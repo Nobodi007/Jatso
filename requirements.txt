@@ -1,7 +1,7 @@
 streamlit>=1.42
 Authlib>=1.3.2
-plotly
-yfinance
+plotly>=5.20
+yfinance>=0.2.40
 numpy
 pandas
 pyyaml
