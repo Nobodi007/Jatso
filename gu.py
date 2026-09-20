@@ -20,7 +20,8 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.27             + [FEATURE] หน้า Dashboard Back Office ดูพอร์ตและกราฟรวมทุกเหรียญ
+v1.5.27             + [FEATURE] อัปเกรดระบบ Login เป็น Streamlit Auth (Continue with Google)
+                    + [FEATURE] หน้า Dashboard Back Office ดูพอร์ตและกราฟรวมทุกเหรียญ
                     + [FIX] แก้บั๊ก FX Limit ให้ตัดยอดรายเดือนอย่างถูกต้อง และอัปเดต Gauge อัตโนมัติ
                     + [UI] ปรับ UI แผงเทรดให้ความสูงเท่ากันเป๊ะ (Alignment) ทั้งฝั่งซื้อและขาย
                     + [FEATURE] ตรึงราคาในแผงออเดอร์ (15 วินาที) และใช้ st.fragment เพื่อรีเฟรชเฉพาะแผง
@@ -37,7 +38,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import hmac
 import json
 import math
 import os
@@ -1763,42 +1763,36 @@ def load_favorites(path: Optional[Path] = None) -> list[str]:
         return []
     return [s for s in d if s in SUPPORTED_ASSETS] if isinstance(d, list) else []
 
-def _hash_pw(pw: str, salt: str) -> str:
-    return hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), 200_000).hex()
-
-def _account() -> tuple[str, str, str]:
-    """คืน (email, salt, pw_hash) จาก st.secrets หรือ env"""
+def _allowed_email() -> str:
     try:
-        s = st.secrets["account"]
-        return str(s["email"]), str(s["salt"]), str(s["pw_hash"])
+        v = st.secrets.get("allowed_email", "")
     except Exception:
-        return (os.environ.get("XSPRING_EMAIL", ""),
-                os.environ.get("XSPRING_SALT", ""),
-                os.environ.get("XSPRING_PW_HASH", ""))
+        v = ""
+    return str(v or os.environ.get("XSPRING_EMAIL", "")).strip().lower()
 
 def require_login() -> bool:
-    if st.session_state.get("auth_email"):
-        return True
-    email, salt, pw_hash = _account()
-    st.markdown("## ♻️ XSpring Dealer Suite")
-    if not (email and salt and pw_hash):
-        st.error("ยังไม่ได้ตั้งบัญชี — กรุณาสร้าง .streamlit/secrets.toml หรือตั้ง Environment Variables")
+    try:
+        logged_in = bool(st.user.is_logged_in)
+    except Exception:
+        st.error("Streamlit เวอร์ชันนี้ไม่รองรับ st.login — ต้องเป็น 1.42 ขึ้นไป")
         return False
-    u = st.text_input("Email", key="login_email")
-    p = st.text_input("Password", type="password", key="login_pw")
-    if st.button("เข้าสู่ระบบ", type="primary"):
-        ok = (hmac.compare_digest(u.strip().lower(), email.lower())
-              and hmac.compare_digest(_hash_pw(p, salt), pw_hash))
-        if ok:
-            st.session_state["auth_email"] = email
-            st.rerun()
-        else:
-            st.error("Email หรือรหัสผ่านไม่ถูกต้อง")
+    if logged_in:
+        allowed = _allowed_email()
+        email = str(getattr(st.user, "email", "") or "").strip().lower()
+        if not allowed:
+            st.error("ยังไม่ได้ตั้ง allowed_email ใน secrets.toml — ระบบจึงปิดไว้ก่อน")
+            st.button("ออกจากระบบ", on_click=st.logout)
+            return False
+        if email != allowed:
+            st.error(f"บัญชี {email} ไม่ได้รับอนุญาตให้ใช้งาน")
+            st.button("ออกจากระบบ", on_click=st.logout)
+            return False
+        return True
+    st.markdown("## ♻️ XSpring Dealer Suite")
+    st.button("Continue with Google", key="login_google", on_click=st.login)
     return False
 
 def _current_actor() -> str:
-    if st.session_state.get("auth_email"):
-        return str(st.session_state["auth_email"])
     try:
         email = getattr(st.user, "email", None)
         if email:
@@ -3435,10 +3429,8 @@ def _main_body() -> None:
     cfg = build_sidebar()
 
     with st.sidebar:
-        st.caption(f"👤 {st.session_state.get('auth_email', '')}")
-        if st.button("ออกจากระบบ", key="logout_btn"):
-            st.session_state.pop("auth_email", None)
-            st.rerun()
+        st.caption(f"👤 {getattr(st.user, 'email', '')}")
+        st.button("ออกจากระบบ", key="logout_btn", on_click=st.logout)
 
     if not cfg["dates_ok"]:
         data, data_err = pd.DataFrame(), "ช่วงวันที่ไม่ถูกต้อง"
@@ -3473,6 +3465,35 @@ def _main_body() -> None:
         "ไม่ใช่เครื่องมือรับรอง compliance</div>",
         unsafe_allow_html=True,
     )
+
+def _allowed_email() -> str:
+    try:
+        v = st.secrets.get("allowed_email", "")
+    except Exception:
+        v = ""
+    return str(v or os.environ.get("XSPRING_EMAIL", "")).strip().lower()
+
+def require_login() -> bool:
+    try:
+        logged_in = bool(st.user.is_logged_in)
+    except Exception:
+        st.error("Streamlit เวอร์ชันนี้ไม่รองรับ st.login — ต้องเป็น 1.42 ขึ้นไป")
+        return False
+    if logged_in:
+        allowed = _allowed_email()
+        email = str(getattr(st.user, "email", "") or "").strip().lower()
+        if not allowed:
+            st.error("ยังไม่ได้ตั้ง allowed_email ใน secrets.toml — ระบบจึงปิดไว้ก่อน")
+            st.button("ออกจากระบบ", on_click=st.logout)
+            return False
+        if email != allowed:
+            st.error(f"บัญชี {email} ไม่ได้รับอนุญาตให้ใช้งาน")
+            st.button("ออกจากระบบ", on_click=st.logout)
+            return False
+        return True
+    st.markdown("## ♻️ XSpring Dealer Suite")
+    st.button("Continue with Google", key="login_google", on_click=st.login)
+    return False
 
 def main() -> None:
     st.set_page_config(
