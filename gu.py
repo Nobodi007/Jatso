@@ -20,14 +20,17 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.27             + [FEATURE] เพิ่มระบบ Single-User Login (Email/Password) ผูกกับ secrets.toml
-                    + [FEATURE] หน้า Dashboard Back Office ดูพอร์ตและกราฟรวมทุกเหรียญ
+v1.5.27             + [FEATURE] หน้า Dashboard Back Office ดูพอร์ตและกราฟรวมทุกเหรียญ
                     + [FIX] แก้บั๊ก FX Limit ให้ตัดยอดรายเดือนอย่างถูกต้อง และอัปเดต Gauge อัตโนมัติ
                     + [UI] ปรับ UI แผงเทรดให้ความสูงเท่ากันเป๊ะ (Alignment) ทั้งฝั่งซื้อและขาย
                     + [FEATURE] ตรึงราคาในแผงออเดอร์ (15 วินาที) และใช้ st.fragment เพื่อรีเฟรชเฉพาะแผง
                     + [FEATURE] ระบบบันทึกรายการโปรด (Favorites) ลงไฟล์
                     + [FEATURE] ระบบสุ่มออเดอร์ข้ามหลายเหรียญพร้อมกัน (Multi-Asset Batch Run) แบบ Log-Uniform
                     + [FEATURE] เพิ่มระบบฝากเงินบาท (THB) แบบ Pop-up Dialog ในหน้า Wallet
+                    + [FIX] อัปเดตข้อมูลราคาวันปัจจุบัน, Limit Order แผงเทรด, และการสุ่มวันที่
+                      ใช้ Radio Button ทำระบบนำทางแทน Tabs เพื่อแก้ปัญหาเด้งเปลี่ยนหน้า 100%
+                      ปรับ Native Columns ใน Tab 4 แทนตาราง HTML เดิมเพื่อแก้ปัญหาคลิกไม่ติด
+v1.5.26             + [FIX] อัปเดตระบบ Logo เป็น Base64 SVG + Multi-layer Background
 """
 
 from __future__ import annotations
@@ -3419,6 +3422,8 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         deposit_dialog()
 
 def _main_body() -> None:
+    st.markdown(THEME_CSS, unsafe_allow_html=True)
+
     if "sim" not in st.session_state:
         saved = load_sim_state()
         if saved:
@@ -3428,6 +3433,12 @@ def _main_body() -> None:
         st.session_state["favorite_tickers"] = load_favorites()
 
     cfg = build_sidebar()
+
+    with st.sidebar:
+        st.caption(f"👤 {st.session_state.get('auth_email', '')}")
+        if st.button("ออกจากระบบ", key="logout_btn"):
+            st.session_state.pop("auth_email", None)
+            st.rerun()
 
     if not cfg["dates_ok"]:
         data, data_err = pd.DataFrame(), "ช่วงวันที่ไม่ถูกต้อง"
@@ -3472,11 +3483,6 @@ def main() -> None:
     )
     if not require_login():
         st.stop()
-    with st.sidebar:
-        st.caption(f"👤 {st.session_state['auth_email']}")
-        if st.button("ออกจากระบบ", key="logout_btn"):
-            st.session_state.pop("auth_email", None)
-            st.rerun()
     try:
         _main_body()
     finally:
