@@ -3081,6 +3081,143 @@ def render_news_section(cfg: dict[str, Any] | None = None) -> None:
         st.divider()
 
 
+
+# ============================================================
+# FUND FLOW LAYER — เฉพาะเหรียญใน SUPPORTED_ASSETS เท่านั้น
+# Binance Public API + CoinGecko Market Cap
+# ============================================================
+
+BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
+COINGECKO_MARKETS_URL = "https://api.coingecko.com/api/v3/coins/markets"
+
+FUNDFLOW_ASSETS = [a for a in SUPPORTED_ASSETS if a not in STABLECOINS]
+
+FUNDFLOW_TIMEFRAMES = {
+    "5m": ("1m", 5), "15m": ("1m", 15), "1h": ("5m", 12),
+    "2h": ("15m", 8), "4h": ("15m", 16), "6h": ("30m", 12),
+    "8h": ("30m", 16), "1D": ("1h", 24), "7D": ("4h", 42),
+    "30D": ("1d", 30),
+}
+
+COINGECKO_ID_MAP = {
+    "BTC": "bitcoin", "ETH": "ethereum", "BNB": "binancecoin",
+    "XRP": "ripple", "SOL": "solana", "ADA": "cardano",
+    "DOGE": "dogecoin", "MATIC": "matic-network", "DOT": "polkadot",
+    "LTC": "litecoin",
+}
+
+
+def _fetch_klines(symbol_pair: str, interval: str, limit: int) -> list:
+    query = urllib.parse.urlencode({"symbol": symbol_pair, "interval": interval, "limit": limit})
+    req = urllib.request.Request(
+        f"{BINANCE_KLINES_URL}?{query}",
+        headers={"User-Agent": "XSpring-Dealer-Suite/1.0"},
+    )
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _net_flow_from_klines(klines: list) -> float:
+    return sum((2 * float(k[10])) - float(k[7]) for k in klines)
+
+
+@_cache_data(ttl=120, show_spinner=False)
+def fetch_fund_flow_row(asset: str) -> dict | None:
+    row = {"symbol": asset}
+    try:
+        for tf_label, (interval, limit) in FUNDFLOW_TIMEFRAMES.items():
+            row[tf_label] = _net_flow_from_klines(_fetch_klines(f"{asset}USDT", interval, limit))
+    except Exception:
+        return None
+    return row
+
+
+@_cache_data(ttl=300, show_spinner=False)
+def fetch_market_caps(assets: list[str]) -> dict:
+    ids = [COINGECKO_ID_MAP[a] for a in assets if a in COINGECKO_ID_MAP]
+    if not ids:
+        return {}
+    query = urllib.parse.urlencode({"vs_currency": "usd", "ids": ",".join(ids)})
+    req = urllib.request.Request(
+        f"{COINGECKO_MARKETS_URL}?{query}",
+        headers={"User-Agent": "XSpring-Dealer-Suite/1.0"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return {}
+    id_to_symbol = {v: k for k, v in COINGECKO_ID_MAP.items()}
+    return {id_to_symbol[item.get("id")]: item.get("market_cap", 0)
+            for item in data if id_to_symbol.get(item.get("id"))}
+
+
+def _fund_signal(row: dict) -> tuple[int, str]:
+    values = [row[tf] for tf in FUNDFLOW_TIMEFRAMES if tf in row]
+    if not values:
+        return 0, "No Data"
+    positive = sum(1 for v in values if v > 0)
+    score = round(((positive / len(values)) * 2 - 1) * 100)
+    if score >= 50:
+        label = "Strong Inflow"
+    elif score > 0:
+        label = "Net Inflow"
+    elif score == 0:
+        label = "Neutral"
+    elif score > -50:
+        label = "Net Outflow"
+    else:
+        label = "Strong Outflow"
+    return score, label
+
+
+def _fmt_flow(value: float) -> str:
+    sign, v = ("-", abs(value)) if value < 0 else ("", value)
+    if v >= 1_000_000_000: return f"{sign}{v / 1_000_000_000:.2f}B"
+    if v >= 1_000_000: return f"{sign}{v / 1_000_000:.2f}M"
+    if v >= 1_000: return f"{sign}{v / 1_000:.2f}K"
+    return f"{sign}{v:.2f}"
+
+
+def build_fund_flow_table() -> pd.DataFrame:
+    rows = []
+    for asset in FUNDFLOW_ASSETS:
+        row = fetch_fund_flow_row(asset)
+        if row is not None:
+            rows.append(row)
+    if not rows:
+        return pd.DataFrame()
+    market_caps = fetch_market_caps([r["symbol"] for r in rows])
+    for row in rows:
+        row["market_cap"] = market_caps.get(row["symbol"], 0)
+        row["signal_score"], row["signal_label"] = _fund_signal(row)
+    return pd.DataFrame(rows).sort_values("market_cap", ascending=False).reset_index(drop=True)
+
+
+def render_fund_flow_section(cfg: dict[str, Any] | None = None) -> None:
+    st.markdown("### 💧 Cryptocurrency Fund Flow")
+    st.caption("Net Taker Buy/Sell Volume จาก Binance · เฉพาะเหรียญในระบบ")
+    df = build_fund_flow_table()
+    if df.empty:
+        st.info("ยังไม่มีข้อมูล Fund Flow ตอนนี้ ลองรีเฟรชอีกครั้ง")
+        return
+    tf_cols = list(FUNDFLOW_TIMEFRAMES.keys())
+    display_df = df.copy()
+    for tf in tf_cols:
+        display_df[tf] = df[tf].apply(_fmt_flow)
+    display_df["Market Cap"] = df["market_cap"].apply(_fmt_flow)
+    display_df["Signal"] = df.apply(lambda r: f"{r['signal_score']:+d}  {r['signal_label']}", axis=1)
+    display_df = display_df[["symbol"] + tf_cols + ["Market Cap", "Signal"]].rename(columns={"symbol": "Symbol"})
+
+    def _color_flow(val: str):
+        if val.startswith("-"):
+            return "color: #f6465d; background-color: rgba(246,70,93,0.08)"
+        return "color: #0ecb81; background-color: rgba(14,203,129,0.08)"
+
+    styled = display_df.style.map(_color_flow, subset=tf_cols)
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+
 def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]) -> None:
     st.markdown(
         "ตอบคำถามที่ผู้บริหารถามจริง:\n\n"
@@ -3092,6 +3229,10 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         return
 
     asset = cfg["asset"]
+
+    # --- FUND FLOW LAYER: อยู่ในแท็บ Liquidity ---
+    with st.expander("💧 Cryptocurrency Fund Flow", expanded=False):
+        render_fund_flow_section(cfg)
 
     section("🎛️ โหมดคำนวณความเสี่ยง")
     cp_mode = st.radio(
