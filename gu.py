@@ -2940,137 +2940,120 @@ def render_perp_venue_table(base: str = "BTC") -> None:
 
 
 # ============================================================
-# NEWS LAYER (v2) — ดึงผ่านเบราว์เซอร์ผู้ใช้
-# กัน server โดนบล็อก/limit และกรองเฉพาะเหรียญใน SUPPORTED_ASSETS
+# NEWS LAYER (v4) — ดึงจาก server (Python) ตัวกรองยืดหยุ่นขึ้น
+# เฉพาะเหรียญใน SUPPORTED_ASSETS เท่านั้น
 # ============================================================
 
+NEWS_API_URL = "https://min-api.cryptocompare.com/data/v2/news/"
 NEWS_ASSETS = [a for a in SUPPORTED_ASSETS if a not in STABLECOINS]
 
-_NEWS_HTML = r"""
-<style>
-  html,body{margin:0;padding:0;background:transparent;color:#EAECEF;
-    font-family:"Source Sans Pro",-apple-system,"Segoe UI",Roboto,sans-serif;}
-  .card{display:flex;gap:12px;padding:12px 4px;border-bottom:1px solid #2b3139;}
-  .card img{width:88px;height:88px;object-fit:cover;border-radius:6px;flex-shrink:0;background:#161a1e;}
-  .card .body{flex:1;min-width:0;}
-  .card a{color:#EAECEF;text-decoration:none;font-weight:700;font-size:.95rem;line-height:1.35;}
-  .card a:hover{color:#fcd535;}
-  .meta{color:#848e9c;font-size:.75rem;margin-top:6px;}
-  .tag{display:inline-block;background:#2b3139;color:#fcd535;border-radius:4px;
-       padding:1px 6px;font-size:.68rem;font-weight:700;margin-right:4px;}
-  .note{color:#848e9c;font-size:.75rem;margin-top:10px;}
-  .empty{color:#848e9c;padding:24px 4px;text-align:center;}
-</style>
-<div id="list"></div>
-<div class="note" id="note">กำลังโหลดข่าว…</div>
-<script>
-const ASSETS = __ASSETS__;
-const NAMES = __NAMES__;
 
-const NEWS_URL = "https://min-api.cryptocompare.com/data/v2/news/?lang=EN&excludeCategories=Sponsored";
-const PROXY_URL = "https://api.allorigins.win/raw?url=" + encodeURIComponent(NEWS_URL);
+def _news_match_assets(item: dict) -> list[str]:
+    """
+    เช็คว่าข่าวนี้เกี่ยวกับเหรียญไหนใน NEWS_ASSETS บ้าง
+    ลำดับการเช็ค: category ตรงตัว -> ticker/ชื่อเหรียญปรากฏในหัวข้อข่าว (word boundary)
+    """
+    cats = {c.strip().upper() for c in (item.get("categories", "") or "").split("|") if c.strip()}
+    title_upper = (item.get("title", "") or "").upper()
+    hits = []
+    for a in NEWS_ASSETS:
+        name_upper = COIN_NAMES.get(a, a).upper()
+        if a in cats:
+            hits.append(a)
+            continue
+        if re.search(rf"\b{re.escape(a)}\b", title_upper) or \
+           re.search(rf"\b{re.escape(name_upper)}\b", title_upper):
+            hits.append(a)
+    return hits
 
-function esc(s){ return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 
-async function getJSON(url, timeoutMs=10000){
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), timeoutMs);
-  try{
-    const r = await fetch(url, {signal: ac.signal, cache: "no-store"});
-    if(!r.ok) throw new Error("HTTP " + r.status);
-    return await r.json();
-  } finally { clearTimeout(t); }
-}
+@_cache_data(ttl=600, show_spinner=False)
+def fetch_crypto_news(limit: int = 30) -> list[dict]:
+    """
+    ดึงข่าวคริปโทจาก CryptoCompare (server-side) แล้วกรองเฉพาะข่าว
+    ที่เกี่ยวกับเหรียญใน NEWS_ASSETS เท่านั้น
+    """
+    query = urllib.parse.urlencode({
+        "lang": "EN",
+        "excludeCategories": "Sponsored",
+    })
+    full_url = f"{NEWS_API_URL}?{query}"
 
-async function fetchNewsWithFallback(){
-  try {
-    return await getJSON(NEWS_URL);
-  } catch (e1) {
-    // CORS / network block -> use public CORS proxy
-    try {
-      return await getJSON(PROXY_URL, 12000);
-    } catch (e2) {
-      throw new Error("direct: " + (e1.message || e1) + " | proxy: " + (e2.message || e2));
-    }
-  }
-}
+    try:
+        req = urllib.request.Request(
+            full_url,
+            headers={"User-Agent": "XSpring-Dealer-Suite/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return []
 
-function matchAssets(item){
-  const cats = (item.categories || "").toUpperCase().split("|").map(s => s.trim());
-  const title = (item.title || "").toUpperCase();
-  const hit = new Set();
-  for (const a of ASSETS){
-    const nm = (NAMES[a] || a).toUpperCase();
-    if (cats.includes(a)) { hit.add(a); continue; }
-    const reTicker = new RegExp("\\b" + a + "\\b");
-    const reName = new RegExp("\\b" + nm + "\\b");
-    if (reTicker.test(title) || reName.test(title)) { hit.add(a); continue; }
-    if (reTicker.test(cats.join(" "))) { hit.add(a); continue; }
-  }
-  return Array.from(hit);
-}
+    items = raw.get("Data", []) or []
+    news_list = []
 
-function timeAgo(unixTs){
-  if (!unixTs) return "";
-  const secs = (Date.now()/1000) - unixTs;
-  if (secs < 3600) return Math.floor(secs/60) + " นาทีที่แล้ว";
-  if (secs < 86400) return Math.floor(secs/3600) + " ชั่วโมงที่แล้ว";
-  return Math.floor(secs/86400) + " วันที่แล้ว";
-}
+    for item in items:
+        matched = _news_match_assets(item)
+        if not matched:
+            continue
+        news_list.append({
+            "title": item.get("title", ""),
+            "url": item.get("url", ""),
+            "source": (item.get("source_info") or {}).get("name") or item.get("source", "Unknown"),
+            "image_url": item.get("imageurl", ""),
+            "published_ts": item.get("published_on", 0),
+            "tags": sorted(matched),
+        })
 
-async function run(){
-  let data;
-  try{
-    data = await fetchNewsWithFallback();
-  } catch(e){
-    document.getElementById("note").textContent = "โหลดข่าวไม่สำเร็จ (ทั้งทางตรงและผ่าน proxy): " + e.message;
-    document.getElementById("list").innerHTML = "<div class='empty'>ดึงข่าวไม่ได้ตอนนี้ ลองรีเฟรชหน้าอีกครั้ง</div>";
-    return;
-  }
-  const items = (data && data.Data) || [];
-  const filtered = [];
-  for (const it of items){
-    const tags = matchAssets(it);
-    if (tags.length) filtered.push({...it, _tags: tags});
-  }
-  filtered.sort((a,b) => (b.published_on||0) - (a.published_on||0));
-  const top = filtered.slice(0, 30);
+    news_list.sort(key=lambda x: x["published_ts"], reverse=True)
+    return news_list[:limit]
 
-  if (!top.length){
-    document.getElementById("list").innerHTML = "<div class='empty'>ยังไม่มีข่าวที่ตรงกับเหรียญในระบบตอนนี้ ลองรีเฟรชอีกครั้ง</div>";
-  } else {
-    document.getElementById("list").innerHTML = top.map(n => {
-      const img = n.imageurl ? "<img src='" + esc(n.imageurl) + "' onerror=\"this.style.display='none'\">" : "";
-      const src = (n.source_info && n.source_info.name) || n.source || "Unknown";
-      const tagsHtml = n._tags.map(t => "<span class='tag'>" + esc(t) + "</span>").join("");
-      return "<div class='card'>" + img +
-             "<div class='body'>" +
-             "<a href='" + esc(n.url) + "' target='_blank' rel='noopener'>" + esc(n.title) + "</a>" +
-             "<div class='meta'>" + esc(src) + " · " + timeAgo(n.published_on) + " · " + tagsHtml + "</div>" +
-             "</div></div>";
-    }).join("");
-  }
-  const ts = new Date().toLocaleTimeString("th-TH", {hour12:false});
-  document.getElementById("note").textContent = "อัปเดต " + ts + " · พบข่าวที่เกี่ยวข้อง " + top.length + " ข่าว จากทั้งหมด " + items.length + " ข่าว";
-}
-run();
-</script>
-"""
+
+def _news_time_ago(unix_ts: int) -> str:
+    if not unix_ts:
+        return ""
+    delta = datetime.now(timezone.utc) - datetime.fromtimestamp(unix_ts, tz=timezone.utc)
+    secs = delta.total_seconds()
+    if secs < 3600:
+        return f"{int(secs // 60)} นาทีที่แล้ว"
+    if secs < 86400:
+        return f"{int(secs // 3600)} ชั่วโมงที่แล้ว"
+    return f"{int(secs // 86400)} วันที่แล้ว"
 
 
 def render_news_section(cfg: dict) -> None:
     """
-    Render ข่าวคริปโท — ดึงผ่านเบราว์เซอร์ผู้ใช้ พร้อม CORS proxy สำรอง
-    กรองเฉพาะข่าวที่เกี่ยวกับเหรียญใน NEWS_ASSETS เท่านั้น
+    Render ข่าวคริปโท — ดึงจาก server เฉพาะข่าวที่เกี่ยวกับเหรียญใน SUPPORTED_ASSETS
     """
     st.markdown("### 📰 ข่าวคริปโท (เฉพาะเหรียญในระบบ)")
 
-    payload_html = (
-        _NEWS_HTML
-        .replace("__ASSETS__", json.dumps(NEWS_ASSETS))
-        .replace("__NAMES__", json.dumps({a: COIN_NAMES.get(a, a) for a in NEWS_ASSETS}))
-    )
-    components.html(payload_html, height=650, scrolling=True)
+    news_items = fetch_crypto_news()
+
+    if not news_items:
+        st.info("ยังไม่มีข่าวที่ตรงกับเหรียญในระบบตอนนี้ ลองรีเฟรชอีกครั้ง")
+        if st.button("🔄 รีเฟรชข่าว", key="news_refresh_empty"):
+            fetch_crypto_news.clear()
+            st.rerun()
+        return
+
+    c_cap, c_btn = st.columns([8, 2])
+    with c_cap:
+        st.caption(f"พบข่าวที่เกี่ยวข้อง {len(news_items)} ข่าว")
+    with c_btn:
+        if st.button("🔄 รีเฟรช", key="news_refresh", **WIDE):
+            fetch_crypto_news.clear()
+            st.rerun()
+
+    for news in news_items:
+        cols = st.columns([1, 4])
+        with cols[0]:
+            if news["image_url"]:
+                st.image(news["image_url"], use_container_width=True)
+        with cols[1]:
+            st.markdown(f"**[{news['title']}]({news['url']})**")
+            tag_str = " · ".join(news["tags"])
+            st.caption(f"{news['source']} • {_news_time_ago(news['published_ts'])} • {tag_str}")
+        st.divider()
 
 def render_fund_flow_section(cfg: dict[str, Any] | None = None) -> None:
     """
