@@ -1434,13 +1434,19 @@ THEME_CSS = """
     .st-key-wl_deposit button, .st-key-wl_deposit button p { color:#0ecb81 !important; font-weight:600 !important; font-size:.85rem !important; }
     
     /* ---------- AI Chat (ปุ่มลอย + ฟองแชท) ---------- */
-    .st-key-ai_fab { position: fixed; bottom: 24px; right: 28px; z-index: 999990; width: auto !important; }
-    .st-key-ai_fab > div > div > button,
-    .st-key-ai_fab [data-testid="stPopover"] > button {
-        border-radius: 999px !important; padding: 10px 20px !important;
-        background: #0ecb81 !important; color: #0b0e11 !important; font-weight: 700 !important;
-        border: none !important; box-shadow: 0 8px 24px rgba(14,203,129,.35) !important;
+    .st-key-ai_fab {
+        position: fixed !important; bottom: 72px; right: 24px;
+        z-index: 999990; width: auto !important;
     }
+    .st-key-ai_fab button {
+        border-radius: 999px !important; padding: 10px 20px !important;
+        background: #0ecb81 !important; border: none !important;
+        box-shadow: 0 8px 24px rgba(14,203,129,.35) !important;
+    }
+    .st-key-ai_fab button, .st-key-ai_fab button * {
+        color: #0b0e11 !important; font-weight: 700 !important;
+    }
+    .st-key-ai_fab button:hover { background: #12e08f !important; }
     div[data-testid="stPopoverBody"] {
         width: min(420px, 92vw) !important; background: #181a20 !important;
         border: 1px solid #2b3139 !important; border-radius: 14px !important;
