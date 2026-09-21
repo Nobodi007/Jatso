@@ -20,6 +20,7 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
+v1.5.29             + [FEATURE] อัปโหลดรูปโปรไฟล์ ย่อขนาด และแปลงเป็น Base64 เก็บลง JSON อัตโนมัติ
 v1.5.28             + [FEATURE] ระบบตั้งค่า Profile (ชื่อและรูปภาพ) หลังจาก Login ครั้งแรก
 v1.5.27             + [FEATURE] อัปเกรดระบบ Login เป็น Streamlit Auth (Continue with Google)
                     + [FEATURE] หน้า Dashboard Back Office ดูพอร์ตและกราฟรวมทุกเหรียญ
@@ -44,18 +45,24 @@ import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.28"
+MODEL_VERSION = "1.5.29"
 
 try:
     import yaml
 except ImportError:
     yaml = None
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
 
 try:
     import plotly.graph_objects as go
@@ -1655,10 +1662,10 @@ def load_profiles() -> dict[str, dict[str, str]]:
     except (OSError, json.JSONDecodeError):
         return {}
 
-def save_profile(email: str, display_name: str, avatar_url: Optional[str] = None) -> None:
+def save_profile(email: str, display_name: str, avatar_b64: Optional[str] = None) -> None:
     p = profile_state_path()
     profiles = load_profiles()
-    profiles[email] = {"display_name": display_name, "avatar_url": avatar_url}
+    profiles[email] = {"display_name": display_name, "avatar_b64": avatar_b64}
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(profiles, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, p)
@@ -1954,7 +1961,7 @@ def build_sidebar() -> dict[str, Any]:
             hedge_fee_maker = st.number_input(
                 "ค่าธรรมเนียม Global CEX — Maker (%)", key="bt_hedge_fee_maker",
                 step=0.01,
-                help=("ค่าตั้งต้น = เท่า Taker จนกว่าจะตั้ง maker preset ใน config.yaml "
+                help=("ค่าตั้งต้น = เท่า Taker จนกว่าจะตั้ง maker presetใน config.yaml "
                       "หรือแก้ช่องนี้ตามเทียร์บัญชีจริง")) / 100
             maker_ratio = st.slider(
                 "สัดส่วน Hedge ที่ทำเป็น Maker / Limit (%)", 0, 100, 0,
@@ -3422,12 +3429,13 @@ def _main_body() -> None:
         email = getattr(st.user, 'email', '')
         user_prof = load_profiles().get(email, {})
         d_name = user_prof.get("display_name", email)
-        avatar = user_prof.get("avatar_url", "")
+        avatar_b64 = user_prof.get("avatar_b64", "")
         
         st.divider()
-        if avatar and avatar.startswith("http"):
+        if avatar_b64:
+            img_src = f"data:image/png;base64,{avatar_b64}" if not avatar_b64.startswith("http") else avatar_b64
             st.markdown(f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">'
-                        f'<img src="{avatar}" width="40" height="40" style="border-radius:50%;object-fit:cover;">'
+                        f'<img src="{img_src}" width="40" height="40" style="border-radius:50%;object-fit:cover;">'
                         f'<div><div style="font-weight:bold;color:#EAECEF;font-size:0.95rem;">{d_name}</div>'
                         f'<div style="font-size:0.75rem;color:#848e9c;">{email}</div></div></div>', 
                         unsafe_allow_html=True)
@@ -3492,10 +3500,10 @@ def load_profiles() -> dict[str, dict[str, str]]:
     except (OSError, json.JSONDecodeError):
         return {}
 
-def save_profile(email: str, display_name: str, avatar_url: Optional[str] = None) -> None:
+def save_profile(email: str, display_name: str, avatar_b64: Optional[str] = None) -> None:
     p = profile_state_path()
     profiles = load_profiles()
-    profiles[email] = {"display_name": display_name, "avatar_url": avatar_url}
+    profiles[email] = {"display_name": display_name, "avatar_b64": avatar_b64}
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(profiles, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, p)
@@ -3533,11 +3541,28 @@ def require_login() -> bool:
             with st.container(border=True):
                 default_name = getattr(st.user, "name", email.split("@")[0])
                 name_input = st.text_input("ชื่อที่แสดง (Display Name)", value=default_name)
-                avatar_input = st.text_input("URL รูปโปรไฟล์ (ถ้ามี)", placeholder="https://...")
+                
+                uploaded_file = st.file_uploader(
+                    "อัปโหลดรูปโปรไฟล์ (ถ้ามี)",
+                    type=["png", "jpg", "jpeg"],
+                    help="รองรับไฟล์ PNG, JPG ขนาดไม่เกิน 2MB"
+                )
+                
+                avatar_b64 = ""
+                if uploaded_file is not None:
+                    if Image is not None:
+                        img = Image.open(uploaded_file)
+                        img.thumbnail((200, 200))
+                        buffer = BytesIO()
+                        img.save(buffer, format="PNG")
+                        avatar_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+                        st.image(img, caption="ตัวอย่างรูปที่จะบันทึก", width=120)
+                    else:
+                        st.error("ไม่สามารถจัดการรูปได้ กรุณาติดตั้งไลบรารี Pillow (pip install pillow)")
                 
                 c1, c2 = st.columns(2)
                 if c1.button("💾 บันทึกโปรไฟล์", type="primary", use_container_width=True):
-                    save_profile(email, name_input, avatar_input)
+                    save_profile(email, name_input, avatar_b64)
                     st.rerun()
                 c2.button("ออกจากระบบ", on_click=st.logout, use_container_width=True)
             return False # ขัดจังหวะไม่ให้โหลดแอปหลัก
@@ -3569,5 +3594,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     if not HAS_UI:
-        raise SystemExit("ต้องติดตั้ง UI stack ก่อน: pip install streamlit plotly yfinance")
+        raise SystemExit("ต้องติดตั้ง UI stack ก่อน: pip install streamlit plotly yfinance pillow")
     main()
