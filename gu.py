@@ -3081,6 +3081,128 @@ def render_news_section(cfg: dict[str, Any] | None = None) -> None:
         st.divider()
 
 
+def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]) -> None:
+    st.markdown(
+        "ตอบคำถามที่ผู้บริหารถามจริง:\n\n"
+        "> **\"ถ้าธุรกรรมเดือนละ X ล้าน ต้องดำรงเหรียญเท่าไหร่ เงินสดเท่าไหร่ "
+        "NC เหลือเท่าไหร่ ผ่านเกณฑ์ไหม และทุนที่มีรับได้สูงสุดกี่ล้าน\"**"
+    )
+    if not cfg["dates_ok"]:
+        st.error("❌ ช่วงวันที่ในแถบซ้ายไม่ถูกต้อง")
+        return
+
+    asset = cfg["asset"]
+
+    section("🎛️ โหมดคำนวณความเสี่ยง")
+    cp_mode = st.radio(
+        "เลือกโหมด",
+        ["Single-Asset (ใช้เหรียญที่เลือกในแถบซ้าย)", "Multi-Asset Portfolio"],
+        horizontal=True, key="cp_mode",
+    )
+
+    rp = None
+    risk_label = ""
+    portfolio_price_frame = data if cp_mode.startswith("Single") else None
+
+    if cp_mode.startswith("Single"):
+        if data.empty:
+            st.error(f"⚠️ โหลดข้อมูลไม่สำเร็จ: {data_err}")
+        else:
+            rp = risk_profile(data["Global_USD"])
+            risk_label = asset
+    else:
+        ma_c1, _ma_c2 = st.columns([2, 1])
+        with ma_c1:
+            selected_assets = st.multiselect(
+                "เลือกเหรียญในพอร์ต", SUPPORTED_ASSETS,
+                default=["BTC", "ETH", "USDT"], key="cp_ma_assets",
+            )
+        if not selected_assets:
+            st.info("เลือกอย่างน้อย 1 เหรียญ")
+        else:
+            wcols = st.columns(min(len(selected_assets), 6))
+            default_w = round(100 / len(selected_assets))
+            weights = {}
+            for i, a_ in enumerate(selected_assets):
+                with wcols[i % len(wcols)]:
+                    weights[a_] = st.number_input(
+                        f"{a_} (%)", value=default_w, min_value=0,
+                        max_value=100, step=5, key=f"cp_w_{a_}",
+                    )
+            wsum = sum(weights.values())
+            if wsum > 0:
+                norm_w = {k: v / wsum for k, v in weights.items()}
+                ret_map, price_map = {}, {}
+                with st.spinner("กำลังโหลดราคาย้อนหลัง…"):
+                    for a_ in selected_assets:
+                        d_, _err = fetch_price_data(a_, cfg["start_date"],
+                                                    cfg["end_date"])
+                        if not d_.empty:
+                            ret_map[a_] = np.log(
+                                d_["Global_USD"] / d_["Global_USD"].shift(1))
+                            price_map[a_] = d_
+                if ret_map:
+                    ret_df = pd.concat(ret_map, axis=1).dropna()
+                    if len(ret_df) >= MIN_RISK_SAMPLE_DAYS:
+                        port_w = np.array([norm_w.get(c, 0) for c in ret_df.columns])
+                        rp = _risk_stats((ret_df * port_w).sum(axis=1))
+                        risk_label = " + ".join(
+                            f"{k} {norm_w[k] * 100:.0f}%" for k in ret_df.columns)
+                        if price_map:
+                            portfolio_price_frame = next(iter(price_map.values()))
+
+    if rp is None:
+        return
+
+    usdthb_now, usdthb_is_fallback = get_reference_usdthb(portfolio_price_frame)
+    settlement_days = cfg["settlement_days"]
+    h_crypto = crypto_haircut(rp["es99"], settlement_days)
+    h_cex = cfg["cex_counterparty_haircut"] if cfg["cex_margin_asset"].startswith("Stablecoin") else h_crypto
+
+    a_factor = safety_stock_factor(cfg["net_bias_pct"], cfg["flow_cv_pct"], settlement_days, cfg["z_alpha"])
+    required_stock_thb = a_factor * cfg["monthly_volume_thb"]
+
+    nc = nc_snapshot(
+        required_stock_thb, cfg["total_capital_thb"], cfg["cex_margin_thb"],
+        cfg["liab_thb"], h_crypto, h_cex, cfg["fixed_min_nc"],
+        cfg["trading_risk_rate"], cfg["daily_volume_thb"],
+        cfg["custody_rate_blended"],
+    )
+    cash_after_stock_thb = nc["cash"]
+    nlc_thb = nc["actual"]
+    required_nc_total = nc["required"]
+    nc_buffer_thb = nc["buffer"]
+
+    slope = (a_factor * (h_crypto + cfg["custody_rate_blended"]) + cfg["trading_risk_rate"] / 30.0)
+    v_nc_thb = max(0.0, (cfg["total_capital_thb"] + cfg["cex_margin_thb"] * (1 - h_cex) - cfg["liab_thb"] - cfg["fixed_min_nc"]) / slope) if slope > 0 else float("inf")
+    v_cash_thb = cfg["total_capital_thb"] / a_factor if a_factor > 0 else float("inf")
+
+    capital_max_v_thb = min(v_nc_thb, v_cash_thb)
+    fx_max_v_thb = cfg["fx_limit_max"] * usdthb_now
+    overall_max_v_thb = min(capital_max_v_thb, fx_max_v_thb)
+    binding_side = "ทุน / NC" if capital_max_v_thb < fx_max_v_thb else "FX Limit"
+
+    section("🧾 สรุปผลสำหรับผู้บริหาร")
+    ok_nc = (not pd.isna(nc_buffer_thb)) and (nc_buffer_thb >= 0)
+    verdict_box(
+        ok_nc,
+        f"NC จริง {fmt_baht(nlc_thb)} (ต้องดำรงขั้นต่ำ {fmt_baht(required_nc_total)})",
+        f"ต้องดองเหรียญ {fmt_baht(required_stock_thb)} เหลือเงินสด {fmt_baht(cash_after_stock_thb)}",
+        warn=(nc_buffer_thb < 0.5 * required_nc_total),
+    )
+
+    section("📊 รายละเอียดตัวเลข")
+    k1 = st.columns(4)
+    metric_card(k1[0], "Required Safety Stock", fmt_baht(required_stock_thb), None, f"Haircut ที่ใช้ {h_crypto * 100:.2f}%")
+    metric_card(k1[1], "เงินสดคงเหลือ", fmt_baht(cash_after_stock_thb), cash_after_stock_thb)
+    metric_card(k1[2], "Net Capital (NC) จริง", fmt_baht(nlc_thb), nlc_thb)
+    metric_card(k1[3], "NC ขั้นต่ำที่ต้องดำรง", fmt_baht(required_nc_total), nc_buffer_thb, f"ส่วนเกิน {fmt_baht(nc_buffer_thb, force_sign=True)}")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    render_perp_venue_table(asset)
+
+
+
 # ---- 5.4 TAB 3 — TIME-TRAVEL ORDER SIMULATOR ---------------------------
 
 def _toggle_fav(sym: str) -> None:
