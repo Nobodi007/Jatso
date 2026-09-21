@@ -105,8 +105,10 @@ COIN_NAMES = {
     "USDT": "Tether", "USDC": "USD Coin", "THB": "Thai Baht"
 }
 
+# ใช้ Base64 SVG ธงชาติไทยที่ถูกต้อง (แดง-ขาว-น้ำเงิน-ขาว-แดง)
 THB_LOGO_SVG = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48Y2xpcFBhdGggaWQ9ImMiPjxjaXJjbGUgY3g9IjUwIiBjeT0iNTAiIHI9IjUwIi8+PC9jbGlwUGF0aD48ZyBjbGlwLXBhdGg9InVybCgjYykiPjxyZWN0IHdpZHRoPSIxMDAiIGhlaWdodD0iMTciIGZpbGw9IiNFRDFDMjQiLz48cmVjdCB5PSIxNyIgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxNyIgZmlsbD0iI2ZmZiIvPjxyZWN0IHk9IjM0IiB3aWR0aD0iMTAwIiBoZWlnaHQ9IjMyIiBmaWxsPSIjMjQxRDRGIi8+PHJlY3QgeT0iNjYiIHdpZHRoPSIxMDAiIGhlaWdodD0iMTciIGZpbGw9IiNmZmYiLz48cmVjdCB5PSI4MyIgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxNyIgZmlsbD0iI0VEMUMyNCIvPjwvZz48L3N2Zz4="
 
+# ข้อมูลผู้พัฒนา (แสดงมุมซ้ายบน)
 DEV_NAME = "Thiraphat Niyom"
 DEV_LINKEDIN = "https://www.linkedin.com/in/thiraphat-niyom-11044727b"
 DEV_AVATAR_B64 = "data:image/jpeg;base64,ใส่_BASE64_ของรูป_IMG_2908_ตรงนี้"
@@ -623,6 +625,9 @@ def execute_order(
 
     trading_fee = amount_thb * LOCAL_TRADING_FEE_PCT
     settlement_thb = max(0.0, amount_thb - trading_fee)
+    # Buy : ค่าธรรมเนียมหักจากเงินที่จ่าย -> ได้เหรียญจาก settlement
+    # Sell: amount_thb = มูลค่าเหรียญที่ขาย (gross) -> ส่งมอบเหรียญเต็มจำนวน
+    #       แล้วได้เงินหลังหักค่าธรรมเนียม
     coins = (amount_thb if side == "sell" else settlement_thb) / quote
 
     if coins <= 0:
@@ -1773,7 +1778,7 @@ def save_sim_state(sim: Any, path: Optional[Path] = None) -> None:
     p = Path(path) if path else sim_state_path()
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(_json_safe(sim), ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, p)
+    os.replace(tmp, p)   # เขียนไฟล์ชั่วคราวก่อนแล้วสลับ กันไฟล์พังถ้าถูกปิดกลางคัน
 
 def load_sim_state(path: Optional[Path] = None) -> Optional[dict[str, Any]]:
     p = Path(path) if path else sim_state_path()
@@ -1891,7 +1896,9 @@ def render_audit_log_sidebar():
             "text/csv",
             **WIDE,
         )
-        # =========================================================================
+
+
+# =========================================================================
 # LAYER 5 — APP
 # =========================================================================
 
@@ -2272,6 +2279,7 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     # ---- 3D Interactive Chart Feature ----
     section("🌐 มุมมองกราฟ 3D พิเศษ (3D Price Surface)")
     with st.expander("✨ เปิดดูกราฟ 3D สามมิติ (Interactive 3D Chart)", expanded=False):
+        # ชื่อตัวเลือก -> (คอลัมน์, ชื่อแกน Z, รูปแบบ hover, ชื่อ colorbar)
         VIEW_3D = {
             "ความผันผวน (Volatility)": ("Vol_Pct", "ความผันผวน (%)", "%{z:.2f}%", "Volatility %"),
             "เปลี่ยนแปลง (%Change)": ("Chg_Pct", "%เปลี่ยนแปลงราคาปิด (Daily)", "%{z:+.2f}%", "%Chg"),
@@ -2295,7 +2303,7 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 mode="markers",
                 marker=dict(
                     size=5,
-                    color=df_3d[z_col],
+                    color=df_3d[z_col],          # สีรุ้งตามค่าของแกน Z
                     colorscale="Rainbow",
                     opacity=0.9,
                     line=dict(width=0),
@@ -2451,14 +2459,24 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         st.dataframe(preview, height=400, **WIDE)
 
 
+# ---- 5.3 TAB 2 — LIQUIDITY & CAPITAL PLANNER ---------------------------
+
 # =========================================================================
 # GLOBAL PERP VENUE TABLE (v3) — เทียบราคา/ปริมาณเทรดข้ามกระดานโลก
+# ลำดับการดึงข้อมูล:
+#   1) server ดึงตรงจากกระดานทั้ง 9 (ฟรี ไม่ใช้ key)
+#   2) [ตัวเลือก] กระดานไหนล้ม + มี coinglass_api_key → ดึงผ่าน CoinGlass
+#   3) กระดานที่ยังล้มอยู่ (เช่น Binance) → ให้ browser ของผู้ใช้ดึงเอง
+#      ใช้ IP ผู้ใช้ จึงช่วยหลีกเลี่ยงข้อจำกัดภูมิภาคของ server
+#
+# จุดเรียกใน render_tab2 ยังเป็น render_perp_venue_table(asset) เหมือนเดิม
 # =========================================================================
 
 _VENUE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (XSpring-Dealer-Suite)",
     "Accept": "application/json",
 }
+
 
 def _http_json(
     url: str,
@@ -2476,11 +2494,14 @@ def _http_json(
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
+
+# แต่ละฟังก์ชันคืน (price_usd, chg24h_pct, turnover24h_usd)
 def _pv_binance(b: str) -> tuple[float, float, float]:
     d = _http_json(
         f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={b}USDT"
     )
     return float(d["lastPrice"]), float(d["priceChangePercent"]), float(d["quoteVolume"])
+
 
 def _pv_gate(b: str) -> tuple[float, float, float]:
     d = _http_json(
@@ -2489,11 +2510,6 @@ def _pv_gate(b: str) -> tuple[float, float, float]:
     turn = d.get("volume_24h_quote") or d.get("volume_24h_settle") or d.get("volume_24h_usd")
     return float(d["last"]), float(d["change_percentage"]), float(turn)
 
-def _pv_bybit(b: str) -> tuple[float, float, float]:
-    d = _http_json(
-        f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={b}USDT"
-    )["result"]["list"][0]
-    return float(d["lastPrice"]), float(d["price24hPcnt"]) * 100, float(d["turnover24h"])
 
 def _pv_hyperliquid(b: str) -> tuple[float, float, float]:
     meta, ctxs = _http_json(
@@ -2505,6 +2521,7 @@ def _pv_hyperliquid(b: str) -> tuple[float, float, float]:
     px, prev = float(c["markPx"]), float(c["prevDayPx"])
     return px, (px / prev - 1) * 100, float(c["dayNtlVlm"])
 
+
 def _pv_bitget(b: str) -> tuple[float, float, float]:
     d = _http_json(
         f"https://api.bitget.com/api/v2/mix/market/ticker"
@@ -2513,20 +2530,26 @@ def _pv_bitget(b: str) -> tuple[float, float, float]:
     turn = d.get("usdtVolume") or d.get("quoteVolume")
     return float(d["lastPr"]), float(d["change24h"]) * 100, float(turn)
 
+
 def _pv_okx(b: str) -> tuple[float, float, float]:
     d = _http_json(
         f"https://www.okx.com/api/v5/market/ticker?instId={b}-USDT-SWAP"
     )["data"][0]
     last, op = float(d["last"]), float(d["open24h"])
+    # OKX ให้ volCcy24h เป็นจำนวนเหรียญ (base) → คูณราคาล่าสุดให้เป็น USD
     return last, (last / op - 1) * 100, float(d["volCcy24h"]) * last
 
+
 def _pv_aster(b: str) -> tuple[float, float, float]:
+    # Aster ใช้ API รูปแบบเดียวกับ Binance Futures
     d = _http_json(
         f"https://fapi.asterdex.com/fapi/v1/ticker/24hr?symbol={b}USDT"
     )
     return float(d["lastPrice"]), float(d["priceChangePercent"]), float(d["quoteVolume"])
 
+
 def _pv_deribit(b: str) -> tuple[float, float, float]:
+    # Deribit perpetual เป็นสัญญา inverse (ราคาเป็น USD, margin เป็นเหรียญ)
     d = _http_json(
         f"https://www.deribit.com/api/v2/public/ticker"
         f"?instrument_name={b}-PERPETUAL"
@@ -2536,6 +2559,7 @@ def _pv_deribit(b: str) -> tuple[float, float, float]:
         float(d["stats"]["price_change"]),
         float(d["stats"]["volume_usd"]),
     )
+
 
 def _pv_bitunix(b: str) -> tuple[float, float, float]:
     doc = _http_json(
@@ -2549,6 +2573,8 @@ def _pv_bitunix(b: str) -> tuple[float, float, float]:
         raise ValueError("bad open")
     return last, (last / op - 1) * 100, float(d["quoteVol"])
 
+
+# cg = คำนำหน้าชื่อกระดานใน CoinGlass (ตัวพิมพ์เล็ก ไม่มีจุด/ช่องว่าง)
 _PERP_VENUES = [
     dict(
         name="Binance",
@@ -2556,6 +2582,7 @@ _PERP_VENUES = [
         bg="#F0B90B",
         fg="#0b0e11",
         tx="BN",
+        logo="https://www.google.com/s2/favicons?domain=binance.com&sz=64",
         fn=_pv_binance,
         sym=lambda b: f"{b}USDT",
         url=lambda b: f"https://www.binance.com/en/futures/{b}USDT",
@@ -2566,19 +2593,10 @@ _PERP_VENUES = [
         bg="#2354E6",
         fg="#ffffff",
         tx="G",
+        logo="https://www.google.com/s2/favicons?domain=gate.com&sz=64",
         fn=_pv_gate,
         sym=lambda b: f"{b}_USDT",
         url=lambda b: f"https://www.gate.io/futures/USDT/{b}_USDT",
-    ),
-    dict(
-        name="Bybit",
-        cg="bybit",
-        bg="#17181E",
-        fg="#F7A600",
-        tx="BB",
-        fn=_pv_bybit,
-        sym=lambda b: f"{b}USDT",
-        url=lambda b: f"https://www.bybit.com/trade/usdt/{b}USDT",
     ),
     dict(
         name="Hyperliquid",
@@ -2586,6 +2604,7 @@ _PERP_VENUES = [
         bg="#072723",
         fg="#97FCE4",
         tx="HL",
+        logo="https://www.google.com/s2/favicons?domain=hyperliquid.xyz&sz=64",
         fn=_pv_hyperliquid,
         sym=lambda b: f"{b}",
         url=lambda b: f"https://app.hyperliquid.xyz/trade/{b}",
@@ -2596,16 +2615,18 @@ _PERP_VENUES = [
         bg="#00F0FF",
         fg="#0b0e11",
         tx="BG",
+        logo="https://www.google.com/s2/favicons?domain=bitget.com&sz=64",
         fn=_pv_bitget,
         sym=lambda b: f"{b}USDT",
         url=lambda b: f"https://www.bitget.com/futures/usdt/{b}USDT",
     ),
     dict(
-        name="Okx",
+        name="OKX",
         cg="okx",
         bg="#000000",
         fg="#ffffff",
         tx="OK",
+        logo="https://www.google.com/s2/favicons?domain=okx.com&sz=64",
         fn=_pv_okx,
         sym=lambda b: f"{b}-USDT-SWAP",
         url=lambda b: f"https://www.okx.com/trade-swap/{b.lower()}-usdt-swap",
@@ -2616,6 +2637,7 @@ _PERP_VENUES = [
         bg="#1F2A44",
         fg="#7CFFB2",
         tx="BU",
+        logo="https://www.google.com/s2/favicons?domain=bitunix.com&sz=64",
         fn=_pv_bitunix,
         sym=lambda b: f"{b}USDT",
         url=lambda b: f"https://www.bitunix.com/contract-trade/{b}USDT",
@@ -2627,6 +2649,7 @@ _PERP_VENUES = [
         bg="#0B7BE5",
         fg="#ffffff",
         tx="DB",
+        logo="https://www.google.com/s2/favicons?domain=deribit.com&sz=64",
         fn=_pv_deribit,
         sym=lambda b: f"{b}-PERPETUAL",
         url=lambda b: f"https://www.deribit.com/futures/{b}-PERPETUAL",
@@ -2638,18 +2661,22 @@ _PERP_VENUES = [
         bg="#E8B96A",
         fg="#0b0e11",
         tx="AS",
+        logo="https://www.google.com/s2/favicons?domain=asterdex.com&sz=64",
         fn=_pv_aster,
         sym=lambda b: f"{b}USDT",
         url=lambda b: f"https://www.asterdex.com/en/futures/v1/{b}USDT",
     ),
 ]
 
+
+# ---------- CoinGlass (ตัวกลาง) ----------
 def _coinglass_key() -> str:
     try:
         k = st.secrets.get("coinglass_api_key", "")
     except Exception:
         k = ""
     return str(k or os.environ.get("COINGLASS_API_KEY", "")).strip()
+
 
 @_cache_data(ttl=60, show_spinner=False)
 def _cg_pairs(base: str, api_key: str) -> list[dict]:
@@ -2662,9 +2689,11 @@ def _cg_pairs(base: str, api_key: str) -> list[dict]:
         raise RuntimeError(str(doc.get("msg") or "error")[:60])
     return doc.get("data") or []
 
+
 def _cg_pick(
     rows: list[dict], v: dict, base: str
 ) -> Optional[tuple[float, float, float]]:
+    """เลือกคู่ของกระดานนั้น; ถ้ามีหลายคู่ เลือกที่ volume สูงสุด"""
     ok_ids = {base + "USDT", base + "USDTSWAP"}
     if v["name"] == "Hyperliquid":
         ok_ids |= {base, base + "USDC"}
@@ -2695,8 +2724,10 @@ def _cg_pick(
 
     return best
 
+
 @_cache_data(ttl=30, show_spinner=False)
 def fetch_perp_venues(base: str = "BTC") -> tuple[pd.DataFrame, str]:
+    """ดึงทุกกระดานพร้อมกัน → ตัวที่ล้มค่อยไปดึงผ่าน CoinGlass ถ้ามี key"""
     def one(v: dict) -> dict:
         row = dict(
             exchange=v["name"],
@@ -2757,6 +2788,7 @@ def fetch_perp_venues(base: str = "BTC") -> tuple[pd.DataFrame, str]:
     )
     return df.reset_index(drop=True), pd.Timestamp.now("Asia/Bangkok").strftime("%H:%M:%S")
 
+
 _PV_HTML = r"""<!doctype html><html><head><meta charset="utf-8"><style>
 html,body{margin:0;padding:0;background:transparent;color:#EAECEF;
   font-family:"Source Sans Pro",-apple-system,"Segoe UI",Roboto,sans-serif;}
@@ -2766,8 +2798,11 @@ th{text-align:left;padding:10px 14px;color:#848e9c;font-weight:600;font-size:.78
   border-bottom:1px solid #2b3139;background:#161a1e;}
 td{padding:12px 14px;border-bottom:1px solid #2b3139;font-variant-numeric:tabular-nums;}
 .ex{display:flex;align-items:center;gap:10px;font-weight:600;}
-.logo{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;
-  border-radius:50%;border:1px solid #2b3139;font-size:.58rem;font-weight:800;}
+.logo{width:28px;height:28px;min-width:28px;border-radius:50%;
+  border:1px solid #2b3139;background:#161a1e;object-fit:contain;display:block;padding:2px;box-sizing:border-box;}
+.logo-fallback{display:none;align-items:center;justify-content:center;width:28px;height:28px;
+  min-width:28px;border-radius:50%;border:1px solid #2b3139;font-size:.58rem;font-weight:800;}
+.logo-wrap{width:28px;height:28px;min-width:28px;display:inline-flex;align-items:center;justify-content:center;}
 .via{margin-left:4px;font-size:.62rem;font-weight:600;color:#848e9c;border:1px solid #2b3139;
   border-radius:4px;padding:0 4px;}
 a{color:#4c9aff;text-decoration:none;}
@@ -2795,17 +2830,12 @@ async function getJSON(url){
   } finally { clearTimeout(t); }
 }
 
+// กระดานที่มักถูกจำกัดจาก server → ให้ browser ของผู้ใช้ลองดึงเอง
 const JOBS = {
   Binance: async () => {
     const d = await getJSON('https://fapi.binance.com/fapi/v1/ticker/24hr?symbol='+BASE+'USDT');
     return [+d.lastPrice, +d.priceChangePercent, +d.quoteVolume];
   },
-  Bybit: async () => {
-    const d = (await getJSON(
-      'https://api.bybit.com/v5/market/tickers?category=linear&symbol='+BASE+'USDT'
-    )).result.list[0];
-    return [+d.lastPrice, +d.price24hPcnt*100, +d.turnover24h];
-  }
 };
 
 function render(){
@@ -2821,8 +2851,10 @@ function render(){
         + (r.note ? '<span class="mut" style="cursor:help" title="'+esc(r.note)+'"> *</span>' : '');
       t = fmtT(r.turnover);
     }
-    return '<tr><td><div class="ex"><span class="logo" style="background:'+esc(r.bg)+';color:'+esc(r.fg)+'">'
-      +esc(r.tx)+'</span>'+esc(r.exchange)+via+'</div></td>'
+    const logo = r.logo
+      ? ('<span class="logo-wrap"><img class="logo" src="'+esc(r.logo)+'" alt="'+esc(r.exchange)+' logo" loading="lazy" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'inline-flex\';"><span class="logo-fallback" style="background:'+esc(r.bg)+';color:'+esc(r.fg)+'">'+esc(r.tx)+'</span></span>')
+      : ('<span class="logo-wrap"><span class="logo-fallback" style="display:inline-flex;background:'+esc(r.bg)+';color:'+esc(r.fg)+'">'+esc(r.tx)+'</span></span>');
+    return '<tr><td><div class="ex">'+logo+esc(r.exchange)+via+'</div></td>'
       +'<td><a href="'+esc(r.url)+'" target="_blank" rel="noopener">'+esc(r.symbol)+'</a></td>'
       +'<td>'+p+'</td><td>'+c+'</td><td>'+t+'</td></tr>';
   }).join('');
@@ -2854,6 +2886,7 @@ async function run(){
 run();
 </script></body></html>"""
 
+
 def render_perp_venue_table(base: str = "BTC") -> None:
     section(f"🌐 เทียบราคา {base} Perpetual ข้ามกระดานโลก")
 
@@ -2879,6 +2912,7 @@ def render_perp_venue_table(base: str = "BTC") -> None:
                 bg=v["bg"],
                 fg=v["fg"],
                 tx=v["tx"],
+                logo=v.get("logo", ""),
                 note=v.get("note"),
                 price=_num(r["price"]),
                 chg=_num(r["chg"]),
@@ -2901,104 +2935,255 @@ def render_perp_venue_table(base: str = "BTC") -> None:
 
     c_cap.caption(
         f"อัปเดต {ts} (เวลาไทย) · กระดานที่ server ดึงไม่ได้ "
-        "(เช่น Binance/Bybit บน server ในสหรัฐฯ) จะให้เบราว์เซอร์ของคุณดึงเอง"
+        "(เช่น Binance บน server ในสหรัฐฯ) จะให้เบราว์เซอร์ของคุณดึงเอง"
     )
 
+
 # ============================================================
-# NEWS LAYER — ข่าวเฉพาะเหรียญที่มีใน SUPPORTED_ASSETS เท่านั้น
+# NEWS LAYER (v6) — Multi-source server fallback
+# CryptoCompare -> CoinDesk RSS -> Cointelegraph RSS
+# เฉพาะเหรียญใน SUPPORTED_ASSETS เท่านั้น
 # ============================================================
 
 NEWS_API_URL = "https://min-api.cryptocompare.com/data/v2/news/"
 NEWS_ASSETS = [a for a in SUPPORTED_ASSETS if a not in STABLECOINS]
 
-@_cache_data(ttl=600, show_spinner=False)
-def fetch_crypto_news(categories: list[str] | None = None, limit: int = 30) -> list[dict]:
-    requested = categories or NEWS_ASSETS
-    allowed = set(requested) & set(NEWS_ASSETS)
-    if not allowed:
-        return []
+# RSS เป็น fallback เมื่อ CryptoCompare จาก Streamlit server ใช้งานไม่ได้
+NEWS_RSS_FEEDS = [
+    ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
+    ("Cointelegraph", "https://cointelegraph.com/rss"),
+]
 
-    query = urllib.parse.urlencode({
-        "categories": ",".join(sorted(allowed)),
-        "excludeCategories": "Sponsored",
-        "lang": "EN",
-    })
-    full_url = f"{NEWS_API_URL}?{query}"
+NEWS_ALIASES = {
+    "BTC": ["BITCOIN", "XBT"],
+    "ETH": ["ETHEREUM", "ETHER"],
+    "SOL": ["SOLANA"],
+    "DOGE": ["DOGECOIN"],
+    "ADA": ["CARDANO"],
+    "HBAR": ["HEDERA", "HEDERA HASHGRAPH"],
+    "LINK": ["CHAINLINK"],
+    "XLM": ["STELLAR", "STELLAR LUMENS"],
+    "XRP": ["RIPPLE"],
+}
 
+
+def _news_match_assets(item: dict) -> list[str]:
+    """Match ข่าวกับเหรียญในระบบจาก category/tags + title/body/description."""
+    cats_raw = str(item.get("categories", "") or "")
+    tags_raw = str(item.get("tags", "") or "")
+    cats = {c.strip().upper() for c in re.split(r"[|,;]", cats_raw) if c.strip()}
+    tags = {c.strip().upper() for c in re.split(r"[|,;]", tags_raw) if c.strip()}
+    text = " ".join([
+        str(item.get("title", "") or ""),
+        str(item.get("body", "") or ""),
+        str(item.get("description", "") or ""),
+        str(item.get("summary", "") or ""),
+    ]).upper()
+    hits = []
+    for a in NEWS_ASSETS:
+        terms = [a, COIN_NAMES.get(a, a)] + NEWS_ALIASES.get(a, [])
+        term_set = {str(x).upper() for x in terms if x}
+        if a in cats or a in tags:
+            hits.append(a)
+            continue
+        if any(re.search(rf"\b{re.escape(term)}\b", text) for term in term_set):
+            hits.append(a)
+    return hits
+
+
+def _news_request(params: dict) -> tuple[list[dict], str | None]:
+    """เรียก CryptoCompare; คืน (Data, error)."""
     try:
+        query = urllib.parse.urlencode(params)
+        full_url = f"{NEWS_API_URL}?{query}"
         req = urllib.request.Request(
             full_url,
-            headers={"User-Agent": "XSpring-Dealer-Suite/1.0"},
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) XSpring-Dealer-Suite/1.0",
+                "Accept": "application/json,text/plain,*/*",
+            },
         )
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            raw = json.loads(resp.read().decode("utf-8"))
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            raw = json.loads(resp.read().decode("utf-8", errors="replace"))
+        if isinstance(raw, dict) and raw.get("Data") is not None:
+            return raw.get("Data", []) or [], None
+        return [], str(raw.get("Message", "CryptoCompare returned no Data")) if isinstance(raw, dict) else "Invalid response"
+    except Exception as e:
+        return [], f"{type(e).__name__}: {e}"
+
+
+def _news_parse_rss(xml_bytes: bytes, source_name: str) -> list[dict]:
+    """Parse RSS/Atom โดยใช้ stdlib เท่านั้น ไม่ต้องติดตั้ง feedparser."""
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(xml_bytes)
     except Exception:
         return []
 
-    items = raw.get("Data", []) or []
-    news_list = []
+    def local(tag: str) -> str:
+        return tag.rsplit("}", 1)[-1].lower()
 
-    for item in items:
-        item_tags = {
-            t.strip().upper()
-            for t in (item.get("categories", "") or "").split("|")
-            if t.strip()
-        }
-        matched = item_tags & allowed
+    def child_text(node, names):
+        for ch in list(node):
+            if local(ch.tag) in names:
+                return (ch.text or "").strip()
+        return ""
+
+    items = []
+    for node in root.iter():
+        if local(node.tag) not in {"item", "entry"}:
+            continue
+        title = child_text(node, {"title"})
+        link = child_text(node, {"link"})
+        if not link:
+            for ch in list(node):
+                if local(ch.tag) == "link":
+                    link = ch.attrib.get("href", "")
+                    if link:
+                        break
+        desc = child_text(node, {"description", "summary", "content", "encoded"})
+        pub = child_text(node, {"pubdate", "published", "updated", "date"})
+        if title:
+            items.append({
+                "title": title,
+                "url": link,
+                "body": desc,
+                "description": desc,
+                "published_raw": pub,
+                "source_info": {"name": source_name},
+                "source": source_name,
+                "categories": "",
+                "tags": "",
+                "imageurl": "",
+            })
+    return items
+
+
+def _news_request_rss(url: str, source_name: str) -> tuple[list[dict], str | None]:
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 XSpring-Dealer-Suite/1.0", "Accept": "application/rss+xml,application/xml,text/xml,*/*"},
+        )
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            raw = resp.read()
+        items = _news_parse_rss(raw, source_name)
+        return items, None if items else "RSS returned no items"
+    except Exception as e:
+        return [], f"{type(e).__name__}: {e}"
+
+
+def _news_parse_time(item: dict) -> int:
+    ts = item.get("published_on")
+    if ts:
+        try:
+            return int(ts)
+        except Exception:
+            pass
+    raw = str(item.get("published_raw", "") or "").strip()
+    if not raw:
+        return 0
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(raw)
+        return int(dt.timestamp())
+    except Exception:
+        try:
+            return int(datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp())
+        except Exception:
+            return 0
+
+
+@_cache_data(ttl=600, show_spinner=False)
+def fetch_crypto_news(limit: int = 30) -> list[dict]:
+    """
+    ดึงข่าวหลายชั้นเพื่อไม่ให้หน้า News ว่างเพราะ provider เดียวล้ม:
+    1) CryptoCompare targeted/global
+    2) CoinDesk RSS
+    3) Cointelegraph RSS
+    จากนั้น filter ซ้ำให้เหลือเฉพาะ NEWS_ASSETS
+    """
+    base = {"lang": "EN", "excludeCategories": "Sponsored", "sortOrder": "latest"}
+    raw_items: list[dict] = []
+    errors: list[str] = []
+
+    # 1) CryptoCompare: global feed ก่อน (เสถียรกว่า category query ในบาง deployment)
+    cc_items, cc_err = _news_request(base)
+    raw_items.extend(cc_items)
+    if cc_err and not cc_items:
+        errors.append("CryptoCompare: " + cc_err)
+
+    # 2) ถ้าได้ข้อมูลแต่ filter ไม่เจอ ให้ลอง category targeted
+    if cc_items and not any(_news_match_assets(x) for x in cc_items):
+        targeted, target_err = _news_request({**base, "categories": ",".join(NEWS_ASSETS)})
+        raw_items.extend(targeted)
+        if target_err and not targeted:
+            errors.append("CryptoCompare targeted: " + target_err)
+
+    # 3) RSS fallback จากสำนักข่าวหลัก
+    if len([x for x in raw_items if _news_match_assets(x)]) < limit:
+        for source_name, rss_url in NEWS_RSS_FEEDS:
+            rss_items, rss_err = _news_request_rss(rss_url, source_name)
+            raw_items.extend(rss_items)
+            if rss_err and not rss_items:
+                errors.append(source_name + ": " + rss_err)
+
+    # 4) dedupe + filter
+    seen = set()
+    news_list = []
+    for item in raw_items:
+        key = item.get("url") or item.get("guid") or item.get("title") or ""
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        matched = _news_match_assets(item)
         if not matched:
             continue
-
-        source_info = item.get("source_info") or {}
         news_list.append({
             "title": item.get("title", ""),
             "url": item.get("url", ""),
-            "source": source_info.get("name") or item.get("source", "Unknown"),
+            "source": (item.get("source_info") or {}).get("name") or item.get("source", "Unknown"),
             "image_url": item.get("imageurl", ""),
-            "published_ts": item.get("published_on", 0),
-            "body": item.get("body", ""),
+            "published_ts": _news_parse_time(item),
             "tags": sorted(matched),
         })
 
     news_list.sort(key=lambda x: x["published_ts"], reverse=True)
     return news_list[:limit]
 
-def _time_ago(unix_ts: int) -> str:
+
+def _news_time_ago(unix_ts: int) -> str:
     if not unix_ts:
         return ""
-    try:
-        delta = datetime.now(timezone.utc) - datetime.fromtimestamp(
-            int(unix_ts), tz=timezone.utc
-        )
-    except (TypeError, ValueError, OSError, OverflowError):
-        return ""
-
-    secs = max(0, delta.total_seconds())
+    delta = datetime.now(timezone.utc) - datetime.fromtimestamp(unix_ts, tz=timezone.utc)
+    secs = delta.total_seconds()
     if secs < 3600:
         return f"{int(secs // 60)} นาทีที่แล้ว"
     if secs < 86400:
         return f"{int(secs // 3600)} ชั่วโมงที่แล้ว"
     return f"{int(secs // 86400)} วันที่แล้ว"
 
-def render_news_section(cfg: dict[str, Any] | None = None) -> None:
+
+def render_news_section(cfg: dict) -> None:
     st.markdown("### 📰 ข่าวคริปโท (เฉพาะเหรียญในระบบ)")
 
-    if not NEWS_ASSETS:
-        st.info("ไม่มีเหรียญสำหรับดึงข่าวในระบบตอนนี้")
-        return
-
-    coin_filter = st.multiselect(
-        "กรองตามเหรียญ",
-        options=NEWS_ASSETS,
-        default=[],
-        placeholder="เลือกเหรียญ (ว่าง = ทั้งหมด)",
-        key="news_coin_filter",
-    )
-
-    news_items = fetch_crypto_news(categories=coin_filter or NEWS_ASSETS)
+    news_items = fetch_crypto_news()
 
     if not news_items:
-        st.info("ยังไม่มีข่าวที่ตรงกับเหรียญในระบบตอนนี้ ลองรีเฟรชอีกครั้ง")
+        st.warning("ยังไม่พบข่าวที่ตรงกับเหรียญในระบบจากแหล่งข่าวที่เชื่อมต่อได้")
+        st.caption("แหล่งข่าว: CryptoCompare → CoinDesk RSS → Cointelegraph RSS")
+        if st.button("🔄 รีเฟรชข่าว", key="news_refresh_empty"):
+            fetch_crypto_news.clear()
+            st.rerun()
         return
+
+    c_cap, c_btn = st.columns([8, 2])
+    with c_cap:
+        st.caption(f"พบข่าวที่เกี่ยวข้อง {len(news_items)} ข่าว")
+    with c_btn:
+        if st.button("🔄 รีเฟรช", key="news_refresh", **WIDE):
+            fetch_crypto_news.clear()
+            st.rerun()
 
     for news in news_items:
         cols = st.columns([1, 4])
@@ -3009,186 +3194,230 @@ def render_news_section(cfg: dict[str, Any] | None = None) -> None:
                 except Exception:
                     pass
         with cols[1]:
-            title = news["title"] or "ข่าวคริปโท"
+            title = news["title"] or "(ไม่มีหัวข้อข่าว)"
             url = news["url"]
             if url:
                 st.markdown(f"**[{title}]({url})**")
             else:
                 st.markdown(f"**{title}**")
             tag_str = " · ".join(news["tags"])
-            st.caption(
-                f"{news['source']} • {_time_ago(news['published_ts'])} • {tag_str}"
-            )
+            st.caption(f"{news['source']} • {_news_time_ago(news['published_ts'])} • {tag_str}")
         st.divider()
 
-# ============================================================
-# FUND FLOW LAYER — เฉพาะเหรียญใน SUPPORTED_ASSETS เท่านั้น
-# Binance Public API + CoinGecko Market Cap (Weighted + Heatmap)
-# ============================================================
 
-BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
-COINGECKO_MARKETS_URL = "https://api.coingecko.com/api/v3/coins/markets"
+# ============================================================
+# FUND FLOW LAYER (v2) — ดึงผ่านเบราว์เซอร์ผู้ใช้
+# เฉพาะเหรียญใน SUPPORTED_ASSETS เท่านั้น
+# ============================================================
 
 FUNDFLOW_ASSETS = [a for a in SUPPORTED_ASSETS if a not in STABLECOINS]
 
 FUNDFLOW_TIMEFRAMES = {
-    "5m": ("1m", 5), "15m": ("1m", 15), "1h": ("5m", 12),
-    "2h": ("15m", 8), "4h": ("15m", 16), "6h": ("30m", 12),
-    "8h": ("30m", 16), "1D": ("1h", 24), "7D": ("4h", 42),
-    "30D": ("1d", 30),
+    "5m":  {"interval": "1m", "limit": 5},
+    "15m": {"interval": "1m", "limit": 15},
+    "1h":  {"interval": "5m", "limit": 12},
+    "2h":  {"interval": "15m", "limit": 8},
+    "4h":  {"interval": "15m", "limit": 16},
+    "6h":  {"interval": "30m", "limit": 12},
+    "8h":  {"interval": "30m", "limit": 16},
+    "1D":  {"interval": "1h", "limit": 24},
+    "7D":  {"interval": "4h", "limit": 42},
+    "30D": {"interval": "1d", "limit": 30},
 }
 
-FUNDFLOW_WEIGHTS = {
-    "5m": 1.5, "15m": 1.4, "1h": 1.3,
-    "2h": 1.2, "4h": 1.1, "6h": 1.0,
-    "8h": 0.9, "1D": 0.8, "7D": 0.5, "30D": 0.3
-}
-
+# แมป symbol ในระบบ -> id ของ CoinGecko
 COINGECKO_ID_MAP = {
-    "BTC": "bitcoin", "ETH": "ethereum", "BNB": "binancecoin",
-    "XRP": "ripple", "SOL": "solana", "ADA": "cardano",
-    "DOGE": "dogecoin", "MATIC": "matic-network", "DOT": "polkadot",
-    "LTC": "litecoin",
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "SOL": "solana",
+    "DOGE": "dogecoin",
+    "ADA": "cardano",
+    "HBAR": "hedera-hashgraph",
+    "LINK": "chainlink",
+    "XLM": "stellar",
+    "XRP": "ripple",
 }
 
-def _fetch_klines(symbol_pair: str, interval: str, limit: int) -> list:
-    query = urllib.parse.urlencode({"symbol": symbol_pair, "interval": interval, "limit": limit})
-    req = urllib.request.Request(
-        f"{BINANCE_KLINES_URL}?{query}",
-        headers={"User-Agent": "XSpring-Dealer-Suite/1.0"},
-    )
-    with urllib.request.urlopen(req, timeout=8) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+_FUNDFLOW_HTML = r"""
+<style>
+  html,body{margin:0;padding:0;background:transparent;color:#EAECEF;
+    font-family:"Source Sans Pro",-apple-system,"Segoe UI",Roboto,sans-serif;}
+  .wrap{border:1px solid #2b3139;border-radius:8px;overflow-x:auto;}
+  table{width:100%;border-collapse:collapse;font-size:.85rem;white-space:nowrap;}
+  th{text-align:left;padding:9px 12px;color:#848e9c;font-weight:600;font-size:.72rem;
+     border-bottom:1px solid #2b3139;background:#161a1e;position:sticky;top:0;}
+  td{padding:10px 12px;border-bottom:1px solid #2b3139;font-variant-numeric:tabular-nums;}
+  .sym{display:flex;align-items:center;gap:8px;font-weight:700;}
+  .logo{width:22px;height:22px;border-radius:50%;}
+  .up{color:#0ecb81;background:rgba(14,203,129,.07);}
+  .dn{color:#f6465d;background:rgba(246,70,93,.07);}
+  .mut{color:#5e6673;}
+  .sig{display:inline-block;padding:2px 8px;border-radius:4px;font-weight:700;font-size:.72rem;}
+  .sig-strongin{background:#0ecb81;color:#0b0e11;}
+  .sig-in{background:rgba(14,203,129,.18);color:#0ecb81;}
+  .sig-neu{background:#2b3139;color:#848e9c;}
+  .sig-out{background:rgba(246,70,93,.18);color:#f6465d;}
+  .sig-strongout{background:#f6465d;color:#0b0e11;}
+  .note{color:#848e9c;font-size:.75rem;margin-top:8px;line-height:1.5;}
+</style>
+<div class="wrap">
+  <table>
+    <thead><tr id="thead"></tr></thead>
+    <tbody id="tb"></tbody>
+  </table>
+</div>
+<div class="note" id="note">กำลังโหลดข้อมูล Fund Flow จากเบราว์เซอร์ของคุณ…</div>
+<script>
+const ASSETS = __ASSETS__;
+const TFS = __TFS__;
+const CG_MAP = __CGMAP__;
+const TF_KEYS = Object.keys(TFS);
 
-def _net_flow_from_klines(klines: list) -> float:
-    net = 0.0
-    for k in klines:
-        quote_volume = float(k[7])
-        taker_buy_quote_volume = float(k[10])
-        net += (2 * taker_buy_quote_volume) - quote_volume
-    return net
+function fmtFlow(v){
+  if (v === null || v === undefined || !isFinite(v)) return "—";
+  const sign = v < 0 ? "-" : "";
+  const a = Math.abs(v);
+  if (a >= 1e9) return sign + (a/1e9).toFixed(2) + "B";
+  if (a >= 1e6) return sign + (a/1e6).toFixed(2) + "M";
+  if (a >= 1e3) return sign + (a/1e3).toFixed(2) + "K";
+  return sign + a.toFixed(2);
+}
 
-@_cache_data(ttl=120, show_spinner=False)
-def fetch_fund_flow_row(asset: str) -> dict | None:
-    row = {"symbol": asset}
-    try:
-        for tf_label, (interval, limit) in FUNDFLOW_TIMEFRAMES.items():
-            row[tf_label] = _net_flow_from_klines(_fetch_klines(f"{asset}USDT", interval, limit))
-    except Exception:
-        return None
-    return row
+async function getJSON(url, timeoutMs=8000){
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+  try{
+    const r = await fetch(url, {signal: ac.signal});
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
 
-@_cache_data(ttl=300, show_spinner=False)
-def fetch_market_caps(assets: list[str]) -> dict:
-    ids = [COINGECKO_ID_MAP[a] for a in assets if a in COINGECKO_ID_MAP]
-    if not ids:
-        return {}
-    query = urllib.parse.urlencode({"vs_currency": "usd", "ids": ",".join(ids)})
-    req = urllib.request.Request(
-        f"{COINGECKO_MARKETS_URL}?{query}",
-        headers={"User-Agent": "XSpring-Dealer-Suite/1.0"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        return {}
-    id_to_symbol = {v: k for k, v in COINGECKO_ID_MAP.items()}
-    return {id_to_symbol[item.get("id")]: item.get("market_cap", 0)
-            for item in data if id_to_symbol.get(item.get("id"))}
+async function fetchNetFlow(asset, interval, limit){
+  const url = "https://api.binance.com/api/v3/klines?symbol=" + asset +
+              "USDT&interval=" + interval + "&limit=" + limit;
+  const kl = await getJSON(url);
+  let net = 0;
+  for(const k of kl){
+    const quoteVol = parseFloat(k[7]);
+    const takerBuyQuoteVol = parseFloat(k[10]);
+    net += (2 * takerBuyQuoteVol) - quoteVol;
+  }
+  return net;
+}
 
-def _fund_signal(row: dict) -> tuple[int, str]:
-    total_weight = 0.0
-    weighted_sum = 0.0
-    for tf, weight in FUNDFLOW_WEIGHTS.items():
-        if tf in row:
-            val = row[tf]
-            total_weight += weight
-            if val > 0:
-                weighted_sum += weight
-            elif val < 0:
-                weighted_sum -= weight
-    
-    if total_weight == 0:
-        return 0, "No Data"
-        
-    score = round((weighted_sum / total_weight) * 100)
-    if score >= 60:
-        label = "Strong Inflow"
-    elif score > 15:
-        label = "Net Inflow"
-    elif score >= -15:
-        label = "Neutral"
-    elif score > -60:
-        label = "Net Outflow"
-    else:
-        label = "Strong Outflow"
-    return score, label
+async function fetchMarketCaps(){
+  const ids = ASSETS.map(a => CG_MAP[a]).filter(Boolean);
+  if (!ids.length) return {};
+  try{
+    const url = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=" + ids.join(",");
+    const data = await getJSON(url);
+    const idToSym = {};
+    for(const sym in CG_MAP) idToSym[CG_MAP[sym]] = sym;
+    const out = {};
+    for(const item of data){
+      const sym = idToSym[item.id];
+      if (sym) out[sym] = item.market_cap || 0;
+    }
+    return out;
+  } catch(e){ return {}; }
+}
 
-def _fmt_flow(value: float) -> str:
-    sign, v = ("-", abs(value)) if value < 0 else ("", value)
-    if v >= 1_000_000_000: return f"{sign}{v / 1_000_000_000:.2f}B"
-    if v >= 1_000_000: return f"{sign}{v / 1_000_000:.2f}M"
-    if v >= 1_000: return f"{sign}{v / 1_000:.2f}K"
-    return f"{sign}{v:.2f}"
+function signalOf(row){
+  const vals = TF_KEYS.map(k => row[k]).filter(v => v !== null && v !== undefined && isFinite(v));
+  if (!vals.length) return {score: 0, label: "No Data", cls: "sig-neu"};
+  const pos = vals.filter(v => v > 0).length;
+  const score = Math.round(((pos / vals.length) * 2 - 1) * 100);
+  if (score >= 50) return {score, label: "Strong Inflow", cls: "sig-strongin"};
+  if (score > 0)   return {score, label: "Net Inflow", cls: "sig-in"};
+  if (score === 0) return {score, label: "Neutral", cls: "sig-neu"};
+  if (score > -50) return {score, label: "Net Outflow", cls: "sig-out"};
+  return {score, label: "Strong Outflow", cls: "sig-strongout"};
+}
 
-def build_fund_flow_table() -> pd.DataFrame:
-    rows = []
-    for asset in FUNDFLOW_ASSETS:
-        row = fetch_fund_flow_row(asset)
-        if row is not None:
-            rows.append(row)
-    if not rows:
-        return pd.DataFrame()
-    
-    market_caps = fetch_market_caps([r["symbol"] for r in rows])
-    for row in rows:
-        row["market_cap"] = market_caps.get(row["symbol"], 0)
-        row["signal_score"], row["signal_label"] = _fund_signal(row)
-        
-    return pd.DataFrame(rows).sort_values("market_cap", ascending=False).reset_index(drop=True)
+function renderHead(){
+  let h = "<th>Symbol</th>";
+  for (const k of TF_KEYS) h += "<th>" + k + "</th>";
+  h += "<th>Market Cap</th><th>Fund Signal</th>";
+  document.getElementById("thead").innerHTML = h;
+}
+
+function renderRows(rows, failed){
+  const sorted = rows.slice().sort((a,b) => (b.marketCap||0) - (a.marketCap||0));
+  document.getElementById("tb").innerHTML = sorted.map(r => {
+    let cells = "";
+    for (const k of TF_KEYS){
+      const v = r[k];
+      if (v === null || v === undefined || !isFinite(v)){
+        cells += "<td class='mut'>—</td>";
+      } else {
+        cells += "<td class='" + (v >= 0 ? "up" : "dn") + "'>" + fmtFlow(v) + "</td>";
+      }
+    }
+    const sig = signalOf(r);
+    const mc = r.marketCap ? fmtFlow(r.marketCap) : "—";
+    return "<tr><td class='sym'>" + esc(r.asset) + "</td>" + cells +
+           "<td>" + mc + "</td>" +
+           "<td><span class='sig " + sig.cls + "'>" + (sig.score>=0?"+":"") + sig.score + " " + sig.label + "</span></td></tr>";
+  }).join("");
+  const ts = new Date().toLocaleTimeString("th-TH", {hour12:false});
+  let note = "อัปเดต " + ts + " · ดึงข้อมูลจากเบราว์เซอร์ของคุณโดยตรง (กัน Binance บล็อก IP server)";
+  if (failed.length) note += " · ดึงไม่ได้: " + failed.join(", ");
+  document.getElementById("note").textContent = note;
+}
+
+function esc(s){ return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+
+async function run(){
+  renderHead();
+  const caps = await fetchMarketCaps();
+  const rows = [];
+  const failed = [];
+
+  await Promise.all(ASSETS.map(async (asset) => {
+    const row = {asset, marketCap: caps[asset] || 0};
+    await Promise.all(TF_KEYS.map(async (k) => {
+      const cfg = TFS[k];
+      try {
+        row[k] = await fetchNetFlow(asset, cfg.interval, cfg.limit);
+      } catch (e) {
+        row[k] = null;
+      }
+    }));
+    const hasAny = TF_KEYS.some(k => row[k] !== null && row[k] !== undefined);
+    if (hasAny) rows.push(row);
+    else failed.push(asset);
+  }));
+
+  renderRows(rows, failed);
+}
+run();
+</script>
+"""
+
 
 def render_fund_flow_section(cfg: dict[str, Any] | None = None) -> None:
+    """
+    Render ตาราง Cryptocurrency Fund Flow โดยให้ browser ของผู้ใช้เรียก
+    Binance Spot klines และ CoinGecko โดยตรง แทนการยิง API จาก Streamlit server.
+    """
     st.markdown("### 💧 Cryptocurrency Fund Flow")
-    st.caption("คำนวณจาก Net Taker Buy/Sell Volume บน Binance · ถ่วงน้ำหนักโมเมนตัมระยะสั้น (Short-term Weighted) · เฉพาะเหรียญในระบบ")
-
-    df = build_fund_flow_table()
-    if df.empty:
-        st.info("ยังไม่มีข้อมูล Fund Flow ตอนนี้ ลองรีเฟรชอีกครั้ง")
-        return
-
-    tf_cols = list(FUNDFLOW_TIMEFRAMES.keys())
-    display_df = df[["symbol"] + tf_cols + ["market_cap"]].copy()
-    display_df["Signal"] = df.apply(
-        lambda r: f"{r['signal_score']:+d}  {r['signal_label']}", axis=1
+    st.caption(
+        "Net Taker Buy/Sell Volume จาก Binance · เฉพาะเหรียญในระบบ · "
+        "คำนวณที่เบราว์เซอร์ของคุณโดยตรง"
     )
-    display_df = display_df.rename(columns={"symbol": "Symbol", "market_cap": "Market Cap"})
 
-    def _fund_heatmap(row):
-        max_val = row.abs().max()
-        if pd.isna(max_val) or max_val == 0:
-            return [''] * len(row)
-        styles = []
-        for v in row:
-            if pd.isna(v) or v == 0:
-                styles.append('color: #848e9c;')
-            else:
-                intensity = 0.1 + (0.7 * (abs(v) / max_val))
-                if v > 0:
-                    styles.append(f'background-color: rgba(14,203,129,{intensity:.2f}); color: #EAECEF;')
-                else:
-                    styles.append(f'background-color: rgba(246,70,93,{intensity:.2f}); color: #EAECEF;')
-        return styles
-
-    format_dict = {tf: _fmt_flow for tf in tf_cols}
-    format_dict["Market Cap"] = _fmt_flow
-
-    styled = (
-        display_df.style
-        .apply(_fund_heatmap, subset=tf_cols, axis=1)
-        .format(format_dict)
+    payload_html = (
+        _FUNDFLOW_HTML
+        .replace("__ASSETS__", json.dumps(FUNDFLOW_ASSETS, ensure_ascii=False))
+        .replace("__TFS__", json.dumps(FUNDFLOW_TIMEFRAMES, ensure_ascii=False))
+        .replace("__CGMAP__", json.dumps(COINGECKO_ID_MAP, ensure_ascii=False))
     )
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    components.html(
+        payload_html,
+        height=90 + 46 * len(FUNDFLOW_ASSETS),
+        scrolling=True,
+    )
 
 
 def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]) -> None:
@@ -3314,7 +3543,10 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
     st.markdown("<br>", unsafe_allow_html=True)
     render_perp_venue_table(asset)
-    # ---- 5.4 TAB 3 — TIME-TRAVEL ORDER SIMULATOR ---------------------------
+
+
+
+# ---- 5.4 TAB 3 — TIME-TRAVEL ORDER SIMULATOR ---------------------------
 
 def _toggle_fav(sym: str) -> None:
     favs = list(st.session_state.get("favorite_tickers", []))
@@ -3447,6 +3679,7 @@ def check_open_orders(sim, quote_buy, quote_sell, data, order_date, ctx) -> None
             remaining.append(o)
         elif ok:
             execute_order(sim, o["side"], amt, order_date, data.loc[order_date], ctx)
+        # hit แต่ยอดไม่พอ = ยกเลิกทิ้ง
     sim["open_orders"] = remaining
 
 def run_random_batch(sim, cfg, ctx, target_stock_thb, coins, n_orders, seed,
@@ -3469,18 +3702,21 @@ def run_random_batch(sim, cfg, ctx, target_stock_thb, coins, n_orders, seed,
     if not frames:
         return [], {}, skipped
 
+    # 1) วางแผนออเดอร์ทั้งหมดก่อน แล้วเรียงตามวันที่
     names = list(frames)
     plan = []
     for _ in range(int(n_orders)):
         c = names[int(rng.integers(len(names)))]
         idx = frames[c].index
         d = idx[int(rng.integers(len(idx)))]
+        # สุ่มแบบ log-uniform ระหว่าง min-max จะได้มีทั้งออเดอร์เล็กและใหญ่
         amt = round(float(np.exp(rng.uniform(np.log(lo), np.log(hi)))), 2)
         amt = max(amt, MIN_TRADE_THB)
         side = "buy" if rng.random() < p_buy else "sell"
         plan.append((d, c, side, amt))
     plan.sort(key=lambda x: x[0])
 
+    # 2) เตรียม ctx และ inventory ต่อเหรียญ
     coin_ctx = {}
     for c, df_c in frames.items():
         rp = risk_profile(df_c["Global_USD"])
@@ -3498,6 +3734,7 @@ def run_random_batch(sim, cfg, ctx, target_stock_thb, coins, n_orders, seed,
             px = float(last["Global_USD"] * last["USDTHB"])
             sim["inv_coins"][c] = target_stock_thb / px if px > 0 else 0.0
 
+    # 3) ยิงออเดอร์ (ไม่แตะกระเป๋าของผู้ใช้)
     saved_asset, saved_target = sim["asset"], sim["target_thb"]
     counts, last_steps = {}, []
     try:
@@ -3622,6 +3859,7 @@ def render_order_panel(cfg, sim, asset, mid_now, data, current_date_val, ctx) ->
         else:
             _submit_order(sim, "sell", float(sell_qty * quote_sell), data, current_date_val, ctx)
 
+    # แสดงออเดอร์ที่รอจับคู่
     for o in sim.get("open_orders", []):
         c1, c2 = st.columns([5, 1])
         c1.caption(f"{o['side'].upper()} @ {o['px']:,.4f} — "
@@ -3656,6 +3894,7 @@ def render_backoffice(sim, cfg, ctx, target_stock_thb, price_thb) -> None:
     rej = df["ผลด่าน"].astype(str).str.startswith("Reject")
     ok = df[~rej]
 
+    # ---------- คำนวณ ----------
     inv_rows = []
     for c, qty in sim["inv_coins"].items():
         px = float(price_thb.get(c, 0.0))
@@ -3696,6 +3935,7 @@ def render_backoffice(sim, cfg, ctx, target_stock_thb, price_thb) -> None:
     fx_lim = float(cfg["fx_limit_max"])
     cex_used, cex_lim = float(sim["cex_used_thb"]), float(ctx["cex_liquidity_thb"])
 
+    # ---------- การ์ด แถว 1 ----------
     section("📦 สถานะหลังบ้าน")
     r1 = st.columns(4)
     metric_card(r1[0], f"สต็อกรวม {len(inv)} เหรียญ", fmt_baht(total_stock), None,
@@ -3707,6 +3947,7 @@ def render_backoffice(sim, cfg, ctx, target_stock_thb, price_thb) -> None:
     metric_card(r1[3], "กำไรสะสมของ Dealer", fmt_baht(net_pnl, True), net_pnl,
                 f"{len(df)} ออเดอร์ · เฉลี่ย {fmt_baht(net_pnl / len(df), True)}/ออเดอร์")
 
+    # ---------- การ์ด แถว 2 (เพิ่มใหม่) ----------
     r2 = st.columns(4)
     metric_card(r2[0], "Net Exposure (ส่วนต่างจาก target)", fmt_baht(net_exposure, True),
                 -abs(net_exposure) if abs(net_exposure) > 1 else 0,
@@ -3718,6 +3959,7 @@ def render_backoffice(sim, cfg, ctx, target_stock_thb, price_thb) -> None:
     metric_card(r2[3], "Win Rate / Reject", f"{win_rate:.1f}%", None,
                 f"ปฏิเสธ {int(rej.sum())} · Hedge ไม่ครบ {partial} ออเดอร์")
 
+    # ---------- Gauges ----------
     g = st.columns(4)
     with g[0]:
         gauge_bar("โควตา Outbound FX", fx_used, fx_lim, f"{fx_used / fx_lim * 100:.0f}%" if fx_lim else "-",
@@ -3736,10 +3978,12 @@ def render_backoffice(sim, cfg, ctx, target_stock_thb, price_thb) -> None:
     if ctx.get("hot_breach"):
         verdict_box(True, "Hot Wallet เกินเพดาน", "สัดส่วน Hot Wallet สูงกว่าเกณฑ์ที่กำหนด", warn=True)
 
+    # ---------- ตารางต่อเหรียญ ----------
     section("🪙 สถานะรายเหรียญ")
     st.dataframe(inv.sort_values("มูลค่า (THB)", ascending=False).reset_index(drop=True),
                  height=min(420, 40 + 35 * len(inv)), **WIDE)
 
+    # ---------- กราฟ ----------
     section("📈 กราฟหลังบ้าน")
     x = df.index
     c1, c2 = st.columns(2)
@@ -3760,6 +4004,7 @@ def render_backoffice(sim, cfg, ctx, target_stock_thb, price_thb) -> None:
     f.add_hline(y=0, line=dict(color="#f6465d", dash="dash"), annotation_text="ขั้นต่ำ")
     c4.plotly_chart(_bo_fig(f, 300, "NC Buffer หลังแต่ละออเดอร์ (THB)"), **WIDE)
 
+    # --- กราฟที่เพิ่มใหม่ ---
     c5, c6 = st.columns(2)
     f = go.Figure(go.Bar(x=inv["เหรียญ"], y=inv["กำไร (THB)"],
                          marker_color=["#0ecb81" if v >= 0 else "#f6465d" for v in inv["กำไร (THB)"]]))
@@ -3842,7 +4087,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
             data.loc[first_day, "USDTHB"], target_stock_thb)
         st.session_state.sim_steps = []
 
-    current_date_val = pd.to_datetime(data.index[-1])
+    current_date_val = pd.to_datetime(data.index[-1])   # ราคาปัจจุบันเสมอ
     st.session_state.sim["current_date"] = current_date_val
 
     spot_usd_current = float(data.loc[current_date_val, "Global_USD"])
@@ -3877,6 +4122,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         pct_txt = f"เปลี่ยน 24H {'+' if pct_24h >= 0 else ''}{pct_24h:.2f}%"
         pct_cls = "ex-green" if pct_24h >= 0 else "ex-red"
 
+    # --- TOP HEADER BAR ---
     top_bar_html = f"""<div class="ex-header">
         <div style="display:flex; align-items:center; gap:12px;">
             {coin_icon_html(asset, 40)}
@@ -3893,6 +4139,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     </div>"""
     st.markdown(top_bar_html, unsafe_allow_html=True)
 
+    # --- MAIN LAYOUT: Market | Chart + Order Panel + Tabs ---
     col_left, col_center = st.columns([2.6, 7.4], gap="small")
 
     with col_left:
@@ -3970,11 +4217,9 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 st.session_state.sim_batch_summary = txt
                 st.rerun()
 
+        # --- NEWS LAYER: แทรกใน Exchange UI เดิม ไม่สร้างแท็บใหม่ ---
         with st.expander("📰 ข่าวคริปโท", expanded=False):
             render_news_section(cfg)
-            
-        with st.expander("💧 Cryptocurrency Fund Flow", expanded=False):
-            render_fund_flow_section(cfg)
 
         st.markdown('<div style="margin-top:14px;"></div>', unsafe_allow_html=True)
         t_route, t_ledger, t_wallet = st.tabs(
@@ -4040,7 +4285,7 @@ def _deposit_dialog_body() -> None:
     done = st.session_state.pop("dep_done", None)
     if done:
         st.session_state["dep_toast"] = done
-        st.rerun()
+        st.rerun()  # รีรันทั้งแอป: ปิดหน้าต่าง + อัปเดตยอดในตาราง
 
     sim = st.session_state.get("sim")
     cash = float(sim.get("customer_thb", 1_000_000.0)) if isinstance(sim, dict) else 1_000_000.0
@@ -4062,6 +4307,8 @@ def _deposit_dialog_body() -> None:
 
 
 def deposit_dialog() -> None:
+    # ห่อ st.dialog ตอนเรียกใช้ (ไม่ใช้ @decorator ระดับโมดูล)
+    # เพื่อให้ import ไฟล์นี้ใน unittest ได้แม้ไม่มี streamlit
     st.dialog("ฝากเงินบาท")(_deposit_dialog_body)()
 
 
@@ -4093,6 +4340,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
     total_usdt = total_thb / usdthb_current if usdthb_current > 0 else 0
     time_str = pd.Timestamp.now(tz="Asia/Bangkok").strftime("%H:%M:%S")
 
+    # Header (ไม่มีปุ่มฝาก/ถอน/ประวัติ ตามที่ร้องขอ)
     st.markdown(
         f'<div style="margin-bottom:20px;">'
         f'<h2 style="margin:0; color:#EAECEF; font-size:1.8rem;">กระเป๋าเงิน</h2>'
@@ -4100,6 +4348,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         unsafe_allow_html=True
     )
 
+    # Total Box
     st.markdown(
         f'<div class="wl-box" style="margin-bottom:20px;">'
         f'<div style="font-size:0.9rem; color:#848e9c; font-weight:600;">มูลค่าทั้งหมด</div>'
@@ -4109,6 +4358,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         unsafe_allow_html=True
     )
 
+    # Asset Table Title and Controls
     st.markdown(
         '<div style="display:flex; align-items:center; margin-bottom:16px; gap:8px;">'
         '<div style="width:3px; height:16px; background:#0ecb81; border-radius:2px;"></div>'
@@ -4124,6 +4374,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         st.markdown('<div style="margin-top:8px;"></div>', unsafe_allow_html=True)
         hide_small = st.checkbox("ซ่อนเหรียญที่มูลค่า < 1 บาท", value=False)
 
+    # Asset List Construction
     assets_to_show = [{"sym": "THB", "qty": cust_thb, "price": 1.0, "val": cust_thb}]
     for sym in SUPPORTED_ASSETS:
         qty = cust_coins.get(sym, 0.0)
@@ -4280,6 +4531,7 @@ def render_ai_fab() -> None:
                     ph.markdown('<div class="ai-empty">ลองกดคำถามด้านล่าง หรือพิมพ์เองได้เลย</div>',
                                 unsafe_allow_html=True)
                                 
+            # ปุ่มคำถามตัวอย่าง (แสดงเฉพาะตอนยังไม่เริ่มคุย)
             if not hist and not pending:
                 with sug_ph.container():
                     for i, s in enumerate(AI_SUGGESTIONS):
@@ -4322,6 +4574,7 @@ def _main_body() -> None:
     d_name = user_prof.get("display_name", email)
     avatar_b64 = user_prof.get("avatar_b64", "")
 
+    # ---- แสดงโปรไฟล์ที่ด้านบนของหน้าหลัก ----
     top_l, top_r = st.columns([8, 2])
     with top_l:
         st.markdown(
@@ -4543,10 +4796,12 @@ def require_login() -> bool:
             st.logout()
         st.stop()
 
+    # ---------- Profile Setup Flow ----------
     profiles = load_profiles()
     if email not in profiles:
         show_profile_setup_page(email)
-        st.stop() 
+        st.stop() # หยุดกระบวนการโหลดแอปหลักจนกว่าจะสร้างโปรไฟล์เสร็จ
+    # ----------------------------------------
     
     return True
 
@@ -4562,6 +4817,7 @@ def main() -> None:
     try:
         _main_body()
     finally:
+        # finally ทำงานแม้มี st.rerun() ทำให้ทุกออเดอร์ถูกเซฟเสมอ
         try:
             save_sim_state(st.session_state.get("sim"))
         except Exception:
