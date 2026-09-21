@@ -2940,59 +2940,106 @@ def render_perp_venue_table(base: str = "BTC") -> None:
 
 
 # ============================================================
-# NEWS LAYER (v4) — ดึงจาก server (Python) ตัวกรองยืดหยุ่นขึ้น
+# NEWS LAYER (v5) — Server-side + category targeted fallback
 # เฉพาะเหรียญใน SUPPORTED_ASSETS เท่านั้น
 # ============================================================
 
 NEWS_API_URL = "https://min-api.cryptocompare.com/data/v2/news/"
 NEWS_ASSETS = [a for a in SUPPORTED_ASSETS if a not in STABLECOINS]
+NEWS_ALIASES = {
+    "BTC": ["BITCOIN"],
+    "ETH": ["ETHEREUM", "ETHER"],
+    "SOL": ["SOLANA"],
+    "DOGE": ["DOGECOIN"],
+    "ADA": ["CARDANO"],
+    "HBAR": ["HEDERA", "HEDERA HASHGRAPH"],
+    "LINK": ["CHAINLINK"],
+    "XLM": ["STELLAR", "STELLAR LUMENS"],
+    "XRP": ["RIPPLE"],
+}
 
 
 def _news_match_assets(item: dict) -> list[str]:
-    """
-    เช็คว่าข่าวนี้เกี่ยวกับเหรียญไหนใน NEWS_ASSETS บ้าง
-    ลำดับการเช็ค: category ตรงตัว -> ticker/ชื่อเหรียญปรากฏในหัวข้อข่าว (word boundary)
-    """
-    cats = {c.strip().upper() for c in (item.get("categories", "") or "").split("|") if c.strip()}
-    title_upper = (item.get("title", "") or "").upper()
+    """Match ข่าวกับเหรียญในระบบจาก category + title + body/description."""
+    cats_raw = str(item.get("categories", "") or "")
+    cats = {c.strip().upper() for c in re.split(r"[|,;]", cats_raw) if c.strip()}
+    text = " ".join([
+        str(item.get("title", "") or ""),
+        str(item.get("body", "") or ""),
+        str(item.get("description", "") or ""),
+    ]).upper()
     hits = []
     for a in NEWS_ASSETS:
-        name_upper = COIN_NAMES.get(a, a).upper()
+        terms = [a, COIN_NAMES.get(a, a)] + NEWS_ALIASES.get(a, [])
         if a in cats:
             hits.append(a)
             continue
-        if re.search(rf"\b{re.escape(a)}\b", title_upper) or \
-           re.search(rf"\b{re.escape(name_upper)}\b", title_upper):
+        if any(re.search(rf"\b{re.escape(str(term).upper())}\b", text) for term in terms if term):
             hits.append(a)
     return hits
+
+
+def _news_request(params: dict) -> list[dict]:
+    """เรียก CryptoCompare และคืน Data; แยก exception เพื่อให้ fallback ทำงานต่อได้."""
+    try:
+        query = urllib.parse.urlencode(params)
+        full_url = f"{NEWS_API_URL}?{query}"
+        req = urllib.request.Request(
+            full_url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (XSpring-Dealer-Suite/1.0)",
+                "Accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            raw = json.loads(resp.read().decode("utf-8"))
+        return raw.get("Data", []) or []
+    except Exception:
+        return []
 
 
 @_cache_data(ttl=600, show_spinner=False)
 def fetch_crypto_news(limit: int = 30) -> list[dict]:
     """
-    ดึงข่าวคริปโทจาก CryptoCompare (server-side) แล้วกรองเฉพาะข่าว
-    ที่เกี่ยวกับเหรียญใน NEWS_ASSETS เท่านั้น
+    ดึงข่าวจาก CryptoCompare แบบ targeted category ก่อน แล้ว fallback เป็น global feed
+    จากนั้นกรองซ้ำอีกชั้นให้เหลือเฉพาะเหรียญใน NEWS_ASSETS.
     """
-    query = urllib.parse.urlencode({
-        "lang": "EN",
-        "excludeCategories": "Sponsored",
-    })
-    full_url = f"{NEWS_API_URL}?{query}"
+    base = {"lang": "EN", "excludeCategories": "Sponsored"}
+    raw_items = []
 
-    try:
-        req = urllib.request.Request(
-            full_url,
-            headers={"User-Agent": "XSpring-Dealer-Suite/1.0"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            raw = json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        return []
+    # 1) ขอ feed โดยระบุ categories ของเหรียญในระบบโดยตรง
+    if NEWS_ASSETS:
+        raw_items.extend(_news_request({**base, "categories": ",".join(NEWS_ASSETS), "sortOrder": "latest"}))
 
-    items = raw.get("Data", []) or []
+    # 2) ถ้า category endpoint ไม่คืนพอ ให้ขอทีละเหรียญ (ช่วยกรณี provider ตี category ต่างกัน)
+    if len(raw_items) < max(10, limit):
+        for asset in NEWS_ASSETS:
+            got = _news_request({**base, "categories": asset, "sortOrder": "latest"})
+            raw_items.extend(got[:20])
+            if len(raw_items) >= max(60, limit * 2):
+                break
+
+    # 3) global feed เป็น fallback สุดท้าย
+    if not raw_items:
+        raw_items = _news_request({**base, "sortOrder": "latest"})
+
+    # ถ้า targeted feed มีข้อมูลแต่ filter ไม่พบ ให้ลอง global feed อีกครั้ง
+    # เพื่อไม่ให้ category ของ provider ทำให้ข่าวกลายเป็น 0 รายการ
+    if raw_items:
+        probe_matches = any(_news_match_assets(item) for item in raw_items)
+        if not probe_matches:
+            global_items = _news_request({**base, "sortOrder": "latest"})
+            if global_items:
+                raw_items.extend(global_items)
+
+    # dedupe ตาม URL/title แล้ว filter เฉพาะเหรียญในระบบ
+    seen = set()
     news_list = []
-
-    for item in items:
+    for item in raw_items:
+        key = item.get("url") or item.get("guid") or item.get("title") or ""
+        if key in seen:
+            continue
+        seen.add(key)
         matched = _news_match_assets(item)
         if not matched:
             continue
@@ -3022,15 +3069,12 @@ def _news_time_ago(unix_ts: int) -> str:
 
 
 def render_news_section(cfg: dict) -> None:
-    """
-    Render ข่าวคริปโท — ดึงจาก server เฉพาะข่าวที่เกี่ยวกับเหรียญใน SUPPORTED_ASSETS
-    """
     st.markdown("### 📰 ข่าวคริปโท (เฉพาะเหรียญในระบบ)")
 
     news_items = fetch_crypto_news()
 
     if not news_items:
-        st.info("ยังไม่มีข่าวที่ตรงกับเหรียญในระบบตอนนี้ ลองรีเฟรชอีกครั้ง")
+        st.warning("ยังดึงข่าวจาก CryptoCompare ไม่สำเร็จ หรือยังไม่มีข่าวที่ตรงกับเหรียญในระบบ")
         if st.button("🔄 รีเฟรชข่าว", key="news_refresh_empty"):
             fetch_crypto_news.clear()
             st.rerun()
@@ -3050,10 +3094,16 @@ def render_news_section(cfg: dict) -> None:
             if news["image_url"]:
                 st.image(news["image_url"], use_container_width=True)
         with cols[1]:
-            st.markdown(f"**[{news['title']}]({news['url']})**")
+            title = news["title"] or "(ไม่มีหัวข้อข่าว)"
+            url = news["url"]
+            if url:
+                st.markdown(f"**[{title}]({url})**")
+            else:
+                st.markdown(f"**{title}**")
             tag_str = " · ".join(news["tags"])
             st.caption(f"{news['source']} • {_news_time_ago(news['published_ts'])} • {tag_str}")
         st.divider()
+
 
 # ============================================================
 # FUND FLOW LAYER (v2) — ดึงผ่านเบราว์เซอร์ผู้ใช้
