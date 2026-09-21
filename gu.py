@@ -10,7 +10,7 @@ LAYERS
   2. DATA LAYER             yfinance / cache / CSV export
   3. UI THEME & COMPONENTS  CSS, metric card, timeline, gauge, TradingView
   4. AUDIT TRAIL            log การเปลี่ยนพารามิเตอร์
-  5. APP                    sidebar + 4 tabs (อยู่ใน main() ทั้งหมด)
+  5. APP                    sidebar + 4 tabs + AI FAB (อยู่ใน main() ทั้งหมด)
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import uuid
+import html as _html  # เพิ่ม Import สำหรับ AI Chat
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -986,7 +987,6 @@ NAV_LABELS = [
     "🧮 Liquidity & Capital Planner",
     "🛒 Exchange UI Simulator",
     "💼 กระเป๋าเงิน (Wallet)",
-    "🤖 AI Assistant",
 ]
 NAV_EXCHANGE = NAV_LABELS[2]
 
@@ -1432,6 +1432,27 @@ THEME_CSS = """
     .wl-act.wl-more { color:#EAECEF; }
     .st-key-wl_deposit button { padding:0 !important; justify-content:center; background:transparent !important; border:none !important; }
     .st-key-wl_deposit button, .st-key-wl_deposit button p { color:#0ecb81 !important; font-weight:600 !important; font-size:.85rem !important; }
+    
+    /* ---------- AI Chat (ปุ่มลอย + ฟองแชท) ---------- */
+    .st-key-ai_fab { position: fixed; bottom: 24px; right: 28px; z-index: 999990; width: auto !important; }
+    .st-key-ai_fab > div > div > button,
+    .st-key-ai_fab [data-testid="stPopover"] > button {
+        border-radius: 999px !important; padding: 10px 20px !important;
+        background: #0ecb81 !important; color: #0b0e11 !important; font-weight: 700 !important;
+        border: none !important; box-shadow: 0 8px 24px rgba(14,203,129,.35) !important;
+    }
+    div[data-testid="stPopoverBody"] {
+        width: min(420px, 92vw) !important; background: #181a20 !important;
+        border: 1px solid #2b3139 !important; border-radius: 14px !important;
+    }
+    .st-key-ai_fab [data-testid="stForm"] { border: none !important; padding: 0 !important; }
+    .ai-row { display: flex; margin: 6px 0; }
+    .ai-row.user { justify-content: flex-end; }
+    .ai-row.bot  { justify-content: flex-start; }
+    .ai-bub { max-width: 82%; padding: 9px 13px; font-size: .86rem; line-height: 1.5; word-wrap: break-word; }
+    .ai-row.user .ai-bub { background: #0ecb81; color: #0b0e11; border-radius: 14px 14px 4px 14px; }
+    .ai-row.bot  .ai-bub { background: #2b3139; color: #EAECEF; border-radius: 14px 14px 14px 4px; }
+    .ai-empty { color: #848e9c; font-size: .82rem; text-align: center; padding: 28px 8px; }
 </style>
 """
 
@@ -2550,7 +2571,7 @@ def _toggle_fav(sym: str) -> None:
         pass
 
 def _select_asset(sym: str) -> None:
-    # ต้องเซ็ตใน callback เพราะ bt_asset เป็น key ของ selectboxใน sidebar
+    # ต้องเซ็ตใน callback เพราะ bt_asset เป็น key ของ selectbox ใน sidebar
     st.session_state["bt_asset"] = sym
 
 
@@ -3418,6 +3439,14 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         deposit_dialog()
 
 # ---------------- ฟังก์ชัน AI ----------------
+
+AI_SYSTEM = (
+    "คุณคือผู้ช่วยในแอป XSpring Dealer Suite (เครื่องมือจำลอง Backtest, วางแผนสภาพคล่องและเงินกองทุน NC, "
+    "จำลองหน้าเทรด และกระเป๋าเงินจำลอง) ตอบเป็นภาษาไทย สั้น กระชับ ไม่เกิน 4-5 ประโยค ภาษาง่าย "
+    "อธิบายความหมายของตัวเลขและวิธีใช้งานแอปได้ แต่ห้ามแนะนำว่าควรซื้อเหรียญไหน ห้ามให้คำแนะนำลงทุน "
+    "และห้ามรับรอง compliance ถ้าถามนอกเรื่อง ให้ปฏิเสธสุภาพแล้วชวนกลับมาเรื่องแอป"
+)
+
 def ask_ai(messages, api_key):
     AI_MODEL = "gemini-3-flash-preview"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{AI_MODEL}:generateContent?key={api_key}"
@@ -3428,6 +3457,7 @@ def ask_ai(messages, api_key):
         formatted_messages.append({"role": role, "parts": [{"text": msg["content"]}]})
 
     payload = {
+        "systemInstruction": {"parts": [{"text": AI_SYSTEM}]},
         "contents": formatted_messages,
         "generationConfig": {
             "maxOutputTokens": 1500,
@@ -3458,38 +3488,57 @@ def ask_ai(messages, api_key):
     except Exception as e:
         return f"ข้อผิดพลาดระบบ: {str(e)}"
 
+def _ai_bubble(role: str, text: str) -> str:
+    t = _html.escape(str(text))
+    t = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
+    t = t.replace("\n", "<br>")
+    cls = "user" if role == "user" else "bot"
+    return f'<div class="ai-row {cls}"><div class="ai-bub">{t}</div></div>'
 
-def render_tab5() -> None:
-    st.markdown('<div style="margin-bottom:20px;"><h2 style="margin:0; color:#EAECEF;">🤖 AI Assistant (Powered by Gemini)</h2></div>', unsafe_allow_html=True)
-    st.caption("สอบถามข้อมูลการเทรด, การคำนวณ Risk, หรือให้ AI ช่วยวิเคราะห์พอร์ตโฟลิโอปัจจุบันของคุณ")
+def _ai_clear() -> None:
+    st.session_state["chat_messages"] = []
 
+def render_ai_fab() -> None:
     try:
         api_key = st.secrets["gemini_api_key"]
     except Exception:
         api_key = os.environ.get("GEMINI_API_KEY", "")
-
-    if not api_key or api_key.startswith("AIza..."):
-        st.warning("⚠️ **ไม่พบ Gemini API Key หรือยังเป็นค่าเริ่มต้น** กรุณาตั้งค่า `gemini_api_key` ให้ถูกต้องในไฟล์ `secrets.toml` เพื่อใช้งานฟีเจอร์แชท")
-        return
-
-    if "chat_messages" not in st.session_state:
-        st.session_state.chat_messages = []
-
-    for msg in st.session_state.chat_messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
-    if prompt := st.chat_input("พิมพ์คำถามเกี่ยวกับการเทรดของคุณที่นี่..."):
-        st.session_state.chat_messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        with st.chat_message("assistant"):
-            with st.spinner("AI กำลังวิเคราะห์และคิดคำตอบ (thinkingLevel: low)..."):
-                response = ask_ai(st.session_state.chat_messages, api_key)
-            st.markdown(response)
-
-        st.session_state.chat_messages.append({"role": "assistant", "content": response})
+        
+    hist = st.session_state.setdefault("chat_messages", [])
+    
+    with st.container(key="ai_fab"):
+        with st.popover("💬 ถาม AI"):
+            if not api_key or api_key.startswith("AIza..."):
+                st.warning("ยังไม่ได้ตั้ง `gemini_api_key` ใน Secrets")
+                return
+                
+            box = st.container(height=380, border=False)
+            ph = box.empty()
+            
+            def draw():
+                if hist:
+                    ph.markdown("".join(_ai_bubble(m["role"], m["content"]) for m in hist),
+                                unsafe_allow_html=True)
+                else:
+                    ph.markdown('<div class="ai-empty">ถามเรื่องการใช้งานแอป หรือความหมายของตัวเลขได้เลย<br>'
+                                'เช่น “Max Drawdown คืออะไร”</div>', unsafe_allow_html=True)
+                                
+            with st.form("ai_form", clear_on_submit=True):
+                c1, c2 = st.columns([5, 1.4], vertical_alignment="center")
+                q = c1.text_input("พิมพ์ข้อความ", label_visibility="collapsed",
+                                  placeholder="พิมพ์ข้อความ…")
+                sent = c2.form_submit_button("ส่ง")
+                
+            if sent and q.strip():
+                hist.append({"role": "user", "content": q.strip()})
+                draw()                                   # โชว์ข้อความเราทันที
+                with st.spinner("กำลังคิด…"):
+                    ans = ask_ai(hist, api_key)
+                hist.append({"role": "assistant", "content": ans})
+            draw()
+            
+            if hist:
+                st.button("🗑️ ล้างแชท", key="ai_clear", on_click=_ai_clear)
 
 def _main_body() -> None:
     st.markdown(THEME_CSS, unsafe_allow_html=True)
@@ -3556,10 +3605,10 @@ def _main_body() -> None:
         render_tab3(cfg, data, data_err,
                     price_lookup={row["symbol"]: row["price_usd"] for _, row in market_df.iterrows()} if not market_df.empty else {},
                     market_df=market_df)
-    elif nav == NAV_LABELS[3]:
+    else:
         render_tab4(cfg, data, market_df=market_df)
-    elif nav == NAV_LABELS[4]:
-        render_tab5()
+
+    render_ai_fab()
 
     st.markdown(
         f"<div class='xs-foot'>XSpring Dealer Suite · Model v{MODEL_VERSION} · "
