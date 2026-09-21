@@ -2582,6 +2582,7 @@ _PERP_VENUES = [
         bg="#F0B90B",
         fg="#0b0e11",
         tx="BN",
+        logo="https://www.google.com/s2/favicons?domain=binance.com&sz=64",
         fn=_pv_binance,
         sym=lambda b: f"{b}USDT",
         url=lambda b: f"https://www.binance.com/en/futures/{b}USDT",
@@ -2592,6 +2593,7 @@ _PERP_VENUES = [
         bg="#2354E6",
         fg="#ffffff",
         tx="G",
+        logo="https://www.google.com/s2/favicons?domain=gate.com&sz=64",
         fn=_pv_gate,
         sym=lambda b: f"{b}_USDT",
         url=lambda b: f"https://www.gate.io/futures/USDT/{b}_USDT",
@@ -2602,6 +2604,7 @@ _PERP_VENUES = [
         bg="#072723",
         fg="#97FCE4",
         tx="HL",
+        logo="https://www.google.com/s2/favicons?domain=hyperliquid.xyz&sz=64",
         fn=_pv_hyperliquid,
         sym=lambda b: f"{b}",
         url=lambda b: f"https://app.hyperliquid.xyz/trade/{b}",
@@ -2612,16 +2615,18 @@ _PERP_VENUES = [
         bg="#00F0FF",
         fg="#0b0e11",
         tx="BG",
+        logo="https://www.google.com/s2/favicons?domain=bitget.com&sz=64",
         fn=_pv_bitget,
         sym=lambda b: f"{b}USDT",
         url=lambda b: f"https://www.bitget.com/futures/usdt/{b}USDT",
     ),
     dict(
-        name="Okx",
+        name="OKX",
         cg="okx",
         bg="#000000",
         fg="#ffffff",
         tx="OK",
+        logo="https://www.google.com/s2/favicons?domain=okx.com&sz=64",
         fn=_pv_okx,
         sym=lambda b: f"{b}-USDT-SWAP",
         url=lambda b: f"https://www.okx.com/trade-swap/{b.lower()}-usdt-swap",
@@ -2632,6 +2637,7 @@ _PERP_VENUES = [
         bg="#1F2A44",
         fg="#7CFFB2",
         tx="BU",
+        logo="https://www.google.com/s2/favicons?domain=bitunix.com&sz=64",
         fn=_pv_bitunix,
         sym=lambda b: f"{b}USDT",
         url=lambda b: f"https://www.bitunix.com/contract-trade/{b}USDT",
@@ -2643,6 +2649,7 @@ _PERP_VENUES = [
         bg="#0B7BE5",
         fg="#ffffff",
         tx="DB",
+        logo="https://www.google.com/s2/favicons?domain=deribit.com&sz=64",
         fn=_pv_deribit,
         sym=lambda b: f"{b}-PERPETUAL",
         url=lambda b: f"https://www.deribit.com/futures/{b}-PERPETUAL",
@@ -2654,6 +2661,7 @@ _PERP_VENUES = [
         bg="#E8B96A",
         fg="#0b0e11",
         tx="AS",
+        logo="https://www.google.com/s2/favicons?domain=asterdex.com&sz=64",
         fn=_pv_aster,
         sym=lambda b: f"{b}USDT",
         url=lambda b: f"https://www.asterdex.com/en/futures/v1/{b}USDT",
@@ -2790,8 +2798,11 @@ th{text-align:left;padding:10px 14px;color:#848e9c;font-weight:600;font-size:.78
   border-bottom:1px solid #2b3139;background:#161a1e;}
 td{padding:12px 14px;border-bottom:1px solid #2b3139;font-variant-numeric:tabular-nums;}
 .ex{display:flex;align-items:center;gap:10px;font-weight:600;}
-.logo{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;
-  border-radius:50%;border:1px solid #2b3139;font-size:.58rem;font-weight:800;}
+.logo{width:28px;height:28px;min-width:28px;border-radius:50%;
+  border:1px solid #2b3139;background:#161a1e;object-fit:contain;display:block;padding:2px;box-sizing:border-box;}
+.logo-fallback{display:none;align-items:center;justify-content:center;width:28px;height:28px;
+  min-width:28px;border-radius:50%;border:1px solid #2b3139;font-size:.58rem;font-weight:800;}
+.logo-wrap{width:28px;height:28px;min-width:28px;display:inline-flex;align-items:center;justify-content:center;}
 .via{margin-left:4px;font-size:.62rem;font-weight:600;color:#848e9c;border:1px solid #2b3139;
   border-radius:4px;padding:0 4px;}
 a{color:#4c9aff;text-decoration:none;}
@@ -2840,8 +2851,10 @@ function render(){
         + (r.note ? '<span class="mut" style="cursor:help" title="'+esc(r.note)+'"> *</span>' : '');
       t = fmtT(r.turnover);
     }
-    return '<tr><td><div class="ex"><span class="logo" style="background:'+esc(r.bg)+';color:'+esc(r.fg)+'">'
-      +esc(r.tx)+'</span>'+esc(r.exchange)+via+'</div></td>'
+    const logo = r.logo
+      ? ('<span class="logo-wrap"><img class="logo" src="'+esc(r.logo)+'" alt="'+esc(r.exchange)+' logo" loading="lazy" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'inline-flex\';"><span class="logo-fallback" style="background:'+esc(r.bg)+';color:'+esc(r.fg)+'">'+esc(r.tx)+'</span></span>')
+      : ('<span class="logo-wrap"><span class="logo-fallback" style="display:inline-flex;background:'+esc(r.bg)+';color:'+esc(r.fg)+'">'+esc(r.tx)+'</span></span>');
+    return '<tr><td><div class="ex">'+logo+esc(r.exchange)+via+'</div></td>'
       +'<td><a href="'+esc(r.url)+'" target="_blank" rel="noopener">'+esc(r.symbol)+'</a></td>'
       +'<td>'+p+'</td><td>'+c+'</td><td>'+t+'</td></tr>';
   }).join('');
@@ -2899,6 +2912,7 @@ def render_perp_venue_table(base: str = "BTC") -> None:
                 bg=v["bg"],
                 fg=v["fg"],
                 tx=v["tx"],
+                logo=v.get("logo", ""),
                 note=v.get("note"),
                 price=_num(r["price"]),
                 chg=_num(r["chg"]),
