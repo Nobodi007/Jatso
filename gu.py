@@ -2948,6 +2948,139 @@ def render_perp_venue_table(base: str = "BTC") -> None:
     )
 
 
+# ============================================================
+# NEWS LAYER — ข่าวเฉพาะเหรียญที่มีใน SUPPORTED_ASSETS เท่านั้น
+# ใช้ CryptoCompare News API (ฟรี ไม่ต้องใช้ key)
+# ============================================================
+
+NEWS_API_URL = "https://min-api.cryptocompare.com/data/v2/news/"
+
+# เหรียญที่จะดึงข่าว = SUPPORTED_ASSETS ตัด stablecoin ออก
+NEWS_ASSETS = [a for a in SUPPORTED_ASSETS if a not in STABLECOINS]
+
+
+@_cache_data(ttl=600, show_spinner=False)
+def fetch_crypto_news(categories: list[str] | None = None, limit: int = 30) -> list[dict]:
+    """
+    ดึงข่าวจาก CryptoCompare แล้วกรองเข้มงวดให้เหลือเฉพาะข่าวที่มี
+    category ตรงกับเหรียญที่เปิดใช้งานในระบบเท่านั้น
+    """
+    requested = categories or NEWS_ASSETS
+    allowed = set(requested) & set(NEWS_ASSETS)
+    if not allowed:
+        return []
+
+    query = urllib.parse.urlencode({
+        "categories": ",".join(sorted(allowed)),
+        "excludeCategories": "Sponsored",
+        "lang": "EN",
+    })
+    full_url = f"{NEWS_API_URL}?{query}"
+
+    try:
+        req = urllib.request.Request(
+            full_url,
+            headers={"User-Agent": "XSpring-Dealer-Suite/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            raw = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return []
+
+    items = raw.get("Data", []) or []
+    news_list = []
+
+    for item in items:
+        item_tags = {
+            t.strip().upper()
+            for t in (item.get("categories", "") or "").split("|")
+            if t.strip()
+        }
+        matched = item_tags & allowed
+        if not matched:
+            continue
+
+        source_info = item.get("source_info") or {}
+        news_list.append({
+            "title": item.get("title", ""),
+            "url": item.get("url", ""),
+            "source": source_info.get("name") or item.get("source", "Unknown"),
+            "image_url": item.get("imageurl", ""),
+            "published_ts": item.get("published_on", 0),
+            "body": item.get("body", ""),
+            "tags": sorted(matched),
+        })
+
+    news_list.sort(key=lambda x: x["published_ts"], reverse=True)
+    return news_list[:limit]
+
+
+def _time_ago(unix_ts: int) -> str:
+    """แปลง unix timestamp เป็นข้อความภาษาไทยแบบย่อ"""
+    if not unix_ts:
+        return ""
+    try:
+        delta = datetime.now(timezone.utc) - datetime.fromtimestamp(
+            int(unix_ts), tz=timezone.utc
+        )
+    except (TypeError, ValueError, OSError, OverflowError):
+        return ""
+
+    secs = max(0, delta.total_seconds())
+    if secs < 3600:
+        return f"{int(secs // 60)} นาทีที่แล้ว"
+    if secs < 86400:
+        return f"{int(secs // 3600)} ชั่วโมงที่แล้ว"
+    return f"{int(secs // 86400)} วันที่แล้ว"
+
+
+def render_news_section(cfg: dict[str, Any] | None = None) -> None:
+    """
+    Render ข่าวคริปโทภายใน Exchange UI Simulator เดิม
+    ไม่สร้างแท็บใหม่
+    """
+    st.markdown("### 📰 ข่าวคริปโท (เฉพาะเหรียญในระบบ)")
+
+    if not NEWS_ASSETS:
+        st.info("ไม่มีเหรียญสำหรับดึงข่าวในระบบตอนนี้")
+        return
+
+    coin_filter = st.multiselect(
+        "กรองตามเหรียญ",
+        options=NEWS_ASSETS,
+        default=[],
+        placeholder="เลือกเหรียญ (ว่าง = ทั้งหมด)",
+        key="news_coin_filter",
+    )
+
+    news_items = fetch_crypto_news(categories=coin_filter or NEWS_ASSETS)
+
+    if not news_items:
+        st.info("ยังไม่มีข่าวที่ตรงกับเหรียญในระบบตอนนี้ ลองรีเฟรชอีกครั้ง")
+        return
+
+    for news in news_items:
+        cols = st.columns([1, 4])
+        with cols[0]:
+            if news["image_url"]:
+                try:
+                    st.image(news["image_url"], use_container_width=True)
+                except Exception:
+                    pass
+        with cols[1]:
+            title = news["title"] or "ข่าวคริปโท"
+            url = news["url"]
+            if url:
+                st.markdown(f"**[{title}]({url})**")
+            else:
+                st.markdown(f"**{title}**")
+            tag_str = " · ".join(news["tags"])
+            st.caption(
+                f"{news['source']} • {_time_ago(news['published_ts'])} • {tag_str}"
+            )
+        st.divider()
+
+
 # ---- 5.4 TAB 3 — TIME-TRAVEL ORDER SIMULATOR ---------------------------
 
 def _toggle_fav(sym: str) -> None:
@@ -3618,6 +3751,10 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                     txt += f" · โหลดราคาไม่ได้: {', '.join(skipped)}"
                 st.session_state.sim_batch_summary = txt
                 st.rerun()
+
+        # --- NEWS LAYER: แทรกใน Exchange UI เดิม ไม่สร้างแท็บใหม่ ---
+        with st.expander("📰 ข่าวคริปโท", expanded=False):
+            render_news_section(cfg)
 
         st.markdown('<div style="margin-top:14px;"></div>', unsafe_allow_html=True)
         t_route, t_ledger, t_wallet = st.tabs(
