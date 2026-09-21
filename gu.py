@@ -20,6 +20,7 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
+v1.5.28             + [FEATURE] ระบบตั้งค่า Profile (ชื่อและรูปภาพ) หลังจาก Login ครั้งแรก
 v1.5.27             + [FEATURE] อัปเกรดระบบ Login เป็น Streamlit Auth (Continue with Google)
                     + [FEATURE] หน้า Dashboard Back Office ดูพอร์ตและกราฟรวมทุกเหรียญ
                     + [FIX] แก้บั๊ก FX Limit ให้ตัดยอดรายเดือนอย่างถูกต้อง และอัปเดต Gauge อัตโนมัติ
@@ -28,10 +29,6 @@ v1.5.27             + [FEATURE] อัปเกรดระบบ Login เป�
                     + [FEATURE] ระบบบันทึกรายการโปรด (Favorites) ลงไฟล์
                     + [FEATURE] ระบบสุ่มออเดอร์ข้ามหลายเหรียญพร้อมกัน (Multi-Asset Batch Run) แบบ Log-Uniform
                     + [FEATURE] เพิ่มระบบฝากเงินบาท (THB) แบบ Pop-up Dialog ในหน้า Wallet
-                    + [FIX] อัปเดตข้อมูลราคาวันปัจจุบัน, Limit Order แผงเทรด, และการสุ่มวันที่
-                      ใช้ Radio Button ทำระบบนำทางแทน Tabs เพื่อแก้ปัญหาเด้งเปลี่ยนหน้า 100%
-                      ปรับ Native Columns ใน Tab 4 แทนตาราง HTML เดิมเพื่อแก้ปัญหาคลิกไม่ติด
-v1.5.26             + [FIX] อัปเดตระบบ Logo เป็น Base64 SVG + Multi-layer Background
 """
 
 from __future__ import annotations
@@ -53,7 +50,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.27"
+MODEL_VERSION = "1.5.28"
 
 try:
     import yaml
@@ -1641,8 +1638,30 @@ def render_tv_panel(asset: str) -> None:
 
 
 # =========================================================================
-# LAYER 4 — AUDIT TRAIL
+# LAYER 4 — DATA STATE & AUDIT TRAIL
 # =========================================================================
+
+PROFILE_STATE_ENV_VAR = "XSPRING_PROFILE_STATE"
+
+def profile_state_path() -> Path:
+    return Path(os.environ.get(PROFILE_STATE_ENV_VAR) or (_HERE / "user_profiles.json"))
+
+def load_profiles() -> dict[str, dict[str, str]]:
+    p = profile_state_path()
+    if not p.is_file():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+def save_profile(email: str, display_name: str, avatar_url: Optional[str] = None) -> None:
+    p = profile_state_path()
+    profiles = load_profiles()
+    profiles[email] = {"display_name": display_name, "avatar_url": avatar_url}
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(profiles, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, p)
 
 AUDIT_LOG_ENV_VAR = "XSPRING_AUDIT_LOG"
 AUDIT_ACTOR_ENV_VAR = "XSPRING_USER"
@@ -1762,35 +1781,6 @@ def load_favorites(path: Optional[Path] = None) -> list[str]:
     except (OSError, json.JSONDecodeError):
         return []
     return [s for s in d if s in SUPPORTED_ASSETS] if isinstance(d, list) else []
-
-def _allowed_email() -> str:
-    try:
-        v = st.secrets.get("allowed_email", "")
-    except Exception:
-        v = ""
-    return str(v or os.environ.get("XSPRING_EMAIL", "")).strip().lower()
-
-def require_login() -> bool:
-    try:
-        logged_in = bool(st.user.is_logged_in)
-    except Exception:
-        st.error("Streamlit เวอร์ชันนี้ไม่รองรับ st.login — ต้องเป็น 1.42 ขึ้นไป")
-        return False
-    if logged_in:
-        allowed = _allowed_email()
-        email = str(getattr(st.user, "email", "") or "").strip().lower()
-        if not allowed:
-            st.error("ยังไม่ได้ตั้ง allowed_email ใน secrets.toml — ระบบจึงปิดไว้ก่อน")
-            st.button("ออกจากระบบ", on_click=st.logout)
-            return False
-        if email != allowed:
-            st.error(f"บัญชี {email} ไม่ได้รับอนุญาตให้ใช้งาน")
-            st.button("ออกจากระบบ", on_click=st.logout)
-            return False
-        return True
-    st.markdown("## ♻️ XSpring Dealer Suite")
-    st.button("Continue with Google", key="login_google", on_click=st.login)
-    return False
 
 def _current_actor() -> str:
     try:
@@ -3429,8 +3419,25 @@ def _main_body() -> None:
     cfg = build_sidebar()
 
     with st.sidebar:
-        st.caption(f"👤 {getattr(st.user, 'email', '')}")
-        st.button("ออกจากระบบ", key="logout_btn", on_click=st.logout)
+        email = getattr(st.user, 'email', '')
+        user_prof = load_profiles().get(email, {})
+        d_name = user_prof.get("display_name", email)
+        avatar = user_prof.get("avatar_url", "")
+        
+        st.divider()
+        if avatar and avatar.startswith("http"):
+            st.markdown(f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">'
+                        f'<img src="{avatar}" width="40" height="40" style="border-radius:50%;object-fit:cover;">'
+                        f'<div><div style="font-weight:bold;color:#EAECEF;font-size:0.95rem;">{d_name}</div>'
+                        f'<div style="font-size:0.75rem;color:#848e9c;">{email}</div></div></div>', 
+                        unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div style="margin-bottom:12px;">'
+                        f'<div style="font-weight:bold;color:#EAECEF;font-size:0.95rem;">👤 {d_name}</div>'
+                        f'<div style="font-size:0.75rem;color:#848e9c;">{email}</div></div>', 
+                        unsafe_allow_html=True)
+        
+        st.button("ออกจากระบบ", key="logout_btn", on_click=st.logout, use_container_width=True)
 
     if not cfg["dates_ok"]:
         data, data_err = pd.DataFrame(), "ช่วงวันที่ไม่ถูกต้อง"
@@ -3466,6 +3473,33 @@ def _main_body() -> None:
         unsafe_allow_html=True,
     )
 
+
+# =========================================================================
+# LAYER 4 — DATA STATE & AUDIT TRAIL
+# =========================================================================
+
+PROFILE_STATE_ENV_VAR = "XSPRING_PROFILE_STATE"
+
+def profile_state_path() -> Path:
+    return Path(os.environ.get(PROFILE_STATE_ENV_VAR) or (_HERE / "user_profiles.json"))
+
+def load_profiles() -> dict[str, dict[str, str]]:
+    p = profile_state_path()
+    if not p.is_file():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+def save_profile(email: str, display_name: str, avatar_url: Optional[str] = None) -> None:
+    p = profile_state_path()
+    profiles = load_profiles()
+    profiles[email] = {"display_name": display_name, "avatar_url": avatar_url}
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(profiles, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, p)
+
 def _allowed_email() -> str:
     try:
         v = st.secrets.get("allowed_email", "")
@@ -3490,7 +3524,27 @@ def require_login() -> bool:
             st.error(f"บัญชี {email} ไม่ได้รับอนุญาตให้ใช้งาน")
             st.button("ออกจากระบบ", on_click=st.logout)
             return False
+            
+        # ---------- Profile Setup Flow ----------
+        profiles = load_profiles()
+        if email not in profiles:
+            st.markdown("## 👤 ตั้งค่าโปรไฟล์ของคุณ")
+            st.caption("ระบบต้องการข้อมูลพื้นฐานก่อนเข้าใช้งาน XSpring Dealer Suite")
+            with st.container(border=True):
+                default_name = getattr(st.user, "name", email.split("@")[0])
+                name_input = st.text_input("ชื่อที่แสดง (Display Name)", value=default_name)
+                avatar_input = st.text_input("URL รูปโปรไฟล์ (ถ้ามี)", placeholder="https://...")
+                
+                c1, c2 = st.columns(2)
+                if c1.button("💾 บันทึกโปรไฟล์", type="primary", use_container_width=True):
+                    save_profile(email, name_input, avatar_input)
+                    st.rerun()
+                c2.button("ออกจากระบบ", on_click=st.logout, use_container_width=True)
+            return False # ขัดจังหวะไม่ให้โหลดแอปหลัก
+        # ----------------------------------------
+        
         return True
+        
     st.markdown("## ♻️ XSpring Dealer Suite")
     st.button("Continue with Google", key="login_google", on_click=st.login)
     return False
