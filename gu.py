@@ -20,6 +20,7 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
+v1.5.33             + [FEATURE] เพิ่มระบบ AI Assistant (Gemini 2.5 Flash) สำหรับช่วยวิเคราะห์ความเสี่ยง
 v1.5.32             + [UI] อัปเดตกราฟ 3D ให้สามารถสลับมุมมองระหว่าง Volatility, %Change และ Volume ได้
 v1.5.31             + [UI] ปรับปรุงกราฟ 3D เป็นมุมมอง เวลา vs %เปลี่ยนแปลงราคาปิด vs Volume
 v1.5.30             + [UI] ปรับปรุงดีไซน์หน้า Login เป็นรูปแบบ Card สวยงาม
@@ -27,7 +28,6 @@ v1.5.29             + [FEATURE] อัปโหลดรูปโปรไฟล
                     + [UI] ย้ายการแสดงโปรไฟล์ไปยังมุมขวาบนของหน้าหลัก
 v1.5.28             + [FEATURE] ระบบตั้งค่า Profile (ชื่อและรูปภาพ) หลังจาก Login ครั้งแรก
 v1.5.27             + [FEATURE] อัปเกรดระบบ Login เป็น Streamlit Auth (Continue with Google)
-                    + [FEATURE] หน้า Dashboard Back Office ดูพอร์ตและกราฟรวมทุกเหรียญ
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ import math
 import os
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -50,7 +51,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.32"
+MODEL_VERSION = "1.5.33"
 
 try:
     import yaml
@@ -119,7 +120,6 @@ COIN_NAMES = {
     "USDT": "Tether", "USDC": "USD Coin", "THB": "Thai Baht"
 }
 
-# ใช้ Base64 SVG ธงชาติไทยที่ถูกต้อง (แดง-ขาว-น้ำเงิน-ขาว-แดง)
 THB_LOGO_SVG = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48Y2xpcFBhdGggaWQ9ImMiPjxjaXJjbGUgY3g9IjUwIiBjeT0iNTAiIHI9IjUwIi8+PC9jbGlwUGF0aD48ZyBjbGlwLXBhdGg9InVybCgjYykiPjxyZWN0IHdpZHRoPSIxMDAiIGhlaWdodD0iMTciIGZpbGw9IiNFRDFDMjQiLz48cmVjdCB5PSIxNyIgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxNyIgZmlsbD0iI2ZmZiIvPjxyZWN0IHk9IjM0IiB3aWR0aD0iMTAwIiBoZWlnaHQ9IjMyIiBmaWxsPSIjMjQxRDRGIi8+PHJlY3QgeT0iNjYiIHdpZHRoPSIxMDAiIGhlaWdodD0iMTciIGZpbGw9IiNmZmYiLz48cmVjdCB5PSI4MyIgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxNyIgZmlsbD0iI0VEMUMyNCIvPjwvZz48L3N2Zz4="
 
 COIN_LOGOS = {s: f"https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/{s.lower()}.png" for s in SUPPORTED_ASSETS}
@@ -1002,6 +1002,7 @@ NAV_LABELS = [
     "🧮 Liquidity & Capital Planner",
     "🛒 Exchange UI Simulator",
     "💼 กระเป๋าเงิน (Wallet)",
+    "🤖 AI Assistant",
 ]
 NAV_EXCHANGE = NAV_LABELS[2]
 
@@ -1870,6 +1871,94 @@ def render_audit_log_sidebar():
 
 
 # =========================================================================
+# AI ASSISTANT (GEMINI) INTEGRATION
+# =========================================================================
+
+AI_SYSTEM = """คุณคือผู้ช่วย AI อัจฉริยะประจำระบบ XSpring Dealer Suite 
+หน้าที่ของคุณคือให้คำแนะนำเกี่ยวกับการบริหารความเสี่ยง (Risk Management), 
+วิเคราะห์สภาพคล่อง, และตอบคำถามผู้ใช้โดยอ้างอิงจาก Context ของระบบในปัจจุบัน
+ตอบคำถามด้วยความเป็นมืออาชีพ สั้น กระชับ และเข้าใจง่าย"""
+
+def _ai_context(cfg: Mapping[str, Any]) -> str:
+    return (
+        f"Context ปัจจุบันของผู้ใช้:\n"
+        f"- สินทรัพย์ที่กำลังวิเคราะห์: {cfg.get('asset')}\n"
+        f"- Global Exchange: {cfg.get('global_exchange')}\n"
+        f"- ทุนสภาพคล่องรวม: {cfg.get('total_capital_thb', 0):,.2f} บาท\n"
+        f"- หนี้สินต่อลูกค้า: {cfg.get('liab_thb', 0):,.2f} บาท\n"
+        f"- ปริมาณธุรกรรมต่อเดือน: {cfg.get('monthly_volume_thb', 0):,.2f} บาท\n"
+    )
+
+AI_MODEL = "gemini-2.5-flash"
+
+def _ai_api_key() -> str:
+    try:
+        v = st.secrets.get("gemini_api_key", "")
+    except Exception:
+        v = ""
+    return str(v or os.environ.get("GEMINI_API_KEY", "")).strip()
+
+def ask_ai(question: str, history: list[dict], cfg: Mapping[str, Any]) -> str:
+    key = _ai_api_key()
+    if not key:
+        return "ยังไม่ได้ตั้ง gemini_api_key ใน secrets.toml"
+    
+    contents = [
+        {"role": "user" if m["role"] == "user" else "model", 
+         "parts": [{"text": m["content"]}]}
+        for m in history[-10:]
+    ]
+    contents.append({"role": "user", "parts": [{"text": question}]})
+    
+    body = {
+        "systemInstruction": {"parts": [{"text": AI_SYSTEM + "\n\n" + _ai_context(cfg)}]},
+        "contents": contents,
+        "generationConfig": {"maxOutputTokens": 500, "temperature": 0.3},
+    }
+    
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{AI_MODEL}:generateContent"
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json", "x-goog-api-key": key},
+        method="POST",
+    )
+    
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        parts = data["candidates"][0]["content"]["parts"]
+        return "".join(p.get("text", "") for p in parts) or "ไม่ได้รับคำตอบ ลองถามใหม่อีกครั้ง"
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            return "ใช้โควตาฟรีครบชั่วคราว รอสักครู่แล้วลองใหม่"
+        return f"เรียก AI ไม่สำเร็จ (HTTP {e.code})"
+    except Exception as e:
+        return f"เรียก AI ไม่สำเร็จ: {e}"
+
+def render_ai_chat(cfg: dict[str, Any]) -> None:
+    st.markdown("### 💬 AI Assistant (Powered by Gemini)")
+    st.caption("สอบถามข้อมูลการเทรด, การคำนวณ Risk, หรือวิเคราะห์พอร์ตโฟลิโอปัจจุบันของคุณ")
+    
+    if "ai_chat_history" not in st.session_state:
+        st.session_state.ai_chat_history = []
+        
+    for msg in st.session_state.ai_chat_history:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            
+    if prompt := st.chat_input("พิมพ์คำถามของคุณที่นี่..."):
+        st.session_state.ai_chat_history.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+            
+        with st.chat_message("assistant"):
+            with st.spinner("กำลังคิด..."):
+                response = ask_ai(prompt, st.session_state.ai_chat_history[:-1], cfg)
+                st.markdown(response)
+        st.session_state.ai_chat_history.append({"role": "assistant", "content": response})
+
+
+# =========================================================================
 # LAYER 5 — APP
 # =========================================================================
 
@@ -1962,7 +2051,7 @@ def build_sidebar() -> dict[str, Any]:
             hedge_fee_maker = st.number_input(
                 "ค่าธรรมเนียม Global CEX — Maker (%)", key="bt_hedge_fee_maker",
                 step=0.01,
-                help=("ค่าตั้งต้น = เท่า Taker จนกว่าจะตั้ง maker presetใน config.yaml "
+                help=("ค่าตั้งต้น = เท่า Taker จนกว่าจะตั้ง maker preset ใน config.yaml "
                       "หรือแก้ช่องนี้ตามเทียร์บัญชีจริง")) / 100
             maker_ratio = st.slider(
                 "สัดส่วน Hedge ที่ทำเป็น Maker / Limit (%)", 0, 100, 0,
@@ -3045,210 +3134,6 @@ def render_backoffice(sim, cfg, ctx, target_stock_thb, price_thb) -> None:
         st.download_button("⬇️ Ledger CSV", to_csv_bytes(df), "xspring_ledger.csv", "text/csv", **WIDE)
 
 
-def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str],
-                price_lookup: Optional[dict[str, float]] = None,
-                market_df: Optional[pd.DataFrame] = None) -> None:
-
-    if data.empty:
-        st.error(f"⚠️ ต้องโหลดราคาจริงก่อนถึงจะจำลองได้: {data_err or 'ไม่สามารถโหลดข้อมูลได้'}")
-        return
-
-    asset = cfg["asset"]
-    settlement_days = cfg["settlement_days"]
-
-    rp_sim = risk_profile(data["Global_USD"])
-    if rp_sim is None:
-        st.error(f"ข้อมูลย้อนหลังน้อยกว่า {MIN_RISK_SAMPLE_DAYS} วัน — กรุณาเลือกช่วงเวลาให้ยาวขึ้น")
-        return
-
-    h_crypto_sim = crypto_haircut(rp_sim["es99"], settlement_days)
-    h_cex_sim = cfg["cex_counterparty_haircut"] if cfg["cex_margin_asset"].startswith("Stablecoin") else h_crypto_sim
-
-    a_factor_sim = safety_stock_factor(cfg["net_bias_pct"], cfg["flow_cv_pct"], settlement_days, cfg["z_alpha"])
-    target_stock_thb = a_factor_sim * cfg["monthly_volume_thb"]
-    cex_liquidity_thb = max(0.0, float(cfg["cex_margin_thb"]))
-
-    ctx = dict(
-        asset=asset, local_premium=cfg["local_premium"], spread=cfg["dealer_spread"],
-        hedge_fee=cfg["hedge_fee"], fx_limit=cfg["fx_limit_max"], slip_sens=cfg["slippage_sensitivity"],
-        market_depth_usd=cfg["market_depth_usd"], impact_penalty=cfg["impact_penalty"],
-        include_fee_rev=cfg["include_trading_fee_revenue"], wd_markup=cfg["withdrawal_fee_markup_pct"],
-        wd_fee_per_coin=WITHDRAWAL_FEE_TABLE.get(asset, 0.0), bank_type=cfg["bank_type"],
-        ktb_wd_fee=cfg["ktb_wd_fee_thb"], ktb_fx_bps=cfg["ktb_fx_spread_bps"],
-        capital=cfg["total_capital_thb"], cex_margin=cfg["cex_margin_thb"],
-        cex_liquidity_thb=cex_liquidity_thb, liab=cfg["liab_thb"],
-        h_crypto=h_crypto_sim, h_cex=h_cex_sim, fixed_min_nc=cfg["fixed_min_nc"],
-        trading_risk_rate=cfg["trading_risk_rate"], daily_volume_thb=cfg["daily_volume_thb"],
-        custody_rate=cfg["custody_rate_blended"], hot_breach=cfg["hot_wallet_cap_breach"],
-    )
-
-    signature = sim_config_signature(ctx, target_stock_thb, cfg["start_date"], cfg["end_date"])
-
-    if "sim" not in st.session_state:
-        first_day = pd.to_datetime(data.index[-1])
-        st.session_state.sim = sim_defaults(
-            asset, first_day, data.loc[first_day, "Global_USD"],
-            data.loc[first_day, "USDTHB"], target_stock_thb)
-        st.session_state.sim_steps = []
-
-    current_date_val = pd.to_datetime(data.index[-1])   # ราคาปัจจุบันเสมอ
-    st.session_state.sim["current_date"] = current_date_val
-
-    spot_usd_current = float(data.loc[current_date_val, "Global_USD"])
-    usdthb_current = float(data.loc[current_date_val, "USDTHB"])
-
-    sim = sim_normalize_state(st.session_state.sim, asset, current_date_val, spot_usd_current, usdthb_current, target_stock_thb)
-    st.session_state.sim = sim
-
-    mid_now = spot_usd_current * usdthb_current * (1 + cfg["local_premium"])
-    
-    check_open_orders(sim, mid_now * (1 + cfg["dealer_spread"]),
-                      mid_now * (1 - cfg["dealer_spread"]), data, current_date_val, ctx)
-
-    row_now = data.loc[current_date_val]
-    fx_adj = usdthb_current * (1 + cfg["local_premium"])
-    high_24h = float(row_now["Day_High"]) * fx_adj
-    low_24h = float(row_now["Day_Low"]) * fx_adj
-    vol_24h_thb = cfg["daily_volume_thb"]
-    if market_df is not None and not market_df.empty:
-        _r = market_df[market_df["symbol"] == asset]
-        if not _r.empty:
-            vol_24h_thb = float(_r["volume"].iloc[0]) * usdthb_current
-
-    pct_24h = None
-    if market_df is not None and not market_df.empty:
-        m_row = market_df[market_df["symbol"] == asset]
-        if not m_row.empty:
-            pct_24h = float(m_row["pct_change"].iloc[0])
-    if pct_24h is None:
-        pct_txt, pct_cls = "เปลี่ยน 24H —", ""
-    else:
-        pct_txt = f"เปลี่ยน 24H {'+' if pct_24h >= 0 else ''}{pct_24h:.2f}%"
-        pct_cls = "ex-green" if pct_24h >= 0 else "ex-red"
-
-    # --- TOP HEADER BAR ---
-    top_bar_html = f"""<div class="ex-header">
-        <div style="display:flex; align-items:center; gap:12px;">
-            {coin_icon_html(asset, 40)}
-            <div class="ex-stat">
-                <span style="font-size:1.4rem; font-weight:700; color:#EAECEF;">{asset}/THB</span>
-                <span style="font-size:0.8rem; font-weight:600;" class="{pct_cls}">{pct_txt}</span>
-            </div>
-        </div>
-        <div class="ex-stat"><span class="ex-stat-label">ราคาล่าสุด (THB)</span><span class="ex-stat-val ex-green">{mid_now:,.2f}</span></div>
-        <div class="ex-stat"><span class="ex-stat-label">สูงสุด 24H (THB)</span><span class="ex-stat-val">{high_24h:,.2f}</span></div>
-        <div class="ex-stat"><span class="ex-stat-label">ต่ำสุด 24H (THB)</span><span class="ex-stat-val">{low_24h:,.2f}</span></div>
-        <div class="ex-stat"><span class="ex-stat-label">ปริมาณ 24H (THB)</span><span class="ex-stat-val">{fmt_num(vol_24h_thb)}</span></div>
-        <div class="ex-stat"><span class="ex-stat-label">วันที่ (ปัจจุบัน)</span><span class="ex-stat-val" style="color:#fcd535;">{current_date_val.strftime('%Y-%m-%d')}</span></div>
-    </div>"""
-    st.markdown(top_bar_html, unsafe_allow_html=True)
-
-    # --- MAIN LAYOUT: Market | Chart + Order Panel + Tabs ---
-    col_left, col_center = st.columns([2.6, 7.4], gap="small")
-
-    with col_left:
-        st.markdown('<div style="font-size:1.15rem; font-weight:700; color:#EAECEF; margin-bottom:12px; display:flex; align-items:center; gap:8px;">🌍 ภาพรวมตลาด (Market)</div>', unsafe_allow_html=True)
-        m_df = market_df if market_df is not None else pd.DataFrame()
-        sub1, sub2, sub3, sub4 = st.tabs(["⭐", "ปริมาณ", "▲ เพิ่ม", "▼ ลด"])
-        for sub, mode in zip((sub1, sub2, sub3, sub4),
-                             ("favorite", "volume", "top_gain", "top_loss")):
-            with sub:
-                try:
-                    cont = st.container(height=480, border=False)
-                except Exception:
-                    cont = st.container()
-                with cont:
-                    render_market_column_view(m_df, mode, asset, usdthb_current)
-
-    with col_center:
-        local_sym = TV_LOCAL_SYMBOL.get(asset, f"BITKUB:{asset}THB")
-        render_tradingview(local_sym, f"tv_center_{asset}", 460,
-                           studies=["MAExp@tv-basicstudies"])
-
-        with st.container(border=True):
-            _order_panel_live(cfg, sim, asset, mid_now, data, current_date_val, ctx)
-
-        with st.expander("🎲 เครื่องมือจำลอง — สุ่มออเดอร์ / รีเซ็ต", expanded=False):
-            st.caption("สุ่มออเดอร์ = ลูกค้าคนอื่นในตลาด ไม่แตะกระเป๋าของคุณ · "
-                       "สุ่มทั้งเหรียญ วันที่ ฝั่งซื้อ/ขาย และจำนวนเงิน · "
-                       "รีเซ็ตจะล้างทุกอย่างรวมถึงกระเป๋า")
-            coins_pick = st.multiselect("เหรียญที่ให้สุ่ม", SUPPORTED_ASSETS,
-                                        default=SUPPORTED_ASSETS, key="sim_coins")
-            b1, b2, b3 = st.columns(3)
-            n_orders = b1.number_input("จำนวนออเดอร์สุ่ม", value=20, min_value=1,
-                                       step=10, key="sim_n")
-            seed = b2.number_input("Random seed", value=42, step=1, key="sim_seed")
-            run_batch = b3.button("🎲 สุ่มออเดอร์ (Auto-Run)", key="sim_batch", **WIDE)
-            a1, a2 = st.columns(2)
-            amt_min = a1.number_input("ยอดต่ำสุด/ออเดอร์ (THB)", value=50.0,
-                                      min_value=float(MIN_TRADE_THB), step=50.0,
-                                      key="sim_amt_min")
-            amt_max = a2.number_input("ยอดสูงสุด/ออเดอร์ (THB)", value=100000.0,
-                                      min_value=float(MIN_TRADE_THB), step=1000.0,
-                                      key="sim_amt_max")
-            reset = st.button("♻️ ล้างระบบใหม่", key="sim_reset", **WIDE)
-            summ = st.session_state.get("sim_batch_summary")
-            if summ:
-                st.caption(summ)
-
-        if reset:
-            first_day = pd.to_datetime(data.index[-1])
-            st.session_state.sim = sim_defaults(
-                asset, first_day, data.loc[first_day, "Global_USD"],
-                data.loc[first_day, "USDTHB"], target_stock_thb)
-            st.session_state.sim_signature = signature
-            st.session_state.sim_steps = []
-            
-            st.session_state["favorite_tickers"] = []
-            try:
-                save_favorites([])
-            except OSError:
-                pass
-                
-            st.rerun()
-
-        if run_batch:
-            if not coins_pick:
-                st.warning("เลือกอย่างน้อย 1 เหรียญ")
-            else:
-                steps_, counts, skipped = run_random_batch(
-                    sim, cfg, ctx, target_stock_thb, coins_pick,
-                    n_orders, seed, amt_min, amt_max)
-                st.session_state.sim_steps = steps_
-                txt = "สุ่มแล้ว: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
-                if skipped:
-                    txt += f" · โหลดราคาไม่ได้: {', '.join(skipped)}"
-                st.session_state.sim_batch_summary = txt
-                st.rerun()
-
-        st.markdown('<div style="margin-top:14px;"></div>', unsafe_allow_html=True)
-        t_route, t_ledger, t_wallet = st.tabs(
-            ["🚀 System Routing", "📒 สมุดออเดอร์ (Ledger)", "🏢 Back Office"])
-
-        with t_route:
-            steps_now = st.session_state.get("sim_steps", [])
-            if not steps_now:
-                st.info("ยังไม่มีออเดอร์ — กดซื้อ/ขายด้านบนเพื่อดูระบบเดินงานทีละด่าน")
-            else:
-                render_timeline(steps_now)
-
-        with t_ledger:
-            if not sim["orders"]:
-                st.caption("ยังไม่มีข้อมูลการเทรด")
-            else:
-                led = pd.DataFrame(sim["orders"])
-                if st.checkbox(f"แสดงเฉพาะ {asset}", key="led_only_asset"):
-                    led = led[led["เหรียญ"] == asset]
-                led.index = range(1, len(led) + 1)
-                st.dataframe(led.sort_index(ascending=False), height=240, **WIDE)
-
-        with t_wallet:
-            price_thb = {r["symbol"]: float(r["price_usd"]) * usdthb_current
-                         for _, r in (market_df if market_df is not None else pd.DataFrame()).iterrows()}
-            price_thb[asset] = spot_usd_current * usdthb_current
-            render_backoffice(sim, cfg, ctx, target_stock_thb, price_thb)
-
-
 def _parse_amount(text: Any) -> float:
     try:
         v = float(str(text).replace(",", "").replace(" ", "").strip())
@@ -3497,8 +3382,10 @@ def _main_body() -> None:
         render_tab3(cfg, data, data_err,
                     price_lookup={row["symbol"]: row["price_usd"] for _, row in market_df.iterrows()} if not market_df.empty else {},
                     market_df=market_df)
-    else:
+    elif nav == NAV_LABELS[3]:
         render_tab4(cfg, data, market_df=market_df)
+    else:
+        render_ai_chat(cfg)
 
     st.markdown(
         f"<div class='xs-foot'>XSpring Dealer Suite · Model v{MODEL_VERSION} · "
@@ -3507,6 +3394,94 @@ def _main_body() -> None:
         "ไม่ใช่เครื่องมือรับรอง compliance</div>",
         unsafe_allow_html=True,
     )
+
+
+# =========================================================================
+# AI ASSISTANT (GEMINI) INTEGRATION
+# =========================================================================
+
+AI_SYSTEM = """คุณคือผู้ช่วย AI อัจฉริยะประจำระบบ XSpring Dealer Suite 
+หน้าที่ของคุณคือให้คำแนะนำเกี่ยวกับการบริหารความเสี่ยง (Risk Management), 
+วิเคราะห์สภาพคล่อง, และตอบคำถามผู้ใช้โดยอ้างอิงจาก Context ของระบบในปัจจุบัน
+ตอบคำถามด้วยความเป็นมืออาชีพ สั้น กระชับ และเข้าใจง่าย"""
+
+def _ai_context(cfg: Mapping[str, Any]) -> str:
+    return (
+        f"Context ปัจจุบันของผู้ใช้:\n"
+        f"- สินทรัพย์ที่กำลังวิเคราะห์: {cfg.get('asset')}\n"
+        f"- Global Exchange: {cfg.get('global_exchange')}\n"
+        f"- ทุนสภาพคล่องรวม: {cfg.get('total_capital_thb', 0):,.2f} บาท\n"
+        f"- หนี้สินต่อลูกค้า: {cfg.get('liab_thb', 0):,.2f} บาท\n"
+        f"- ปริมาณธุรกรรมต่อเดือน: {cfg.get('monthly_volume_thb', 0):,.2f} บาท\n"
+    )
+
+AI_MODEL = "gemini-2.5-flash"
+
+def _ai_api_key() -> str:
+    try:
+        v = st.secrets.get("gemini_api_key", "")
+    except Exception:
+        v = ""
+    return str(v or os.environ.get("GEMINI_API_KEY", "")).strip()
+
+def ask_ai(question: str, history: list[dict], cfg: Mapping[str, Any]) -> str:
+    key = _ai_api_key()
+    if not key:
+        return "ยังไม่ได้ตั้ง gemini_api_key ใน secrets.toml"
+    
+    contents = [
+        {"role": "user" if m["role"] == "user" else "model", 
+         "parts": [{"text": m["content"]}]}
+        for m in history[-10:]
+    ]
+    contents.append({"role": "user", "parts": [{"text": question}]})
+    
+    body = {
+        "systemInstruction": {"parts": [{"text": AI_SYSTEM + "\n\n" + _ai_context(cfg)}]},
+        "contents": contents,
+        "generationConfig": {"maxOutputTokens": 500, "temperature": 0.3},
+    }
+    
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{AI_MODEL}:generateContent"
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json", "x-goog-api-key": key},
+        method="POST",
+    )
+    
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        parts = data["candidates"][0]["content"]["parts"]
+        return "".join(p.get("text", "") for p in parts) or "ไม่ได้รับคำตอบ ลองถามใหม่อีกครั้ง"
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            return "ใช้โควตาฟรีครบชั่วคราว รอสักครู่แล้วลองใหม่"
+        return f"เรียก AI ไม่สำเร็จ (HTTP {e.code})"
+    except Exception as e:
+        return f"เรียก AI ไม่สำเร็จ: {e}"
+
+def render_ai_chat(cfg: dict[str, Any]) -> None:
+    st.markdown("### 💬 AI Assistant (Powered by Gemini)")
+    st.caption("สอบถามข้อมูลการเทรด, การคำนวณ Risk, หรือวิเคราะห์พอร์ตโฟลิโอปัจจุบันของคุณ")
+    
+    if "ai_chat_history" not in st.session_state:
+        st.session_state.ai_chat_history = []
+        
+    for msg in st.session_state.ai_chat_history:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            
+    if prompt := st.chat_input("พิมพ์คำถามของคุณที่นี่..."):
+        st.session_state.ai_chat_history.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+            
+        with st.chat_message("assistant"):
+            with st.spinner("กำลังคิด..."):
+                response = ask_ai(prompt, st.session_state.ai_chat_history[:-1], cfg)
+                st.markdown(response)
+        st.session_state.ai_chat_history.append({"role": "assistant", "content": response})
 
 
 def show_profile_setup_page(email: str):
