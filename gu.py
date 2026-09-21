@@ -2466,7 +2466,7 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 # ลำดับการดึงข้อมูล:
 #   1) server ดึงตรงจากกระดานทั้ง 9 (ฟรี ไม่ใช้ key)
 #   2) [ตัวเลือก] กระดานไหนล้ม + มี coinglass_api_key → ดึงผ่าน CoinGlass
-#   3) กระดานที่ยังล้มอยู่ (Binance/Bybit) → ให้ browser ของผู้ใช้ดึงเอง
+#   3) กระดานที่ยังล้มอยู่ (เช่น Binance) → ให้ browser ของผู้ใช้ดึงเอง
 #      ใช้ IP ผู้ใช้ จึงช่วยหลีกเลี่ยงข้อจำกัดภูมิภาคของ server
 #
 # จุดเรียกใน render_tab2 ยังเป็น render_perp_venue_table(asset) เหมือนเดิม
@@ -2509,13 +2509,6 @@ def _pv_gate(b: str) -> tuple[float, float, float]:
     )[0]
     turn = d.get("volume_24h_quote") or d.get("volume_24h_settle") or d.get("volume_24h_usd")
     return float(d["last"]), float(d["change_percentage"]), float(turn)
-
-
-def _pv_bybit(b: str) -> tuple[float, float, float]:
-    d = _http_json(
-        f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={b}USDT"
-    )["result"]["list"][0]
-    return float(d["lastPrice"]), float(d["price24hPcnt"]) * 100, float(d["turnover24h"])
 
 
 def _pv_hyperliquid(b: str) -> tuple[float, float, float]:
@@ -2602,16 +2595,6 @@ _PERP_VENUES = [
         fn=_pv_gate,
         sym=lambda b: f"{b}_USDT",
         url=lambda b: f"https://www.gate.io/futures/USDT/{b}_USDT",
-    ),
-    dict(
-        name="Bybit",
-        cg="bybit",
-        bg="#17181E",
-        fg="#F7A600",
-        tx="BB",
-        fn=_pv_bybit,
-        sym=lambda b: f"{b}USDT",
-        url=lambda b: f"https://www.bybit.com/trade/usdt/{b}USDT",
     ),
     dict(
         name="Hyperliquid",
@@ -2842,12 +2825,6 @@ const JOBS = {
     const d = await getJSON('https://fapi.binance.com/fapi/v1/ticker/24hr?symbol='+BASE+'USDT');
     return [+d.lastPrice, +d.priceChangePercent, +d.quoteVolume];
   },
-  Bybit: async () => {
-    const d = (await getJSON(
-      'https://api.bybit.com/v5/market/tickers?category=linear&symbol='+BASE+'USDT'
-    )).result.list[0];
-    return [+d.lastPrice, +d.price24hPcnt*100, +d.turnover24h];
-  }
 };
 
 function render(){
@@ -2944,7 +2921,7 @@ def render_perp_venue_table(base: str = "BTC") -> None:
 
     c_cap.caption(
         f"อัปเดต {ts} (เวลาไทย) · กระดานที่ server ดึงไม่ได้ "
-        "(เช่น Binance/Bybit บน server ในสหรัฐฯ) จะให้เบราว์เซอร์ของคุณดึงเอง"
+        "(เช่น Binance บน server ในสหรัฐฯ) จะให้เบราว์เซอร์ของคุณดึงเอง"
     )
 
 
@@ -3100,10 +3077,14 @@ FUNDFLOW_TIMEFRAMES = {
 }
 
 COINGECKO_ID_MAP = {
-    "BTC": "bitcoin", "ETH": "ethereum", "BNB": "binancecoin",
-    "XRP": "ripple", "SOL": "solana", "ADA": "cardano",
-    "DOGE": "dogecoin", "MATIC": "matic-network", "DOT": "polkadot",
-    "LTC": "litecoin",
+    "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
+    "DOGE": "dogecoin", "ADA": "cardano", "HBAR": "hedera-hashgraph",
+    "LINK": "chainlink", "XLM": "stellar", "XRP": "ripple",
+}
+
+_FUNDFLOW_SYMBOL_ICON = {
+    "BTC": "₿", "ETH": "Ξ", "SOL": "S", "DOGE": "Ð",
+    "ADA": "A", "HBAR": "H", "LINK": "L", "XLM": "X", "XRP": "X",
 }
 
 
@@ -3124,12 +3105,15 @@ def _net_flow_from_klines(klines: list) -> float:
 @_cache_data(ttl=120, show_spinner=False)
 def fetch_fund_flow_row(asset: str) -> dict | None:
     row = {"symbol": asset}
-    try:
-        for tf_label, (interval, limit) in FUNDFLOW_TIMEFRAMES.items():
-            row[tf_label] = _net_flow_from_klines(_fetch_klines(f"{asset}USDT", interval, limit))
-    except Exception:
-        return None
-    return row
+    pair = f"{asset}USDT"
+    for tf_label, (interval, limit) in FUNDFLOW_TIMEFRAMES.items():
+        try:
+            klines = _fetch_klines(pair, interval, limit)
+            if klines:
+                row[tf_label] = _net_flow_from_klines(klines)
+        except Exception:
+            continue
+    return row if len(row) > 1 else None
 
 
 @_cache_data(ttl=300, show_spinner=False)
@@ -3148,8 +3132,11 @@ def fetch_market_caps(assets: list[str]) -> dict:
     except Exception:
         return {}
     id_to_symbol = {v: k for k, v in COINGECKO_ID_MAP.items()}
-    return {id_to_symbol[item.get("id")]: item.get("market_cap", 0)
-            for item in data if id_to_symbol.get(item.get("id"))}
+    return {
+        id_to_symbol[item.get("id")]: item.get("market_cap", 0)
+        for item in data
+        if id_to_symbol.get(item.get("id"))
+    }
 
 
 def _fund_signal(row: dict) -> tuple[int, str]:
@@ -3179,6 +3166,14 @@ def _fmt_flow(value: float) -> str:
     return f"{sign}{v:.2f}"
 
 
+def _fmt_market_cap(value: float) -> str:
+    v = float(value or 0)
+    if v >= 1_000_000_000_000: return f"{v / 1_000_000_000_000:.2f}T"
+    if v >= 1_000_000_000: return f"{v / 1_000_000_000:.2f}B"
+    if v >= 1_000_000: return f"{v / 1_000_000:.2f}M"
+    return f"{v:,.0f}"
+
+
 def build_fund_flow_table() -> pd.DataFrame:
     rows = []
     for asset in FUNDFLOW_ASSETS:
@@ -3191,7 +3186,7 @@ def build_fund_flow_table() -> pd.DataFrame:
     for row in rows:
         row["market_cap"] = market_caps.get(row["symbol"], 0)
         row["signal_score"], row["signal_label"] = _fund_signal(row)
-    return pd.DataFrame(rows).sort_values("market_cap", ascending=False).reset_index(drop=True)
+    return pd.DataFrame(rows).sort_values("market_cap", ascending=False, na_position="last").reset_index(drop=True)
 
 
 def render_fund_flow_section(cfg: dict[str, Any] | None = None) -> None:
@@ -3201,22 +3196,48 @@ def render_fund_flow_section(cfg: dict[str, Any] | None = None) -> None:
     if df.empty:
         st.info("ยังไม่มีข้อมูล Fund Flow ตอนนี้ ลองรีเฟรชอีกครั้ง")
         return
+
     tf_cols = list(FUNDFLOW_TIMEFRAMES.keys())
-    display_df = df.copy()
-    for tf in tf_cols:
-        display_df[tf] = df[tf].apply(_fmt_flow)
-    display_df["Market Cap"] = df["market_cap"].apply(_fmt_flow)
-    display_df["Signal"] = df.apply(lambda r: f"{r['signal_score']:+d}  {r['signal_label']}", axis=1)
-    display_df = display_df[["symbol"] + tf_cols + ["Market Cap", "Signal"]].rename(columns={"symbol": "Symbol"})
+    payload_rows = []
+    for _, r in df.iterrows():
+        flows = {tf: (None if pd.isna(r.get(tf)) else float(r.get(tf))) for tf in tf_cols}
+        payload_rows.append({
+            "symbol": str(r["symbol"]),
+            "icon": _FUNDFLOW_SYMBOL_ICON.get(str(r["symbol"]), str(r["symbol"])[0]),
+            "flows": flows,
+            "market_cap": float(r.get("market_cap") or 0),
+            "score": int(r.get("signal_score") or 0),
+            "label": str(r.get("signal_label") or "No Data"),
+        })
 
-    def _color_flow(val: str):
-        if val.startswith("-"):
-            return "color: #f6465d; background-color: rgba(246,70,93,0.08)"
-        return "color: #0ecb81; background-color: rgba(14,203,129,0.08)"
+    payload = json.dumps({"timeframes": tf_cols, "rows": payload_rows}, ensure_ascii=False).replace("</", "<\\/")
 
-    styled = display_df.style.map(_color_flow, subset=tf_cols)
-    st.dataframe(styled, use_container_width=True, hide_index=True)
-
+    html = r'''<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;padding:0;background:transparent;color:#111827;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
+.wrap{border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;background:#fff}
+.toolbar{height:62px;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid #e5e7eb;background:#fff}
+.title{font-size:16px;font-weight:700;margin-right:auto}.pill{padding:8px 14px;border-radius:10px;background:#f1f5f9;font-weight:700;font-size:13px}.pill.active{background:#fff;box-shadow:0 1px 5px rgba(15,23,42,.10)}
+.tablewrap{overflow-x:auto}.table{width:100%;border-collapse:collapse;table-layout:fixed;min-width:1180px}
+th{height:44px;font-size:13px;text-align:center;font-weight:600;border-bottom:1px solid #e5e7eb;white-space:nowrap}
+th:first-child{text-align:left;padding-left:18px;width:190px}.th-flow{width:88px}.th-cap{width:110px}.th-sig{width:220px}
+td{height:74px;border-bottom:1px solid #edf0f3;text-align:center;font-size:14px;font-variant-numeric:tabular-nums}.asset{text-align:left;padding-left:18px;font-weight:700;display:flex;align-items:center;gap:10px}.star{color:#aab2bd;font-size:20px}.coin{width:34px;height:34px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:#f3f4f6;border:1px solid #e5e7eb;font-weight:800;font-size:14px}.sym{font-size:17px}
+.flow{font-weight:700}.pos{color:#0aa76a;background:rgba(14,203,129,.12)}.neg{color:#d93445;background:rgba(246,70,93,.12)}.zero{color:#64748b;background:#f8fafc}
+.sig{display:flex;align-items:center;justify-content:center;gap:8px}.score{min-width:50px;padding:8px 7px;border-radius:6px;color:#fff;font-weight:800}.score.pos{background:#9bd9ba}.score.neg{background:#c85c63}.score.neutral{background:#94a3b8}.label{padding:8px 10px;border-radius:6px;font-weight:700;white-space:nowrap}.label.pos{background:#8bd0ae;color:#fff}.label.neg{background:#e3a4aa;color:#a82e39}.label.neutral{background:#e2e8f0;color:#475569}.bar{width:54px;height:8px;border-radius:6px;background:#e5e7eb;overflow:hidden;display:flex}.bar .in{background:#4fc58e;height:100%}.bar .out{background:#bd3540;height:100%}.cap{color:#0aa76a;font-weight:700}
+.foot{padding:10px 14px;color:#64748b;font-size:11px;background:#fff}
+</style></head><body><div class="wrap">
+<div class="toolbar"><div class="title">Cryptocurrency Fund Flow</div><div class="pill">SPOT</div><div class="pill active">FUTURES</div><div class="pill">☆ Favorite</div><div class="pill">⚙ Customize</div><div class="pill">▦ Heatmap</div></div>
+<div class="tablewrap"><table class="table"><thead><tr><th>Symbol</th><th class="th-flow">5m</th><th class="th-flow">15m</th><th class="th-flow">1h</th><th class="th-flow">2h</th><th class="th-flow">4h</th><th class="th-flow">6h</th><th class="th-flow">8h</th><th class="th-flow">1D</th><th class="th-flow">7D</th><th class="th-flow">30D</th><th class="th-cap">Market Cap</th><th class="th-sig">Fund Signals</th></tr></thead><tbody id="tb"></tbody></table></div>
+<div class="foot">ข้อมูล Net Taker Buy/Sell จาก Binance Futures · แสดงเฉพาะเหรียญใน SUPPORTED_ASSETS ของระบบ</div></div>
+<script>
+const D=__PAYLOAD__,tf=D.timeframes,rows=D.rows;
+const fmt=v=>{if(v==null)return '—';const n=Math.abs(v),s=v<0?'-':'';if(n>=1e9)return s+(n/1e9).toFixed(2)+'B';if(n>=1e6)return s+(n/1e6).toFixed(2)+'M';if(n>=1e3)return s+(n/1e3).toFixed(2)+'K';return s+n.toFixed(2)};
+const cap=v=>{if(v>=1e12)return (v/1e12).toFixed(2)+'T';if(v>=1e9)return (v/1e9).toFixed(2)+'B';if(v>=1e6)return (v/1e6).toFixed(2)+'M';return Math.round(v).toLocaleString('en-US')};
+const cls=v=>v==null?'zero':v>0?'pos':v<0?'neg':'zero';
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function rowHtml(r){const cells=tf.map(k=>{const v=r.flows[k];return `<td class="flow ${cls(v)}">${fmt(v)}</td>`}).join('');const score=r.score,sc=score>0?'pos':score<0?'neg':'neutral',w=Math.min(100,Math.abs(score));const bar=score>=0?`<span class="bar"><span class="in" style="width:${w}%"></span></span>`:`<span class="bar"><span class="out" style="width:${w}%"></span></span>`;const labelClass=score>0?'pos':score<0?'neg':'neutral';return `<tr><td class="asset"><span class="star">☆</span><span class="coin">${esc(r.icon)}</span><span class="sym">${esc(r.symbol)}</span></td>${cells}<td class="cap">${cap(r.market_cap)}</td><td><div class="sig"><span class="score ${sc}">${score>=0?'+':''}${score}</span><span class="label ${labelClass}">${esc(r.label)}</span>${bar}</div></td></tr>`;}
+document.getElementById('tb').innerHTML=rows.map(rowHtml).join('');
+</script></body></html>'''
+    components.html(html.replace("__PAYLOAD__", payload), height=138 + 74 * len(payload_rows), scrolling=True)
 
 def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]) -> None:
     st.markdown(
