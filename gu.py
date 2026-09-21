@@ -1737,7 +1737,7 @@ def build_audit_records(prev: Optional[Mapping[str, Any]], current: Mapping[str,
         old_val = prev.get(key)
         if old_val != new_val:
             records.append({**base, "event": "param_change", "param": key,
-                            "old": _json_safe(old_val), "new": _json_safe(newval)})
+                            "old": _json_safe(old_val), "new": _json_safe(new_val)})
     return records
 
 def append_audit_records(records: list[dict[str, Any]], path: Optional[Path] = None) -> None:
@@ -2462,35 +2462,49 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 # ---- 5.3 TAB 2 — LIQUIDITY & CAPITAL PLANNER ---------------------------
 
 # =========================================================================
-# GLOBAL PERP VENUE TABLE — เทียบราคา/ปริมาณเทรดข้ามกระดานโลก
+# GLOBAL PERP VENUE TABLE (v3) — เทียบราคา/ปริมาณเทรดข้ามกระดานโลก (ไม่มี OI)
+# ลำดับการดึงข้อมูล:
+#   1) server ดึงตรงจากกระดานทั้ง 6 (ฟรี ไม่ใช้ key)
+#   2) [ตัวเลือก] กระดานไหนล้ม + มี coinglass_api_key → ดึงผ่าน CoinGlass (1 call/รอบ)
+#   3) กระดานที่ยังล้มอยู่ (Binance/Bybit) → ให้ "เบราว์เซอร์ของผู้ใช้" ดึงเอง
+#      (ใช้ IP ผู้ใช้ จึงไม่โดนบล็อกภูมิภาคของ server) — ตารางวาดใน iframe ด้วย JS
 # =========================================================================
 
 _VENUE_HEADERS = {"User-Agent": "Mozilla/5.0 (XSpring-Dealer-Suite)",
                   "Accept": "application/json"}
 
-def _http_json(url: str, payload: Optional[dict] = None, timeout: float = 6.0) -> Any:
+
+def _http_json(url: str, payload: Optional[dict] = None, timeout: float = 6.0,
+               extra_headers: Optional[dict] = None) -> Any:
     data = json.dumps(payload).encode() if payload is not None else None
     headers = dict(_VENUE_HEADERS)
     if data is not None:
         headers["Content-Type"] = "application/json"
+    if extra_headers:
+        headers.update(extra_headers)
     req = urllib.request.Request(url, data=data, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
+
+# แต่ละฟังก์ชันคืน (price_usd, chg24h_pct, turnover24h_usd)
 def _pv_binance(b: str) -> tuple[float, float, float]:
     d = _http_json(f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={b}USDT")
     return float(d["lastPrice"]), float(d["priceChangePercent"]), float(d["quoteVolume"])
+
 
 def _pv_gate(b: str) -> tuple[float, float, float]:
     d = _http_json(f"https://api.gateio.ws/api/v4/futures/usdt/tickers?contract={b}_USDT")[0]
     turn = d.get("volume_24h_quote") or d.get("volume_24h_settle") or d.get("volume_24h_usd")
     return float(d["last"]), float(d["change_percentage"]), float(turn)
 
+
 def _pv_bybit(b: str) -> tuple[float, float, float]:
     d = _http_json(
         f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={b}USDT"
     )["result"]["list"][0]
     return float(d["lastPrice"]), float(d["price24hPcnt"]) * 100, float(d["turnover24h"])
+
 
 def _pv_hyperliquid(b: str) -> tuple[float, float, float]:
     meta, ctxs = _http_json("https://api.hyperliquid.xyz/info", {"type": "metaAndAssetCtxs"})
@@ -2499,6 +2513,7 @@ def _pv_hyperliquid(b: str) -> tuple[float, float, float]:
     px, prev = float(c["markPx"]), float(c["prevDayPx"])
     return px, (px / prev - 1) * 100, float(c["dayNtlVlm"])
 
+
 def _pv_bitget(b: str) -> tuple[float, float, float]:
     d = _http_json(
         f"https://api.bitget.com/api/v2/mix/market/ticker?symbol={b}USDT&productType=USDT-FUTURES"
@@ -2506,37 +2521,85 @@ def _pv_bitget(b: str) -> tuple[float, float, float]:
     turn = d.get("usdtVolume") or d.get("quoteVolume")
     return float(d["lastPr"]), float(d["change24h"]) * 100, float(turn)
 
+
 def _pv_okx(b: str) -> tuple[float, float, float]:
     d = _http_json(f"https://www.okx.com/api/v5/market/ticker?instId={b}-USDT-SWAP")["data"][0]
     last, op = float(d["last"]), float(d["open24h"])
+    # OKX ให้ volCcy24h เป็นจำนวนเหรียญ (base) → คูณราคาล่าสุดให้เป็น USD (ค่าประมาณ)
     return last, (last / op - 1) * 100, float(d["volCcy24h"]) * last
 
+
+# cg = คำนำหน้าชื่อกระดานใน CoinGlass (ตัวพิมพ์เล็ก ไม่มีจุด/ช่องว่าง เช่น "Gate.io" → "gateio")
 _PERP_VENUES = [
-    dict(name="Binance", bg="#F0B90B", fg="#0b0e11", tx="BN", fn=_pv_binance,
+    dict(name="Binance", cg="binance", bg="#F0B90B", fg="#0b0e11", tx="BN", fn=_pv_binance,
          sym=lambda b: f"{b}USDT",
          url=lambda b: f"https://www.binance.com/en/futures/{b}USDT"),
-    dict(name="Gate", bg="#2354E6", fg="#ffffff", tx="G", fn=_pv_gate,
+    dict(name="Gate", cg="gate", bg="#2354E6", fg="#ffffff", tx="G", fn=_pv_gate,
          sym=lambda b: f"{b}_USDT",
          url=lambda b: f"https://www.gate.io/futures/USDT/{b}_USDT"),
-    dict(name="Bybit", bg="#17181E", fg="#F7A600", tx="BB", fn=_pv_bybit,
+    dict(name="Bybit", cg="bybit", bg="#17181E", fg="#F7A600", tx="BB", fn=_pv_bybit,
          sym=lambda b: f"{b}USDT",
          url=lambda b: f"https://www.bybit.com/trade/usdt/{b}USDT"),
-    dict(name="Hyperliquid", bg="#072723", fg="#97FCE4", tx="HL", fn=_pv_hyperliquid,
-         sym=lambda b: f"{b}",
+    dict(name="Hyperliquid", cg="hyperliquid", bg="#072723", fg="#97FCE4", tx="HL",
+         fn=_pv_hyperliquid, sym=lambda b: f"{b}",
          url=lambda b: f"https://app.hyperliquid.xyz/trade/{b}"),
-    dict(name="Bitget", bg="#00F0FF", fg="#0b0e11", tx="BG", fn=_pv_bitget,
+    dict(name="Bitget", cg="bitget", bg="#00F0FF", fg="#0b0e11", tx="BG", fn=_pv_bitget,
          sym=lambda b: f"{b}USDT",
          url=lambda b: f"https://www.bitget.com/futures/usdt/{b}USDT"),
-    dict(name="Okx", bg="#000000", fg="#ffffff", tx="OK", fn=_pv_okx,
+    dict(name="Okx", cg="okx", bg="#000000", fg="#ffffff", tx="OK", fn=_pv_okx,
          sym=lambda b: f"{b}-USDT-SWAP",
          url=lambda b: f"https://www.okx.com/trade-swap/{b.lower()}-usdt-swap"),
 ]
 
+
+# ---------- CoinGlass (ตัวกลาง) ----------
+def _coinglass_key() -> str:
+    try:
+        k = st.secrets.get("coinglass_api_key", "")
+    except Exception:
+        k = ""
+    return str(k or os.environ.get("COINGLASS_API_KEY", "")).strip()
+
+
+@_cache_data(ttl=60, show_spinner=False)
+def _cg_pairs(base: str, api_key: str) -> list[dict]:
+    doc = _http_json(
+        f"https://open-api-v4.coinglass.com/api/futures/pairs-markets?symbol={base}",
+        timeout=8.0, extra_headers={"CG-API-KEY": api_key})
+    if str(doc.get("code")) != "0":
+        raise RuntimeError(str(doc.get("msg") or "error")[:60])
+    return doc.get("data") or []
+
+
+def _cg_pick(rows: list[dict], v: dict, base: str) -> Optional[tuple[float, float, float]]:
+    """เลือกคู่ USDT-margined ของกระดานนั้น (ถ้ามีหลายคู่ เอาที่ volume สูงสุด)"""
+    ok_ids = {base + "USDT", base + "USDTSWAP"}
+    if v["name"] == "Hyperliquid":
+        ok_ids |= {base, base + "USDC"}
+    best = None
+    for r in rows:
+        if not re.sub(r"[^a-z0-9]", "", str(r.get("exchange_name", "")).lower()).startswith(v["cg"]):
+            continue
+        iid = re.sub(r"[^A-Z0-9]", "", str(r.get("instrument_id", "")).upper())
+        if iid not in ok_ids:
+            continue
+        try:
+            px = float(r["current_price"])
+            chg = float(r["price_change_percent_24h"])
+            vol = float(r.get("volume_usd") or 0)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if px > 0 and (best is None or vol > best[2]):
+            best = (px, chg, vol)
+    return best
+
+
 @_cache_data(ttl=30, show_spinner=False)
 def fetch_perp_venues(base: str = "BTC") -> tuple[pd.DataFrame, str]:
+    """ดึง 6 กระดานพร้อมกัน → ตัวที่ล้มค่อยไปดึงผ่าน CoinGlass (ถ้ามี key)"""
     def one(v: dict) -> dict:
         row = dict(exchange=v["name"], symbol=v["sym"](base), url=v["url"](base),
-                   price=None, chg=None, turnover=None, err=None)
+                   price=None, chg=None, turnover=None, err=None, via=None)
         try:
             p, c, t = v["fn"](base)
             if not (p > 0):
@@ -2550,16 +2613,124 @@ def fetch_perp_venues(base: str = "BTC") -> tuple[pd.DataFrame, str]:
 
     with ThreadPoolExecutor(max_workers=len(_PERP_VENUES)) as ex:
         rows = list(ex.map(one, _PERP_VENUES))
+
+    failed = [r for r in rows if r["err"]]
+    if failed:
+        key = _coinglass_key()
+        cg_rows: list[dict] = []
+        cg_err = ""
+        if key:
+            try:
+                cg_rows = _cg_pairs(base, key)
+            except urllib.error.HTTPError as e:
+                cg_err = f"CoinGlass HTTP {e.code}"
+            except Exception as e:
+                cg_err = f"CoinGlass {type(e).__name__}: {e}"[:70]
+        meta = {v["name"]: v for v in _PERP_VENUES}
+        for r in failed:
+            hit = _cg_pick(cg_rows, meta[r["exchange"]], base) if cg_rows else None
+            if hit:
+                r.update(price=hit[0], chg=hit[1], turnover=hit[2], err=None, via="CoinGlass")
+            elif cg_err:
+                r["err"] += f" → {cg_err}"
+            elif key:
+                r["err"] += " → CoinGlass ไม่พบคู่นี้"
+
     df = pd.DataFrame(rows).sort_values("turnover", ascending=False, na_position="last")
     return df.reset_index(drop=True), pd.Timestamp.now("Asia/Bangkok").strftime("%H:%M:%S")
 
 
-def _fmt_turnover(v: float) -> str:
-    if v >= 1e9:
-        return f"${v / 1e9:.2f}B"
-    if v >= 1e6:
-        return f"${v / 1e6:.2f}M"
-    return f"${v:,.0f}"
+_PV_HTML = r"""<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;padding:0;background:transparent;color:#EAECEF;
+  font-family:"Source Sans Pro",-apple-system,"Segoe UI",Roboto,sans-serif;}
+.wrap{border:1px solid #2b3139;border-radius:8px;overflow-x:auto;}
+table{width:100%;border-collapse:collapse;font-size:.92rem;}
+th{text-align:left;padding:10px 14px;color:#848e9c;font-weight:600;font-size:.78rem;
+  border-bottom:1px solid #2b3139;background:#161a1e;}
+td{padding:12px 14px;border-bottom:1px solid #2b3139;font-variant-numeric:tabular-nums;}
+.ex{display:flex;align-items:center;gap:10px;font-weight:600;}
+.logo{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;
+  border-radius:50%;border:1px solid #2b3139;font-size:.58rem;font-weight:800;}
+.via{margin-left:4px;font-size:.62rem;font-weight:600;color:#848e9c;border:1px solid #2b3139;
+  border-radius:4px;padding:0 4px;}
+a{color:#4c9aff;text-decoration:none;}
+.up{color:#0ecb81}.dn{color:#f6465d}.mut{color:#5e6673}
+.note{color:#848e9c;font-size:.78rem;margin-top:8px;line-height:1.5;}
+</style></head><body>
+<div class="wrap"><table><thead><tr><th>Exchange</th><th>Symbol</th><th>Price($)</th>
+<th>Chg 24H(%)</th><th>Turnover 24h</th></tr></thead><tbody id="tb"></tbody></table></div>
+<div class="note" id="note"></div>
+<script>
+const D = __PAYLOAD__;
+const BASE = D.base, rows = D.rows;
+const esc = s => String(s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtT = v => v>=1e9 ? '$'+(v/1e9).toFixed(2)+'B' : v>=1e6 ? '$'+(v/1e6).toFixed(2)+'M'
+  : '$'+Math.round(v).toLocaleString('en-US');
+const fmtP = v => v.toLocaleString('en-US',{minimumFractionDigits:1,maximumFractionDigits:1});
+
+async function getJSON(url){
+  const ac = new AbortController(), t = setTimeout(() => ac.abort(), 8000);
+  try{
+    const r = await fetch(url, {signal: ac.signal});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
+// ฟังก์ชันที่เบราว์เซอร์ดึงเอง → [price, chg%, turnover_usd]
+const JOBS = {
+  Binance: async () => {
+    const d = await getJSON('https://fapi.binance.com/fapi/v1/ticker/24hr?symbol='+BASE+'USDT');
+    return [+d.lastPrice, +d.priceChangePercent, +d.quoteVolume];
+  },
+  Bybit: async () => {
+    const d = (await getJSON('https://api.bybit.com/v5/market/tickers?category=linear&symbol='
+      +BASE+'USDT')).result.list[0];
+    return [+d.lastPrice, +d.price24hPcnt*100, +d.turnover24h];
+  },
+};
+
+function render(){
+  const list = rows.slice().sort((a,b) => (b.turnover ?? -1) - (a.turnover ?? -1));
+  document.getElementById('tb').innerHTML = list.map(r => {
+    const via = r.via ? '<span class="via" title="ข้อมูลไม่ได้ดึงตรงจาก server">via '+esc(r.via)+'</span>' : '';
+    let p, c, t;
+    if(r.err){
+      p = c = t = '<span class="mut" title="'+esc(r.err)+'">—</span>';
+    } else {
+      p = fmtP(r.price);
+      c = '<span class="'+(r.chg>=0?'up':'dn')+'">'+(r.chg>=0?'+':'')+r.chg.toFixed(2)+'%</span>';
+      t = fmtT(r.turnover);
+    }
+    return '<tr><td><div class="ex"><span class="logo" style="background:'+esc(r.bg)+';color:'+esc(r.fg)+'">'
+      +esc(r.tx)+'</span>'+esc(r.exchange)+via+'</div></td>'
+      +'<td><a href="'+esc(r.url)+'" target="_blank" rel="noopener">'+esc(r.symbol)+'</a></td>'
+      +'<td>'+p+'</td><td>'+c+'</td><td>'+t+'</td></tr>';
+  }).join('');
+  const bad = rows.filter(r => r.err).map(r => r.exchange+' ('+r.err+')');
+  const via = {}; rows.forEach(r => { if(r.via) (via[r.via] = via[r.via]||[]).push(r.exchange); });
+  let n = 'อัปเดต '+D.ts+' (เวลาไทย) · เรียงตาม Turnover';
+  Object.keys(via).forEach(k => { n += ' · '+via[k].join(', ')+' ดึงผ่าน '+k; });
+  if(bad.length) n += ' · ดึงไม่ได้: '+bad.join(', ');
+  document.getElementById('note').textContent = n;
+}
+
+async function run(){
+  render();
+  const todo = rows.filter(r => r.err && JOBS[r.exchange]);
+  await Promise.all(todo.map(async r => {
+    try{
+      const [p, c, t] = await JOBS[r.exchange]();
+      if(!(isFinite(p) && p > 0 && isFinite(c) && isFinite(t))) throw new Error('bad data');
+      Object.assign(r, {price:p, chg:c, turnover:t, err:null, via:'browser'});
+    } catch(e){
+      r.err += ' → browser: ' + (e && e.message ? e.message : 'fetch failed');
+    }
+    render();
+  }));
+}
+run();
+</script></body></html>"""
 
 
 def render_perp_venue_table(base: str = "BTC") -> None:
@@ -2571,48 +2742,28 @@ def render_perp_venue_table(base: str = "BTC") -> None:
             fetch_perp_venues.clear()
     df, ts = fetch_perp_venues(base)
 
-    th = ("text-align:left;padding:10px 14px;color:#848e9c;font-weight:600;"
-          "font-size:.78rem;border-bottom:1px solid #2b3139;background:#161a1e;")
-    td = "padding:12px 14px;border-bottom:1px solid #2b3139;font-variant-numeric:tabular-nums;"
-    head = "".join(f'<th style="{th}">{h}</th>' for h in
-                   ("Exchange", "Symbol", "Price($)", "Chg 24H(%)", "Turnover 24h"))
-
     meta = {v["name"]: v for v in _PERP_VENUES}
-    body = []
+
+    def _num(x: Any) -> Optional[float]:
+        return None if pd.isna(x) else float(x)
+
+    rows = []
     for _, r in df.iterrows():
         v = meta[r["exchange"]]
-        logo = (f'<span style="display:inline-flex;align-items:center;justify-content:center;'
-                f'width:26px;height:26px;border-radius:50%;background:{v["bg"]};color:{v["fg"]};'
-                f'border:1px solid #2b3139;font-size:.58rem;font-weight:800;">{v["tx"]}</span>')
-        ex_cell = (f'<div style="display:flex;align-items:center;gap:10px;color:#EAECEF;'
-                   f'font-weight:600;">{logo}{_html.escape(r["exchange"])}</div>')
-        sym_cell = (f'<a href="{_html.escape(r["url"])}" target="_blank" rel="noopener" '
-                    f'style="color:#4c9aff;text-decoration:none;">{_html.escape(r["symbol"])}</a>')
-        if isinstance(r["err"], str):
-            price = chg = turn = (f'<span style="color:#5e6673;" title="{_html.escape(r["err"])}">'
-                                  f'—</span>')
-        else:
-            up = r["chg"] >= 0
-            price = f'<span style="color:#EAECEF;">{r["price"]:,.1f}</span>'
-            chg = (f'<span style="color:{"#0ecb81" if up else "#f6465d"};">'
-                   f'{"+" if up else ""}{r["chg"]:.2f}%</span>')
-            turn = f'<span style="color:#EAECEF;">{_fmt_turnover(r["turnover"])}</span>'
-        body.append(f'<tr><td style="{td}">{ex_cell}</td><td style="{td}">{sym_cell}</td>'
-                    f'<td style="{td}">{price}</td><td style="{td}">{chg}</td>'
-                    f'<td style="{td}">{turn}</td></tr>')
+        rows.append(dict(
+            exchange=r["exchange"], symbol=r["symbol"], url=r["url"],
+            bg=v["bg"], fg=v["fg"], tx=v["tx"],
+            price=_num(r["price"]), chg=_num(r["chg"]), turnover=_num(r["turnover"]),
+            err=r["err"] if isinstance(r["err"], str) else None,
+            via=r["via"] if isinstance(r["via"], str) else None,
+        ))
+    payload = json.dumps(dict(base=base, ts=ts, rows=rows),
+                         ensure_ascii=False).replace("</", "<\\/")
+    components.html(_PV_HTML.replace("__PAYLOAD__", payload),
+                    height=90 + 52 * len(rows), scrolling=False)
 
-    st.markdown(
-        '<div style="border:1px solid #2b3139;border-radius:8px;overflow-x:auto;">'
-        '<table style="width:100%;border-collapse:collapse;font-size:.92rem;">'
-        f'<thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table></div>',
-        unsafe_allow_html=True,
-    )
-
-    failed = [f'{r["exchange"]} ({r["err"]})' for _, r in df.iterrows() if isinstance(r["err"], str)]
-    note = f"อัปเดต {ts} (เวลาไทย) · ข้อมูลสาธารณะจาก API ของแต่ละกระดาน · เรียงตาม Turnover"
-    if failed:
-        note += " · ดึงไม่ได้: " + ", ".join(failed)
-    c_cap.caption(note)
+    c_cap.caption(f"อัปเดต {ts} (เวลาไทย) · กระดานที่ server ดึงไม่ได้ "
+                  "(เช่น Binance/Bybit บน server ในสหรัฐฯ) จะให้เบราว์เซอร์ของคุณดึงเอง")
 
 
 def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]) -> None:
