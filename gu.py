@@ -1961,7 +1961,7 @@ def build_sidebar() -> dict[str, Any]:
             hedge_fee_maker = st.number_input(
                 "ค่าธรรมเนียม Global CEX — Maker (%)", key="bt_hedge_fee_maker",
                 step=0.01,
-                help=("ค่าตั้งต้น = เท่า Taker จนกว่าจะตั้ง maker presetใน config.yaml "
+                help=("ค่าตั้งต้น = เท่า Taker จนกว่าจะตั้ง maker preset ใน config.yaml "
                       "หรือแก้ช่องนี้ตามเทียร์บัญชีจริง")) / 100
             maker_ratio = st.slider(
                 "สัดส่วน Hedge ที่ทำเป็น Maker / Limit (%)", 0, 100, 0,
@@ -3482,31 +3482,41 @@ def _main_body() -> None:
     )
 
 
-# =========================================================================
-# LAYER 4 — DATA STATE & AUDIT TRAIL
-# =========================================================================
+def show_profile_setup_page(email: str):
+    st.subheader("ตั้งค่าโปรไฟล์ของคุณ")
+    st.caption("ระบบต้องการข้อมูลพื้นฐานก่อนเข้าใช้งาน XSpring Dealer Suite")
 
-PROFILE_STATE_ENV_VAR = "XSPRING_PROFILE_STATE"
+    default_name = getattr(st.user, "name", email.split("@")[0])
+    name_input = st.text_input("ชื่อที่แสดง (Display Name)", value=default_name)
+    
+    uploaded_file = st.file_uploader(
+        "อัปโหลดรูปโปรไฟล์ (ถ้ามี)",
+        type=["png", "jpg", "jpeg"],
+        help="รองรับไฟล์ PNG, JPG ขนาดไม่เกิน 2MB"
+    )
+    
+    avatar_b64 = ""
+    if uploaded_file is not None:
+        if Image is not None:
+            img = Image.open(uploaded_file)
+            img.thumbnail((200, 200))
+            buffer = BytesIO()
+            img.save(buffer, format="PNG")
+            avatar_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+            st.image(img, caption="ตัวอย่างรูปที่จะบันทึก", width=120)
+        else:
+            st.error("ไม่สามารถจัดการรูปได้ กรุณาติดตั้งไลบรารี Pillow (pip install pillow)")
+    
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        if st.button("💾 บันทึกโปรไฟล์", type="primary", use_container_width=True):
+            save_profile(email, name_input, avatar_b64)
+            st.success("บันทึกโปรไฟล์สำเร็จ!")
+            st.rerun()
+    with col2:
+        if st.button("ออกจากระบบ", use_container_width=True):
+            st.logout()
 
-def profile_state_path() -> Path:
-    return Path(os.environ.get(PROFILE_STATE_ENV_VAR) or (_HERE / "user_profiles.json"))
-
-def load_profiles() -> dict[str, dict[str, str]]:
-    p = profile_state_path()
-    if not p.is_file():
-        return {}
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-def save_profile(email: str, display_name: str, avatar_b64: Optional[str] = None) -> None:
-    p = profile_state_path()
-    profiles = load_profiles()
-    profiles[email] = {"display_name": display_name, "avatar_b64": avatar_b64}
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(profiles, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, p)
 
 def _allowed_email() -> str:
     try:
@@ -3520,59 +3530,37 @@ def require_login() -> bool:
         logged_in = bool(st.user.is_logged_in)
     except Exception:
         st.error("Streamlit เวอร์ชันนี้ไม่รองรับ st.login — ต้องเป็น 1.42 ขึ้นไป")
-        return False
-    if logged_in:
-        allowed = _allowed_email()
-        email = str(getattr(st.user, "email", "") or "").strip().lower()
-        if not allowed:
-            st.error("ยังไม่ได้ตั้ง allowed_email ใน secrets.toml — ระบบจึงปิดไว้ก่อน")
-            st.button("ออกจากระบบ", on_click=st.logout)
-            return False
-        if email != allowed:
-            st.error(f"บัญชี {email} ไม่ได้รับอนุญาตให้ใช้งาน")
-            st.button("ออกจากระบบ", on_click=st.logout)
-            return False
-            
-        # ---------- Profile Setup Flow ----------
-        profiles = load_profiles()
-        if email not in profiles:
-            st.markdown("## 👤 ตั้งค่าโปรไฟล์ของคุณ")
-            st.caption("ระบบต้องการข้อมูลพื้นฐานก่อนเข้าใช้งาน XSpring Dealer Suite")
-            with st.container(border=True):
-                default_name = getattr(st.user, "name", email.split("@")[0])
-                name_input = st.text_input("ชื่อที่แสดง (Display Name)", value=default_name)
-                
-                uploaded_file = st.file_uploader(
-                    "อัปโหลดรูปโปรไฟล์ (ถ้ามี)",
-                    type=["png", "jpg", "jpeg"],
-                    help="รองรับไฟล์ PNG, JPG ขนาดไม่เกิน 2MB"
-                )
-                
-                avatar_b64 = ""
-                if uploaded_file is not None:
-                    if Image is not None:
-                        img = Image.open(uploaded_file)
-                        img.thumbnail((200, 200))
-                        buffer = BytesIO()
-                        img.save(buffer, format="PNG")
-                        avatar_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
-                        st.image(img, caption="ตัวอย่างรูปที่จะบันทึก", width=120)
-                    else:
-                        st.error("ไม่สามารถจัดการรูปได้ กรุณาติดตั้งไลบรารี Pillow (pip install pillow)")
-                
-                c1, c2 = st.columns(2)
-                if c1.button("💾 บันทึกโปรไฟล์", type="primary", use_container_width=True):
-                    save_profile(email, name_input, avatar_b64)
-                    st.rerun()
-                c2.button("ออกจากระบบ", on_click=st.logout, use_container_width=True)
-            return False # ขัดจังหวะไม่ให้โหลดแอปหลัก
-        # ----------------------------------------
+        st.stop()
         
-        return True
+    if not logged_in:
+        st.markdown("## ♻️ XSpring Dealer Suite")
+        st.button("Continue with Google", key="login_google", on_click=st.login)
+        st.stop()
+
+    allowed = _allowed_email()
+    email = str(getattr(st.user, "email", "") or "").strip().lower()
+    
+    if not allowed:
+        st.error("ยังไม่ได้ตั้ง allowed_email ใน secrets.toml — ระบบจึงปิดไว้ก่อน")
+        if st.button("ออกจากระบบ", key="logout_err1"):
+            st.logout()
+        st.stop()
         
-    st.markdown("## ♻️ XSpring Dealer Suite")
-    st.button("Continue with Google", key="login_google", on_click=st.login)
-    return False
+    allowed_list = [a.strip() for a in allowed.split(",")]
+    if email not in allowed_list and allowed != "*":
+        st.error(f"บัญชี {email} ไม่ได้รับอนุญาตให้ใช้งาน")
+        if st.button("ออกจากระบบ", key="logout_err2"):
+            st.logout()
+        st.stop()
+
+    # ---------- Profile Setup Flow ----------
+    profiles = load_profiles()
+    if email not in profiles:
+        show_profile_setup_page(email)
+        st.stop() # หยุดกระบวนการโหลดแอปหลักจนกว่าจะสร้างโปรไฟล์เสร็จ
+    # ----------------------------------------
+    
+    return True
 
 def main() -> None:
     st.set_page_config(
