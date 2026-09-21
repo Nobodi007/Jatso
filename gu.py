@@ -2462,12 +2462,8 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 # ---- 5.3 TAB 2 — LIQUIDITY & CAPITAL PLANNER ---------------------------
 
 # =========================================================================
-# GLOBAL PERP VENUE TABLE (v3) — เทียบราคา/ปริมาณเทรดข้ามกระดานโลก (ไม่มี OI)
-# ลำดับการดึงข้อมูล:
-#   1) server ดึงตรงจากกระดานทั้ง 6 (ฟรี ไม่ใช้ key)
-#   2) [ตัวเลือก] กระดานไหนล้ม + มี coinglass_api_key → ดึงผ่าน CoinGlass (1 call/รอบ)
-#   3) กระดานที่ยังล้มอยู่ (Binance/Bybit) → ให้ "เบราว์เซอร์ของผู้ใช้" ดึงเอง
-#      (ใช้ IP ผู้ใช้ จึงไม่โดนบล็อกภูมิภาคของ server) — ตารางวาดใน iframe ด้วย JS
+# GLOBAL PERP VENUE TABLE (v4) — เทียบราคา/ปริมาณเทรดข้ามกระดานโลก
+# เอา Bybit ออก และเปลี่ยนโลโก้จากตัวหนังสือเป็นรูปโลโก้จริงของกระดานอัตโนมัติ
 # =========================================================================
 
 _VENUE_HEADERS = {"User-Agent": "Mozilla/5.0 (XSpring-Dealer-Suite)",
@@ -2499,13 +2495,6 @@ def _pv_gate(b: str) -> tuple[float, float, float]:
     return float(d["last"]), float(d["change_percentage"]), float(turn)
 
 
-def _pv_bybit(b: str) -> tuple[float, float, float]:
-    d = _http_json(
-        f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={b}USDT"
-    )["result"]["list"][0]
-    return float(d["lastPrice"]), float(d["price24hPcnt"]) * 100, float(d["turnover24h"])
-
-
 def _pv_hyperliquid(b: str) -> tuple[float, float, float]:
     meta, ctxs = _http_json("https://api.hyperliquid.xyz/info", {"type": "metaAndAssetCtxs"})
     i = next(k for k, u in enumerate(meta["universe"]) if u["name"] == b)
@@ -2525,28 +2514,24 @@ def _pv_bitget(b: str) -> tuple[float, float, float]:
 def _pv_okx(b: str) -> tuple[float, float, float]:
     d = _http_json(f"https://www.okx.com/api/v5/market/ticker?instId={b}-USDT-SWAP")["data"][0]
     last, op = float(d["last"]), float(d["open24h"])
-    # OKX ให้ volCcy24h เป็นจำนวนเหรียญ (base) → คูณราคาล่าสุดให้เป็น USD (ค่าประมาณ)
     return last, (last / op - 1) * 100, float(d["volCcy24h"]) * last
 
 
-# cg = คำนำหน้าชื่อกระดานใน CoinGlass (ตัวพิมพ์เล็ก ไม่มีจุด/ช่องว่าง เช่น "Gate.io" → "gateio")
+# cg = คำนำหน้าชื่อกระดานใน CoinGlass | domain = ใช้ดึง Favicon โลโก้จริงของกระดานอัตโนมัติ
 _PERP_VENUES = [
-    dict(name="Binance", cg="binance", bg="#F0B90B", fg="#0b0e11", tx="BN", fn=_pv_binance,
+    dict(name="Binance", cg="binance", domain="binance.com", fn=_pv_binance,
          sym=lambda b: f"{b}USDT",
          url=lambda b: f"https://www.binance.com/en/futures/{b}USDT"),
-    dict(name="Gate", cg="gate", bg="#2354E6", fg="#ffffff", tx="G", fn=_pv_gate,
+    dict(name="Gate", cg="gate", domain="gate.io", fn=_pv_gate,
          sym=lambda b: f"{b}_USDT",
          url=lambda b: f"https://www.gate.io/futures/USDT/{b}_USDT"),
-    dict(name="Bybit", cg="bybit", bg="#17181E", fg="#F7A600", tx="BB", fn=_pv_bybit,
-         sym=lambda b: f"{b}USDT",
-         url=lambda b: f"https://www.bybit.com/trade/usdt/{b}USDT"),
-    dict(name="Hyperliquid", cg="hyperliquid", bg="#072723", fg="#97FCE4", tx="HL",
+    dict(name="Hyperliquid", cg="hyperliquid", domain="app.hyperliquid.xyz",
          fn=_pv_hyperliquid, sym=lambda b: f"{b}",
          url=lambda b: f"https://app.hyperliquid.xyz/trade/{b}"),
-    dict(name="Bitget", cg="bitget", bg="#00F0FF", fg="#0b0e11", tx="BG", fn=_pv_bitget,
+    dict(name="Bitget", cg="bitget", domain="bitget.com", fn=_pv_bitget,
          sym=lambda b: f"{b}USDT",
          url=lambda b: f"https://www.bitget.com/futures/usdt/{b}USDT"),
-    dict(name="Okx", cg="okx", bg="#000000", fg="#ffffff", tx="OK", fn=_pv_okx,
+    dict(name="Okx", cg="okx", domain="okx.com", fn=_pv_okx,
          sym=lambda b: f"{b}-USDT-SWAP",
          url=lambda b: f"https://www.okx.com/trade-swap/{b.lower()}-usdt-swap"),
 ]
@@ -2596,7 +2581,7 @@ def _cg_pick(rows: list[dict], v: dict, base: str) -> Optional[tuple[float, floa
 
 @_cache_data(ttl=30, show_spinner=False)
 def fetch_perp_venues(base: str = "BTC") -> tuple[pd.DataFrame, str]:
-    """ดึง 6 กระดานพร้อมกัน → ตัวที่ล้มค่อยไปดึงผ่าน CoinGlass (ถ้ามี key)"""
+    """ดึงกระดานพร้อมกัน → ตัวที่ล้มค่อยไปดึงผ่าน CoinGlass (ถ้ามี key)"""
     def one(v: dict) -> dict:
         row = dict(exchange=v["name"], symbol=v["sym"](base), url=v["url"](base),
                    price=None, chg=None, turnover=None, err=None, via=None)
@@ -2649,8 +2634,7 @@ th{text-align:left;padding:10px 14px;color:#848e9c;font-weight:600;font-size:.78
   border-bottom:1px solid #2b3139;background:#161a1e;}
 td{padding:12px 14px;border-bottom:1px solid #2b3139;font-variant-numeric:tabular-nums;}
 .ex{display:flex;align-items:center;gap:10px;font-weight:600;}
-.logo{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;
-  border-radius:50%;border:1px solid #2b3139;font-size:.58rem;font-weight:800;}
+.logo-img{width:24px;height:24px;border-radius:50%;object-fit:contain;background:#fff;border:1px solid #2b3139;padding:2px;}
 .via{margin-left:4px;font-size:.62rem;font-weight:600;color:#848e9c;border:1px solid #2b3139;
   border-radius:4px;padding:0 4px;}
 a{color:#4c9aff;text-decoration:none;}
@@ -2677,17 +2661,12 @@ async function getJSON(url){
     return await r.json();
   } finally { clearTimeout(t); }
 }
-// ฟังก์ชันที่เบราว์เซอร์ดึงเอง → [price, chg%, turnover_usd]
+// เฉพาะ Binance ที่ยังให้ Browser ดึงเป็น Fallback
 const JOBS = {
   Binance: async () => {
     const d = await getJSON('https://fapi.binance.com/fapi/v1/ticker/24hr?symbol='+BASE+'USDT');
     return [+d.lastPrice, +d.priceChangePercent, +d.quoteVolume];
-  },
-  Bybit: async () => {
-    const d = (await getJSON('https://api.bybit.com/v5/market/tickers?category=linear&symbol='
-      +BASE+'USDT')).result.list[0];
-    return [+d.lastPrice, +d.price24hPcnt*100, +d.turnover24h];
-  },
+  }
 };
 
 function render(){
@@ -2702,8 +2681,9 @@ function render(){
       c = '<span class="'+(r.chg>=0?'up':'dn')+'">'+(r.chg>=0?'+':'')+r.chg.toFixed(2)+'%</span>';
       t = fmtT(r.turnover);
     }
-    return '<tr><td><div class="ex"><span class="logo" style="background:'+esc(r.bg)+';color:'+esc(r.fg)+'">'
-      +esc(r.tx)+'</span>'+esc(r.exchange)+via+'</div></td>'
+    const iconUrl = 'https://www.google.com/s2/favicons?domain='+esc(r.domain)+'&sz=64';
+    return '<tr><td><div class="ex"><img src="'+iconUrl+'" class="logo-img" alt="logo">'
+      +esc(r.exchange)+via+'</div></td>'
       +'<td><a href="'+esc(r.url)+'" target="_blank" rel="noopener">'+esc(r.symbol)+'</a></td>'
       +'<td>'+p+'</td><td>'+c+'</td><td>'+t+'</td></tr>';
   }).join('');
@@ -2752,7 +2732,7 @@ def render_perp_venue_table(base: str = "BTC") -> None:
         v = meta[r["exchange"]]
         rows.append(dict(
             exchange=r["exchange"], symbol=r["symbol"], url=r["url"],
-            bg=v["bg"], fg=v["fg"], tx=v["tx"],
+            domain=v["domain"],
             price=_num(r["price"]), chg=_num(r["chg"]), turnover=_num(r["turnover"]),
             err=r["err"] if isinstance(r["err"], str) else None,
             via=r["via"] if isinstance(r["via"], str) else None,
@@ -2763,7 +2743,7 @@ def render_perp_venue_table(base: str = "BTC") -> None:
                     height=90 + 52 * len(rows), scrolling=False)
 
     c_cap.caption(f"อัปเดต {ts} (เวลาไทย) · กระดานที่ server ดึงไม่ได้ "
-                  "(เช่น Binance/Bybit บน server ในสหรัฐฯ) จะให้เบราว์เซอร์ของคุณดึงเอง")
+                  "(เช่น Binance บน server ในสหรัฐฯ) จะให้เบราว์เซอร์ของคุณดึงเอง")
 
 
 def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]) -> None:
