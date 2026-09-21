@@ -3060,184 +3060,219 @@ def render_news_section(cfg: dict[str, Any] | None = None) -> None:
 
 
 # ============================================================
-# FUND FLOW LAYER — เฉพาะเหรียญใน SUPPORTED_ASSETS เท่านั้น
-# Binance Public API + CoinGecko Market Cap
+# FUND FLOW LAYER (v2) — ดึงผ่านเบราว์เซอร์ผู้ใช้
+# เฉพาะเหรียญใน SUPPORTED_ASSETS เท่านั้น
 # ============================================================
-
-BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
-COINGECKO_MARKETS_URL = "https://api.coingecko.com/api/v3/coins/markets"
 
 FUNDFLOW_ASSETS = [a for a in SUPPORTED_ASSETS if a not in STABLECOINS]
 
 FUNDFLOW_TIMEFRAMES = {
-    "5m": ("1m", 5), "15m": ("1m", 15), "1h": ("5m", 12),
-    "2h": ("15m", 8), "4h": ("15m", 16), "6h": ("30m", 12),
-    "8h": ("30m", 16), "1D": ("1h", 24), "7D": ("4h", 42),
-    "30D": ("1d", 30),
+    "5m":  {"interval": "1m", "limit": 5},
+    "15m": {"interval": "1m", "limit": 15},
+    "1h":  {"interval": "5m", "limit": 12},
+    "2h":  {"interval": "15m", "limit": 8},
+    "4h":  {"interval": "15m", "limit": 16},
+    "6h":  {"interval": "30m", "limit": 12},
+    "8h":  {"interval": "30m", "limit": 16},
+    "1D":  {"interval": "1h", "limit": 24},
+    "7D":  {"interval": "4h", "limit": 42},
+    "30D": {"interval": "1d", "limit": 30},
 }
 
+# แมป symbol ในระบบ -> id ของ CoinGecko
 COINGECKO_ID_MAP = {
-    "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
-    "DOGE": "dogecoin", "ADA": "cardano", "HBAR": "hedera-hashgraph",
-    "LINK": "chainlink", "XLM": "stellar", "XRP": "ripple",
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "SOL": "solana",
+    "DOGE": "dogecoin",
+    "ADA": "cardano",
+    "HBAR": "hedera-hashgraph",
+    "LINK": "chainlink",
+    "XLM": "stellar",
+    "XRP": "ripple",
 }
 
-_FUNDFLOW_SYMBOL_ICON = {
-    "BTC": "₿", "ETH": "Ξ", "SOL": "S", "DOGE": "Ð",
-    "ADA": "A", "HBAR": "H", "LINK": "L", "XLM": "X", "XRP": "X",
+_FUNDFLOW_HTML = r"""
+<style>
+  html,body{margin:0;padding:0;background:transparent;color:#EAECEF;
+    font-family:"Source Sans Pro",-apple-system,"Segoe UI",Roboto,sans-serif;}
+  .wrap{border:1px solid #2b3139;border-radius:8px;overflow-x:auto;}
+  table{width:100%;border-collapse:collapse;font-size:.85rem;white-space:nowrap;}
+  th{text-align:left;padding:9px 12px;color:#848e9c;font-weight:600;font-size:.72rem;
+     border-bottom:1px solid #2b3139;background:#161a1e;position:sticky;top:0;}
+  td{padding:10px 12px;border-bottom:1px solid #2b3139;font-variant-numeric:tabular-nums;}
+  .sym{display:flex;align-items:center;gap:8px;font-weight:700;}
+  .logo{width:22px;height:22px;border-radius:50%;}
+  .up{color:#0ecb81;background:rgba(14,203,129,.07);}
+  .dn{color:#f6465d;background:rgba(246,70,93,.07);}
+  .mut{color:#5e6673;}
+  .sig{display:inline-block;padding:2px 8px;border-radius:4px;font-weight:700;font-size:.72rem;}
+  .sig-strongin{background:#0ecb81;color:#0b0e11;}
+  .sig-in{background:rgba(14,203,129,.18);color:#0ecb81;}
+  .sig-neu{background:#2b3139;color:#848e9c;}
+  .sig-out{background:rgba(246,70,93,.18);color:#f6465d;}
+  .sig-strongout{background:#f6465d;color:#0b0e11;}
+  .note{color:#848e9c;font-size:.75rem;margin-top:8px;line-height:1.5;}
+</style>
+<div class="wrap">
+  <table>
+    <thead><tr id="thead"></tr></thead>
+    <tbody id="tb"></tbody>
+  </table>
+</div>
+<div class="note" id="note">กำลังโหลดข้อมูล Fund Flow จากเบราว์เซอร์ของคุณ…</div>
+<script>
+const ASSETS = __ASSETS__;
+const TFS = __TFS__;
+const CG_MAP = __CGMAP__;
+const TF_KEYS = Object.keys(TFS);
+
+function fmtFlow(v){
+  if (v === null || v === undefined || !isFinite(v)) return "—";
+  const sign = v < 0 ? "-" : "";
+  const a = Math.abs(v);
+  if (a >= 1e9) return sign + (a/1e9).toFixed(2) + "B";
+  if (a >= 1e6) return sign + (a/1e6).toFixed(2) + "M";
+  if (a >= 1e3) return sign + (a/1e3).toFixed(2) + "K";
+  return sign + a.toFixed(2);
 }
 
+async function getJSON(url, timeoutMs=8000){
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+  try{
+    const r = await fetch(url, {signal: ac.signal});
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
 
-def _fetch_klines(symbol_pair: str, interval: str, limit: int) -> list:
-    query = urllib.parse.urlencode({"symbol": symbol_pair, "interval": interval, "limit": limit})
-    req = urllib.request.Request(
-        f"{BINANCE_KLINES_URL}?{query}",
-        headers={"User-Agent": "XSpring-Dealer-Suite/1.0"},
-    )
-    with urllib.request.urlopen(req, timeout=8) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+async function fetchNetFlow(asset, interval, limit){
+  const url = "https://api.binance.com/api/v3/klines?symbol=" + asset +
+              "USDT&interval=" + interval + "&limit=" + limit;
+  const kl = await getJSON(url);
+  let net = 0;
+  for(const k of kl){
+    const quoteVol = parseFloat(k[7]);
+    const takerBuyQuoteVol = parseFloat(k[10]);
+    net += (2 * takerBuyQuoteVol) - quoteVol;
+  }
+  return net;
+}
 
-
-def _net_flow_from_klines(klines: list) -> float:
-    return sum((2 * float(k[10])) - float(k[7]) for k in klines)
-
-
-@_cache_data(ttl=120, show_spinner=False)
-def fetch_fund_flow_row(asset: str) -> dict | None:
-    row = {"symbol": asset}
-    pair = f"{asset}USDT"
-    for tf_label, (interval, limit) in FUNDFLOW_TIMEFRAMES.items():
-        try:
-            klines = _fetch_klines(pair, interval, limit)
-            if klines:
-                row[tf_label] = _net_flow_from_klines(klines)
-        except Exception:
-            continue
-    return row if len(row) > 1 else None
-
-
-@_cache_data(ttl=300, show_spinner=False)
-def fetch_market_caps(assets: list[str]) -> dict:
-    ids = [COINGECKO_ID_MAP[a] for a in assets if a in COINGECKO_ID_MAP]
-    if not ids:
-        return {}
-    query = urllib.parse.urlencode({"vs_currency": "usd", "ids": ",".join(ids)})
-    req = urllib.request.Request(
-        f"{COINGECKO_MARKETS_URL}?{query}",
-        headers={"User-Agent": "XSpring-Dealer-Suite/1.0"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        return {}
-    id_to_symbol = {v: k for k, v in COINGECKO_ID_MAP.items()}
-    return {
-        id_to_symbol[item.get("id")]: item.get("market_cap", 0)
-        for item in data
-        if id_to_symbol.get(item.get("id"))
+async function fetchMarketCaps(){
+  const ids = ASSETS.map(a => CG_MAP[a]).filter(Boolean);
+  if (!ids.length) return {};
+  try{
+    const url = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=" + ids.join(",");
+    const data = await getJSON(url);
+    const idToSym = {};
+    for(const sym in CG_MAP) idToSym[CG_MAP[sym]] = sym;
+    const out = {};
+    for(const item of data){
+      const sym = idToSym[item.id];
+      if (sym) out[sym] = item.market_cap || 0;
     }
+    return out;
+  } catch(e){ return {}; }
+}
 
+function signalOf(row){
+  const vals = TF_KEYS.map(k => row[k]).filter(v => v !== null && v !== undefined && isFinite(v));
+  if (!vals.length) return {score: 0, label: "No Data", cls: "sig-neu"};
+  const pos = vals.filter(v => v > 0).length;
+  const score = Math.round(((pos / vals.length) * 2 - 1) * 100);
+  if (score >= 50) return {score, label: "Strong Inflow", cls: "sig-strongin"};
+  if (score > 0)   return {score, label: "Net Inflow", cls: "sig-in"};
+  if (score === 0) return {score, label: "Neutral", cls: "sig-neu"};
+  if (score > -50) return {score, label: "Net Outflow", cls: "sig-out"};
+  return {score, label: "Strong Outflow", cls: "sig-strongout"};
+}
 
-def _fund_signal(row: dict) -> tuple[int, str]:
-    values = [row[tf] for tf in FUNDFLOW_TIMEFRAMES if tf in row]
-    if not values:
-        return 0, "No Data"
-    positive = sum(1 for v in values if v > 0)
-    score = round(((positive / len(values)) * 2 - 1) * 100)
-    if score >= 50:
-        label = "Strong Inflow"
-    elif score > 0:
-        label = "Net Inflow"
-    elif score == 0:
-        label = "Neutral"
-    elif score > -50:
-        label = "Net Outflow"
-    else:
-        label = "Strong Outflow"
-    return score, label
+function renderHead(){
+  let h = "<th>Symbol</th>";
+  for (const k of TF_KEYS) h += "<th>" + k + "</th>";
+  h += "<th>Market Cap</th><th>Fund Signal</th>";
+  document.getElementById("thead").innerHTML = h;
+}
 
+function renderRows(rows, failed){
+  const sorted = rows.slice().sort((a,b) => (b.marketCap||0) - (a.marketCap||0));
+  document.getElementById("tb").innerHTML = sorted.map(r => {
+    let cells = "";
+    for (const k of TF_KEYS){
+      const v = r[k];
+      if (v === null || v === undefined || !isFinite(v)){
+        cells += "<td class='mut'>—</td>";
+      } else {
+        cells += "<td class='" + (v >= 0 ? "up" : "dn") + "'>" + fmtFlow(v) + "</td>";
+      }
+    }
+    const sig = signalOf(r);
+    const mc = r.marketCap ? fmtFlow(r.marketCap) : "—";
+    return "<tr><td class='sym'>" + esc(r.asset) + "</td>" + cells +
+           "<td>" + mc + "</td>" +
+           "<td><span class='sig " + sig.cls + "'>" + (sig.score>=0?"+":"") + sig.score + " " + sig.label + "</span></td></tr>";
+  }).join("");
+  const ts = new Date().toLocaleTimeString("th-TH", {hour12:false});
+  let note = "อัปเดต " + ts + " · ดึงข้อมูลจากเบราว์เซอร์ของคุณโดยตรง (กัน Binance บล็อก IP server)";
+  if (failed.length) note += " · ดึงไม่ได้: " + failed.join(", ");
+  document.getElementById("note").textContent = note;
+}
 
-def _fmt_flow(value: float) -> str:
-    sign, v = ("-", abs(value)) if value < 0 else ("", value)
-    if v >= 1_000_000_000: return f"{sign}{v / 1_000_000_000:.2f}B"
-    if v >= 1_000_000: return f"{sign}{v / 1_000_000:.2f}M"
-    if v >= 1_000: return f"{sign}{v / 1_000:.2f}K"
-    return f"{sign}{v:.2f}"
+function esc(s){ return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
 
+async function run(){
+  renderHead();
+  const caps = await fetchMarketCaps();
+  const rows = [];
+  const failed = [];
 
-def _fmt_market_cap(value: float) -> str:
-    v = float(value or 0)
-    if v >= 1_000_000_000_000: return f"{v / 1_000_000_000_000:.2f}T"
-    if v >= 1_000_000_000: return f"{v / 1_000_000_000:.2f}B"
-    if v >= 1_000_000: return f"{v / 1_000_000:.2f}M"
-    return f"{v:,.0f}"
+  await Promise.all(ASSETS.map(async (asset) => {
+    const row = {asset, marketCap: caps[asset] || 0};
+    await Promise.all(TF_KEYS.map(async (k) => {
+      const cfg = TFS[k];
+      try {
+        row[k] = await fetchNetFlow(asset, cfg.interval, cfg.limit);
+      } catch (e) {
+        row[k] = null;
+      }
+    }));
+    const hasAny = TF_KEYS.some(k => row[k] !== null && row[k] !== undefined);
+    if (hasAny) rows.push(row);
+    else failed.push(asset);
+  }));
 
-
-def build_fund_flow_table() -> pd.DataFrame:
-    rows = []
-    for asset in FUNDFLOW_ASSETS:
-        row = fetch_fund_flow_row(asset)
-        if row is not None:
-            rows.append(row)
-    if not rows:
-        return pd.DataFrame()
-    market_caps = fetch_market_caps([r["symbol"] for r in rows])
-    for row in rows:
-        row["market_cap"] = market_caps.get(row["symbol"], 0)
-        row["signal_score"], row["signal_label"] = _fund_signal(row)
-    return pd.DataFrame(rows).sort_values("market_cap", ascending=False, na_position="last").reset_index(drop=True)
+  renderRows(rows, failed);
+}
+run();
+</script>
+"""
 
 
 def render_fund_flow_section(cfg: dict[str, Any] | None = None) -> None:
+    """
+    Render ตาราง Cryptocurrency Fund Flow โดยให้ browser ของผู้ใช้เรียก
+    Binance Spot klines และ CoinGecko โดยตรง แทนการยิง API จาก Streamlit server.
+    """
     st.markdown("### 💧 Cryptocurrency Fund Flow")
-    st.caption("Net Taker Buy/Sell Volume จาก Binance · เฉพาะเหรียญในระบบ")
-    df = build_fund_flow_table()
-    if df.empty:
-        st.info("ยังไม่มีข้อมูล Fund Flow ตอนนี้ ลองรีเฟรชอีกครั้ง")
-        return
+    st.caption(
+        "Net Taker Buy/Sell Volume จาก Binance · เฉพาะเหรียญในระบบ · "
+        "คำนวณที่เบราว์เซอร์ของคุณโดยตรง"
+    )
 
-    tf_cols = list(FUNDFLOW_TIMEFRAMES.keys())
-    payload_rows = []
-    for _, r in df.iterrows():
-        flows = {tf: (None if pd.isna(r.get(tf)) else float(r.get(tf))) for tf in tf_cols}
-        payload_rows.append({
-            "symbol": str(r["symbol"]),
-            "icon": _FUNDFLOW_SYMBOL_ICON.get(str(r["symbol"]), str(r["symbol"])[0]),
-            "flows": flows,
-            "market_cap": float(r.get("market_cap") or 0),
-            "score": int(r.get("signal_score") or 0),
-            "label": str(r.get("signal_label") or "No Data"),
-        })
+    payload_html = (
+        _FUNDFLOW_HTML
+        .replace("__ASSETS__", json.dumps(FUNDFLOW_ASSETS, ensure_ascii=False))
+        .replace("__TFS__", json.dumps(FUNDFLOW_TIMEFRAMES, ensure_ascii=False))
+        .replace("__CGMAP__", json.dumps(COINGECKO_ID_MAP, ensure_ascii=False))
+    )
+    components.html(
+        payload_html,
+        height=90 + 46 * len(FUNDFLOW_ASSETS),
+        scrolling=True,
+    )
 
-    payload = json.dumps({"timeframes": tf_cols, "rows": payload_rows}, ensure_ascii=False).replace("</", "<\\/")
-
-    html = r'''<!doctype html><html><head><meta charset="utf-8"><style>
-html,body{margin:0;padding:0;background:transparent;color:#111827;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
-.wrap{border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;background:#fff}
-.toolbar{height:62px;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid #e5e7eb;background:#fff}
-.title{font-size:16px;font-weight:700;margin-right:auto}.pill{padding:8px 14px;border-radius:10px;background:#f1f5f9;font-weight:700;font-size:13px}.pill.active{background:#fff;box-shadow:0 1px 5px rgba(15,23,42,.10)}
-.tablewrap{overflow-x:auto}.table{width:100%;border-collapse:collapse;table-layout:fixed;min-width:1180px}
-th{height:44px;font-size:13px;text-align:center;font-weight:600;border-bottom:1px solid #e5e7eb;white-space:nowrap}
-th:first-child{text-align:left;padding-left:18px;width:190px}.th-flow{width:88px}.th-cap{width:110px}.th-sig{width:220px}
-td{height:74px;border-bottom:1px solid #edf0f3;text-align:center;font-size:14px;font-variant-numeric:tabular-nums}.asset{text-align:left;padding-left:18px;font-weight:700;display:flex;align-items:center;gap:10px}.star{color:#aab2bd;font-size:20px}.coin{width:34px;height:34px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:#f3f4f6;border:1px solid #e5e7eb;font-weight:800;font-size:14px}.sym{font-size:17px}
-.flow{font-weight:700}.pos{color:#0aa76a;background:rgba(14,203,129,.12)}.neg{color:#d93445;background:rgba(246,70,93,.12)}.zero{color:#64748b;background:#f8fafc}
-.sig{display:flex;align-items:center;justify-content:center;gap:8px}.score{min-width:50px;padding:8px 7px;border-radius:6px;color:#fff;font-weight:800}.score.pos{background:#9bd9ba}.score.neg{background:#c85c63}.score.neutral{background:#94a3b8}.label{padding:8px 10px;border-radius:6px;font-weight:700;white-space:nowrap}.label.pos{background:#8bd0ae;color:#fff}.label.neg{background:#e3a4aa;color:#a82e39}.label.neutral{background:#e2e8f0;color:#475569}.bar{width:54px;height:8px;border-radius:6px;background:#e5e7eb;overflow:hidden;display:flex}.bar .in{background:#4fc58e;height:100%}.bar .out{background:#bd3540;height:100%}.cap{color:#0aa76a;font-weight:700}
-.foot{padding:10px 14px;color:#64748b;font-size:11px;background:#fff}
-</style></head><body><div class="wrap">
-<div class="toolbar"><div class="title">Cryptocurrency Fund Flow</div><div class="pill">SPOT</div><div class="pill active">FUTURES</div><div class="pill">☆ Favorite</div><div class="pill">⚙ Customize</div><div class="pill">▦ Heatmap</div></div>
-<div class="tablewrap"><table class="table"><thead><tr><th>Symbol</th><th class="th-flow">5m</th><th class="th-flow">15m</th><th class="th-flow">1h</th><th class="th-flow">2h</th><th class="th-flow">4h</th><th class="th-flow">6h</th><th class="th-flow">8h</th><th class="th-flow">1D</th><th class="th-flow">7D</th><th class="th-flow">30D</th><th class="th-cap">Market Cap</th><th class="th-sig">Fund Signals</th></tr></thead><tbody id="tb"></tbody></table></div>
-<div class="foot">ข้อมูล Net Taker Buy/Sell จาก Binance Futures · แสดงเฉพาะเหรียญใน SUPPORTED_ASSETS ของระบบ</div></div>
-<script>
-const D=__PAYLOAD__,tf=D.timeframes,rows=D.rows;
-const fmt=v=>{if(v==null)return '—';const n=Math.abs(v),s=v<0?'-':'';if(n>=1e9)return s+(n/1e9).toFixed(2)+'B';if(n>=1e6)return s+(n/1e6).toFixed(2)+'M';if(n>=1e3)return s+(n/1e3).toFixed(2)+'K';return s+n.toFixed(2)};
-const cap=v=>{if(v>=1e12)return (v/1e12).toFixed(2)+'T';if(v>=1e9)return (v/1e9).toFixed(2)+'B';if(v>=1e6)return (v/1e6).toFixed(2)+'M';return Math.round(v).toLocaleString('en-US')};
-const cls=v=>v==null?'zero':v>0?'pos':v<0?'neg':'zero';
-const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-function rowHtml(r){const cells=tf.map(k=>{const v=r.flows[k];return `<td class="flow ${cls(v)}">${fmt(v)}</td>`}).join('');const score=r.score,sc=score>0?'pos':score<0?'neg':'neutral',w=Math.min(100,Math.abs(score));const bar=score>=0?`<span class="bar"><span class="in" style="width:${w}%"></span></span>`:`<span class="bar"><span class="out" style="width:${w}%"></span></span>`;const labelClass=score>0?'pos':score<0?'neg':'neutral';return `<tr><td class="asset"><span class="star">☆</span><span class="coin">${esc(r.icon)}</span><span class="sym">${esc(r.symbol)}</span></td>${cells}<td class="cap">${cap(r.market_cap)}</td><td><div class="sig"><span class="score ${sc}">${score>=0?'+':''}${score}</span><span class="label ${labelClass}">${esc(r.label)}</span>${bar}</div></td></tr>`;}
-document.getElementById('tb').innerHTML=rows.map(rowHtml).join('');
-</script></body></html>'''
-    components.html(html.replace("__PAYLOAD__", payload), height=138 + 74 * len(payload_rows), scrolling=True)
 
 def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]) -> None:
     st.markdown(
