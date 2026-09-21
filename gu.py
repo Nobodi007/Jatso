@@ -20,18 +20,13 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
+v1.5.31             + [UI] ปรับปรุงกราฟ 3D เป็นมุมมอง เวลา vs %เปลี่ยนแปลงราคาปิด vs Volume
 v1.5.30             + [UI] ปรับปรุงดีไซน์หน้า Login เป็นรูปแบบ Card สวยงาม
 v1.5.29             + [FEATURE] อัปโหลดรูปโปรไฟล์ ย่อขนาด และแปลงเป็น Base64 เก็บลง JSON อัตโนมัติ
                     + [UI] ย้ายการแสดงโปรไฟล์ไปยังมุมขวาบนของหน้าหลัก
 v1.5.28             + [FEATURE] ระบบตั้งค่า Profile (ชื่อและรูปภาพ) หลังจาก Login ครั้งแรก
 v1.5.27             + [FEATURE] อัปเกรดระบบ Login เป็น Streamlit Auth (Continue with Google)
                     + [FEATURE] หน้า Dashboard Back Office ดูพอร์ตและกราฟรวมทุกเหรียญ
-                    + [FIX] แก้บั๊ก FX Limit ให้ตัดยอดรายเดือนอย่างถูกต้อง และอัปเดต Gauge อัตโนมัติ
-                    + [UI] ปรับ UI แผงเทรดให้ความสูงเท่ากันเป๊ะ (Alignment) ทั้งฝั่งซื้อและขาย
-                    + [FEATURE] ตรึงราคาในแผงออเดอร์ (15 วินาที) และใช้ st.fragment เพื่อรีเฟรชเฉพาะแผง
-                    + [FEATURE] ระบบบันทึกรายการโปรด (Favorites) ลงไฟล์
-                    + [FEATURE] ระบบสุ่มออเดอร์ข้ามหลายเหรียญพร้อมกัน (Multi-Asset Batch Run) แบบ Log-Uniform
-                    + [FEATURE] เพิ่มระบบฝากเงินบาท (THB) แบบ Pop-up Dialog ในหน้า Wallet
 """
 
 from __future__ import annotations
@@ -54,7 +49,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.30"
+MODEL_VERSION = "1.5.31"
 
 try:
     import yaml
@@ -1086,8 +1081,11 @@ def fetch_price_data(ticker: str, start: Any, end: Any,
     raw = raw[~raw.index.duplicated(keep="last")]
     fx_raw = fx_raw[~fx_raw.index.duplicated(keep="last")]
 
+    vol_col = "Volume" if "Volume" in raw.columns else None
     df = raw[["Close", "High", "Low"]].copy()
     df.columns = ["Global_USD", "Day_High", "Day_Low"]
+    df["Volume_USD"] = raw[vol_col].astype(float) if vol_col else 0.0
+    
     proxy = None
     if use_fx_proxy:
         proxy, _proxy_err = fetch_fx_proxy_series(start, end)
@@ -2249,41 +2247,49 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     render_tv_panel(asset)
 
     # ---- 3D Interactive Chart Feature ----
-    section("🌐 มุมมองกราฟ 3D พิเศษ (3D Price & Volatility Surface)")
+    section("🌐 มุมมองกราฟ 3D พิเศษ (3D Daily Change & Volume)")
     with st.expander("✨ เปิดดูกราฟ 3D สามมิติ (Interactive 3D Chart)", expanded=False):
-        st.caption("หมุนและซูมเพื่อดูความสัมพันธ์ระหว่าง วันที่, ราคาโลก (USD), และความผันผวน (Volatility)")
-        df_3d = bt.dropna().copy()
+        st.caption("หมุนและซูมเพื่อดูความสัมพันธ์ระหว่าง วันที่, %เปลี่ยนแปลงราคาปิดรายวัน, และ Volume")
+        df_3d = bt.copy()
+        df_3d["Close_Chg_Pct"] = df_3d["Global_USD"].pct_change() * 100
+        df_3d = df_3d.replace([np.inf, -np.inf], np.nan).dropna(subset=["Close_Chg_Pct", "Volume_USD"])
         if len(df_3d) > 0:
             fig_3d = go.Figure(data=[go.Scatter3d(
                 x=list(range(len(df_3d))),
-                y=df_3d["Global_USD"],
-                z=df_3d["Volatility_Pct"] * 100,
-                mode='markers',
+                y=df_3d["Close_Chg_Pct"],
+                z=df_3d["Volume_USD"] / 1e9,
+                mode="markers",
                 marker=dict(
                     size=5,
-                    color=list(range(len(df_3d))), # ไล่สีรุ้งตามเวลา
-                    colorscale='Rainbow',          
-                    opacity=0.8,
-                    line=dict(width=0)
+                    color=df_3d["Close_Chg_Pct"],
+                    colorscale=[[0, "#f6465d"], [0.5, "#848e9c"], [1, "#0ecb81"]],
+                    cmid=0,
+                    opacity=0.85,
+                    line=dict(width=0),
+                    colorbar=dict(title="%Chg", thickness=12),
                 ),
-                text=df_3d.index.strftime('%Y-%m-%d'),
-                hovertemplate='วันที่: %{text}<br>ราคา: $%{y:,.2f}<br>ความผันผวน: %{z:.2f}%<extra></extra>'
+                text=df_3d.index.strftime("%Y-%m-%d"),
+                hovertemplate=("วันที่: %{text}<br>%ปิด: %{y:+.2f}%"
+                               "<br>Volume: $%{z:,.2f}B<extra></extra>"),
             )])
             fig_3d.update_layout(
-                title=dict(text=f"3D Trajectory — {asset} (Price vs Volatility vs Time)", font=dict(size=14)),
+                title=dict(text=f"3D — {asset} (Time vs %Close Change vs Volume)",
+                           font=dict(size=14)),
                 scene=dict(
-                    xaxis_title='ลำดับเวลา (Time Steps)',
-                    yaxis_title='ราคาโลก (USD)',
-                    zaxis_title='ความผันผวน (%)',
-                    bgcolor='#181a20'
+                    xaxis_title="ลำดับเวลา (Time Steps)",
+                    yaxis_title="%เปลี่ยนแปลงราคาปิด (Daily)",
+                    zaxis_title="Volume (พันล้าน USD)",
+                    bgcolor="#181a20",
                 ),
                 template="plotly_dark",
                 height=600,
                 margin=dict(l=0, r=0, b=0, t=40),
-                paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='rgba(0,0,0,0)'
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
             )
             st.plotly_chart(fig_3d, **WIDE)
+        else:
+            st.info("ไม่มีข้อมูล Volume สำหรับช่วงเวลานี้")
 
     # ---- Performance ----
     section("📈 Performance Summary")
