@@ -20,6 +20,7 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
+v1.5.32             + [UI] อัปเดตกราฟ 3D ให้สามารถสลับมุมมองระหว่าง Volatility, %Change และ Volume ได้
 v1.5.31             + [UI] ปรับปรุงกราฟ 3D เป็นมุมมอง เวลา vs %เปลี่ยนแปลงราคาปิด vs Volume
 v1.5.30             + [UI] ปรับปรุงดีไซน์หน้า Login เป็นรูปแบบ Card สวยงาม
 v1.5.29             + [FEATURE] อัปโหลดรูปโปรไฟล์ ย่อขนาด และแปลงเป็น Base64 เก็บลง JSON อัตโนมัติ
@@ -49,7 +50,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.31"
+MODEL_VERSION = "1.5.32"
 
 try:
     import yaml
@@ -1961,7 +1962,7 @@ def build_sidebar() -> dict[str, Any]:
             hedge_fee_maker = st.number_input(
                 "ค่าธรรมเนียม Global CEX — Maker (%)", key="bt_hedge_fee_maker",
                 step=0.01,
-                help=("ค่าตั้งต้น = เท่า Taker จนกว่าจะตั้ง maker preset ใน config.yaml "
+                help=("ค่าตั้งต้น = เท่า Taker จนกว่าจะตั้ง maker presetใน config.yaml "
                       "หรือแก้ช่องนี้ตามเทียร์บัญชีจริง")) / 100
             maker_ratio = st.slider(
                 "สัดส่วน Hedge ที่ทำเป็น Maker / Limit (%)", 0, 100, 0,
@@ -2247,38 +2248,49 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     render_tv_panel(asset)
 
     # ---- 3D Interactive Chart Feature ----
-    section("🌐 มุมมองกราฟ 3D พิเศษ (3D Daily Change & Volume)")
+    section("🌐 มุมมองกราฟ 3D พิเศษ (3D Price Surface)")
     with st.expander("✨ เปิดดูกราฟ 3D สามมิติ (Interactive 3D Chart)", expanded=False):
-        st.caption("หมุนและซูมเพื่อดูความสัมพันธ์ระหว่าง วันที่, %เปลี่ยนแปลงราคาปิดรายวัน, และ Volume")
+        # ชื่อตัวเลือก -> (คอลัมน์, ชื่อแกน Z, รูปแบบ hover, ชื่อ colorbar)
+        VIEW_3D = {
+            "ความผันผวน (Volatility)": ("Vol_Pct", "ความผันผวน (%)", "%{z:.2f}%", "Volatility %"),
+            "เปลี่ยนแปลง (%Change)": ("Chg_Pct", "%เปลี่ยนแปลงราคาปิด (Daily)", "%{z:+.2f}%", "%Chg"),
+            "Volume": ("Vol_B", "Volume (พันล้าน USD)", "$%{z:,.2f}B", "Volume (B)"),
+        }
+        view_3d = st.selectbox("เลือกกราฟ 3D", list(VIEW_3D.keys()), key="bt_3d_view")
+        z_col, z_title, z_hover, cbar_title = VIEW_3D[view_3d]
+        
+        st.caption("หมุนและซูมเพื่อดูความสัมพันธ์ระหว่าง เวลา, ราคาโลก (USD) และตัวชี้วัดที่เลือก")
         df_3d = bt.copy()
-        df_3d["Close_Chg_Pct"] = df_3d["Global_USD"].pct_change() * 100
-        df_3d = df_3d.replace([np.inf, -np.inf], np.nan).dropna(subset=["Close_Chg_Pct", "Volume_USD"])
-        if len(df_3d) > 0:
+        df_3d["Vol_Pct"] = df_3d["Volatility_Pct"] * 100
+        df_3d["Chg_Pct"] = df_3d["Global_USD"].pct_change() * 100
+        df_3d["Vol_B"] = (df_3d["Volume_USD"] / 1e9) if "Volume_USD" in df_3d.columns else np.nan
+        df_3d = df_3d.replace([np.inf, -np.inf], np.nan).dropna(subset=[z_col, "Global_USD"])
+        
+        if len(df_3d) > 0 and (z_col != "Vol_B" or df_3d["Vol_B"].sum() > 0):
             fig_3d = go.Figure(data=[go.Scatter3d(
                 x=list(range(len(df_3d))),
-                y=df_3d["Close_Chg_Pct"],
-                z=df_3d["Volume_USD"] / 1e9,
+                y=df_3d["Global_USD"],
+                z=df_3d[z_col],
                 mode="markers",
                 marker=dict(
                     size=5,
-                    color=df_3d["Close_Chg_Pct"],
-                    colorscale=[[0, "#f6465d"], [0.5, "#848e9c"], [1, "#0ecb81"]],
-                    cmid=0,
-                    opacity=0.85,
+                    color=df_3d[z_col],          # สีรุ้งตามค่าของแกน Z
+                    colorscale="Rainbow",
+                    opacity=0.9,
                     line=dict(width=0),
-                    colorbar=dict(title="%Chg", thickness=12),
+                    colorbar=dict(title=cbar_title, thickness=12),
                 ),
                 text=df_3d.index.strftime("%Y-%m-%d"),
-                hovertemplate=("วันที่: %{text}<br>%ปิด: %{y:+.2f}%"
-                               "<br>Volume: $%{z:,.2f}B<extra></extra>"),
+                hovertemplate=("วันที่: %{text}<br>ราคา: $%{y:,.2f}<br>"
+                               f"{view_3d}: {z_hover}<extra></extra>"),
             )])
             fig_3d.update_layout(
-                title=dict(text=f"3D — {asset} (Time vs %Close Change vs Volume)",
+                title=dict(text=f"3D — {asset} (Time vs Price vs {view_3d})",
                            font=dict(size=14)),
                 scene=dict(
                     xaxis_title="ลำดับเวลา (Time Steps)",
-                    yaxis_title="%เปลี่ยนแปลงราคาปิด (Daily)",
-                    zaxis_title="Volume (พันล้าน USD)",
+                    yaxis_title="ราคาโลก (USD)",
+                    zaxis_title=z_title,
                     bgcolor="#181a20",
                 ),
                 template="plotly_dark",
@@ -2289,7 +2301,7 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
             )
             st.plotly_chart(fig_3d, **WIDE)
         else:
-            st.info("ไม่มีข้อมูล Volume สำหรับช่วงเวลานี้")
+            st.info("ไม่มีข้อมูลสำหรับกราฟนี้ในช่วงเวลาที่เลือก (เช่น Volume เป็น 0 ทั้งช่วง)")
 
     # ---- Performance ----
     section("📈 Performance Summary")
