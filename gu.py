@@ -21,6 +21,7 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 MODEL_VERSION / CHANGELOG
 -------------------------
 v1.5.29             + [FEATURE] อัปโหลดรูปโปรไฟล์ ย่อขนาด และแปลงเป็น Base64 เก็บลง JSON อัตโนมัติ
+                    + [UI] ย้ายการแสดงโปรไฟล์ไปยังมุมขวาบนของหน้าหลัก
 v1.5.28             + [FEATURE] ระบบตั้งค่า Profile (ชื่อและรูปภาพ) หลังจาก Login ครั้งแรก
 v1.5.27             + [FEATURE] อัปเกรดระบบ Login เป็น Streamlit Auth (Continue with Google)
                     + [FEATURE] หน้า Dashboard Back Office ดูพอร์ตและกราฟรวมทุกเหรียญ
@@ -1961,7 +1962,7 @@ def build_sidebar() -> dict[str, Any]:
             hedge_fee_maker = st.number_input(
                 "ค่าธรรมเนียม Global CEX — Maker (%)", key="bt_hedge_fee_maker",
                 step=0.01,
-                help=("ค่าตั้งต้น = เท่า Taker จนกว่าจะตั้ง maker preset ใน config.yaml "
+                help=("ค่าตั้งต้น = เท่า Taker จนกว่าจะตั้ง maker presetใน config.yaml "
                       "หรือแก้ช่องนี้ตามเทียร์บัญชีจริง")) / 100
             maker_ratio = st.slider(
                 "สัดส่วน Hedge ที่ทำเป็น Maker / Limit (%)", 0, 100, 0,
@@ -3423,28 +3424,35 @@ def _main_body() -> None:
     if "favorite_tickers" not in st.session_state:
         st.session_state["favorite_tickers"] = load_favorites()
 
+    email = getattr(st.user, 'email', '')
+    user_prof = load_profiles().get(email, {})
+    d_name = user_prof.get("display_name", email)
+    avatar_b64 = user_prof.get("avatar_b64", "")
+
+    # ---- แสดงโปรไฟล์ที่ด้านบนของหน้าหลัก ----
+    top_l, top_r = st.columns([8, 2])
+    with top_r:
+        if avatar_b64:
+            img_src = f"data:image/png;base64,{avatar_b64}" if not avatar_b64.startswith("http") else avatar_b64
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:10px;justify-content:flex-end;padding:6px 0;">'
+                f'<div style="text-align:right;">'
+                f'<div style="font-weight:bold;color:#EAECEF;font-size:0.9rem;">{d_name}</div>'
+                f'<div style="font-size:0.72rem;color:#848e9c;">{email}</div></div>'
+                f'<img src="{img_src}" width="36" height="36" style="border-radius:50%;object-fit:cover;">'
+                f'</div>',
+                unsafe_allow_html=True)
+        else:
+            st.markdown(
+                f'<div style="text-align:right;padding:6px 0;">'
+                f'<div style="font-weight:bold;color:#EAECEF;font-size:0.9rem;">👤 {d_name}</div>'
+                f'<div style="font-size:0.72rem;color:#848e9c;">{email}</div></div>',
+                unsafe_allow_html=True)
+
     cfg = build_sidebar()
 
     with st.sidebar:
-        email = getattr(st.user, 'email', '')
-        user_prof = load_profiles().get(email, {})
-        d_name = user_prof.get("display_name", email)
-        avatar_b64 = user_prof.get("avatar_b64", "")
-        
         st.divider()
-        if avatar_b64:
-            img_src = f"data:image/png;base64,{avatar_b64}" if not avatar_b64.startswith("http") else avatar_b64
-            st.markdown(f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">'
-                        f'<img src="{img_src}" width="40" height="40" style="border-radius:50%;object-fit:cover;">'
-                        f'<div><div style="font-weight:bold;color:#EAECEF;font-size:0.95rem;">{d_name}</div>'
-                        f'<div style="font-size:0.75rem;color:#848e9c;">{email}</div></div></div>', 
-                        unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div style="margin-bottom:12px;">'
-                        f'<div style="font-weight:bold;color:#EAECEF;font-size:0.95rem;">👤 {d_name}</div>'
-                        f'<div style="font-size:0.75rem;color:#848e9c;">{email}</div></div>', 
-                        unsafe_allow_html=True)
-        
         st.button("ออกจากระบบ", key="logout_btn", on_click=st.logout, use_container_width=True)
 
     if not cfg["dates_ok"]:
