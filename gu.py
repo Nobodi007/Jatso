@@ -20,6 +20,7 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
+v1.5.30             + [UI] ปรับปรุงดีไซน์หน้า Login เป็นรูปแบบ Card สวยงาม
 v1.5.29             + [FEATURE] อัปโหลดรูปโปรไฟล์ ย่อขนาด และแปลงเป็น Base64 เก็บลง JSON อัตโนมัติ
                     + [UI] ย้ายการแสดงโปรไฟล์ไปยังมุมขวาบนของหน้าหลัก
 v1.5.28             + [FEATURE] ระบบตั้งค่า Profile (ชื่อและรูปภาพ) หลังจาก Login ครั้งแรก
@@ -53,7 +54,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.29"
+MODEL_VERSION = "1.5.30"
 
 try:
     import yaml
@@ -1962,7 +1963,7 @@ def build_sidebar() -> dict[str, Any]:
             hedge_fee_maker = st.number_input(
                 "ค่าธรรมเนียม Global CEX — Maker (%)", key="bt_hedge_fee_maker",
                 step=0.01,
-                help=("ค่าตั้งต้น = เท่า Taker จนกว่าจะตั้ง maker presetใน config.yaml "
+                help=("ค่าตั้งต้น = เท่า Taker จนกว่าจะตั้ง maker preset ใน config.yaml "
                       "หรือแก้ช่องนี้ตามเทียร์บัญชีจริง")) / 100
             maker_ratio = st.slider(
                 "สัดส่วน Hedge ที่ทำเป็น Maker / Limit (%)", 0, 100, 0,
@@ -3541,8 +3542,84 @@ def require_login() -> bool:
         st.stop()
         
     if not logged_in:
-        st.markdown("## ♻️ XSpring Dealer Suite")
-        st.button("Continue with Google", key="login_google", on_click=st.login)
+        st.markdown(THEME_CSS, unsafe_allow_html=True)
+        st.markdown("""
+        <style>
+            .login-wrap {
+                display:flex; justify-content:center; align-items:center;
+                min-height:82vh; padding: 20px;
+            }
+            .login-card {
+                max-width: 460px; width:100%;
+                background: linear-gradient(160deg, #14161a 0%, #181a20 55%, #1e2329 100%);
+                border: 1px solid #2b3139; border-radius: 18px;
+                padding: 44px 40px 36px;
+                box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+                text-align: center;
+            }
+            .login-icon {
+                width: 74px; height: 74px; margin: 0 auto 18px;
+                display:flex; align-items:center; justify-content:center;
+                font-size: 2.2rem; border-radius: 20px;
+                background: linear-gradient(135deg, #0ecb81 0%, #0a9c63 100%);
+                box-shadow: 0 8px 24px rgba(14,203,129,0.35);
+            }
+            .login-title {
+                font-size: 1.65rem; font-weight: 800; color:#EAECEF;
+                letter-spacing: -0.5px; margin-bottom: 6px;
+            }
+            .login-sub {
+                color:#848e9c; font-size: 0.88rem; margin-bottom: 26px;
+                line-height:1.5;
+            }
+            .login-feats {
+                display:flex; flex-direction:column; gap:10px;
+                text-align:left; margin-bottom: 28px;
+            }
+            .login-feat {
+                display:flex; align-items:center; gap:10px;
+                background: rgba(255,255,255,0.03);
+                border: 1px solid #2b3139; border-radius: 10px;
+                padding: 10px 14px; font-size: 0.82rem; color:#b7bdc6;
+            }
+            .login-feat .ico { font-size: 1rem; }
+            .st-key-login_google button {
+                width: 100% !important; height: 48px !important;
+                background: #ffffff !important; color:#1a1a1a !important;
+                border: none !important; border-radius: 10px !important;
+                font-weight: 700 !important; font-size: 0.95rem !important;
+                box-shadow: 0 4px 14px rgba(255,255,255,0.15) !important;
+                transition: transform .15s ease, box-shadow .15s ease !important;
+            }
+            .st-key-login_google button:hover {
+                transform: translateY(-1px) !important;
+                box-shadow: 0 6px 20px rgba(255,255,255,0.25) !important;
+            }
+            .login-foot {
+                margin-top: 22px; font-size: 0.7rem; color:#5e6673;
+            }
+        </style>
+        <div class="login-wrap">
+          <div class="login-card">
+            <div class="login-icon">♻️</div>
+            <div class="login-title">XSpring Dealer Suite</div>
+            <div class="login-sub">
+              ระบบจำลองและวางแผนสภาพคล่องสำหรับ Dealer คริปโท<br>
+              ล็อกอินเพื่อเข้าใช้งาน Backtest, Liquidity Planner และ Exchange Simulator
+            </div>
+            <div class="login-feats">
+              <div class="login-feat"><span class="ico">📊</span> Backtest ย้อนหลังสูงสุด 5 ปี พร้อมวิเคราะห์ P&L</div>
+              <div class="login-feat"><span class="ico">🧮</span> วางแผนเงินกองทุนและสภาพคล่องตามเกณฑ์ ก.ล.ต.</div>
+              <div class="login-feat"><span class="ico">🛒</span> จำลองหน้าเทรดจริงพร้อมระบบ Hedge อัตโนมัติ</div>
+            </div>
+        """, unsafe_allow_html=True)
+        st.button("🔐  Continue with Google", key="login_google", on_click=st.login,
+                  use_container_width=True)
+        st.markdown(f"""
+            <div class="login-foot">XSpring Dealer Suite · Model v{MODEL_VERSION}</div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
         st.stop()
 
     allowed = _allowed_email()
