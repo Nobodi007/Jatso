@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Mapping, Optional
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -1736,7 +1737,7 @@ def build_audit_records(prev: Optional[Mapping[str, Any]], current: Mapping[str,
         old_val = prev.get(key)
         if old_val != new_val:
             records.append({**base, "event": "param_change", "param": key,
-                            "old": _json_safe(old_val), "new": _json_safe(new_val)})
+                            "old": _json_safe(old_val), "new": _json_safe(newval)})
     return records
 
 def append_audit_records(records: list[dict[str, Any]], path: Optional[Path] = None) -> None:
@@ -2460,6 +2461,160 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
 # ---- 5.3 TAB 2 — LIQUIDITY & CAPITAL PLANNER ---------------------------
 
+# =========================================================================
+# GLOBAL PERP VENUE TABLE — เทียบราคา/ปริมาณเทรดข้ามกระดานโลก
+# =========================================================================
+
+_VENUE_HEADERS = {"User-Agent": "Mozilla/5.0 (XSpring-Dealer-Suite)",
+                  "Accept": "application/json"}
+
+def _http_json(url: str, payload: Optional[dict] = None, timeout: float = 6.0) -> Any:
+    data = json.dumps(payload).encode() if payload is not None else None
+    headers = dict(_VENUE_HEADERS)
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+def _pv_binance(b: str) -> tuple[float, float, float]:
+    d = _http_json(f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={b}USDT")
+    return float(d["lastPrice"]), float(d["priceChangePercent"]), float(d["quoteVolume"])
+
+def _pv_gate(b: str) -> tuple[float, float, float]:
+    d = _http_json(f"https://api.gateio.ws/api/v4/futures/usdt/tickers?contract={b}_USDT")[0]
+    turn = d.get("volume_24h_quote") or d.get("volume_24h_settle") or d.get("volume_24h_usd")
+    return float(d["last"]), float(d["change_percentage"]), float(turn)
+
+def _pv_bybit(b: str) -> tuple[float, float, float]:
+    d = _http_json(
+        f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={b}USDT"
+    )["result"]["list"][0]
+    return float(d["lastPrice"]), float(d["price24hPcnt"]) * 100, float(d["turnover24h"])
+
+def _pv_hyperliquid(b: str) -> tuple[float, float, float]:
+    meta, ctxs = _http_json("https://api.hyperliquid.xyz/info", {"type": "metaAndAssetCtxs"})
+    i = next(k for k, u in enumerate(meta["universe"]) if u["name"] == b)
+    c = ctxs[i]
+    px, prev = float(c["markPx"]), float(c["prevDayPx"])
+    return px, (px / prev - 1) * 100, float(c["dayNtlVlm"])
+
+def _pv_bitget(b: str) -> tuple[float, float, float]:
+    d = _http_json(
+        f"https://api.bitget.com/api/v2/mix/market/ticker?symbol={b}USDT&productType=USDT-FUTURES"
+    )["data"][0]
+    turn = d.get("usdtVolume") or d.get("quoteVolume")
+    return float(d["lastPr"]), float(d["change24h"]) * 100, float(turn)
+
+def _pv_okx(b: str) -> tuple[float, float, float]:
+    d = _http_json(f"https://www.okx.com/api/v5/market/ticker?instId={b}-USDT-SWAP")["data"][0]
+    last, op = float(d["last"]), float(d["open24h"])
+    return last, (last / op - 1) * 100, float(d["volCcy24h"]) * last
+
+_PERP_VENUES = [
+    dict(name="Binance", bg="#F0B90B", fg="#0b0e11", tx="BN", fn=_pv_binance,
+         sym=lambda b: f"{b}USDT",
+         url=lambda b: f"https://www.binance.com/en/futures/{b}USDT"),
+    dict(name="Gate", bg="#2354E6", fg="#ffffff", tx="G", fn=_pv_gate,
+         sym=lambda b: f"{b}_USDT",
+         url=lambda b: f"https://www.gate.io/futures/USDT/{b}_USDT"),
+    dict(name="Bybit", bg="#17181E", fg="#F7A600", tx="BB", fn=_pv_bybit,
+         sym=lambda b: f"{b}USDT",
+         url=lambda b: f"https://www.bybit.com/trade/usdt/{b}USDT"),
+    dict(name="Hyperliquid", bg="#072723", fg="#97FCE4", tx="HL", fn=_pv_hyperliquid,
+         sym=lambda b: f"{b}",
+         url=lambda b: f"https://app.hyperliquid.xyz/trade/{b}"),
+    dict(name="Bitget", bg="#00F0FF", fg="#0b0e11", tx="BG", fn=_pv_bitget,
+         sym=lambda b: f"{b}USDT",
+         url=lambda b: f"https://www.bitget.com/futures/usdt/{b}USDT"),
+    dict(name="Okx", bg="#000000", fg="#ffffff", tx="OK", fn=_pv_okx,
+         sym=lambda b: f"{b}-USDT-SWAP",
+         url=lambda b: f"https://www.okx.com/trade-swap/{b.lower()}-usdt-swap"),
+]
+
+@_cache_data(ttl=30, show_spinner=False)
+def fetch_perp_venues(base: str = "BTC") -> tuple[pd.DataFrame, str]:
+    def one(v: dict) -> dict:
+        row = dict(exchange=v["name"], symbol=v["sym"](base), url=v["url"](base),
+                   price=None, chg=None, turnover=None, err=None)
+        try:
+            p, c, t = v["fn"](base)
+            if not (p > 0):
+                raise ValueError("bad price")
+            row.update(price=p, chg=c, turnover=t)
+        except urllib.error.HTTPError as e:
+            row["err"] = f"HTTP {e.code}"
+        except Exception as e:
+            row["err"] = type(e).__name__
+        return row
+
+    with ThreadPoolExecutor(max_workers=len(_PERP_VENUES)) as ex:
+        rows = list(ex.map(one, _PERP_VENUES))
+    df = pd.DataFrame(rows).sort_values("turnover", ascending=False, na_position="last")
+    return df.reset_index(drop=True), pd.Timestamp.now("Asia/Bangkok").strftime("%H:%M:%S")
+
+
+def _fmt_turnover(v: float) -> str:
+    if v >= 1e9:
+        return f"${v / 1e9:.2f}B"
+    if v >= 1e6:
+        return f"${v / 1e6:.2f}M"
+    return f"${v:,.0f}"
+
+
+def render_perp_venue_table(base: str = "BTC") -> None:
+    section(f"🌐 เทียบราคา {base} Perpetual ข้ามกระดานโลก")
+
+    c_cap, c_btn = st.columns([8, 2])
+    with c_btn:
+        if st.button("🔄 รีเฟรช", key="pv_refresh", **WIDE):
+            fetch_perp_venues.clear()
+    df, ts = fetch_perp_venues(base)
+
+    th = ("text-align:left;padding:10px 14px;color:#848e9c;font-weight:600;"
+          "font-size:.78rem;border-bottom:1px solid #2b3139;background:#161a1e;")
+    td = "padding:12px 14px;border-bottom:1px solid #2b3139;font-variant-numeric:tabular-nums;"
+    head = "".join(f'<th style="{th}">{h}</th>' for h in
+                   ("Exchange", "Symbol", "Price($)", "Chg 24H(%)", "Turnover 24h"))
+
+    meta = {v["name"]: v for v in _PERP_VENUES}
+    body = []
+    for _, r in df.iterrows():
+        v = meta[r["exchange"]]
+        logo = (f'<span style="display:inline-flex;align-items:center;justify-content:center;'
+                f'width:26px;height:26px;border-radius:50%;background:{v["bg"]};color:{v["fg"]};'
+                f'border:1px solid #2b3139;font-size:.58rem;font-weight:800;">{v["tx"]}</span>')
+        ex_cell = (f'<div style="display:flex;align-items:center;gap:10px;color:#EAECEF;'
+                   f'font-weight:600;">{logo}{_html.escape(r["exchange"])}</div>')
+        sym_cell = (f'<a href="{_html.escape(r["url"])}" target="_blank" rel="noopener" '
+                    f'style="color:#4c9aff;text-decoration:none;">{_html.escape(r["symbol"])}</a>')
+        if isinstance(r["err"], str):
+            price = chg = turn = (f'<span style="color:#5e6673;" title="{_html.escape(r["err"])}">'
+                                  f'—</span>')
+        else:
+            up = r["chg"] >= 0
+            price = f'<span style="color:#EAECEF;">{r["price"]:,.1f}</span>'
+            chg = (f'<span style="color:{"#0ecb81" if up else "#f6465d"};">'
+                   f'{"+" if up else ""}{r["chg"]:.2f}%</span>')
+            turn = f'<span style="color:#EAECEF;">{_fmt_turnover(r["turnover"])}</span>'
+        body.append(f'<tr><td style="{td}">{ex_cell}</td><td style="{td}">{sym_cell}</td>'
+                    f'<td style="{td}">{price}</td><td style="{td}">{chg}</td>'
+                    f'<td style="{td}">{turn}</td></tr>')
+
+    st.markdown(
+        '<div style="border:1px solid #2b3139;border-radius:8px;overflow-x:auto;">'
+        '<table style="width:100%;border-collapse:collapse;font-size:.92rem;">'
+        f'<thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table></div>',
+        unsafe_allow_html=True,
+    )
+
+    failed = [f'{r["exchange"]} ({r["err"]})' for _, r in df.iterrows() if isinstance(r["err"], str)]
+    note = f"อัปเดต {ts} (เวลาไทย) · ข้อมูลสาธารณะจาก API ของแต่ละกระดาน · เรียงตาม Turnover"
+    if failed:
+        note += " · ดึงไม่ได้: " + ", ".join(failed)
+    c_cap.caption(note)
+
+
 def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]) -> None:
     st.markdown(
         "ตอบคำถามที่ผู้บริหารถามจริง:\n\n"
@@ -2576,6 +2731,9 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     metric_card(k1[1], "เงินสดคงเหลือ", fmt_baht(cash_after_stock_thb), cash_after_stock_thb)
     metric_card(k1[2], "Net Capital (NC) จริง", fmt_baht(nlc_thb), nlc_thb)
     metric_card(k1[3], "NC ขั้นต่ำที่ต้องดำรง", fmt_baht(required_nc_total), nc_buffer_thb, f"ส่วนเกิน {fmt_baht(nc_buffer_thb, force_sign=True)}")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    render_perp_venue_table(asset)
 
 
 # ---- 5.4 TAB 3 — TIME-TRAVEL ORDER SIMULATOR ---------------------------
