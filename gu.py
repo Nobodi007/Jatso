@@ -3606,16 +3606,16 @@ def _main_body() -> None:
     top_l, top_r = st.columns([8, 2])
     with top_l:
         st.markdown(
-            f'<div style="display:flex;align-items:center;gap:12px;padding:6px 0;">'
-            f'<img src="{DEV_AVATAR_B64}" width="40" height="40" '
-            f'style="border-radius:50%;object-fit:cover;border:2px solid #2b3139;">'
-            f'<div>'
-            f'<div style="color:#EAECEF;font-weight:700;font-size:0.9rem;">ทำโดย {DEV_NAME}</div>'
-            f'<a href="{DEV_LINKEDIN}" target="_blank" '
-            f'style="color:#0ecb81;font-size:0.75rem;text-decoration:none;">🔗 ดูโปรไฟล์ LinkedIn</a>'
-            f'</div></div>',
-            unsafe_allow_html=True,
-        )
+    f'<div style="display:flex;align-items:center;gap:12px;padding:6px 0;">'
+    f'<img src="{DEV_AVATAR_B64}" width="40" height="40" '
+    f'style="border-radius:50%;object-fit:cover;border:2px solid #2b3139;">'
+    f'<div>'
+    f'<div style="color:#EAECEF;font-weight:700;font-size:0.9rem;line-height:1.6;padding-top:2px;">ทำโดย {DEV_NAME}</div>'
+    f'<a href="{DEV_LINKEDIN}" target="_blank" '
+    f'style="color:#0ecb81;font-size:0.75rem;text-decoration:none;line-height:1.6;">🔗 ดูโปรไฟล์ LinkedIn</a>'
+    f'</div></div>',
+    unsafe_allow_html=True,
+)
     with top_r:
         if avatar_b64:
             img_src = f"data:image/png;base64,{avatar_b64}" if not avatar_b64.startswith("http") else avatar_b64
