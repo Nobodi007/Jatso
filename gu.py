@@ -3055,6 +3055,197 @@ def render_news_section(cfg: dict) -> None:
             st.caption(f"{news['source']} • {_news_time_ago(news['published_ts'])} • {tag_str}")
         st.divider()
 
+# ============================================================
+# FUND FLOW LAYER (v2) — ดึงผ่านเบราว์เซอร์ผู้ใช้
+# เฉพาะเหรียญใน SUPPORTED_ASSETS เท่านั้น
+# ============================================================
+
+FUNDFLOW_ASSETS = [a for a in SUPPORTED_ASSETS if a not in STABLECOINS]
+
+FUNDFLOW_TIMEFRAMES = {
+    "5m":  {"interval": "1m", "limit": 5},
+    "15m": {"interval": "1m", "limit": 15},
+    "1h":  {"interval": "5m", "limit": 12},
+    "2h":  {"interval": "15m", "limit": 8},
+    "4h":  {"interval": "15m", "limit": 16},
+    "6h":  {"interval": "30m", "limit": 12},
+    "8h":  {"interval": "30m", "limit": 16},
+    "1D":  {"interval": "1h", "limit": 24},
+    "7D":  {"interval": "4h", "limit": 42},
+    "30D": {"interval": "1d", "limit": 30},
+}
+
+# แมป symbol ในระบบ -> id ของ CoinGecko
+COINGECKO_ID_MAP = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "SOL": "solana",
+    "DOGE": "dogecoin",
+    "ADA": "cardano",
+    "HBAR": "hedera-hashgraph",
+    "LINK": "chainlink",
+    "XLM": "stellar",
+    "XRP": "ripple",
+}
+
+_FUNDFLOW_HTML = r"""
+<style>
+  html,body{margin:0;padding:0;background:transparent;color:#EAECEF;
+    font-family:"Source Sans Pro",-apple-system,"Segoe UI",Roboto,sans-serif;}
+  .wrap{border:1px solid #2b3139;border-radius:8px;overflow-x:auto;}
+  table{width:100%;border-collapse:collapse;font-size:.85rem;white-space:nowrap;}
+  th{text-align:left;padding:9px 12px;color:#848e9c;font-weight:600;font-size:.72rem;
+     border-bottom:1px solid #2b3139;background:#161a1e;position:sticky;top:0;}
+  td{padding:10px 12px;border-bottom:1px solid #2b3139;font-variant-numeric:tabular-nums;}
+  .sym{display:flex;align-items:center;gap:8px;font-weight:700;}
+  .logo{width:22px;height:22px;border-radius:50%;}
+  .up{color:#0ecb81;background:rgba(14,203,129,.07);}
+  .dn{color:#f6465d;background:rgba(246,70,93,.07);}
+  .mut{color:#5e6673;}
+  .sig{display:inline-block;padding:2px 8px;border-radius:4px;font-weight:700;font-size:.72rem;}
+  .sig-strongin{background:#0ecb81;color:#0b0e11;}
+  .sig-in{background:rgba(14,203,129,.18);color:#0ecb81;}
+  .sig-neu{background:#2b3139;color:#848e9c;}
+  .sig-out{background:rgba(246,70,93,.18);color:#f6465d;}
+  .sig-strongout{background:#f6465d;color:#0b0e11;}
+  .note{color:#848e9c;font-size:.75rem;margin-top:8px;line-height:1.5;}
+</style>
+<div class="wrap">
+  <table>
+    <thead><tr id="thead"></tr></thead>
+    <tbody id="tb"></tbody>
+  </table>
+</div>
+<div class="note" id="note">กำลังโหลดข้อมูล Fund Flow จากเบราว์เซอร์ของคุณ…</div>
+<script>
+const ASSETS = __ASSETS__;
+const TFS = __TFS__;
+const CG_MAP = __CGMAP__;
+const TF_KEYS = Object.keys(TFS);
+
+function fmtFlow(v){
+  if (v === null || v === undefined || !isFinite(v)) return "—";
+  const sign = v < 0 ? "-" : "";
+  const a = Math.abs(v);
+  if (a >= 1e9) return sign + (a/1e9).toFixed(2) + "B";
+  if (a >= 1e6) return sign + (a/1e6).toFixed(2) + "M";
+  if (a >= 1e3) return sign + (a/1e3).toFixed(2) + "K";
+  return sign + a.toFixed(2);
+}
+
+async function getJSON(url, timeoutMs=8000){
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+  try{
+    const r = await fetch(url, {signal: ac.signal});
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
+
+async function fetchNetFlow(asset, interval, limit){
+  const url = "https://api.binance.com/api/v3/klines?symbol=" + asset +
+              "USDT&interval=" + interval + "&limit=" + limit;
+  const kl = await getJSON(url);
+  let net = 0;
+  for(const k of kl){
+    const quoteVol = parseFloat(k[7]);
+    const takerBuyQuoteVol = parseFloat(k[10]);
+    net += (2 * takerBuyQuoteVol) - quoteVol;
+  }
+  return net;
+}
+
+async function fetchMarketCaps(){
+  const ids = ASSETS.map(a => CG_MAP[a]).filter(Boolean);
+  if (!ids.length) return {};
+  try{
+    const url = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=" + ids.join(",");
+    const data = await getJSON(url);
+    const idToSym = {};
+    for(const sym in CG_MAP) idToSym[CG_MAP[sym]] = sym;
+    const out = {};
+    for(const item of data){
+      const sym = idToSym[item.id];
+      if (sym) out[sym] = item.market_cap || 0;
+    }
+    return out;
+  } catch(e){ return {}; }
+}
+
+function signalOf(row){
+  const vals = TF_KEYS.map(k => row[k]).filter(v => v !== null && v !== undefined && isFinite(v));
+  if (!vals.length) return {score: 0, label: "No Data", cls: "sig-neu"};
+  const pos = vals.filter(v => v > 0).length;
+  const score = Math.round(((pos / vals.length) * 2 - 1) * 100);
+  if (score >= 50) return {score, label: "Strong Inflow", cls: "sig-strongin"};
+  if (score > 0)   return {score, label: "Net Inflow", cls: "sig-in"};
+  if (score === 0) return {score, label: "Neutral", cls: "sig-neu"};
+  if (score > -50) return {score, label: "Net Outflow", cls: "sig-out"};
+  return {score, label: "Strong Outflow", cls: "sig-strongout"};
+}
+
+function renderHead(){
+  let h = "<th>Symbol</th>";
+  for (const k of TF_KEYS) h += "<th>" + k + "</th>";
+  h += "<th>Market Cap</th><th>Fund Signal</th>";
+  document.getElementById("thead").innerHTML = h;
+}
+
+function renderRows(rows, failed){
+  const sorted = rows.slice().sort((a,b) => (b.marketCap||0) - (a.marketCap||0));
+  document.getElementById("tb").innerHTML = sorted.map(r => {
+    let cells = "";
+    for (const k of TF_KEYS){
+      const v = r[k];
+      if (v === null || v === undefined || !isFinite(v)){
+        cells += "<td class='mut'>—</td>";
+      } else {
+        cells += "<td class='" + (v >= 0 ? "up" : "dn") + "'>" + fmtFlow(v) + "</td>";
+      }
+    }
+    const sig = signalOf(r);
+    const mc = r.marketCap ? fmtFlow(r.marketCap) : "—";
+    return "<tr><td class='sym'>" + esc(r.asset) + "</td>" + cells +
+           "<td>" + mc + "</td>" +
+           "<td><span class='sig " + sig.cls + "'>" + (sig.score>=0?"+":"") + sig.score + " " + sig.label + "</span></td></tr>";
+  }).join("");
+  const ts = new Date().toLocaleTimeString("th-TH", {hour12:false});
+  let note = "อัปเดต " + ts + " · ดึงข้อมูลจากเบราว์เซอร์ของคุณโดยตรง (กัน Binance บล็อก IP server)";
+  if (failed.length) note += " · ดึงไม่ได้: " + failed.join(", ");
+  document.getElementById("note").textContent = note;
+}
+
+function esc(s){ return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+
+async function run(){
+  renderHead();
+  const caps = await fetchMarketCaps();
+  const rows = [];
+  const failed = [];
+
+  await Promise.all(ASSETS.map(async (asset) => {
+    const row = {asset, marketCap: caps[asset] || 0};
+    await Promise.all(TF_KEYS.map(async (k) => {
+      const cfg = TFS[k];
+      try {
+        row[k] = await fetchNetFlow(asset, cfg.interval, cfg.limit);
+      } catch (e) {
+        row[k] = null;
+      }
+    }));
+    const hasAny = TF_KEYS.some(k => row[k] !== null && row[k] !== undefined);
+    if (hasAny) rows.push(row);
+    else failed.push(asset);
+  }));
+
+  renderRows(rows, failed);
+}
+run();
+</script>
+"""
+
+
 def render_fund_flow_section(cfg: dict[str, Any] | None = None) -> None:
     """
     Render ตาราง Cryptocurrency Fund Flow โดยให้ browser ของผู้ใช้เรียก
