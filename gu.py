@@ -1459,6 +1459,17 @@ THEME_CSS = """
     .ai-row.user .ai-bub { background: #0ecb81; color: #0b0e11; border-radius: 14px 14px 4px 14px; }
     .ai-row.bot  .ai-bub { background: #2b3139; color: #EAECEF; border-radius: 14px 14px 14px 4px; }
     .ai-empty { color: #848e9c; font-size: .82rem; text-align: center; padding: 28px 8px; }
+    
+    [class*="st-key-ai_sug_"] button {
+        justify-content: flex-start !important; text-align: left !important;
+        background: #20242b !important; border: 1px solid #2b3139 !important;
+        border-radius: 10px !important; padding: 8px 12px !important;
+        min-height: 0 !important;
+    }
+    [class*="st-key-ai_sug_"] button, [class*="st-key-ai_sug_"] button * {
+        color: #EAECEF !important; font-size: .82rem !important; font-weight: 500 !important;
+    }
+    [class*="st-key-ai_sug_"] button:hover { border-color: #0ecb81 !important; }
 </style>
 """
 
@@ -3494,6 +3505,17 @@ def ask_ai(messages, api_key):
     except Exception as e:
         return f"ข้อผิดพลาดระบบ: {str(e)}"
 
+AI_SUGGESTIONS = [
+    "Max Drawdown กับ Win Rate ในหน้า Backtest หมายถึงอะไร",
+    "FX Limit Hit คืออะไร และกระทบกำไรยังไง",
+    "NC กับ NC Buffer คืออะไร ทำไมต้องดำรงขั้นต่ำ",
+    "Hedge กับ Dealer Spread ทำงานยังไง",
+    "หน้า Exchange UI Simulator ใช้ซื้อ/ขายและสุ่มออเดอร์ยังไง",
+]
+
+def _ai_queue(q: str) -> None:
+    st.session_state["ai_pending"] = q
+
 def _ai_bubble(role: str, text: str) -> str:
     t = _html.escape(str(text))
     t = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
@@ -3511,6 +3533,7 @@ def render_ai_fab() -> None:
         api_key = os.environ.get("GEMINI_API_KEY", "")
         
     hist = st.session_state.setdefault("chat_messages", [])
+    pending = st.session_state.pop("ai_pending", None)
     
     with st.container(key="ai_fab"):
         with st.popover("💬 ถาม AI"):
@@ -3519,25 +3542,37 @@ def render_ai_fab() -> None:
                 return
                 
             box = st.container(height=380, border=False)
-            ph = box.empty()
-            
+            with box:
+                ph = st.empty()
+                sug_ph = st.empty()
+                
             def draw():
                 if hist:
                     ph.markdown("".join(_ai_bubble(m["role"], m["content"]) for m in hist),
                                 unsafe_allow_html=True)
                 else:
-                    ph.markdown('<div class="ai-empty">ถามเรื่องการใช้งานแอป หรือความหมายของตัวเลขได้เลย<br>'
-                                'เช่น “Max Drawdown คืออะไร”</div>', unsafe_allow_html=True)
+                    ph.markdown('<div class="ai-empty">ลองกดคำถามด้านล่าง หรือพิมพ์เองได้เลย</div>',
+                                unsafe_allow_html=True)
                                 
+            # ปุ่มคำถามตัวอย่าง (แสดงเฉพาะตอนยังไม่เริ่มคุย)
+            if not hist and not pending:
+                with sug_ph.container():
+                    for i, s in enumerate(AI_SUGGESTIONS):
+                        st.button(s, key=f"ai_sug_{i}", on_click=_ai_queue,
+                                  args=(s,), **WIDE)
+                                  
             with st.form("ai_form", clear_on_submit=True):
                 c1, c2 = st.columns([5, 1.4], vertical_alignment="center")
                 q = c1.text_input("พิมพ์ข้อความ", label_visibility="collapsed",
                                   placeholder="พิมพ์ข้อความ…")
                 sent = c2.form_submit_button("ส่ง")
                 
-            if sent and q.strip():
-                hist.append({"role": "user", "content": q.strip()})
-                draw()                                   # โชว์ข้อความเราทันที
+            question = q.strip() if (sent and q.strip()) else pending
+            
+            if question:
+                sug_ph.empty()
+                hist.append({"role": "user", "content": question})
+                draw()
                 with st.spinner("กำลังคิด…"):
                     ans = ask_ai(hist, api_key)
                 hist.append({"role": "assistant", "content": ans})
