@@ -2868,8 +2868,10 @@ CRISIS_PRESETS: dict[str, dict[str, Any]] = {
 
 
 def _monte_carlo_pnl(daily_pnl: pd.Series, n_sims: int, n_days: int,
-                     method: str, seed: int) -> dict[str, Any]:
-    """Bootstrap หรือสุ่ม normal จาก Daily P&L จริงของ baseline เพื่อทำ fan chart"""
+                     method: str, seed: int, n_day_slices: int = 25,
+                     n_bins: int = 40) -> dict[str, Any]:
+    """Bootstrap หรือสุ่ม normal จาก Daily P&L จริงของ baseline เพื่อทำ fan chart
+    + เตรียมข้อมูล 3D surface: กระจายตัวของ P&L ข้ามหลายวัน (ไม่ใช่แค่วันสุดท้าย)"""
     r = pd.Series(daily_pnl, dtype=float).replace([np.inf, -np.inf], np.nan).dropna().to_numpy()
     if len(r) < 10:
         return {}
@@ -2884,6 +2886,19 @@ def _monte_carlo_pnl(daily_pnl: pd.Series, n_sims: int, n_days: int,
     cum = np.cumsum(sims, axis=1)
     percentiles = {p: np.percentile(cum, p, axis=0) for p in (5, 25, 50, 75, 95)}
     final = cum[:, -1]
+
+    # ---- เตรียมข้อมูลกราฟ 3D: histogram ของ P&L ในแต่ละ "วันตัดขวาง" ----
+    day_idx = np.unique(np.linspace(0, n_days - 1, min(n_day_slices, n_days)).astype(int))
+    lo, hi = np.percentile(cum[:, day_idx], [0.5, 99.5])
+    if lo >= hi:
+        hi = lo + 1.0
+    bin_edges = np.linspace(lo, hi, n_bins + 1)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    z_matrix = np.zeros((len(day_idx), n_bins))
+    for i, di in enumerate(day_idx):
+        counts, _ = np.histogram(cum[:, di], bins=bin_edges)
+        z_matrix[i] = counts
+
     return {
         "percentiles": percentiles,
         "final_dist": final,
@@ -2894,6 +2909,9 @@ def _monte_carlo_pnl(daily_pnl: pd.Series, n_sims: int, n_days: int,
         "worst_final": float(final.min()),
         "n_days": n_days,
         "n_sims": n_sims,
+        "surface_days": (day_idx + 1).tolist(),
+        "surface_bin_centers": bin_centers.tolist(),
+        "surface_z": z_matrix.tolist(),
     }
 
 
@@ -2955,14 +2973,47 @@ def _render_monte_carlo(cfg: dict[str, Any], data: pd.DataFrame,
                 legend=dict(orientation="h", y=1.02, yanchor="bottom"))
             st.plotly_chart(fig, **WIDE)
 
-            fig_h = go.Figure(go.Histogram(x=res["final_dist"], nbinsx=50,
-                                          marker_color="#0ecb81", opacity=0.8))
-            fig_h.add_vline(x=0, line=dict(color="#f6465d", dash="dash"))
-            fig_h.update_layout(
-                template="plotly_dark", height=280, margin=dict(t=20, b=20),
-                title=dict(text=f"การกระจายตัวของ P&L ที่วันที่ {res['n_days']}", font=dict(size=13)),
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig_h, **WIDE)
+            show_3d = st.checkbox("🌐 แสดงแบบ 3D (กระจายตัวของ P&L ข้ามหลายวัน)",
+                                  value=True, key="mc_3d_toggle")
+
+            if show_3d and res.get("surface_z"):
+                days_arr = res["surface_days"]
+                bins_arr = res["surface_bin_centers"]
+                z = np.array(res["surface_z"])  # shape (n_day_slices, n_bins)
+                fig_3d = go.Figure(data=[go.Surface(
+                    x=days_arr, y=bins_arr, z=z.T,
+                    colorscale="Rainbow", showscale=True,
+                    colorbar=dict(title="ความถี่ (จำนวนรอบ)", thickness=12),
+                    hovertemplate=("วันที่ %{x}<br>P&L: %{y:,.0f} THB<br>"
+                                   "ความถี่: %{z}<extra></extra>"),
+                )])
+                fig_3d.update_layout(
+                    title=dict(text="การกระจายตัวของ P&L ข้ามหลายวัน (3D)", font=dict(size=14)),
+                    scene=dict(
+                        xaxis_title="วันข้างหน้า",
+                        yaxis_title="Cumulative P&L (THB)",
+                        zaxis_title="ความถี่ (จำนวนรอบ)",
+                        bgcolor="#181a20",
+                    ),
+                    template="plotly_dark", height=600,
+                    margin=dict(l=0, r=0, b=0, t=40),
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                )
+                st.plotly_chart(fig_3d, **WIDE)
+                st.caption(
+                    "หมุน/ซูมเพื่อดู: แกน X = วันข้างหน้า, แกน Y = ระดับ Cumulative P&L (THB), "
+                    "แกน Z/สี = ความถี่ที่ผลจำลองตกอยู่ระดับนั้น — เนินสูงตรงไหนคือผลลัพธ์ที่เป็นไปได้มากที่สุด "
+                    "ณ วันนั้น สังเกตได้ว่าฐานการกระจายจะกว้างขึ้นเมื่อวันเวลาผ่านไป (ความไม่แน่นอนสะสม)"
+                )
+            else:
+                fig_h = go.Figure(go.Histogram(x=res["final_dist"], nbinsx=50,
+                                              marker_color="#0ecb81", opacity=0.8))
+                fig_h.add_vline(x=0, line=dict(color="#f6465d", dash="dash"))
+                fig_h.update_layout(
+                    template="plotly_dark", height=280, margin=dict(t=20, b=20),
+                    title=dict(text=f"การกระจายตัวของ P&L ที่วันที่ {res['n_days']}", font=dict(size=13)),
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                st.plotly_chart(fig_h, **WIDE)
 
 
 def _render_crisis_replay(cfg: dict[str, Any], data: pd.DataFrame,
