@@ -2868,10 +2868,10 @@ CRISIS_PRESETS: dict[str, dict[str, Any]] = {
 
 
 def _monte_carlo_pnl(daily_pnl: pd.Series, n_sims: int, n_days: int,
-                     method: str, seed: int, n_day_slices: int = 25,
-                     n_bins: int = 40) -> dict[str, Any]:
+                     method: str, seed: int, n_scatter_paths: int = 350,
+                     n_scatter_days: int = 60) -> dict[str, Any]:
     """Bootstrap หรือสุ่ม normal จาก Daily P&L จริงของ baseline เพื่อทำ fan chart
-    + เตรียมข้อมูล 3D surface: กระจายตัวของ P&L ข้ามหลายวัน (ไม่ใช่แค่วันสุดท้าย)"""
+    + เตรียมข้อมูล scatter3d: จุดกระจายของเส้นทางจำลอง สีตามระดับความเบี่ยงเบน (z-score)"""
     r = pd.Series(daily_pnl, dtype=float).replace([np.inf, -np.inf], np.nan).dropna().to_numpy()
     if len(r) < 10:
         return {}
@@ -2887,17 +2887,23 @@ def _monte_carlo_pnl(daily_pnl: pd.Series, n_sims: int, n_days: int,
     percentiles = {p: np.percentile(cum, p, axis=0) for p in (5, 25, 50, 75, 95)}
     final = cum[:, -1]
 
-    # ---- เตรียมข้อมูลกราฟ 3D: histogram ของ P&L ในแต่ละ "วันตัดขวาง" ----
-    day_idx = np.unique(np.linspace(0, n_days - 1, min(n_day_slices, n_days)).astype(int))
-    lo, hi = np.percentile(cum[:, day_idx], [0.5, 99.5])
-    if lo >= hi:
-        hi = lo + 1.0
-    bin_edges = np.linspace(lo, hi, n_bins + 1)
-    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-    z_matrix = np.zeros((len(day_idx), n_bins))
-    for i, di in enumerate(day_idx):
-        counts, _ = np.histogram(cum[:, di], bins=bin_edges)
-        z_matrix[i] = counts
+    # ---- เตรียมข้อมูล scatter3d: สุ่มเลือกเส้นทาง + วันมาพล็อตเป็นจุด ----
+    n_paths = min(n_scatter_paths, n_sims)
+    path_idx = rng.choice(n_sims, size=n_paths, replace=False)
+    day_stride = max(1, n_days // min(n_scatter_days, n_days))
+    day_idx = np.arange(0, n_days, day_stride)
+
+    day_mean = cum.mean(axis=0)
+    day_std = cum.std(axis=0)
+    day_std_safe = np.where(day_std == 0, 1e-9, day_std)
+
+    sub = cum[np.ix_(path_idx, day_idx)]                       # (n_paths, n_days_sub)
+    z_sub = (sub - day_mean[day_idx]) / day_std_safe[day_idx]   # z-score ต่อวัน
+
+    dd, pp = np.meshgrid(day_idx + 1, np.arange(n_paths), indexing="xy")
+    scatter_day = dd.flatten().tolist()
+    scatter_pnl = sub.flatten().tolist()
+    scatter_z = z_sub.flatten().tolist()
 
     return {
         "percentiles": percentiles,
@@ -2909,9 +2915,9 @@ def _monte_carlo_pnl(daily_pnl: pd.Series, n_sims: int, n_days: int,
         "worst_final": float(final.min()),
         "n_days": n_days,
         "n_sims": n_sims,
-        "surface_days": (day_idx + 1).tolist(),
-        "surface_bin_centers": bin_centers.tolist(),
-        "surface_z": z_matrix.tolist(),
+        "scatter_day": scatter_day,
+        "scatter_pnl": scatter_pnl,
+        "scatter_z": scatter_z,
     }
 
 
@@ -2973,26 +2979,38 @@ def _render_monte_carlo(cfg: dict[str, Any], data: pd.DataFrame,
                 legend=dict(orientation="h", y=1.02, yanchor="bottom"))
             st.plotly_chart(fig, **WIDE)
 
-            show_3d = st.checkbox("🌐 แสดงแบบ 3D (กระจายตัวของ P&L ข้ามหลายวัน)",
+            show_3d = st.checkbox("🌐 แสดงแบบ 3D (จุดกระจายของเส้นทางจำลอง)",
                                   value=True, key="mc_3d_toggle")
 
-            if show_3d and res.get("surface_z"):
-                days_arr = res["surface_days"]
-                bins_arr = res["surface_bin_centers"]
-                z = np.array(res["surface_z"])  # shape (n_day_slices, n_bins)
-                fig_3d = go.Figure(data=[go.Surface(
-                    x=days_arr, y=bins_arr, z=z.T,
-                    colorscale="Rainbow", showscale=True,
-                    colorbar=dict(title="ความถี่ (จำนวนรอบ)", thickness=12),
-                    hovertemplate=("วันที่ %{x}<br>P&L: %{y:,.0f} THB<br>"
-                                   "ความถี่: %{z}<extra></extra>"),
+            if show_3d and res.get("scatter_day"):
+                df_sc = pd.DataFrame({
+                    "day": res["scatter_day"],
+                    "pnl": res["scatter_pnl"],
+                    "z": res["scatter_z"],
+                })
+                fig_3d = go.Figure(data=[go.Scatter3d(
+                    x=df_sc["day"], y=df_sc["pnl"], z=df_sc["z"],
+                    mode="markers",
+                    marker=dict(
+                        size=5,
+                        color=df_sc["z"],
+                        colorscale="Rainbow",
+                        opacity=0.9,
+                        line=dict(width=0),
+                        colorbar=dict(title="Z-score", thickness=12),
+                    ),
+                    hovertemplate=(
+                        "วันที่: %{x}<br>"
+                        "Cumulative P&L: %{y:,.0f} THB<br>"
+                        "ความเบี่ยงเบน (Z-score): %{z:.2f}<extra></extra>"
+                    ),
                 )])
                 fig_3d.update_layout(
-                    title=dict(text="การกระจายตัวของ P&L ข้ามหลายวัน (3D)", font=dict(size=14)),
+                    title=dict(text="จุดกระจายของเส้นทาง Monte Carlo (3D)", font=dict(size=14)),
                     scene=dict(
-                        xaxis_title="วันข้างหน้า",
+                        xaxis_title="วันข้างหน้า (Time Steps)",
                         yaxis_title="Cumulative P&L (THB)",
-                        zaxis_title="ความถี่ (จำนวนรอบ)",
+                        zaxis_title="ความเบี่ยงเบน (Z-score)",
                         bgcolor="#181a20",
                     ),
                     template="plotly_dark", height=600,
@@ -3001,10 +3019,11 @@ def _render_monte_carlo(cfg: dict[str, Any], data: pd.DataFrame,
                 )
                 st.plotly_chart(fig_3d, **WIDE)
                 st.caption(
-                    "หมุน/ซูมเพื่อดู: แกน X = วันข้างหน้า, แกน Y = ระดับ Cumulative P&L (THB), "
-                    "แกน Z/สี = ความถี่ที่ผลจำลองตกอยู่ระดับนั้น — เนินสูงตรงไหนคือผลลัพธ์ที่เป็นไปได้มากที่สุด "
-                    "ณ วันนั้น สังเกตได้ว่าฐานการกระจายจะกว้างขึ้นเมื่อวันเวลาผ่านไป (ความไม่แน่นอนสะสม)"
+                    "หมุน/ซูมเพื่อดู: แต่ละจุด = 1 เส้นทางจำลองที่วันหนึ่งๆ · สีแดง/เหลือง = ค่าที่ห่างจากค่ากลางมาก "
+                    "(ผลลัพธ์สุดโต่ง ดี/แย่ผิดปกติ) · สีน้ำเงิน/ม่วง = ใกล้เคียงค่ากลาง (ผลลัพธ์ปกติ) "
+                    "ยิ่งวันเวลาผ่านไป จุดจะกระจายกว้างขึ้น สะท้อนความไม่แน่นอนที่สะสมมากขึ้น"
                 )
+
             else:
                 fig_h = go.Figure(go.Histogram(x=res["final_dist"], nbinsx=50,
                                               marker_color="#0ecb81", opacity=0.8))
