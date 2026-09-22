@@ -5028,20 +5028,39 @@ else:
 DCA_FREQS = ["รายวัน", "รายสัปดาห์", "รายเดือน"]
 
 
-def _asset_return_pct(asset: str, months: int) -> Optional[float]:
-    """คืน % ผลตอบแทนของเหรียญย้อนหลัง N เดือนจนถึงวันล่าสุดที่มีข้อมูล"""
-    end = pd.Timestamp.now().date()
-    start = end - pd.Timedelta(days=int(months * 30.44) + 5)
+def _asset_return_pct(asset: str, months: int, cfg: dict[str, Any]) -> Optional[float]:
+    """คืน % ผลตอบแทนตามราคา Dealer จริงในระบบ (THB + Premium + Spread)
+    โดยใช้วันเริ่ม/วันจบแบบ calendar months จากข้อมูลล่าสุดที่มีจริง
+    และคิดฝั่งซื้อที่ต้นงวด -> ฝั่งขายที่ปลายงวด เพื่อให้สอดคล้องกับ quote ของลูกค้า
+    """
+    end = pd.Timestamp.now().normalize()
+    start = end - pd.DateOffset(months=int(months)) - pd.Timedelta(days=5)
     try:
-        d, _err = fetch_price_data(asset, start, end)
+        d, _err = fetch_price_data(asset, start.date(), end.date())
     except Exception:
         return None
     if d.empty or len(d) < 2:
         return None
-    first, last = float(d["Global_USD"].iloc[0]), float(d["Global_USD"].iloc[-1])
-    if first <= 0:
+
+    d = d.sort_index()
+    actual_end = pd.Timestamp(d.index.max())
+    target_start = actual_end - pd.DateOffset(months=int(months))
+    window = d[d.index >= target_start]
+    if len(window) < 2:
         return None
-    return (last / first - 1) * 100
+
+    first = window.iloc[0]
+    last = window.iloc[-1]
+    first_mid = (float(first["Global_USD"]) * float(first["USDTHB"])
+                 * (1 + float(cfg["local_premium"])))
+    last_mid = (float(last["Global_USD"]) * float(last["USDTHB"])
+                * (1 + float(cfg["local_premium"])))
+    spread = float(cfg["dealer_spread"])
+    buy_quote = first_mid * (1 + spread)
+    sell_quote = last_mid * (1 - spread)
+    if buy_quote <= 0:
+        return None
+    return (sell_quote / buy_quote - 1) * 100
 
 
 def _dca_schedule_dates(idx: pd.Index, freq_label: str, months: int) -> list[pd.Timestamp]:
@@ -5162,8 +5181,8 @@ def render_auto_dca(cfg: dict[str, Any], sim: dict[str, Any], data: pd.DataFrame
             unsafe_allow_html=True)
 
         st.markdown("**ผลตอบแทนจากเหรียญที่คุณเลือก**")
-        r1y = _asset_return_pct(asset_dca, 12)
-        r6m = _asset_return_pct(asset_dca, 6)
+        r1y = _asset_return_pct(asset_dca, 12, cfg)
+        r6m = _asset_return_pct(asset_dca, 6, cfg)
 
         def _ret_row(label: str, v: Optional[float]) -> str:
             if v is None:
@@ -5231,8 +5250,8 @@ def render_auto_dca(cfg: dict[str, Any], sim: dict[str, Any], data: pd.DataFrame
     quick_coins = [a for a in SUPPORTED_ASSETS if a not in STABLECOINS][:6]
     qcols = st.columns(len(quick_coins))
     for col, a in zip(qcols, quick_coins):
-        r1 = _asset_return_pct(a, 12)
-        r6 = _asset_return_pct(a, 6)
+        r1 = _asset_return_pct(a, 12, cfg)
+        r6 = _asset_return_pct(a, 6, cfg)
         r1_txt = f"{'+' if (r1 or 0) >= 0 else ''}{r1:.2f}%" if r1 is not None else "—"
         r6_txt = f"{'+' if (r6 or 0) >= 0 else ''}{r6:.2f}%" if r6 is not None else "—"
         r1_cls = "ex-green" if (r1 or 0) >= 0 else "ex-red"
