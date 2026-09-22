@@ -26,6 +26,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import uuid
+import xml.etree.ElementTree as ET
 import html as _html
 from datetime import datetime, timezone
 from io import BytesIO
@@ -992,9 +993,11 @@ NAV_LABELS = [
     "📊 5-Year Backtest Simulator",
     "🧮 Liquidity & Capital Planner",
     "🛒 Exchange UI Simulator",
+    "📰 ข่าวคริปโท",
     "💼 กระเป๋าเงิน (Wallet)",
 ]
 NAV_EXCHANGE = NAV_LABELS[2]
+NAV_NEWS = NAV_LABELS[3]
 
 def _go_to_exchange(sym: str) -> None:
     st.session_state["bt_asset"] = sym
@@ -2940,22 +2943,14 @@ def render_perp_venue_table(base: str = "BTC") -> None:
 
 
 # ============================================================
-# NEWS LAYER (v6) — Multi-source server fallback
-# CryptoCompare -> CoinDesk RSS -> Cointelegraph RSS
+# NEWS LAYER (v5) — Server-side + category targeted fallback
 # เฉพาะเหรียญใน SUPPORTED_ASSETS เท่านั้น
 # ============================================================
 
 NEWS_API_URL = "https://min-api.cryptocompare.com/data/v2/news/"
 NEWS_ASSETS = [a for a in SUPPORTED_ASSETS if a not in STABLECOINS]
-
-# RSS เป็น fallback เมื่อ CryptoCompare จาก Streamlit server ใช้งานไม่ได้
-NEWS_RSS_FEEDS = [
-    ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
-    ("Cointelegraph", "https://cointelegraph.com/rss"),
-]
-
 NEWS_ALIASES = {
-    "BTC": ["BITCOIN", "XBT"],
+    "BTC": ["BITCOIN"],
     "ETH": ["ETHEREUM", "ETHER"],
     "SOL": ["SOLANA"],
     "DOGE": ["DOGECOIN"],
@@ -2968,170 +2963,177 @@ NEWS_ALIASES = {
 
 
 def _news_match_assets(item: dict) -> list[str]:
-    """Match ข่าวกับเหรียญในระบบจาก category/tags + title/body/description."""
+    """Match ข่าวกับเหรียญในระบบจาก category + title + body/description."""
     cats_raw = str(item.get("categories", "") or "")
-    tags_raw = str(item.get("tags", "") or "")
     cats = {c.strip().upper() for c in re.split(r"[|,;]", cats_raw) if c.strip()}
-    tags = {c.strip().upper() for c in re.split(r"[|,;]", tags_raw) if c.strip()}
     text = " ".join([
         str(item.get("title", "") or ""),
         str(item.get("body", "") or ""),
         str(item.get("description", "") or ""),
-        str(item.get("summary", "") or ""),
     ]).upper()
     hits = []
     for a in NEWS_ASSETS:
         terms = [a, COIN_NAMES.get(a, a)] + NEWS_ALIASES.get(a, [])
-        term_set = {str(x).upper() for x in terms if x}
-        if a in cats or a in tags:
+        if a in cats:
             hits.append(a)
             continue
-        if any(re.search(rf"\b{re.escape(term)}\b", text) for term in term_set):
+        if any(re.search(rf"\b{re.escape(str(term).upper())}\b", text) for term in terms if term):
             hits.append(a)
     return hits
 
 
-def _news_request(params: dict) -> tuple[list[dict], str | None]:
-    """เรียก CryptoCompare; คืน (Data, error)."""
+def _news_request(params: dict) -> list[dict]:
+    """เรียก CryptoCompare และคืน Data; แยก exception เพื่อให้ fallback ทำงานต่อได้."""
     try:
         query = urllib.parse.urlencode(params)
         full_url = f"{NEWS_API_URL}?{query}"
         req = urllib.request.Request(
             full_url,
             headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) XSpring-Dealer-Suite/1.0",
-                "Accept": "application/json,text/plain,*/*",
+                "User-Agent": "Mozilla/5.0 (XSpring-Dealer-Suite/1.0)",
+                "Accept": "application/json",
             },
         )
         with urllib.request.urlopen(req, timeout=12) as resp:
-            raw = json.loads(resp.read().decode("utf-8", errors="replace"))
-        if isinstance(raw, dict) and raw.get("Data") is not None:
-            return raw.get("Data", []) or [], None
-        return [], str(raw.get("Message", "CryptoCompare returned no Data")) if isinstance(raw, dict) else "Invalid response"
-    except Exception as e:
-        return [], f"{type(e).__name__}: {e}"
-
-
-def _news_parse_rss(xml_bytes: bytes, source_name: str) -> list[dict]:
-    """Parse RSS/Atom โดยใช้ stdlib เท่านั้น ไม่ต้องติดตั้ง feedparser."""
-    import xml.etree.ElementTree as ET
-    try:
-        root = ET.fromstring(xml_bytes)
+            raw = json.loads(resp.read().decode("utf-8"))
+        return raw.get("Data", []) or []
     except Exception:
         return []
 
-    def local(tag: str) -> str:
-        return tag.rsplit("}", 1)[-1].lower()
 
-    def child_text(node, names):
-        for ch in list(node):
-            if local(ch.tag) in names:
-                return (ch.text or "").strip()
-        return ""
+NEWS_RSS_FEEDS = {
+    "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
+    "Cointelegraph": "https://cointelegraph.com/rss",
+}
+
+NEWS_PLACEHOLDER_SVG = (
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 640 360'>"
+    "<rect width='640' height='360' rx='18' fill='#161a1e'/>"
+    "<rect x='24' y='24' width='592' height='312' rx='14' fill='#1f242b' stroke='#2b3139'/>"
+    "<path d='M150 258l100-104 72 72 56-58 112 90H150z' fill='#2b3139'/>"
+    "<circle cx='432' cy='126' r='28' fill='#3a424d'/>"
+    "<text x='320' y='304' text-anchor='middle' fill='#848e9c' "
+    "font-family='Arial,sans-serif' font-size='24' font-weight='700'>CRYPTO NEWS</text>"
+    "</svg>"
+)
+NEWS_PLACEHOLDER_URL = "data:image/svg+xml;base64," + base64.b64encode(
+    NEWS_PLACEHOLDER_SVG.encode("utf-8")
+).decode("ascii")
+
+
+def _news_local_tag(tag: Any) -> str:
+    return str(tag).rsplit("}", 1)[-1].lower()
+
+
+def _news_extract_image(node: ET.Element, desc: str = "") -> str:
+    """ดึง thumbnail จาก RSS/Atom media:content, media:thumbnail, enclosure หรือ <img> ใน description."""
+    for ch in node.iter():
+        local = _news_local_tag(ch.tag)
+        url = str(ch.attrib.get("url", "") or "").strip()
+        if url and local in {"content", "thumbnail"}:
+            media_type = str(ch.attrib.get("type", "") or "").lower()
+            medium = str(ch.attrib.get("medium", "") or "").lower()
+            if not media_type or media_type.startswith("image") or medium == "image":
+                return url
+
+    for ch in list(node):
+        if _news_local_tag(ch.tag) == "enclosure":
+            typ = str(ch.attrib.get("type", "") or "").lower()
+            url = str(ch.attrib.get("url", "") or "").strip()
+            if url and (typ.startswith("image") or not typ):
+                return url
+
+    m = re.search(r"<img[^>]+src=[\"']([^\"']+)[\"']", desc or "", re.IGNORECASE)
+    return _html.unescape(m.group(1)).strip() if m else ""
+
+
+def _news_text_from_node(node: ET.Element, *names: str) -> str:
+    wanted = {n.lower() for n in names}
+    for ch in list(node):
+        if _news_local_tag(ch.tag) in wanted:
+            return _html.unescape("".join(ch.itertext())).strip()
+    return ""
+
+
+def _news_parse_rss(xml_bytes: bytes, source: str) -> list[dict]:
+    """Parse RSS/Atom feed into the same normalized structure used by CryptoCompare."""
+    try:
+        root = ET.fromstring(xml_bytes)
+    except (ET.ParseError, ValueError):
+        return []
 
     items = []
-    for node in root.iter():
-        if local(node.tag) not in {"item", "entry"}:
-            continue
-        title = child_text(node, {"title"})
-        link = child_text(node, {"link"})
-        if not link:
+    nodes = [n for n in root.iter() if _news_local_tag(n.tag) in {"item", "entry"}]
+    for node in nodes:
+        title = _news_text_from_node(node, "title")
+        desc = _news_text_from_node(node, "description", "summary", "content", "encoded")
+        url = _news_text_from_node(node, "link")
+        if not url:
             for ch in list(node):
-                if local(ch.tag) == "link":
-                    link = ch.attrib.get("href", "")
-                    if link:
-                        break
-        desc = child_text(node, {"description", "summary", "content", "encoded"})
-        pub = child_text(node, {"pubdate", "published", "updated", "date"})
-        if title:
-            items.append({
-                "title": title,
-                "url": link,
-                "body": desc,
-                "description": desc,
-                "published_raw": pub,
-                "source_info": {"name": source_name},
-                "source": source_name,
-                "categories": "",
-                "tags": "",
-                "imageurl": "",
-            })
-    return items
+                if _news_local_tag(ch.tag) == "link" and ch.attrib.get("href"):
+                    url = ch.attrib["href"]
+                    break
 
-
-def _news_request_rss(url: str, source_name: str) -> tuple[list[dict], str | None]:
-    try:
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "Mozilla/5.0 XSpring-Dealer-Suite/1.0", "Accept": "application/rss+xml,application/xml,text/xml,*/*"},
+        published_raw = (
+            _news_text_from_node(node, "pubdate", "published", "updated", "date")
         )
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            raw = resp.read()
-        items = _news_parse_rss(raw, source_name)
-        return items, None if items else "RSS returned no items"
-    except Exception as e:
-        return [], f"{type(e).__name__}: {e}"
+        published_ts = 0
+        if published_raw:
+            try:
+                published_ts = int(pd.Timestamp(published_raw).timestamp())
+            except Exception:
+                published_ts = 0
 
-
-def _news_parse_time(item: dict) -> int:
-    ts = item.get("published_on")
-    if ts:
-        try:
-            return int(ts)
-        except Exception:
-            pass
-    raw = str(item.get("published_raw", "") or "").strip()
-    if not raw:
-        return 0
-    try:
-        from email.utils import parsedate_to_datetime
-        dt = parsedate_to_datetime(raw)
-        return int(dt.timestamp())
-    except Exception:
-        try:
-            return int(datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp())
-        except Exception:
-            return 0
+        items.append({
+            "title": title,
+            "url": url,
+            "source": source,
+            "description": desc,
+            "imageurl": _news_extract_image(node, desc),
+            "published_on": published_ts,
+            "categories": " ".join(
+                _html.unescape("".join(ch.itertext())).strip()
+                for ch in list(node) if _news_local_tag(ch.tag) == "category"
+            ),
+        })
+    return items
 
 
 @_cache_data(ttl=600, show_spinner=False)
 def fetch_crypto_news(limit: int = 30) -> list[dict]:
     """
-    ดึงข่าวหลายชั้นเพื่อไม่ให้หน้า News ว่างเพราะ provider เดียวล้ม:
-    1) CryptoCompare targeted/global
-    2) CoinDesk RSS
-    3) Cointelegraph RSS
-    จากนั้น filter ซ้ำให้เหลือเฉพาะ NEWS_ASSETS
+    รวมข่าวจาก CryptoCompare + RSS แล้ว dedupe/filter ตามเหรียญในระบบ.
+    RSS ใช้เป็นแหล่งเสริมเพื่อให้ CoinDesk/Cointelegraph มี thumbnail ได้เมื่อ feed มีรูป.
     """
-    base = {"lang": "EN", "excludeCategories": "Sponsored", "sortOrder": "latest"}
-    raw_items: list[dict] = []
-    errors: list[str] = []
+    base = {"lang": "EN", "excludeCategories": "Sponsored"}
+    raw_items = []
 
-    # 1) CryptoCompare: global feed ก่อน (เสถียรกว่า category query ในบาง deployment)
-    cc_items, cc_err = _news_request(base)
-    raw_items.extend(cc_items)
-    if cc_err and not cc_items:
-        errors.append("CryptoCompare: " + cc_err)
+    if NEWS_ASSETS:
+        raw_items.extend(_news_request({**base, "categories": ",".join(NEWS_ASSETS), "sortOrder": "latest"}))
 
-    # 2) ถ้าได้ข้อมูลแต่ filter ไม่เจอ ให้ลอง category targeted
-    if cc_items and not any(_news_match_assets(x) for x in cc_items):
-        targeted, target_err = _news_request({**base, "categories": ",".join(NEWS_ASSETS)})
-        raw_items.extend(targeted)
-        if target_err and not targeted:
-            errors.append("CryptoCompare targeted: " + target_err)
+    if len(raw_items) < max(10, limit):
+        for asset in NEWS_ASSETS:
+            got = _news_request({**base, "categories": asset, "sortOrder": "latest"})
+            raw_items.extend(got[:20])
+            if len(raw_items) >= max(60, limit * 2):
+                break
 
-    # 3) RSS fallback จากสำนักข่าวหลัก
-    if len([x for x in raw_items if _news_match_assets(x)]) < limit:
-        for source_name, rss_url in NEWS_RSS_FEEDS:
-            rss_items, rss_err = _news_request_rss(rss_url, source_name)
-            raw_items.extend(rss_items)
-            if rss_err and not rss_items:
-                errors.append(source_name + ": " + rss_err)
+    if not raw_items:
+        raw_items = _news_request({**base, "sortOrder": "latest"})
 
-    # 4) dedupe + filter
+    if raw_items:
+        probe_matches = any(_news_match_assets(item) for item in raw_items)
+        if not probe_matches:
+            global_items = _news_request({**base, "sortOrder": "latest"})
+            if global_items:
+                raw_items.extend(global_items)
+
+    # RSS จาก CoinDesk / Cointelegraph
+    raw_rss = fetch_crypto_news_rss(limit=max(limit, 30))
+
     seen = set()
     news_list = []
-    for item in raw_items:
+    for item in raw_items + raw_rss:
         key = item.get("url") or item.get("guid") or item.get("title") or ""
         if not key or key in seen:
             continue
@@ -3142,15 +3144,16 @@ def fetch_crypto_news(limit: int = 30) -> list[dict]:
         news_list.append({
             "title": item.get("title", ""),
             "url": item.get("url", ""),
-            "source": (item.get("source_info") or {}).get("name") or item.get("source", "Unknown"),
+            "source": (item.get("source_info") or {}).get("name")
+                      if isinstance(item.get("source_info"), dict)
+                      else item.get("source", "Unknown"),
             "image_url": item.get("imageurl", ""),
-            "published_ts": _news_parse_time(item),
+            "published_ts": item.get("published_on", 0),
             "tags": sorted(matched),
         })
 
     news_list.sort(key=lambda x: x["published_ts"], reverse=True)
     return news_list[:limit]
-
 
 def _news_time_ago(unix_ts: int) -> str:
     if not unix_ts:
@@ -3165,15 +3168,15 @@ def _news_time_ago(unix_ts: int) -> str:
 
 
 def render_news_section(cfg: dict) -> None:
-    st.markdown("### 📰 ข่าวคริปโท (เฉพาะเหรียญในระบบ)")
+    st.markdown("### 📰 ข่าวคริปโท")
 
     news_items = fetch_crypto_news()
 
     if not news_items:
-        st.warning("ยังไม่พบข่าวที่ตรงกับเหรียญในระบบจากแหล่งข่าวที่เชื่อมต่อได้")
-        st.caption("แหล่งข่าว: CryptoCompare → CoinDesk RSS → Cointelegraph RSS")
+        st.warning("ยังดึงข่าวจากแหล่งข่าวไม่สำเร็จ หรือยังไม่มีข่าวที่ตรงกับเหรียญในระบบ")
         if st.button("🔄 รีเฟรชข่าว", key="news_refresh_empty"):
             fetch_crypto_news.clear()
+            fetch_crypto_news_rss.clear()
             st.rerun()
         return
 
@@ -3183,16 +3186,17 @@ def render_news_section(cfg: dict) -> None:
     with c_btn:
         if st.button("🔄 รีเฟรช", key="news_refresh", **WIDE):
             fetch_crypto_news.clear()
+            fetch_crypto_news_rss.clear()
             st.rerun()
 
     for news in news_items:
         cols = st.columns([1, 4])
         with cols[0]:
-            if news["image_url"]:
-                try:
-                    st.image(news["image_url"], use_container_width=True)
-                except Exception:
-                    pass
+            # ให้ทุกข่าวมี thumbnail เท่ากัน แม้ RSS entry ไม่มีรูปจริง
+            st.image(
+                news["image_url"] or NEWS_PLACEHOLDER_URL,
+                use_container_width=True,
+            )
         with cols[1]:
             title = news["title"] or "(ไม่มีหัวข้อข่าว)"
             url = news["url"]
@@ -4217,9 +4221,6 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 st.session_state.sim_batch_summary = txt
                 st.rerun()
 
-        # --- NEWS LAYER: แทรกใน Exchange UI เดิม ไม่สร้างแท็บใหม่ ---
-        with st.expander("📰 ข่าวคริปโท", expanded=False):
-            render_news_section(cfg)
 
         st.markdown('<div style="margin-top:14px;"></div>', unsafe_allow_html=True)
         t_route, t_ledger, t_wallet = st.tabs(
@@ -4635,6 +4636,8 @@ def _main_body() -> None:
         render_tab3(cfg, data, data_err,
                     price_lookup={row["symbol"]: row["price_usd"] for _, row in market_df.iterrows()} if not market_df.empty else {},
                     market_df=market_df)
+    elif nav == NAV_NEWS:
+        render_news_section(cfg)
     else:
         render_tab4(cfg, data, market_df=market_df)
 
