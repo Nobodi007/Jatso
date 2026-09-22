@@ -39,7 +39,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.6.0"
+MODEL_VERSION = "1.7.0"
 
 try:
     import yaml
@@ -2676,10 +2676,16 @@ def build_sidebar() -> dict[str, Any]:
 
 
 def _backtest_frame(cfg: dict[str, Any], data: pd.DataFrame,
-                    shock_pct: float = 0.0, shock_days: int = 0) -> pd.DataFrame:
+                    shock_pct: float = 0.0, shock_days: int = 0,
+                    shock_path: Optional[np.ndarray] = None) -> pd.DataFrame:
     """สร้าง backtest ledger แบบ pure-ish เพื่อให้ baseline/scenario ใช้สูตรชุดเดียวกัน"""
     bt = data.copy()
-    if shock_pct and shock_days > 0 and not bt.empty:
+    if shock_path is not None and len(shock_path) and not bt.empty:
+        # ใช้เส้นทาง % รายวัน (เช่น preset วิกฤติจริง) แทน shock แบบแบนราบ
+        n = min(len(shock_path), len(bt))
+        mult = np.cumprod(1.0 + np.asarray(shock_path[:n], dtype=float) / 100.0)
+        bt.iloc[:n, bt.columns.get_loc("Global_USD")] *= mult
+    elif shock_pct and shock_days > 0 and not bt.empty:
         n = min(int(shock_days), len(bt))
         bt.iloc[:n, bt.columns.get_loc("Global_USD")] *= (1.0 + float(shock_pct))
 
@@ -2762,8 +2768,9 @@ def _backtest_metrics(bt: pd.DataFrame) -> dict[str, Any]:
     }
 
 
-def _scenario_result(cfg: dict[str, Any], data: pd.DataFrame, shock_pct: float, shock_days: int) -> dict[str, Any]:
-    bt = _backtest_frame(cfg, data, shock_pct=shock_pct, shock_days=shock_days)
+def _scenario_result(cfg: dict[str, Any], data: pd.DataFrame, shock_pct: float = 0.0,
+                     shock_days: int = 0, shock_path: Optional[np.ndarray] = None) -> dict[str, Any]:
+    bt = _backtest_frame(cfg, data, shock_pct=shock_pct, shock_days=shock_days, shock_path=shock_path)
     return {"frame": bt, **_backtest_metrics(bt)}
 
 
@@ -2834,6 +2841,247 @@ def _config_for_compare(cfg: dict[str, Any]) -> dict[str, Any]:
     return {k: cfg.get(k) for k in keys}
 
 
+# =========================================================================
+# PHASE 2.5 — Monte Carlo · Crisis Replay · Correlation · Hedge Comparator
+# =========================================================================
+
+CRISIS_PRESETS: dict[str, dict[str, Any]] = {
+    "LUNA / UST Collapse (พ.ค. 2022)": {
+        "desc": "Terra/UST depeg ลาก BTC/ETH ร่วงแรงต่อเนื่องราว 10 วัน (ค่าประมาณจากทิศทางตลาดช่วงนั้น)",
+        "daily_pct": [-2, -3, -5, -8, -6, -4, -3, 2, -2, 1],
+    },
+    "FTX Collapse (พ.ย. 2022)": {
+        "desc": "ข่าว FTX ล้มละลายทำให้ตลาดคริปโทร่วงยาวและผันผวนสูงหลายวันติด",
+        "daily_pct": [-4, -10, -5, -3, 2, -2, -3, 1, -2, 1, 2, -1],
+    },
+    "COVID Black Thursday (มี.ค. 2020)": {
+        "desc": "BTC ร่วงกว่า 40% ภายในไม่กี่วันจาก panic sell-off ทั่วตลาดการเงินโลก",
+        "desc_short": "แรงและเร็ว",
+        "daily_pct": [-39, -15, 8, 5, -3],
+    },
+    "Crypto Winter 2018": {
+        "desc": "ตลาดหมีลากยาวทั้งปี ราคาร่วงต่อเนื่องแบบค่อยเป็นค่อยไป ไม่มีวันเดียวที่พังหนัก",
+        "daily_pct": [-3, -2, -4, -2, -3, -1, -2, -3, -1, -2, -3, -1,
+                      -2, -4, -2, -1, -3, -2, -1, -2],
+    },
+}
+
+
+def _monte_carlo_pnl(daily_pnl: pd.Series, n_sims: int, n_days: int,
+                     method: str, seed: int) -> dict[str, Any]:
+    """Bootstrap หรือสุ่ม normal จาก Daily P&L จริงของ baseline เพื่อทำ fan chart"""
+    r = pd.Series(daily_pnl, dtype=float).replace([np.inf, -np.inf], np.nan).dropna().to_numpy()
+    if len(r) < 10:
+        return {}
+    rng = np.random.default_rng(int(seed))
+    n_sims, n_days = int(n_sims), int(n_days)
+    if method == "bootstrap":
+        idx = rng.integers(0, len(r), size=(n_sims, n_days))
+        sims = r[idx]
+    else:
+        mu, sigma = float(r.mean()), float(r.std())
+        sims = rng.normal(mu, sigma, size=(n_sims, n_days))
+    cum = np.cumsum(sims, axis=1)
+    percentiles = {p: np.percentile(cum, p, axis=0) for p in (5, 25, 50, 75, 95)}
+    final = cum[:, -1]
+    return {
+        "percentiles": percentiles,
+        "final_dist": final,
+        "prob_loss_pct": float((final < 0).mean() * 100),
+        "var95_final": float(max(0.0, -np.percentile(final, 5))),
+        "expected_final": float(final.mean()),
+        "best_final": float(final.max()),
+        "worst_final": float(final.min()),
+        "n_days": n_days,
+        "n_sims": n_sims,
+    }
+
+
+def _render_monte_carlo(cfg: dict[str, Any], data: pd.DataFrame,
+                        bt_baseline: Optional[pd.DataFrame]) -> None:
+    with st.expander("🎲 Monte Carlo P&L Simulator", expanded=False):
+        st.caption(
+            "Bootstrap/สุ่ม resample จาก Daily P&L จริงของ baseline backtest "
+            "เพื่อดูช่วงความน่าจะเป็นของกำไรในอนาคต — ไม่ใช่การพยากรณ์ราคา"
+        )
+        bt = bt_baseline if bt_baseline is not None else _backtest_frame(cfg, data)
+        c1, c2, c3, c4 = st.columns(4)
+        n_sims = c1.number_input("จำนวนรอบจำลอง", value=1000, min_value=100,
+                                 max_value=5000, step=100, key="mc_nsims")
+        n_days = c2.number_input("จำนวนวันข้างหน้า", value=90, min_value=10,
+                                 max_value=365, step=10, key="mc_ndays")
+        method = c3.selectbox(
+            "วิธีสุ่ม", ["bootstrap", "normal"],
+            format_func=lambda x: "Bootstrap (จากข้อมูลจริง)" if x == "bootstrap"
+                                  else "Normal Distribution (GBM-like)",
+            key="mc_method")
+        seed = c4.number_input("Seed", value=7, step=1, key="mc_seed")
+
+        if st.button("🎲 Run Monte Carlo", key="mc_run", **WIDE):
+            st.session_state["mc_result"] = _monte_carlo_pnl(
+                bt["Actual_Daily_PnL"], n_sims, n_days, method, seed)
+
+        res = st.session_state.get("mc_result")
+        if res:
+            k = st.columns(4)
+            metric_card(k[0], "Expected P&L (คาดหวัง)",
+                       fmt_baht(res["expected_final"], True), res["expected_final"])
+            metric_card(k[1], f"VaR 95% ({res['n_days']} วัน)",
+                       fmt_baht(res["var95_final"]), -abs(res["var95_final"]))
+            metric_card(k[2], "โอกาสขาดทุน", f"{res['prob_loss_pct']:.1f}%",
+                       -1 if res["prob_loss_pct"] > 50 else 0)
+            metric_card(k[3], "Best / Worst Case",
+                       f"{fmt_baht(res['best_final'], True)} / {fmt_baht(res['worst_final'], True)}")
+
+            x = list(range(1, res["n_days"] + 1))
+            pct = res["percentiles"]
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=x + x[::-1], y=list(pct[95]) + list(pct[5])[::-1],
+                fill="toself", fillcolor="rgba(14,203,129,0.10)",
+                line=dict(width=0), name="P5–P95", hoverinfo="skip"))
+            fig.add_trace(go.Scatter(
+                x=x + x[::-1], y=list(pct[75]) + list(pct[25])[::-1],
+                fill="toself", fillcolor="rgba(14,203,129,0.22)",
+                line=dict(width=0), name="P25–P75", hoverinfo="skip"))
+            fig.add_trace(go.Scatter(
+                x=x, y=pct[50], line=dict(color="#0ecb81", width=2.5), name="Median (P50)"))
+            fig.add_hline(y=0, line=dict(color="#848e9c", dash="dot"))
+            fig.update_layout(
+                template="plotly_dark", height=440, hovermode="x unified",
+                margin=dict(t=30, b=20), yaxis_title="Cumulative P&L (THB)",
+                xaxis_title="วันข้างหน้า", paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                legend=dict(orientation="h", y=1.02, yanchor="bottom"))
+            st.plotly_chart(fig, **WIDE)
+
+            fig_h = go.Figure(go.Histogram(x=res["final_dist"], nbinsx=50,
+                                          marker_color="#0ecb81", opacity=0.8))
+            fig_h.add_vline(x=0, line=dict(color="#f6465d", dash="dash"))
+            fig_h.update_layout(
+                template="plotly_dark", height=280, margin=dict(t=20, b=20),
+                title=dict(text=f"การกระจายตัวของ P&L ที่วันที่ {res['n_days']}", font=dict(size=13)),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+            st.plotly_chart(fig_h, **WIDE)
+
+
+def _render_crisis_replay(cfg: dict[str, Any], data: pd.DataFrame,
+                          bt_baseline: Optional[pd.DataFrame]) -> None:
+    with st.expander("🔥 Historical Crisis Replay", expanded=False):
+        st.caption(
+            "จำลองราคาช่วงต้นของ backtest ให้เคลื่อนไหวตาม pattern เหตุการณ์วิกฤติจริงในอดีต "
+            "(ค่าประมาณทิศทาง/ขนาดความรุนแรง ไม่ใช่ราคาย้อนหลังที่แม่นยำ 100%)"
+        )
+        names = list(CRISIS_PRESETS.keys())
+        pick = st.selectbox("เลือกเหตุการณ์", names, key="crisis_pick")
+        preset = CRISIS_PRESETS[pick]
+        st.caption(f"📌 {preset['desc']}")
+        path = preset["daily_pct"]
+        cum_total = (float(np.prod([1 + p / 100 for p in path])) - 1) * 100
+        st.caption(f"ระยะเวลา {len(path)} วัน · ผลรวมราคาโดยประมาณ {cum_total:+.1f}%")
+
+        if st.button("🔥 Run Crisis Replay", key="crisis_run", **WIDE):
+            st.session_state["crisis_result"] = _scenario_result(
+                cfg, data, shock_path=np.array(path, dtype=float))
+            st.session_state["crisis_name"] = pick
+
+        cr = st.session_state.get("crisis_result")
+        if cr:
+            base = _backtest_metrics(bt_baseline if bt_baseline is not None else _backtest_frame(cfg, data))
+            st.markdown(f"**ผลลัพธ์: {st.session_state.get('crisis_name', '')}**")
+            st.dataframe(pd.DataFrame([
+                {"Metric": "Net P&L", "Baseline": base["net_pnl"], "Crisis": cr["net_pnl"],
+                 "Δ": cr["net_pnl"] - base["net_pnl"]},
+                {"Metric": "Max Drawdown", "Baseline": base["max_drawdown"], "Crisis": cr["max_drawdown"],
+                 "Δ": cr["max_drawdown"] - base["max_drawdown"]},
+                {"Metric": "Sharpe", "Baseline": base["sharpe"], "Crisis": cr["sharpe"],
+                 "Δ": cr["sharpe"] - base["sharpe"]},
+                {"Metric": "Sortino", "Baseline": base["sortino"], "Crisis": cr["sortino"],
+                 "Δ": cr["sortino"] - base["sortino"]},
+                {"Metric": "FX Limit Hit (days)", "Baseline": base["fx_hit_days"], "Crisis": cr["fx_hit_days"],
+                 "Δ": cr["fx_hit_days"] - base["fx_hit_days"]},
+            ]), **WIDE)
+
+            n_show = len(path) + 5
+            fig = go.Figure(go.Scatter(
+                x=cr["frame"].index[:n_show], y=cr["frame"]["Global_USD"].iloc[:n_show],
+                line=dict(color="#f6465d", width=2), name="ราคาช่วง Crisis"))
+            fig.update_layout(
+                template="plotly_dark", height=280, margin=dict(t=20, b=20),
+                title=dict(text="ราคาสินทรัพย์ช่วงเกิด Crisis (Simulated)", font=dict(size=13)),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+            st.plotly_chart(fig, **WIDE)
+
+
+def _hedge_strategy_variants(cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    taker = cfg["hedge_fee_taker"]
+    maker = cfg["hedge_fee_maker"]
+    return {
+        "100% Taker (Instant Hedge)": dict(hedge_fee=taker, lag_days=0, lag_mult=0.0),
+        "70% Maker / 30% Taker": dict(hedge_fee=blend_hedge_fee(taker, maker, 0.7), lag_days=0, lag_mult=0.0),
+        "Delayed Hedge (lag 1 วัน)": dict(hedge_fee=taker, lag_days=1, lag_mult=1.0),
+        "Delayed Hedge (lag 3 วัน)": dict(hedge_fee=taker, lag_days=3, lag_mult=1.0),
+    }
+
+
+def _backtest_frame_hedge_variant(cfg: dict[str, Any], data: pd.DataFrame,
+                                  variant: dict[str, Any]) -> pd.DataFrame:
+    """สร้าง backtest ตาม hedge strategy variant; Delayed Hedge ประมาณต้นทุนจาก
+    adverse price move ระหว่างช่วงที่ยังไม่ได้ hedge (ยิ่ง lag นาน ยิ่งเสี่ยงราคาขยับสวนทาง)"""
+    c2 = dict(cfg)
+    c2["hedge_fee"] = variant["hedge_fee"]
+    bt = _backtest_frame(c2, data)
+    lag, mult = int(variant.get("lag_days", 0)), float(variant.get("lag_mult", 0.0))
+    if lag > 0 and mult > 0:
+        adverse_move = bt["Global_USD"].pct_change(periods=lag).abs().fillna(0.0)
+        extra_cost = float(c2["trade_vol"]) * adverse_move * bt["USDTHB"] * mult
+        bt["Cost_THB"] = bt["Cost_THB"] + extra_cost
+        bt["Daily_PnL_THB"] = bt["Revenue_THB"] - bt["Cost_THB"]
+        bt["Actual_Daily_PnL"] = np.where(bt["Trade_Allowed"] == 1, bt["Daily_PnL_THB"], 0.0)
+        bt["Actual_Cum_PnL"] = bt["Actual_Daily_PnL"].cumsum()
+    return bt
+
+
+def _render_hedge_comparator(cfg: dict[str, Any], data: pd.DataFrame) -> None:
+    with st.expander("⚖️ Hedge Strategy Comparator", expanded=False):
+        st.caption(
+            "เทียบผลลัพธ์ของกลยุทธ์ Hedge หลายแบบบนข้อมูลราคาชุดเดียวกัน · "
+            "Delayed Hedge เป็นแบบจำลองประมาณต้นทุนจาก adverse price move "
+            "ระหว่างที่ยังไม่ได้ hedge ไม่ใช่การจำลอง order book จริง"
+        )
+        variants = _hedge_strategy_variants(cfg)
+        chosen = st.multiselect("เลือกกลยุทธ์ที่จะเทียบ", list(variants.keys()),
+                                default=list(variants.keys()), key="hc_pick")
+        if st.button("⚖️ Run Comparison", key="hc_run", **WIDE):
+            results = {}
+            for name in chosen:
+                bt_v = _backtest_frame_hedge_variant(cfg, data, variants[name])
+                m = _backtest_metrics(bt_v)
+                m["frame"] = bt_v
+                results[name] = m
+            st.session_state["hc_results"] = results
+
+        res = st.session_state.get("hc_results")
+        if res:
+            rows = [{"กลยุทธ์": k, "Net P&L": v["net_pnl"], "Total Cost": v["cost"],
+                    "Max DD": v["max_drawdown"], "Sharpe": v["sharpe"], "Sortino": v["sortino"]}
+                    for k, v in res.items()]
+            st.dataframe(pd.DataFrame(rows).sort_values("Net P&L", ascending=False), **WIDE)
+
+            colors = ["#0ecb81", "#3B82F6", "#fcd535", "#f6465d", "#9945FF"]
+            fig = go.Figure()
+            for i, (name, v) in enumerate(res.items()):
+                fig.add_trace(go.Scatter(
+                    x=v["frame"].index, y=v["frame"]["Actual_Cum_PnL"],
+                    name=name, line=dict(color=colors[i % len(colors)], width=2)))
+            fig.update_layout(
+                template="plotly_dark", height=440, hovermode="x unified",
+                margin=dict(t=30, b=20), yaxis_title="Cumulative P&L (THB)",
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                legend=dict(orientation="h", y=1.02, yanchor="bottom"))
+            st.plotly_chart(fig, **WIDE)
+
+
 def _phase2_excel_bytes(frames: dict[str, pd.DataFrame], summary: pd.DataFrame) -> bytes:
     from openpyxl import Workbook
     from openpyxl.utils.dataframe import dataframe_to_rows
@@ -2884,6 +3132,10 @@ def render_phase2_tools(cfg: dict[str, Any], data: pd.DataFrame, bt_baseline: Op
                 {"Metric":"Sortino", "Baseline":base["sortino"], "Stress":sr["sortino"], "Δ":sr["sortino"]-base["sortino"]},
                 {"Metric":"FX Limit Hit (days)", "Baseline":base["fx_hit_days"], "Stress":sr["fx_hit_days"], "Δ":sr["fx_hit_days"]-base["fx_hit_days"]},
             ]), **WIDE)
+
+    _render_monte_carlo(cfg, data, bt_baseline)
+    _render_crisis_replay(cfg, data, bt_baseline)
+    _render_hedge_comparator(cfg, data)
 
     with st.expander("🆚 Compare Config A / B", expanded=False):
         saved = st.session_state.setdefault("p2_configs", {})
@@ -4276,6 +4528,20 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                             f"{k} {norm_w[k] * 100:.0f}%" for k in ret_df.columns)
                         if price_map:
                             portfolio_price_frame = next(iter(price_map.values()))
+
+                        if len(ret_df.columns) >= 2:
+                            section("🔥 Correlation Heatmap (Daily Returns)")
+                            corr = ret_df.corr()
+                            fig_corr = go.Figure(go.Heatmap(
+                                z=corr.values, x=list(corr.columns), y=list(corr.columns),
+                                colorscale=[[0, "#f6465d"], [0.5, "#181a20"], [1, "#0ecb81"]],
+                                zmin=-1, zmax=1, texttemplate="%{z:.2f}", textfont={"size": 11},
+                            ))
+                            fig_corr.update_layout(
+                                template="plotly_dark", height=380, margin=dict(t=20, b=20),
+                                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                            st.plotly_chart(fig_corr, **WIDE)
+                            st.caption("ยิ่งใกล้ +1 = เคลื่อนไหวไปทางเดียวกันมาก (กระจายความเสี่ยงได้น้อย) · ใกล้ -1 = สวนทางกัน (ช่วยลดความเสี่ยงพอร์ตได้ดี)")
 
     if rp is None:
         return
