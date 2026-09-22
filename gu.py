@@ -3112,7 +3112,9 @@ def _phase2_pdf_bytes(title: str, summary: pd.DataFrame) -> bytes:
     story.append(t); doc.build(story); return out.getvalue()
 
 
-def render_phase2_tools(cfg: dict[str, Any], data: pd.DataFrame, bt_baseline: Optional[pd.DataFrame] = None) -> None:
+def render_phase2_tools_top(cfg: dict[str, Any], data: pd.DataFrame,
+                            bt_baseline: Optional[pd.DataFrame] = None) -> None:
+    """เครื่องมือที่โชว์เร็ว ต่อจาก Performance Summary — Stress / Monte Carlo / Crisis / Hedge"""
     if data.empty:
         return
     with st.expander("🧪 Phase 2 — Scenario / Stress Test", expanded=False):
@@ -3137,6 +3139,12 @@ def render_phase2_tools(cfg: dict[str, Any], data: pd.DataFrame, bt_baseline: Op
     _render_crisis_replay(cfg, data, bt_baseline)
     _render_hedge_comparator(cfg, data)
 
+
+def render_phase2_tools_bottom(cfg: dict[str, Any], data: pd.DataFrame,
+                               bt_baseline: Optional[pd.DataFrame] = None) -> None:
+    """เครื่องมือที่ควรอยู่ท้ายหน้า ต่อจาก P&L รายเดือน / Daily Ledger"""
+    if data.empty:
+        return
     with st.expander("🆚 Compare Config A / B", expanded=False):
         saved = st.session_state.setdefault("p2_configs", {})
         name = st.text_input("ชื่อ Config ที่ต้องการบันทึก", value="Config A", key="p2_cfg_name")
@@ -3362,7 +3370,7 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     metric_card(r4[0], "Sharpe Ratio", f"{sharpe:.2f}", sharpe, "annualized จาก Daily P&L")
     metric_card(r4[1], "Sortino Ratio", f"{sortino:.2f}", sortino, "annualized; downside deviation")
 
-    render_phase2_tools(cfg, data, bt_baseline=bt)
+    render_phase2_tools_top(cfg, data, bt_baseline=bt)
 
     # ---- Waterfall ----
     section("💧 Revenue & Cost Waterfall")
@@ -3455,6 +3463,8 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
         preview = bt[cols].sort_index(ascending=False).head(100)
         st.dataframe(preview, height=400, **WIDE)
+
+    render_phase2_tools_bottom(cfg, data, bt_baseline=bt)
 
 
 # ---- 5.3 TAB 2 — LIQUIDITY & CAPITAL PLANNER ---------------------------
