@@ -1863,9 +1863,9 @@ def role_at_least(role: str, min_role: str) -> bool:
 
 def default_role_for_new_user(email: str, existing_profiles: Mapping[str, dict]) -> str:
     email = str(email or "").strip().lower()
+    # Public Google login: only explicitly configured admin_emails get Admin.
+    # Never promote the first/only user to Admin automatically.
     if email in _admin_bootstrap_emails():
-        return ROLE_ADMIN
-    if not existing_profiles:
         return ROLE_ADMIN
     return ROLE_VIEWER
 
