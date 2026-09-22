@@ -5571,36 +5571,29 @@ def require_login() -> bool:
         st.markdown(THEME_CSS, unsafe_allow_html=True)
         st.markdown("""
         <style>
-            .login-wrap {
-                display:flex; justify-content:center; align-items:center;
-                min-height:82vh; padding: 20px;
-            }
-            .login-card {
-                max-width: 460px; width:100%;
-                background: linear-gradient(160deg, #14161a 0%, #181a20 55%, #1e2329 100%);
-                border: 1px solid #2b3139; border-radius: 18px;
-                padding: 44px 40px 36px;
-                box-shadow: 0 20px 60px rgba(0,0,0,0.45);
-                text-align: center;
+            .block-container { padding-top: 1.2rem !important; }
+            [data-testid="stHorizontalBlock"] { align-items: center; }
+
+            .login-brand {
+                padding: 20px 28px;
             }
             .login-icon {
-                width: 74px; height: 74px; margin: 0 auto 18px;
+                width: 64px; height: 64px; margin-bottom: 16px;
                 display:flex; align-items:center; justify-content:center;
-                font-size: 2.2rem; border-radius: 20px;
+                font-size: 2rem; border-radius: 18px;
                 background: linear-gradient(135deg, #0ecb81 0%, #0a9c63 100%);
                 box-shadow: 0 8px 24px rgba(14,203,129,0.35);
             }
             .login-title {
-                font-size: 1.65rem; font-weight: 800; color:#EAECEF;
+                font-size: 1.6rem; font-weight: 800; color:#EAECEF;
                 letter-spacing: -0.5px; margin-bottom: 6px;
             }
             .login-sub {
-                color:#848e9c; font-size: 0.88rem; margin-bottom: 26px;
+                color:#848e9c; font-size: 0.85rem; margin-bottom: 22px;
                 line-height:1.5;
             }
             .login-feats {
                 display:flex; flex-direction:column; gap:10px;
-                text-align:left; margin-bottom: 28px;
             }
             .login-feat {
                 display:flex; align-items:center; gap:10px;
@@ -5609,6 +5602,19 @@ def require_login() -> bool:
                 padding: 10px 14px; font-size: 0.82rem; color:#b7bdc6;
             }
             .login-feat .ico { font-size: 1rem; }
+
+            .login-card {
+                background: linear-gradient(160deg, #14161a 0%, #181a20 55%, #1e2329 100%);
+                border: 1px solid #2b3139; border-radius: 18px;
+                padding: 32px 28px; box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+            }
+            .login-or {
+                text-align:center; color:#5e6673; font-size:.75rem; margin:12px 0;
+            }
+            .login-foot {
+                text-align:center; margin-top:18px; font-size:.7rem; color:#5e6673;
+            }
+
             .st-key-login_google button {
                 width: 100% !important; height: 48px !important;
                 background: #ffffff !important; color:#1a1a1a !important;
@@ -5621,42 +5627,59 @@ def require_login() -> bool:
                 transform: translateY(-1px) !important;
                 box-shadow: 0 6px 20px rgba(255,255,255,0.25) !important;
             }
-            .login-foot {
-                margin-top: 22px; font-size: 0.7rem; color:#5e6673;
+            .st-key-login_guest button {
+                width: 100% !important; height: 44px !important;
+                border-radius: 10px !important;
+            }
+
+            @media (max-width: 900px) {
+                .login-brand { padding: 12px 8px; }
+                .login-card { padding: 24px 20px; }
             }
         </style>
-        <div class="login-wrap">
-          <div class="login-card">
-            <div class="login-icon">♻️</div>
-            <div class="login-title">XSpring Dealer Suite</div>
-            <div class="login-sub">
-              ระบบจำลองและวางแผนสภาพคล่องสำหรับ Dealer คริปโท<br>
-              ล็อกอินเพื่อเข้าใช้งาน Backtest, Liquidity Planner และ Exchange Simulator
-            </div>
-            <div class="login-feats">
-              <div class="login-feat"><span class="ico">📊</span> Backtest ย้อนหลังสูงสุด 5 ปี พร้อมวิเคราะห์ P&L</div>
-              <div class="login-feat"><span class="ico">🧮</span> วางแผนเงินกองทุนและสภาพคล่องตามเกณฑ์ ก.ล.ต.</div>
-              <div class="login-feat"><span class="ico">🛒</span> จำลองหน้าเทรดจริงพร้อมระบบ Hedge อัตโนมัติ</div>
-            </div>
         """, unsafe_allow_html=True)
-        st.button("🔐  Continue with Google", key="login_google", on_click=st.login,
-                  use_container_width=True)
-        st.markdown(
-            '<div style="margin:10px 0;color:#5e6673;font-size:.75rem;">หรือ</div>',
-            unsafe_allow_html=True,
-        )
-        st.button(
-            "👤 ทดลองใช้แบบ Guest (ไม่ต้องล็อกอิน)",
-            key="login_guest",
-            on_click=_start_guest_session,
-            use_container_width=True,
-        )
-        st.caption("โหมด Guest: ข้อมูลทั้งหมดจะหายทันทีเมื่อออกจากระบบ และไม่ถูกบันทึกไว้ที่ไหน")
-        st.markdown(f"""
-            <div class="login-foot">XSpring Dealer Suite · Model v{MODEL_VERSION}</div>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
+
+        col_l, col_r = st.columns([1.1, 1], gap="large")
+
+        with col_l:
+            st.markdown("""
+            <div class="login-brand">
+              <div class="login-icon">♻️</div>
+              <div class="login-title">XSpring Dealer Suite</div>
+              <div class="login-sub">
+                ระบบจำลองและวางแผนสภาพคล่องสำหรับ Dealer คริปโท<br>
+                ล็อกอินเพื่อเข้าใช้งาน Backtest, Liquidity Planner และ Exchange Simulator
+              </div>
+              <div class="login-feats">
+                <div class="login-feat"><span class="ico">📊</span> Backtest ย้อนหลังสูงสุด 5 ปี พร้อมวิเคราะห์ P&L</div>
+                <div class="login-feat"><span class="ico">🧮</span> วางแผนเงินกองทุนและสภาพคล่องตามเกณฑ์ ก.ล.ต.</div>
+                <div class="login-feat"><span class="ico">🛒</span> จำลองหน้าเทรดจริงพร้อมระบบ Hedge อัตโนมัติ</div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col_r:
+            st.markdown('<div class="login-card">', unsafe_allow_html=True)
+            st.button(
+                "🔐  Continue with Google",
+                key="login_google",
+                on_click=st.login,
+                use_container_width=True,
+            )
+            st.markdown('<div class="login-or">หรือ</div>', unsafe_allow_html=True)
+            st.button(
+                "👤 ทดลองใช้แบบ Guest (ไม่ต้องล็อกอิน)",
+                key="login_guest",
+                on_click=_start_guest_session,
+                use_container_width=True,
+            )
+            st.caption("โหมด Guest: ข้อมูลทั้งหมดจะหายทันทีเมื่อออกจากระบบ และไม่ถูกบันทึกไว้ที่ไหน")
+            st.markdown(
+                f'<div class="login-foot">XSpring Dealer Suite · Model v{MODEL_VERSION}</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
         st.stop()
 
     allowed = _allowed_email()
