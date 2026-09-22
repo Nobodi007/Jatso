@@ -5571,87 +5571,119 @@ def require_login() -> bool:
         st.markdown(THEME_CSS, unsafe_allow_html=True)
         st.markdown("""
         <style>
-            .block-container { padding-top: 1.2rem !important; }
+            .block-container { padding-top: 2.4rem !important; }
             [data-testid="stHorizontalBlock"] { align-items: center; }
+            body { background: radial-gradient(ellipse at 20% 20%, rgba(14,203,129,0.05), transparent 55%); }
 
-            .login-brand {
-                padding: 20px 28px;
-            }
+            /* ---- ฝั่งซ้าย: แบรนด์ ---- */
+            .login-brand { padding: 12px 32px 12px 8px; }
             .login-icon {
-                width: 64px; height: 64px; margin-bottom: 16px;
+                width: 68px; height: 68px; margin-bottom: 22px;
                 display:flex; align-items:center; justify-content:center;
-                font-size: 2rem; border-radius: 18px;
+                font-size: 2.1rem; border-radius: 20px;
                 background: linear-gradient(135deg, #0ecb81 0%, #0a9c63 100%);
-                box-shadow: 0 8px 24px rgba(14,203,129,0.35);
+                box-shadow: 0 0 0 1px rgba(14,203,129,0.25),
+                            0 12px 34px rgba(14,203,129,0.30),
+                            0 0 60px rgba(14,203,129,0.15);
+            }
+            .login-kicker {
+                display:inline-block; font-size:.68rem; font-weight:700;
+                letter-spacing:.14em; color:#0ecb81; text-transform:uppercase;
+                background:rgba(14,203,129,.08); border:1px solid rgba(14,203,129,.25);
+                border-radius:20px; padding:4px 12px; margin-bottom:14px;
             }
             .login-title {
-                font-size: 1.6rem; font-weight: 800; color:#EAECEF;
-                letter-spacing: -0.5px; margin-bottom: 6px;
+                font-size: 2.1rem; font-weight: 800; color:#EAECEF;
+                letter-spacing: -0.8px; line-height:1.15; margin-bottom: 12px;
             }
-            .login-sub {
-                color:#848e9c; font-size: 0.85rem; margin-bottom: 22px;
-                line-height:1.5;
-            }
-            .login-feats {
-                display:flex; flex-direction:column; gap:10px;
-            }
+            .login-title span { color:#0ecb81; }
+            .login-sub { color:#848e9c; font-size: 0.92rem; margin-bottom: 30px; line-height:1.6; max-width: 420px; }
+            .login-feats { display:flex; flex-direction:column; gap:10px; max-width: 440px; }
             .login-feat {
-                display:flex; align-items:center; gap:10px;
-                background: rgba(255,255,255,0.03);
-                border: 1px solid #2b3139; border-radius: 10px;
-                padding: 10px 14px; font-size: 0.82rem; color:#b7bdc6;
+                display:flex; align-items:center; gap:12px;
+                background: rgba(255,255,255,0.025);
+                border: 1px solid #23262d; border-radius: 12px;
+                padding: 12px 16px; font-size: 0.85rem; color:#c4cad3;
+                transition: border-color .15s ease, transform .15s ease;
             }
-            .login-feat .ico { font-size: 1rem; }
+            .login-feat:hover { border-color:#0ecb81; transform: translateX(3px); }
+            .login-feat .ico {
+                width:30px; height:30px; min-width:30px; border-radius:9px;
+                display:flex; align-items:center; justify-content:center;
+                font-size:.95rem; background:rgba(14,203,129,.1);
+            }
 
-            .login-card {
-                background: linear-gradient(160deg, #14161a 0%, #181a20 55%, #1e2329 100%);
-                border: 1px solid #2b3139; border-radius: 18px;
-                padding: 32px 28px; box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+            /* ---- ฝั่งขวา: การ์ดล็อกอิน (ห่อ container จริง) ---- */
+            .st-key-login_card_box {
+                background: linear-gradient(165deg, #15171c 0%, #191c22 55%, #1d2129 100%);
+                border: 1px solid #262a32; border-radius: 20px;
+                padding: 34px 30px 26px; max-width: 420px;
+                box-shadow: 0 0 0 1px rgba(255,255,255,0.02) inset,
+                            0 24px 70px rgba(0,0,0,0.55);
+                position: relative; overflow: hidden;
             }
+            .st-key-login_card_box::before {
+                content:""; position:absolute; top:-40%; right:-30%;
+                width:220px; height:220px; border-radius:50%;
+                background: radial-gradient(circle, rgba(14,203,129,0.16), transparent 70%);
+                pointer-events:none;
+            }
+            .login-card-head { font-size:1rem; font-weight:700; color:#EAECEF; margin-bottom:4px; }
+            .login-card-sub { font-size:.78rem; color:#5e6673; margin-bottom:20px; }
             .login-or {
-                text-align:center; color:#5e6673; font-size:.75rem; margin:12px 0;
+                display:flex; align-items:center; gap:12px;
+                color:#4a4f57; font-size:.72rem; margin:16px 0; text-transform:uppercase; letter-spacing:.08em;
             }
-            .login-foot {
-                text-align:center; margin-top:18px; font-size:.7rem; color:#5e6673;
-            }
+            .login-or::before, .login-or::after { content:""; flex:1; height:1px; background:#262a32; }
+            .login-foot { text-align:center; margin-top: 20px; font-size: 0.68rem; color:#454a52; }
 
             .st-key-login_google button {
-                width: 100% !important; height: 48px !important;
-                background: #ffffff !important; color:#1a1a1a !important;
-                border: none !important; border-radius: 10px !important;
+                width: 100% !important; height: 50px !important;
+                background: #ffffff !important; color:#14161a !important;
+                border: none !important; border-radius: 12px !important;
                 font-weight: 700 !important; font-size: 0.95rem !important;
-                box-shadow: 0 4px 14px rgba(255,255,255,0.15) !important;
+                box-shadow: 0 6px 18px rgba(255,255,255,0.12) !important;
                 transition: transform .15s ease, box-shadow .15s ease !important;
             }
             .st-key-login_google button:hover {
                 transform: translateY(-1px) !important;
-                box-shadow: 0 6px 20px rgba(255,255,255,0.25) !important;
+                box-shadow: 0 10px 26px rgba(255,255,255,0.22) !important;
             }
             .st-key-login_guest button {
-                width: 100% !important; height: 44px !important;
-                border-radius: 10px !important;
+                width: 100% !important; height: 46px !important;
+                background: transparent !important; color:#c4cad3 !important;
+                border: 1px solid #2b3139 !important; border-radius: 12px !important;
+                font-weight: 600 !important; font-size: .88rem !important;
+                transition: border-color .15s ease, color .15s ease !important;
+            }
+            .st-key-login_guest button:hover {
+                border-color:#0ecb81 !important; color:#0ecb81 !important;
             }
 
             @media (max-width: 900px) {
+                .block-container { padding-top: 1.2rem !important; }
                 .login-brand { padding: 12px 8px; }
-                .login-card { padding: 24px 20px; }
+                .st-key-login_card_box { padding: 24px 20px 20px; max-width: none; }
+                .login-title { font-size: 1.7rem; }
+                .login-sub { margin-bottom: 20px; }
             }
         </style>
         """, unsafe_allow_html=True)
 
-        col_l, col_r = st.columns([1.1, 1], gap="large")
+        col_l, col_r = st.columns([1.15, 1], gap="large")
 
         with col_l:
-            st.markdown("""
+            st.markdown(f"""
             <div class="login-brand">
               <div class="login-icon">♻️</div>
-              <div class="login-title">XSpring Dealer Suite</div>
+              <div class="login-kicker">Crypto Dealer OS</div>
+              <div class="login-title">XSpring <span>Dealer Suite</span></div>
               <div class="login-sub">
-                ระบบจำลองและวางแผนสภาพคล่องสำหรับ Dealer คริปโท<br>
+                ระบบจำลองและวางแผนสภาพคล่องสำหรับ Dealer คริปโท —
                 ล็อกอินเพื่อเข้าใช้งาน Backtest, Liquidity Planner และ Exchange Simulator
               </div>
               <div class="login-feats">
-                <div class="login-feat"><span class="ico">📊</span> Backtest ย้อนหลังสูงสุด 5 ปี พร้อมวิเคราะห์ P&L</div>
+                <div class="login-feat"><span class="ico">📊</span> Backtest ย้อนหลังสูงสุด 5 ปี พร้อมวิเคราะห์ P&amp;L</div>
                 <div class="login-feat"><span class="ico">🧮</span> วางแผนเงินกองทุนและสภาพคล่องตามเกณฑ์ ก.ล.ต.</div>
                 <div class="login-feat"><span class="ico">🛒</span> จำลองหน้าเทรดจริงพร้อมระบบ Hedge อัตโนมัติ</div>
               </div>
@@ -5659,26 +5691,30 @@ def require_login() -> bool:
             """, unsafe_allow_html=True)
 
         with col_r:
-            st.markdown('<div class="login-card">', unsafe_allow_html=True)
-            st.button(
-                "🔐  Continue with Google",
-                key="login_google",
-                on_click=st.login,
-                use_container_width=True,
-            )
-            st.markdown('<div class="login-or">หรือ</div>', unsafe_allow_html=True)
-            st.button(
-                "👤 ทดลองใช้แบบ Guest (ไม่ต้องล็อกอิน)",
-                key="login_guest",
-                on_click=_start_guest_session,
-                use_container_width=True,
-            )
-            st.caption("โหมด Guest: ข้อมูลทั้งหมดจะหายทันทีเมื่อออกจากระบบ และไม่ถูกบันทึกไว้ที่ไหน")
-            st.markdown(
-                f'<div class="login-foot">XSpring Dealer Suite · Model v{MODEL_VERSION}</div>'
-                '</div>',
-                unsafe_allow_html=True,
-            )
+            with st.container(key="login_card_box"):
+                st.markdown(
+                    '<div class="login-card-head">เข้าสู่ระบบ</div>'
+                    '<div class="login-card-sub">เลือกวิธีเข้าใช้งานด้านล่าง</div>',
+                    unsafe_allow_html=True,
+                )
+                st.button(
+                    "🔐  Continue with Google",
+                    key="login_google",
+                    on_click=st.login,
+                    use_container_width=True,
+                )
+                st.markdown('<div class="login-or">หรือ</div>', unsafe_allow_html=True)
+                st.button(
+                    "👤 ทดลองใช้แบบ Guest (ไม่ต้องล็อกอิน)",
+                    key="login_guest",
+                    on_click=_start_guest_session,
+                    use_container_width=True,
+                )
+                st.caption("โหมด Guest: ข้อมูลทั้งหมดจะหายทันทีเมื่อออกจากระบบ และไม่ถูกบันทึกไว้ที่ไหน")
+                st.markdown(
+                    f'<div class="login-foot">XSpring Dealer Suite · Model v{MODEL_VERSION}</div>',
+                    unsafe_allow_html=True,
+                )
 
         st.stop()
 
