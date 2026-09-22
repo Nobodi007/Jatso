@@ -3182,6 +3182,187 @@ def _phase2_pdf_bytes(title: str, summary: pd.DataFrame) -> bytes:
     story.append(t); doc.build(story); return out.getvalue()
 
 
+
+# =========================================================================
+# PARAMETER OPTIMIZER — Grid / Random Search หา Dealer Spread, Local Premium,
+# Hedge Fee (Maker/Taker Ratio) ที่ให้ผลลัพธ์ดีที่สุดตาม objective ที่เลือก
+# ใช้ _backtest_frame / _backtest_metrics ชุดเดียวกับ Backtest หลัก (Tab 1)
+# =========================================================================
+
+OPT_OBJECTIVES = {
+    "Net P&L (สูงสุด)": lambda m: m["net_pnl"],
+    "Sharpe Ratio (สูงสุด)": lambda m: m["sharpe"],
+    "Sortino Ratio (สูงสุด)": lambda m: m["sortino"],
+    "Net P&L ต่อ Max Drawdown (Calmar-like)": lambda m: (
+        m["net_pnl"] / abs(m["max_drawdown"]) if m["max_drawdown"] != 0 else 0.0
+    ),
+}
+
+
+def _opt_backtest(cfg: dict[str, Any], data: pd.DataFrame,
+                  spread: float, premium: float, maker_ratio: float) -> dict[str, Any]:
+    """รัน backtest 1 ชุดพารามิเตอร์ด้วย engine เดียวกับ Tab 1"""
+    c2 = dict(cfg)
+    c2["dealer_spread"] = spread
+    c2["local_premium"] = premium
+    c2["hedge_fee"] = blend_hedge_fee(cfg["hedge_fee_taker"], cfg["hedge_fee_maker"], maker_ratio)
+    bt = _backtest_frame(c2, data)
+    m = _backtest_metrics(bt)
+    m.update(dealer_spread=spread, local_premium=premium, maker_ratio=maker_ratio)
+    return m
+
+
+def run_param_optimizer(cfg: dict[str, Any], data: pd.DataFrame,
+                        spread_range: tuple[float, float], spread_step: float,
+                        premium_range: tuple[float, float], premium_step: float,
+                        maker_range: tuple[float, float], maker_step: float,
+                        method: str, n_random: int, seed: int,
+                        objective_key: str) -> pd.DataFrame:
+    """หา combo ที่ดีที่สุดด้วย grid หรือ random search — คืน DataFrame เรียงจากดีสุดไปแย่สุด"""
+    obj_fn = OPT_OBJECTIVES[objective_key]
+
+    def _arange(lo, hi, step):
+        n = int(round((hi - lo) / step)) + 1 if step > 0 else 1
+        return [round(lo + i * step, 6) for i in range(max(n, 1))]
+
+    if method == "grid":
+        spreads = _arange(*spread_range, spread_step)
+        premiums = _arange(*premium_range, premium_step)
+        makers = _arange(*maker_range, maker_step)
+        combos = [(s, p, mk) for s in spreads for p in premiums for mk in makers]
+    else:
+        rng = np.random.default_rng(int(seed))
+        combos = list(zip(
+            rng.uniform(spread_range[0], spread_range[1], int(n_random)),
+            rng.uniform(premium_range[0], premium_range[1], int(n_random)),
+            rng.uniform(maker_range[0], maker_range[1], int(n_random)),
+        ))
+
+    rows = []
+    for s, p, mk in combos:
+        m = _opt_backtest(cfg, data, s / 100.0, p / 100.0, mk / 100.0)
+        rows.append({
+            "Dealer Spread (%)": round(s, 4), "Local Premium (%)": round(p, 4),
+            "Maker Ratio (%)": round(mk, 1),
+            "Net P&L": m["net_pnl"], "Sharpe": m["sharpe"], "Sortino": m["sortino"],
+            "Max DD": m["max_drawdown"], "Win Rate %": m["win_rate"],
+            "FX Hit Days": m["fx_hit_days"], "Objective": obj_fn(m),
+        })
+    df = pd.DataFrame(rows).sort_values("Objective", ascending=False).reset_index(drop=True)
+    return df
+
+
+def _apply_best_params(row: pd.Series) -> None:
+    """เขียนค่าที่ดีที่สุดกลับเข้า session_state ของ widget ใน sidebar แล้ว rerun"""
+    st.session_state["bt_spread"] = float(row["Dealer Spread (%)"])
+    st.session_state["bt_local_premium"] = float(row["Local Premium (%)"])
+    st.session_state["bt_maker_ratio"] = int(round(row["Maker Ratio (%)"]))
+    st.rerun()
+
+
+def render_param_optimizer(cfg: dict[str, Any], data: pd.DataFrame) -> None:
+    with st.expander("🎯 Parameter Optimizer — หาค่า Spread/Premium/Hedge ที่ดีที่สุด", expanded=False):
+        if data.empty:
+            st.info("ต้องโหลดข้อมูลราคาก่อนถึงจะรัน Optimizer ได้")
+            return
+        st.caption(
+            "ค้นหา Dealer Spread, Local Premium และสัดส่วน Maker/Taker Hedge ที่ให้ผลลัพธ์ดีที่สุด "
+            "โดยรัน Backtest ซ้ำหลายชุดพารามิเตอร์บนข้อมูลราคาชุดเดียวกับ Tab นี้ — "
+            "ผลลัพธ์คือค่า optimal บน 'ข้อมูลย้อนหลัง' เท่านั้น ไม่รับประกันผลในอนาคต (ระวัง overfitting)"
+        )
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            spread_lo, spread_hi = st.slider("ช่วง Dealer Spread (%)", 0.0, 5.0,
+                                             (0.1, 1.0), 0.05, key="opt_spread_range")
+            spread_step = st.number_input("Step Spread (%)", value=0.1, min_value=0.01,
+                                          step=0.05, key="opt_spread_step")
+        with c2:
+            prem_lo, prem_hi = st.slider("ช่วง Local Premium (%)", -2.0, 2.0,
+                                         (0.0, 0.3), 0.05, key="opt_prem_range")
+            prem_step = st.number_input("Step Premium (%)", value=0.1, min_value=0.01,
+                                        step=0.05, key="opt_prem_step")
+        with c3:
+            maker_lo, maker_hi = st.slider("ช่วง Maker Ratio (%)", 0, 100,
+                                           (0, 100), 10, key="opt_maker_range")
+            maker_step = st.number_input("Step Maker Ratio (%)", value=25.0, min_value=5.0,
+                                         step=5.0, key="opt_maker_step")
+
+        c4, c5, c6 = st.columns(3)
+        method = c4.selectbox("วิธีค้นหา", ["grid", "random"],
+                              format_func=lambda x: "Grid Search (ครบทุกช่อง)" if x == "grid"
+                                                    else "Random Search (สุ่ม)",
+                              key="opt_method")
+        n_random = c5.number_input("จำนวนชุดสุ่ม (ถ้าเลือก Random)", value=200, min_value=20,
+                                   max_value=3000, step=20, key="opt_n_random",
+                                   disabled=(method != "random"))
+        seed = c5.number_input("Seed", value=42, step=1, key="opt_seed",
+                               disabled=(method != "random"))
+        objective_key = c6.selectbox("เป้าหมายที่ต้องการ Optimize", list(OPT_OBJECTIVES.keys()),
+                                     key="opt_objective")
+
+        if method == "grid":
+            n_s = int(round((spread_hi - spread_lo) / spread_step)) + 1
+            n_p = int(round((prem_hi - prem_lo) / prem_step)) + 1
+            n_m = int(round((maker_hi - maker_lo) / maker_step)) + 1
+            total_combo = max(n_s, 1) * max(n_p, 1) * max(n_m, 1)
+            st.caption(f"จำนวนชุดที่จะรันทั้งหมด (Grid): **{total_combo:,} ชุด**"
+                      + (" ⚠️ เยอะมาก อาจใช้เวลานาน" if total_combo > 2000 else ""))
+
+        run_clicked = st.button("🎯 เริ่มค้นหาพารามิเตอร์ที่ดีที่สุด", key="opt_run",
+                                disabled=not can_edit_config(), **WIDE)
+        if run_clicked:
+            with st.spinner("กำลังรัน Backtest หลายชุด…"):
+                st.session_state["opt_result"] = run_param_optimizer(
+                    cfg, data, (spread_lo, spread_hi), spread_step,
+                    (prem_lo, prem_hi), prem_step,
+                    (maker_lo, maker_hi), maker_step,
+                    method, n_random, seed, objective_key)
+
+        res = st.session_state.get("opt_result")
+        if res is None or res.empty:
+            return
+
+        best = res.iloc[0]
+        k = st.columns(4)
+        metric_card(k[0], "Spread ที่ดีที่สุด", f"{best['Dealer Spread (%)']:.3f}%")
+        metric_card(k[1], "Premium ที่ดีที่สุด", f"{best['Local Premium (%)']:.3f}%")
+        metric_card(k[2], "Maker Ratio ที่ดีที่สุด", f"{best['Maker Ratio (%)']:.0f}%")
+        metric_card(k[3], f"{objective_key.split(' (')[0]} ที่ดีที่สุด",
+                   f"{best['Objective']:,.2f}", best["Objective"])
+
+        st.dataframe(res.head(30), height=min(420, 40 + 35 * min(len(res), 30)), **WIDE)
+
+        if can_edit_config():
+            st.button("✅ ใช้ค่าที่ดีที่สุดนี้กับ Backtest หลัก (แถบซ้าย)",
+                     key="opt_apply", on_click=_apply_best_params, args=(best,), **WIDE)
+        else:
+            st.caption("🔒 บัญชี Viewer ไม่สามารถนำค่าไปใช้ได้ — ติดต่อ Admin เพื่อขอสิทธิ์ Trader")
+
+        fig_3d = go.Figure(data=[go.Scatter3d(
+            x=res["Dealer Spread (%)"], y=res["Local Premium (%)"], z=res["Objective"],
+            mode="markers",
+            marker=dict(
+                size=5, color=res["Maker Ratio (%)"], colorscale="Rainbow",
+                opacity=0.85, colorbar=dict(title="Maker %", thickness=12),
+            ),
+            hovertemplate=(
+                "Spread: %{x:.3f}%<br>Premium: %{y:.3f}%<br>Objective: %{z:,.2f}<extra></extra>"
+            ),
+        )])
+        fig_3d.update_layout(
+            title=dict(text="พื้นที่ค้นหาพารามิเตอร์ (3D)", font=dict(size=14)),
+            scene=dict(xaxis_title="Dealer Spread (%)", yaxis_title="Local Premium (%)",
+                      zaxis_title=objective_key.split(" (")[0], bgcolor="#181a20"),
+            template="plotly_dark", height=560, margin=dict(l=0, r=0, b=0, t=40),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(fig_3d, **WIDE)
+
+        with st.expander("ดาวน์โหลดผลลัพธ์ทั้งหมด (CSV)"):
+            st.download_button("⬇️ ผลลัพธ์ Optimizer CSV", to_csv_bytes(res),
+                               "xspring_param_optimizer.csv", "text/csv", **WIDE)
+
 def render_phase2_tools_top(cfg: dict[str, Any], data: pd.DataFrame,
                             bt_baseline: Optional[pd.DataFrame] = None) -> None:
     """เครื่องมือที่โชว์เร็ว ต่อจาก Performance Summary — Stress / Monte Carlo / Crisis / Hedge"""
@@ -3208,6 +3389,7 @@ def render_phase2_tools_top(cfg: dict[str, Any], data: pd.DataFrame,
     _render_monte_carlo(cfg, data, bt_baseline)
     _render_crisis_replay(cfg, data, bt_baseline)
     _render_hedge_comparator(cfg, data)
+    render_param_optimizer(cfg, data)
 
 
 def render_phase2_tools_bottom(cfg: dict[str, Any], data: pd.DataFrame,
