@@ -26,6 +26,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import uuid
+import copy
 import xml.etree.ElementTree as ET
 import html as _html
 from datetime import datetime, timezone
@@ -2070,6 +2071,84 @@ def render_audit_log_sidebar():
 
 
 # =========================================================================
+# UNDO / ROLLBACK ออเดอร์ล่าสุด
+# =========================================================================
+
+UNDO_STACK_MAX = 20
+
+
+def _push_undo_snapshot(sim: dict) -> None:
+    """เก็บ snapshot ก่อน execute_order เพื่อย้อนกลับออเดอร์ของลูกค้าได้"""
+    stack = st.session_state.setdefault("undo_stack", [])
+    stack.append(copy.deepcopy(sim))
+    if len(stack) > UNDO_STACK_MAX:
+        stack.pop(0)
+
+
+def can_undo() -> bool:
+    return bool(st.session_state.get("undo_stack"))
+
+
+def peek_last_order() -> Optional[dict[str, Any]]:
+    """ดูออเดอร์ล่าสุดที่จะถูกยกเลิก ถ้ามี"""
+    orders = st.session_state.get("sim", {}).get("orders", [])
+    return orders[-1] if orders else None
+
+
+def undo_last_order() -> Optional[dict[str, Any]]:
+    """คืน sim กลับไปเป็น snapshot ก่อนออเดอร์ล่าสุด 1 รายการ"""
+    stack = st.session_state.get("undo_stack", [])
+    if not stack:
+        return None
+
+    current_sim = st.session_state.get("sim", {})
+    cur_orders = current_sim.get("orders", [])
+
+    prev_sim = stack.pop()
+    prev_orders = prev_sim.get("orders", [])
+
+    cancelled_order = cur_orders[-1] if len(cur_orders) > len(prev_orders) else None
+
+    st.session_state["sim"] = prev_sim
+    st.session_state["sim_steps"] = []
+    return cancelled_order
+
+
+def _do_undo() -> None:
+    cancelled = undo_last_order()
+    if cancelled:
+        st.session_state["undo_toast"] = cancelled
+    st.rerun(scope="app")
+
+
+def render_undo_button(asset: str) -> None:
+    """แสดงปุ่ม Undo ใต้ order panel เมื่อมีออเดอร์ของลูกค้าให้ย้อนกลับ"""
+    last = peek_last_order()
+    if not can_undo() or last is None:
+        return
+
+    side_th = last.get("ฝั่ง", "?")
+    coin = last.get("เหรียญ", asset)
+    amt = last.get("มูลค่า (บาท)", 0.0)
+    with st.container(border=True):
+        st.caption(f"ออเดอร์ล่าสุด: {side_th} {coin} · {fmt_baht(amt)}")
+        st.button(
+            "↩️ ยกเลิกออเดอร์ล่าสุด (Undo)",
+            key="undo_last_order_btn",
+            on_click=_do_undo,
+            **WIDE,
+        )
+
+    toast = st.session_state.pop("undo_toast", None)
+    if toast:
+        st.toast(
+            f"ยกเลิกออเดอร์ {toast.get('ฝั่ง', '')} {toast.get('เหรียญ', '')} "
+            f"{fmt_baht(toast.get('มูลค่า (บาท)', 0.0))} สำเร็จ",
+            icon="↩️",
+        )
+
+
+# =========================================================================
 # LAYER 5 — APP
 # =========================================================================
 
@@ -3852,6 +3931,7 @@ def _apply_pct(pct_key: str, target_key: str, base: float, kind: str) -> None:
 
 
 def _submit_order(sim, side, amount_thb, data, order_date, ctx) -> None:
+    _push_undo_snapshot(sim)
     steps, _rec = execute_order(sim, side, amount_thb, order_date,
                                 data.loc[order_date], ctx)
     st.session_state.sim_steps = steps
@@ -3886,6 +3966,7 @@ def check_open_orders(sim, quote_buy, quote_sell, data, order_date, ctx) -> None
         if not hit:
             remaining.append(o)
         elif ok:
+            _push_undo_snapshot(sim)
             execute_order(sim, o["side"], amt, order_date, data.loc[order_date], ctx)
         # hit แต่ยอดไม่พอ = ยกเลิกทิ้ง
     sim["open_orders"] = remaining
@@ -4074,6 +4155,8 @@ def render_order_panel(cfg, sim, asset, mid_now, data, current_date_val, ctx) ->
                    f"{o['amount_thb']:,.2f} THB" if o["side"] == "buy"
                    else f"SELL @ {o['px']:,.4f} — {o['qty']:.8f} {asset}")
         c2.button("Cancel", key=f"cx_{o['id']}", on_click=_cancel_limit, args=(o["id"],))
+
+    render_undo_button(asset)
 
 
 def _order_panel_live_body(cfg, sim, asset, mid_now, data, current_date_val, ctx):
