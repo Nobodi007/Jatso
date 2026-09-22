@@ -428,242 +428,6 @@ def nc_snapshot(stock_thb: float, total_capital: float, cex_margin: float,
         "custody_nc": custody_nc,
     }
 
-# =========================================================================
-# MULTI-ASSET PORTFOLIO NC PLANNER — วางแผน NC รวมหลายเหรียญพร้อมกัน
-# เทียบ Haircut แยกรายเหรียญ vs Portfolio ES99 (คำนึงถึง Correlation)
-# =========================================================================
-
-def _portfolio_return_series(frames: dict[str, pd.DataFrame],
-                             weights: dict[str, float]) -> Optional[pd.Series]:
-    """คืน log-return รายวันของพอร์ต ถ่วงน้ำหนักตามสัดส่วนปริมาณธุรกรรมของแต่ละเหรียญ"""
-    if len(frames) < 2:
-        return None
-    ret_map = {
-        a: np.log(df["Global_USD"] / df["Global_USD"].shift(1))
-        for a, df in frames.items()
-    }
-    ret_df = pd.concat(ret_map, axis=1).dropna()
-    if ret_df.empty:
-        return None
-    w = np.array([weights.get(c, 0.0) for c in ret_df.columns])
-    if w.sum() <= 0:
-        return None
-    w = w / w.sum()
-    return (ret_df * w).sum(axis=1)
-
-
-def render_multi_asset_nc_planner(cfg: dict[str, Any]) -> None:
-    with st.expander(
-        "🧺 Multi-Asset Portfolio NC Planner — วางแผน NC รวมหลายเหรียญพร้อมกัน",
-        expanded=False,
-    ):
-        st.caption(
-            "กระจายปริมาณธุรกรรมลูกค้าไปหลายเหรียญ แล้วดูว่า NC รวมทั้งพอร์ตเหลือเท่าไหร่ "
-            "เทียบผลลัพธ์ระหว่างคิด Haircut แยกรายเหรียญ กับคิดจาก Portfolio ES99 ที่คำนึงถึง "
-            "Correlation ระหว่างเหรียญ (สมมติฐาน: CEX Margin ถือเป็น Stablecoin ใช้ Counterparty "
-            "Haircut เดียวกันทุกเหรียญ)"
-        )
-
-        assets_pick = st.multiselect(
-            "เลือกเหรียญในพอร์ต", SUPPORTED_ASSETS,
-            default=["BTC", "ETH", "USDT"], key="pnc_assets")
-        if not assets_pick:
-            st.info("เลือกอย่างน้อย 1 เหรียญ")
-            return
-
-        st.markdown("**ปริมาณธุรกรรมลูกค้าต่อเดือน แยกรายเหรียญ (THB)**")
-        vol_cols = st.columns(min(len(assets_pick), 4))
-        monthly_vol: dict[str, float] = {}
-        for i, a in enumerate(assets_pick):
-            with vol_cols[i % len(vol_cols)]:
-                monthly_vol[a] = comma_number_input(
-                    f"{a}", value=20_000_000, min_value=0, key=f"pnc_vol_{a}")
-
-        total_volume = sum(monthly_vol.values())
-        if total_volume <= 0:
-            st.warning("กรอกปริมาณธุรกรรมอย่างน้อย 1 เหรียญ")
-            return
-
-        run_clicked = st.button("🧺 คำนวณ Portfolio NC", key="pnc_run", **WIDE)
-        if run_clicked:
-            with st.spinner("กำลังโหลดราคาย้อนหลังของทุกเหรียญ…"):
-                frames: dict[str, pd.DataFrame] = {}
-                skipped = []
-                for a in assets_pick:
-                    d, _err = fetch_price_data(a, cfg["start_date"], cfg["end_date"])
-                    if not d.empty:
-                        frames[a] = d
-                    else:
-                        skipped.append(a)
-
-                a_factor = safety_stock_factor(
-                    cfg["net_bias_pct"], cfg["flow_cv_pct"],
-                    cfg["settlement_days"], cfg["z_alpha"])
-                rows = []
-                for a in assets_pick:
-                    vol = monthly_vol[a]
-                    required = a_factor * vol
-                    h, insufficient = None, True
-                    if a in frames:
-                        rp = risk_profile(frames[a]["Global_USD"])
-                        if rp:
-                            h = crypto_haircut(rp["es99"], cfg["settlement_days"])
-                            insufficient = rp["insufficient_sample"]
-                    rows.append(dict(
-                        asset=a, monthly_volume=vol, required_stock=required,
-                        haircut=h, insufficient=insufficient,
-                    ))
-                per_asset_df = pd.DataFrame(rows)
-
-                valid = per_asset_df.dropna(subset=["haircut"])
-                missing = per_asset_df[per_asset_df["haircut"].isna()]
-                total_required = per_asset_df["required_stock"].sum()
-                per_asset_actual_value = (
-                    (valid["required_stock"] * (1 - valid["haircut"])).sum()
-                    + missing["required_stock"].sum() * (1 - cfg["custody_rate_blended"])
-                )
-
-                weights = {a: monthly_vol[a] for a in assets_pick}
-                port_ret = _portfolio_return_series(frames, weights)
-                port_rp = _risk_stats(port_ret) if port_ret is not None else None
-                h_portfolio = (
-                    crypto_haircut(port_rp["es99"], cfg["settlement_days"])
-                    if port_rp else None
-                )
-                portfolio_actual_value = (
-                    total_required * (1 - h_portfolio)
-                    if h_portfolio is not None else None
-                )
-
-                daily_volume_total = total_volume / 30.0
-                cash = cfg["total_capital_thb"] - total_required
-                custody_nc = total_required * cfg["custody_rate_blended"]
-                trading_nc = cfg["trading_risk_rate"] * daily_volume_total
-                required_nc = cfg["fixed_min_nc"] + trading_nc + custody_nc
-
-                def _nc_result(stock_value_after_haircut):
-                    actual = (
-                        cash + stock_value_after_haircut
-                        + cfg["cex_margin_thb"] * (1 - cfg["cex_counterparty_haircut"])
-                        - cfg["liab_thb"]
-                    )
-                    return dict(actual=actual, required=required_nc, buffer=actual - required_nc)
-
-                st.session_state["pnc_result"] = dict(
-                    per_asset=per_asset_df,
-                    total_required=total_required,
-                    total_volume=total_volume,
-                    skipped=skipped,
-                    per_asset_method=_nc_result(per_asset_actual_value),
-                    portfolio_method=(
-                        _nc_result(portfolio_actual_value)
-                        if portfolio_actual_value is not None else None
-                    ),
-                    h_portfolio=h_portfolio,
-                    cash=cash,
-                )
-
-        res = st.session_state.get("pnc_result")
-        if not res:
-            return
-
-        if res["skipped"]:
-            st.warning(
-                f"โหลดราคาไม่ได้: {', '.join(res['skipped'])} — "
-                "ใช้ custody haircut แบบอนุรักษนิยมแทนสำหรับเหรียญเหล่านี้"
-            )
-
-        section("📦 สรุป Portfolio")
-        k = st.columns(4)
-        metric_card(k[0], "ปริมาณธุรกรรมรวม/เดือน", fmt_baht(res["total_volume"]))
-        metric_card(k[1], "Required Stock รวม", fmt_baht(res["total_required"]))
-        metric_card(k[2], "เงินสดคงเหลือ", fmt_baht(res["cash"]), res["cash"])
-        metric_card(k[3], "NC ขั้นต่ำที่ต้องดำรง", fmt_baht(res["per_asset_method"]["required"]))
-
-        section("⚖️ เทียบวิธีคิด Haircut")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**วิธีที่ 1: Haircut แยกรายเหรียญ**")
-            m = res["per_asset_method"]
-            verdict_box(
-                m["buffer"] >= 0,
-                f"NC จริง {fmt_baht(m['actual'])}",
-                f"Buffer {fmt_baht(m['buffer'], True)}",
-                warn=(m["buffer"] < 0.5 * m["required"]),
-            )
-        with c2:
-            st.markdown("**วิธีที่ 2: Portfolio ES99 (คำนึงถึง Correlation)**")
-            pm = res["portfolio_method"]
-            if pm is None:
-                st.info(
-                    "ข้อมูลราคาไม่พอ (ต้องมีอย่างน้อย 2 เหรียญที่มีราคาย้อนหลังพร้อมกันครบ "
-                    f"{MIN_RISK_SAMPLE_DAYS} วัน)"
-                )
-            else:
-                verdict_box(
-                    pm["buffer"] >= 0,
-                    f"NC จริง {fmt_baht(pm['actual'])} "
-                    f"(Haircut รวม {res['h_portfolio'] * 100:.2f}%)",
-                    f"Buffer {fmt_baht(pm['buffer'], True)}",
-                    warn=(pm["buffer"] < 0.5 * pm["required"]),
-                )
-                diff = pm["buffer"] - m["buffer"]
-                if diff > 0:
-                    st.caption(
-                        f"✅ วิธี Portfolio ES99 ให้ Buffer มากกว่า {fmt_baht(diff, True)} "
-                        "จากผลของ correlation ที่ไม่สมบูรณ์ระหว่างเหรียญ"
-                    )
-                elif diff < 0:
-                    st.caption(
-                        f"⚠️ วิธี Portfolio ES99 ให้ Buffer น้อยกว่า {fmt_baht(abs(diff))} "
-                        "(เหรียญในพอร์ตเคลื่อนไหวสัมพันธ์กันสูง ไม่ค่อยได้ประโยชน์จากการกระจาย)"
-                    )
-
-        section("🪙 รายละเอียดต่อเหรียญ")
-        disp = res["per_asset"].copy()
-        disp["haircut"] = disp["haircut"].apply(
-            lambda v: f"{v * 100:.2f}%" if pd.notna(v) else "— (ใช้ custody เริ่มต้น)"
-        )
-        disp["monthly_volume"] = disp["monthly_volume"].apply(fmt_baht)
-        disp["required_stock"] = disp["required_stock"].apply(fmt_baht)
-        disp["insufficient"] = disp["insufficient"].map({True: "⚠️ น้อย", False: "✅ พอ"})
-        disp = disp.rename(columns={
-            "asset": "เหรียญ", "monthly_volume": "ปริมาณ/เดือน",
-            "required_stock": "Required Stock", "haircut": "Haircut (Crypto)",
-            "insufficient": "ตัวอย่างราคา",
-        })
-        st.dataframe(disp, height=min(360, 40 + 35 * len(disp)), **WIDE)
-
-        valid_assets = [a for a in assets_pick if a not in res["skipped"]]
-        if len(valid_assets) >= 2:
-            with st.expander("🔥 Correlation ระหว่างเหรียญในพอร์ต"):
-                frames2 = {}
-                for a in valid_assets:
-                    d, _e = fetch_price_data(a, cfg["start_date"], cfg["end_date"])
-                    if not d.empty:
-                        frames2[a] = d
-                if len(frames2) >= 2:
-                    ret_df = pd.concat(
-                        {
-                            a: np.log(d["Global_USD"] / d["Global_USD"].shift(1))
-                            for a, d in frames2.items()
-                        }, axis=1).dropna()
-                    corr = ret_df.corr()
-                    fig_corr = go.Figure(go.Heatmap(
-                        z=corr.values, x=list(corr.columns), y=list(corr.columns),
-                        colorscale=[[0, "#f6465d"], [0.5, "#181a20"], [1, "#0ecb81"]],
-                        zmin=-1, zmax=1, texttemplate="%{z:.2f}", textfont={"size": 11},
-                    ))
-                    fig_corr.update_layout(
-                        template="plotly_dark", height=340, margin=dict(t=20, b=20),
-                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-                    st.plotly_chart(fig_corr, **WIDE)
-                    st.caption(
-                        "ยิ่งใกล้ +1 = เคลื่อนไหวทางเดียวกัน (ได้ประโยชน์จากการกระจายน้อย) "
-                        "· ใกล้ -1 = สวนทางกัน (ได้ประโยชน์มาก)"
-                    )
-
-
 def blend_hedge_fee(taker_fee: float, maker_fee: float, maker_ratio: float) -> float:
     r = min(max(float(maker_ratio), 0.0), 1.0)
     return taker_fee * (1.0 - r) + maker_fee * r
@@ -4980,6 +4744,7 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
     rp = None
     risk_label = ""
+    weighted_avg_haircut = None  # ค่าเฉลี่ย haircut แยกรายเหรียญ (ถ่วงน้ำหนัก) สำหรับโหมด Multi-Asset
     portfolio_price_frame = data if cp_mode.startswith("Single") else None
 
     if cp_mode.startswith("Single"):
@@ -5028,6 +4793,18 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                             f"{k} {norm_w[k] * 100:.0f}%" for k in ret_df.columns)
                         if price_map:
                             portfolio_price_frame = next(iter(price_map.values()))
+
+                        indiv_haircuts = {}
+                        for a_ in ret_df.columns:
+                            rp_i = risk_profile(price_map[a_]["Global_USD"])
+                            if rp_i:
+                                indiv_haircuts[a_] = crypto_haircut(rp_i["es99"], cfg["settlement_days"])
+                        if indiv_haircuts:
+                            w_sum = sum(norm_w[a_] for a_ in indiv_haircuts)
+                            if w_sum > 0:
+                                weighted_avg_haircut = sum(
+                                    norm_w[a_] * indiv_haircuts[a_]
+                                    for a_ in indiv_haircuts) / w_sum
 
                         if len(ret_df.columns) >= 2:
                             section("🔥 Correlation Heatmap (Daily Returns)")
@@ -5083,6 +4860,24 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         warn=(nc_buffer_thb < 0.5 * required_nc_total),
     )
 
+    if weighted_avg_haircut is not None:
+        diff_pp = (weighted_avg_haircut - h_crypto) * 100
+        if diff_pp > 0.01:
+            st.caption(
+                f"💡 Diversification benefit: Haircut รวมพอร์ต (คำนึงถึง Correlation) "
+                f"{h_crypto * 100:.2f}% ต่ำกว่าค่าเฉลี่ยถ่วงน้ำหนักแบบแยกรายเหรียญ "
+                f"{weighted_avg_haircut * 100:.2f}% (ต่างกัน {diff_pp:.2f} จุด) "
+                "— เพราะเหรียญในพอร์ตไม่เคลื่อนไหวทางเดียวกันหมด")
+        elif diff_pp < -0.01:
+            st.caption(
+                f"⚠️ Haircut รวมพอร์ต {h_crypto * 100:.2f}% สูงกว่าค่าเฉลี่ยแยกรายเหรียญ "
+                f"{weighted_avg_haircut * 100:.2f}% — เหรียญในพอร์ตเคลื่อนไหวสัมพันธ์กันสูง "
+                "จึงแทบไม่ได้ประโยชน์จากการกระจายความเสี่ยง")
+        else:
+            st.caption(
+                f"Haircut รวมพอร์ต ({h_crypto * 100:.2f}%) ใกล้เคียงค่าเฉลี่ยแยกรายเหรียญ "
+                "— ไม่ได้ประโยชน์จากการกระจายความเสี่ยงมากนัก")
+
     section("📊 รายละเอียดตัวเลข")
     k1 = st.columns(4)
     metric_card(k1[0], "Required Safety Stock", fmt_baht(required_stock_thb), None, f"Haircut ที่ใช้ {h_crypto * 100:.2f}%")
@@ -5091,7 +4886,6 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     metric_card(k1[3], "NC ขั้นต่ำที่ต้องดำรง", fmt_baht(required_nc_total), nc_buffer_thb, f"ส่วนเกิน {fmt_baht(nc_buffer_thb, force_sign=True)}")
 
     st.markdown("<br>", unsafe_allow_html=True)
-    render_multi_asset_nc_planner(cfg)
     render_perp_venue_table(asset)
 
 
