@@ -8,3 +8,5 @@ pandas
 pyyaml
 pillow
 supabase
+openpyxl
+reportlab
