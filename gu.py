@@ -1625,6 +1625,87 @@ def render_timeline(steps):
     )
     st.markdown(f"<div class='xs-tl'>{html}</div>", unsafe_allow_html=True)
 
+_BINANCE_CHECK_HTML = r"""<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;padding:0;background:transparent;color:#EAECEF;
+  font-family:"Source Sans Pro",-apple-system,"Segoe UI",Roboto,sans-serif;}
+.box{border:1px solid #2b3139;border-radius:8px;padding:12px 16px;font-size:.82rem;}
+.row{display:flex;justify-content:space-between;padding:4px 0;
+  border-bottom:1px dashed #2b3139;color:#b7bdc6;}
+.row:last-child{border-bottom:none;}
+.row b{color:#EAECEF;font-variant-numeric:tabular-nums;}
+.up{color:#0ecb81}.dn{color:#f6465d}.mut{color:#5e6673}
+.tag{font-size:.68rem;font-weight:600;padding:2px 8px;border-radius:4px;
+  background:rgba(14,203,129,.1);color:#0ecb81;margin-left:6px;}
+.tag.stale{background:rgba(246,70,93,.1);color:#f6465d;}
+.note{color:#5e6673;font-size:.7rem;margin-top:6px;}
+</style></head><body>
+<div class="box">
+  <div class="row"><span>💹 ราคาจริงจาก Binance (live)</span>
+    <b id="bn-price">กำลังโหลด…</b></div>
+  <div class="row"><span>ราคาที่โมเดลใช้ในการ Hedge</span>
+    <b>$__MODEL_PRICE__</b></div>
+  <div class="row"><span>ส่วนต่าง (Model vs Binance)</span>
+    <b id="bn-diff">—</b></div>
+  <div class="note" id="bn-note">ดึงจากเบราว์เซอร์ของคุณโดยตรง ณ ขณะเปิดดูหน้านี้ · ไม่ auto-refresh</div>
+</div>
+<script>
+const SYMBOL = "__ASSET__USDT";
+const MODEL_PRICE = __MODEL_PRICE__;
+
+async function run(){
+  try{
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 8000);
+    const r = await fetch("https://fapi.binance.com/fapi/v1/ticker/price?symbol=" + SYMBOL,
+                          {signal: ac.signal});
+    clearTimeout(t);
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+    const px = parseFloat(d.price);
+    if (!Number.isFinite(px)) throw new Error("invalid price");
+    document.getElementById("bn-price").innerHTML =
+      "$" + px.toLocaleString("en-US", {minimumFractionDigits:2, maximumFractionDigits:2});
+
+    if (MODEL_PRICE > 0){
+      const diffPct = (MODEL_PRICE - px) / px * 100;
+      const cls = diffPct >= 0 ? "up" : "dn";
+      document.getElementById("bn-diff").innerHTML =
+        '<span class="' + cls + '">' + (diffPct >= 0 ? "+" : "") + diffPct.toFixed(3) + "%</span>";
+    }
+    document.getElementById("bn-note").innerHTML =
+      "อัปเดต " + new Date().toLocaleTimeString("th-TH", {hour12:false}) +
+      " (เวลาเครื่องคุณ) · ดึงจากเบราว์เซอร์ของคุณโดยตรง ณ ขณะเปิดดูหน้านี้";
+  } catch(e){
+    document.getElementById("bn-price").innerHTML =
+      '<span class="mut">ดึงไม่ได้ (' + e.message + ')</span>';
+    document.getElementById("bn-diff").innerHTML = '<span class="mut">—</span>';
+  }
+}
+run();
+</script></body></html>"""
+
+
+def render_binance_price_check(asset: str, model_price_usd: float) -> None:
+    """แสดงราคาจริงจาก Binance เทียบกับราคาที่โมเดลใช้ hedge
+    ดึงครั้งเดียวเมื่อ component ถูก render; ไม่มี timer/auto-refresh"""
+    if asset in STABLECOINS:
+        return
+    try:
+        model_price = float(model_price_usd)
+    except (TypeError, ValueError):
+        model_price = 0.0
+    if not math.isfinite(model_price) or model_price < 0:
+        model_price = 0.0
+    asset = str(asset or "").upper().strip()
+    if not re.fullmatch(r"[A-Z0-9]{1,20}", asset):
+        return
+    html = (
+        _BINANCE_CHECK_HTML
+        .replace("__ASSET__", asset)
+        .replace("__MODEL_PRICE__", f"{model_price:.2f}")
+    )
+    components.html(html, height=110, scrolling=False)
+
 def render_tradingview(symbol, container_id, height=500, interval="D", studies=None):
     studies_js = str(studies or []).replace("'", '"')
     html = f"""
@@ -4953,6 +5034,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 st.info("ยังไม่มีออเดอร์ — กดซื้อ/ขายด้านบนเพื่อดูระบบเดินงานทีละด่าน")
             else:
                 render_timeline(steps_now)
+                render_binance_price_check(asset, spot_usd_current)
 
         with t_ledger:
             if not sim["orders"]:
