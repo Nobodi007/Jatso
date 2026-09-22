@@ -1058,10 +1058,18 @@ def fetch_price_data(ticker: str, start: Any, end: Any,
                      use_fx_proxy: bool = False) -> tuple[pd.DataFrame, Optional[str]]:
     try:
         end_incl = pd.Timestamp(end) + pd.Timedelta(days=1)
-        raw = yf.download(f"{ticker}-USD", start=start, end=end_incl,
-                          auto_adjust=False, progress=False)
-        fx_raw = yf.download("THB=X", start=start, end=end_incl,
-                             auto_adjust=False, progress=False)
+        # ดาวน์โหลดราคาเหรียญ + USD/THB พร้อมกัน ลดเวลารอจาก network 2 รอบเหลือรอบเดียว
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f_crypto = ex.submit(
+                yf.download, f"{ticker}-USD", start=start, end=end_incl,
+                auto_adjust=False, progress=False
+            )
+            f_fx = ex.submit(
+                yf.download, "THB=X", start=start, end=end_incl,
+                auto_adjust=False, progress=False
+            )
+            raw = f_crypto.result()
+            fx_raw = f_fx.result()
     except Exception as e:
         return pd.DataFrame(), f"ดึงข้อมูลไม่สำเร็จ: {e}"
 
@@ -1097,26 +1105,30 @@ def fetch_price_data(ticker: str, start: Any, end: Any,
 
 @_cache_data(ttl=60, show_spinner=False)
 def fetch_market_overview(tickers: list[str]) -> pd.DataFrame:
-    rows = []
-    for t in tickers:
+    def _one(t: str) -> Optional[dict[str, Any]]:
         try:
             data = yf.download(f"{t}-USD", period="2d", interval="1h", progress=False)
             if data.empty:
-                continue
+                return None
             if isinstance(data.columns, pd.MultiIndex):
                 data.columns = data.columns.get_level_values(0)
             last_price = float(data["Close"].iloc[-1])
             prev_price = float(data["Close"].iloc[0])
             pct_change = (last_price - prev_price) / prev_price * 100 if prev_price else 0
             volume_24h = float(data["Volume"].tail(24).sum())
-            rows.append({
+            return {
                 "symbol": t,
                 "price_usd": last_price,
                 "pct_change": pct_change,
                 "volume": volume_24h,
-            })
+            }
         except Exception:
-            continue
+            return None
+
+    # เดิมยิงทีละเหรียญ ทำให้ 11 เหรียญรอ network ต่อกันยาวมาก
+    # เปลี่ยนเป็น parallel requests เพื่อลดเวลาโหลดหน้า Wallet/Exchange
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(tickers)))) as ex:
+        rows = [row for row in ex.map(_one, tickers) if row is not None]
     return pd.DataFrame(rows)
 
 
