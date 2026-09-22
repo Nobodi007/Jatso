@@ -5021,6 +5021,234 @@ if HAS_FRAGMENT:
 else:
     _order_panel_live = _order_panel_live_body
 
+# =========================================================================
+# AUTO DCA — จำลองคำสั่งซื้อสม่ำเสมอย้อนหลัง + Backfill เข้ากระเป๋าจำลอง
+# =========================================================================
+
+DCA_FREQS = ["รายวัน", "รายสัปดาห์", "รายเดือน"]
+
+
+def _asset_return_pct(asset: str, months: int) -> Optional[float]:
+    """คืน % ผลตอบแทนของเหรียญย้อนหลัง N เดือนจนถึงวันล่าสุดที่มีข้อมูล"""
+    end = pd.Timestamp.now().date()
+    start = end - pd.Timedelta(days=int(months * 30.44) + 5)
+    try:
+        d, _err = fetch_price_data(asset, start, end)
+    except Exception:
+        return None
+    if d.empty or len(d) < 2:
+        return None
+    first, last = float(d["Global_USD"].iloc[0]), float(d["Global_USD"].iloc[-1])
+    if first <= 0:
+        return None
+    return (last / first - 1) * 100
+
+
+def _dca_schedule_dates(idx: pd.Index, freq_label: str, months: int) -> list[pd.Timestamp]:
+    """สร้างรายการวันที่ที่จะ 'ซื้อ' ตามความถี่ ภายในกรอบเวลาย้อนหลัง N เดือนจากวันล่าสุด"""
+    if idx is None or len(idx) == 0:
+        return []
+    idx = pd.DatetimeIndex(idx).sort_values()
+    end = idx.max()
+    start = end - pd.DateOffset(months=int(max(1, months)))
+    window = idx[(idx >= start) & (idx <= end)]
+    if len(window) == 0:
+        return []
+    if freq_label == "รายวัน":
+        return list(window)
+    if freq_label == "รายสัปดาห์":
+        out, last = [], None
+        for d in window:
+            if last is None or (d - last).days >= 7:
+                out.append(d)
+                last = d
+        return out
+    out, seen = [], set()
+    for d in window:
+        key = (d.year, d.month)
+        if key not in seen:
+            seen.add(key)
+            out.append(d)
+    return out
+
+
+def _dca_preview(data: pd.DataFrame, cfg: dict[str, Any], amount_thb: float,
+                 freq_label: str, months: int) -> Optional[dict[str, Any]]:
+    """คำนวณผลลัพธ์ย้อนหลังแบบ pure โดยใช้ราคา quote เดียวกับที่ลูกค้าจริงจะได้"""
+    dates = _dca_schedule_dates(data.index, freq_label, months)
+    if not dates:
+        return None
+    fee = LOCAL_TRADING_FEE_PCT
+    total_invested, total_coins = 0.0, 0.0
+    rows = []
+    for d in dates:
+        row = data.loc[d]
+        spot, fx = float(row["Global_USD"]), float(row["USDTHB"])
+        mid = spot * fx * (1 + cfg["local_premium"])
+        quote = mid * (1 + cfg["dealer_spread"])
+        settlement = amount_thb * (1 - fee)
+        coins = settlement / quote if quote > 0 else 0.0
+        total_invested += amount_thb
+        total_coins += coins
+        rows.append({
+            "วันที่": d.strftime("%Y-%m-%d"),
+            "ราคาที่ได้ (THB)": quote,
+            f"{cfg['asset']} ที่ได้รอบนี้": coins,
+            "ลงทุนสะสม (THB)": total_invested,
+        })
+    last_row = data.iloc[-1]
+    cur_mid = (float(last_row["Global_USD"]) * float(last_row["USDTHB"])
+              * (1 + cfg["local_premium"]))
+    current_value = total_coins * cur_mid
+    pnl = current_value - total_invested
+    pnl_pct = (pnl / total_invested * 100) if total_invested > 0 else 0.0
+    avg_cost = (total_invested / total_coins) if total_coins > 0 else 0.0
+    return dict(dates=dates, n_rounds=len(dates), total_invested=total_invested,
+               total_coins=total_coins, current_value=current_value, pnl=pnl,
+               pnl_pct=pnl_pct, avg_cost=avg_cost, cur_price=cur_mid,
+               ledger=pd.DataFrame(rows))
+
+
+def _dca_confirm_backfill(sim: dict[str, Any], dates: list[pd.Timestamp],
+                          amount_thb: float, data: pd.DataFrame,
+                          ctx: dict[str, Any]) -> int:
+    """ยิงคำสั่งซื้อจริงตามตารางวันที่ ผ่าน execute_order"""
+    n = 0
+    for d in dates:
+        if amount_thb > float(sim.get("customer_thb", 0.0)) + 1e-9:
+            break
+        _push_undo_snapshot(sim)
+        execute_order(sim, "buy", amount_thb, d, data.loc[d], ctx, affect_wallet=True)
+        n += 1
+    return n
+
+
+def render_auto_dca(cfg: dict[str, Any], sim: dict[str, Any], data: pd.DataFrame,
+                    ctx: dict[str, Any]) -> None:
+    st.caption(
+        f"การสร้างคำสั่งซื้อคริปโทล่วงหน้าตามเงื่อนไขที่คุณกำหนดไว้ เพื่อผลตอบแทนเฉลี่ยจากการลงทุนในระยะยาว · "
+        f"Backfill เข้ากระเป๋าจำลองทำได้เฉพาะเหรียญที่เลือกในแถบซ้ายตอนนี้ ({cfg['asset']}) เท่านั้น"
+    )
+
+    c_form, c_detail = st.columns([1.3, 1], gap="large")
+    with c_form:
+        st.markdown("**1. เลือกเหรียญและกรอกจำนวนเงิน**")
+        asset_choices = [cfg["asset"]] + [a for a in SUPPORTED_ASSETS
+                                          if a not in STABLECOINS and a != cfg["asset"]]
+        asset_dca = st.selectbox("เหรียญ", asset_choices, key="dca_asset")
+        amount_dca = comma_number_input("จำนวนเงินต่อรอบ (THB)", value=1000,
+                                        min_value=float(MIN_TRADE_THB), key="dca_amount")
+
+        st.markdown("**2. กำหนดรอบการทำรายการ**")
+        freq = st.radio("ความถี่", DCA_FREQS, horizontal=True, key="dca_freq",
+                        label_visibility="collapsed")
+        th, tm = st.columns(2)
+        hour = th.selectbox("เวลา (ชั่วโมง)", [f"{h:02d}" for h in range(24)],
+                            index=10, key="dca_hh")
+        minute = tm.selectbox("เวลา (นาที)", ["00", "15", "30", "45"], key="dca_mm")
+        months = st.number_input("ระยะเวลาย้อนหลังที่จะทดสอบ (เดือน, สูงสุด 12)", value=6,
+                                 min_value=1, max_value=12, step=1, key="dca_months")
+
+    dates_preview = (_dca_schedule_dates(data.index, freq, months)
+                     if asset_dca == cfg["asset"] else [])
+
+    with c_detail:
+        st.markdown("**รายละเอียดคำสั่ง Auto DCA**")
+        st.markdown(
+            f'<div class="op-ro"><span>จำนวนเงินต่อรอบ</span><b>{amount_dca:,.2f} THB</b></div>'
+            f'<div class="op-ro"><span>รอบการทำรายการ</span><b>{freq} {hour}:{minute}</b></div>'
+            f'<div class="op-ro"><span>ระยะเวลาที่ทดสอบ</span><b>{months} เดือน</b></div>'
+            f'<div class="op-ro"><span>จำนวนรอบทั้งหมด (ย้อนหลัง)</span><b>{len(dates_preview)} รอบ</b></div>',
+            unsafe_allow_html=True)
+
+        st.markdown("**ผลตอบแทนจากเหรียญที่คุณเลือก**")
+        r1y = _asset_return_pct(asset_dca, 12)
+        r6m = _asset_return_pct(asset_dca, 6)
+
+        def _ret_row(label: str, v: Optional[float]) -> str:
+            if v is None:
+                return f'<div class="op-ro"><span>{label}</span><b style="color:#848e9c">—</b></div>'
+            cls = "#0ecb81" if v >= 0 else "#f6465d"
+            return (f'<div class="op-ro"><span>{label}</span>'
+                   f'<b style="color:{cls}">{"+" if v >= 0 else ""}{v:.2f}%</b></div>')
+
+        st.markdown(_ret_row("ผลตอบแทนย้อนหลัง 1 ปี", r1y)
+                    + _ret_row("ผลตอบแทนย้อนหลัง 6 เดือน", r6m), unsafe_allow_html=True)
+
+    check_clicked = st.button("🔍 ตรวจสอบข้อมูล", key="dca_check", **WIDE)
+    if check_clicked:
+        if asset_dca != cfg["asset"]:
+            st.warning(
+                f"พรีวิวแบบเต็มรูปแบบ (ราคา dealer จริง) ทำได้เฉพาะ {cfg['asset']} เท่านั้น "
+                f"— เปลี่ยนเหรียญในแถบซ้ายก่อนถ้าต้องการพรีวิวเหรียญนี้"
+            )
+        elif amount_dca < MIN_TRADE_THB:
+            st.warning(f"จำนวนเงินต่อรอบต้อง ≥ {MIN_TRADE_THB:,.0f} บาท")
+        else:
+            st.session_state["dca_preview"] = _dca_preview(data, cfg, amount_dca, freq, months)
+
+    prev = st.session_state.get("dca_preview")
+    if prev:
+        k = st.columns(4)
+        metric_card(k[0], "ลงทุนสะสม", fmt_baht(prev["total_invested"]), None,
+                    f"{prev['n_rounds']} รอบ")
+        metric_card(k[1], "มูลค่าปัจจุบัน", fmt_baht(prev["current_value"]), prev["pnl"])
+        metric_card(k[2], "กำไร/ขาดทุน", fmt_baht(prev["pnl"], True), prev["pnl"],
+                    f"{prev['pnl_pct']:+.2f}%")
+        metric_card(k[3], "ต้นทุนเฉลี่ย/หน่วย", fmt_baht(prev["avg_cost"]), None,
+                    f"ราคาปัจจุบัน {fmt_baht(prev['cur_price'])}")
+
+        fig = go.Figure(go.Scatter(
+            x=prev["ledger"]["วันที่"], y=prev["ledger"]["ลงทุนสะสม (THB)"],
+            line=dict(color="#0ecb81", width=2), fill="tozeroy",
+            fillcolor="rgba(14,203,129,0.12)"))
+        fig.update_layout(
+            template="plotly_dark", height=260, margin=dict(t=20, b=20),
+            title=dict(text="เงินลงทุนสะสมตามรอบ DCA", font=dict(size=13)),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+        st.plotly_chart(fig, **WIDE)
+
+        with st.expander("ดูรายรอบทั้งหมด"):
+            st.dataframe(prev["ledger"], height=min(300, 40 + 35 * len(prev["ledger"])), **WIDE)
+
+        if can_trade():
+            if st.button(f"✅ ยืนยัน Backfill เข้ากระเป๋าจำลอง ({prev['n_rounds']} ออเดอร์)",
+                        key="dca_confirm", **WIDE):
+                cash = float(sim.get("customer_thb", 0.0))
+                if prev["total_invested"] > cash + 1e-9:
+                    st.error(f"เงินสดในกระเป๋าไม่พอ (มี {cash:,.2f} THB ต้องใช้ {prev['total_invested']:,.2f} THB)")
+                else:
+                    with st.spinner(f"กำลังสร้าง {prev['n_rounds']} ออเดอร์…"):
+                        n_done = _dca_confirm_backfill(sim, prev["dates"], amount_dca, data, ctx)
+                    st.session_state.pop("dca_preview", None)
+                    st.success(f"Backfill สำเร็จ {n_done} ออเดอร์ เข้ากระเป๋าจำลองแล้ว")
+                    st.rerun(scope="app")
+        else:
+            st.caption("🔒 บัญชี Viewer ไม่สามารถยืนยัน Backfill ได้")
+
+    st.markdown("<div style='margin-top:14px;font-weight:700;color:#EAECEF;'>📈 ผลตอบแทนเหรียญยอดนิยม</div>",
+               unsafe_allow_html=True)
+    quick_coins = [a for a in SUPPORTED_ASSETS if a not in STABLECOINS][:6]
+    qcols = st.columns(len(quick_coins))
+    for col, a in zip(qcols, quick_coins):
+        r1 = _asset_return_pct(a, 12)
+        r6 = _asset_return_pct(a, 6)
+        r1_txt = f"{'+' if (r1 or 0) >= 0 else ''}{r1:.2f}%" if r1 is not None else "—"
+        r6_txt = f"{'+' if (r6 or 0) >= 0 else ''}{r6:.2f}%" if r6 is not None else "—"
+        r1_cls = "ex-green" if (r1 or 0) >= 0 else "ex-red"
+        r6_cls = "ex-green" if (r6 or 0) >= 0 else "ex-red"
+        with col:
+            st.markdown(
+                f'<div style="background:#181a20;border:1px solid #2b3139;border-radius:10px;padding:10px 12px;">'
+                f'<div style="display:flex;align-items:center;gap:6px;font-weight:700;color:#EAECEF;font-size:.85rem;">'
+                f'{coin_icon_html(a, 20)}{a}</div>'
+                f'<div style="font-size:.72rem;color:#848e9c;margin-top:6px;">ย้อนหลัง 1 ปี '
+                f'<span class="{r1_cls}" style="float:right;">{r1_txt}</span></div>'
+                f'<div style="font-size:.72rem;color:#848e9c;">ย้อนหลัง 6 เดือน '
+                f'<span class="{r6_cls}" style="float:right;">{r6_txt}</span></div>'
+                f'</div>', unsafe_allow_html=True)
+
+
 def _bo_fig(fig, h=300, title=""):
     fig.update_layout(template="plotly_dark", height=h, title=dict(text=title, font=dict(size=13)),
                       margin=dict(t=36, b=20, l=10, r=10),
@@ -5373,8 +5601,8 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
 
         st.markdown('<div style="margin-top:14px;"></div>', unsafe_allow_html=True)
-        t_route, t_ledger, t_wallet = st.tabs(
-            ["🚀 System Routing", "📒 สมุดออเดอร์ (Ledger)", "🏢 Back Office"])
+        t_route, t_ledger, t_wallet, t_dca = st.tabs(
+            ["🚀 System Routing", "📒 สมุดออเดอร์ (Ledger)", "🏢 Back Office", "🔄 Auto DCA"])
 
         with t_route:
             steps_now = st.session_state.get("sim_steps", [])
@@ -5399,6 +5627,9 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                          for _, r in (market_df if market_df is not None else pd.DataFrame()).iterrows()}
             price_thb[asset] = spot_usd_current * usdthb_current
             render_backoffice(sim, cfg, ctx, target_stock_thb, price_thb)
+
+        with t_dca:
+            render_auto_dca(cfg, sim, data, ctx)
 
 
 def _parse_amount(text: Any) -> float:
