@@ -1002,6 +1002,8 @@ NAV_NEWS = NAV_LABELS[3]
 def _go_to_exchange(sym: str) -> None:
     st.session_state["bt_asset"] = sym
     st.session_state["main_nav"] = NAV_EXCHANGE
+    st.session_state["main_nav_tabs"] = NAV_EXCHANGE
+    st.session_state.pop("main_nav_tabs_news", None)
 
 
 # =========================================================================
@@ -4641,6 +4643,7 @@ def _main_body() -> None:
                 if current in [x for x in NAV_LABELS if x != NAV_NEWS]:
                     st.session_state["news_last_tab"] = current
                 st.session_state["main_nav"] = NAV_NEWS
+                st.session_state.pop("main_nav_tabs_news", None)
                 st.rerun()
 
     with top_r:
