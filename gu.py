@@ -1692,8 +1692,38 @@ def render_tv_panel(asset: str) -> None:
 
 
 # =========================================================================
-# LAYER 4 — DATA STATE & AUDIT TRAIL
+# LAYER 4 — DATA STATE & AUDIT TRAIL (Supabase-backed, local-file fallback)
 # =========================================================================
+
+try:
+    from supabase import create_client, Client as _SupabaseClient
+    HAS_SUPABASE_LIB = True
+except ImportError:
+    _SupabaseClient = None
+    HAS_SUPABASE_LIB = False
+
+_supabase_client: Optional["_SupabaseClient"] = None
+_supabase_checked = False
+
+
+def _get_supabase() -> Optional["_SupabaseClient"]:
+    """คืน Supabase client ถ้าตั้งค่าไว้ครบ; ถ้าไม่มีคืน None (จะ fallback ไปไฟล์ local)"""
+    global _supabase_client, _supabase_checked
+    if _supabase_checked:
+        return _supabase_client
+    _supabase_checked = True
+    if not HAS_SUPABASE_LIB:
+        return None
+    try:
+        cfg = st.secrets.get("supabase", {})
+        url, key = cfg.get("url", ""), cfg.get("key", "")
+        if not (url and key):
+            return None
+        _supabase_client = create_client(url, key)
+    except Exception:
+        _supabase_client = None
+    return _supabase_client
+
 
 PROFILE_STATE_ENV_VAR = "XSPRING_PROFILE_STATE"
 
@@ -1701,6 +1731,20 @@ def profile_state_path() -> Path:
     return Path(os.environ.get(PROFILE_STATE_ENV_VAR) or (_HERE / "user_profiles.json"))
 
 def load_profiles() -> dict[str, dict[str, str]]:
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            res = sb.table("user_profiles").select("*").execute()
+            return {
+                row["email"]: {
+                    "display_name": row.get("display_name") or row["email"],
+                    "avatar_b64": row.get("avatar_b64") or "",
+                }
+                for row in (res.data or [])
+            }
+        except Exception:
+            pass  # ตกไป fallback local ด้านล่าง
+
     p = profile_state_path()
     if not p.is_file():
         return {}
@@ -1710,12 +1754,26 @@ def load_profiles() -> dict[str, dict[str, str]]:
         return {}
 
 def save_profile(email: str, display_name: str, avatar_b64: Optional[str] = None) -> None:
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            sb.table("user_profiles").upsert({
+                "email": email,
+                "display_name": display_name,
+                "avatar_b64": avatar_b64,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).execute()
+            return
+        except Exception:
+            pass  # ตกไป fallback local
+
     p = profile_state_path()
     profiles = load_profiles()
     profiles[email] = {"display_name": display_name, "avatar_b64": avatar_b64}
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(profiles, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, p)
+
 
 AUDIT_LOG_ENV_VAR = "XSPRING_AUDIT_LOG"
 AUDIT_ACTOR_ENV_VAR = "XSPRING_USER"
@@ -1760,6 +1818,27 @@ def build_audit_records(prev: Optional[Mapping[str, Any]], current: Mapping[str,
 def append_audit_records(records: list[dict[str, Any]], path: Optional[Path] = None) -> None:
     if not records:
         return
+
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            rows = [{
+                "ts": r["ts"],
+                "session_id": r.get("session_id"),
+                "actor": r.get("actor"),
+                "model_version": r.get("model_version"),
+                "config_sha256": r.get("config_sha256"),
+                "event": r.get("event"),
+                "param": r.get("param"),
+                "old_value": r.get("old"),
+                "new_value": r.get("new"),
+                "params": r.get("params"),
+            } for r in records]
+            sb.table("audit_log").insert(rows).execute()
+            return
+        except Exception:
+            pass  # ตกไป fallback local
+
     p = Path(path) if path else audit_log_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a", encoding="utf-8") as fh:
@@ -1769,6 +1848,27 @@ def append_audit_records(records: list[dict[str, Any]], path: Optional[Path] = N
         os.fsync(fh.fileno())
 
 def read_audit_records(path: Optional[Path] = None, limit: Optional[int] = None) -> list[dict[str, Any]]:
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            q = sb.table("audit_log").select("*").order("ts", desc=True)
+            if limit:
+                q = q.limit(limit)
+            res = q.execute()
+            rows = res.data or []
+            out = []
+            for r in rows[::-1]:  # คืนเรียงเก่า->ใหม่ เหมือนของเดิม
+                out.append({
+                    "ts": r["ts"], "session_id": r.get("session_id"),
+                    "actor": r.get("actor"), "model_version": r.get("model_version"),
+                    "config_sha256": r.get("config_sha256"), "event": r.get("event"),
+                    "param": r.get("param"), "old": r.get("old_value"),
+                    "new": r.get("new_value"), "params": r.get("params"),
+                })
+            return out
+        except Exception:
+            pass  # ตกไป fallback local
+
     p = Path(path) if path else audit_log_path()
     if not p.is_file():
         return []
@@ -1784,6 +1884,7 @@ def read_audit_records(path: Optional[Path] = None, limit: Optional[int] = None)
                 continue
     return out[-limit:] if limit else out
 
+
 SIM_STATE_ENV_VAR = "XSPRING_SIM_STATE"
 
 def sim_state_path() -> Path:
@@ -1792,12 +1893,44 @@ def sim_state_path() -> Path:
 def save_sim_state(sim: Any, path: Optional[Path] = None) -> None:
     if not isinstance(sim, dict):
         return
+
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            sb.table("sim_state").upsert({
+                "actor": _current_actor(),
+                "data": _json_safe(sim),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).execute()
+            return
+        except Exception:
+            pass  # ตกไป fallback local
+
     p = Path(path) if path else sim_state_path()
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(_json_safe(sim), ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, p)   # เขียนไฟล์ชั่วคราวก่อนแล้วสลับ กันไฟล์พังถ้าถูกปิดกลางคัน
+    os.replace(tmp, p)
 
 def load_sim_state(path: Optional[Path] = None) -> Optional[dict[str, Any]]:
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            res = (sb.table("sim_state")
+                     .select("data")
+                     .eq("actor", _current_actor())
+                     .limit(1)
+                     .execute())
+            if res.data:
+                d = res.data[0]["data"]
+                if isinstance(d, dict) and d.get("current_date"):
+                    try:
+                        d["current_date"] = pd.to_datetime(d["current_date"])
+                    except (ValueError, TypeError):
+                        d.pop("current_date", None)
+                return d
+        except Exception:
+            pass  # ตกไป fallback local
+
     p = Path(path) if path else sim_state_path()
     if not p.is_file():
         return None
@@ -1814,19 +1947,47 @@ def load_sim_state(path: Optional[Path] = None) -> Optional[dict[str, Any]]:
             d.pop("current_date", None)
     return d
 
+
 FAV_STATE_ENV_VAR = "XSPRING_FAV_STATE"
 
 def fav_state_path() -> Path:
     return Path(os.environ.get(FAV_STATE_ENV_VAR) or (_HERE / "favorites.json"))
 
 def save_favorites(favs: Any, path: Optional[Path] = None) -> None:
-    p = Path(path) if path else fav_state_path()
     clean = [s for s in (favs or []) if s in SUPPORTED_ASSETS]
+
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            sb.table("favorites").upsert({
+                "actor": _current_actor(),
+                "symbols": clean,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).execute()
+            return
+        except Exception:
+            pass  # ตกไป fallback local
+
+    p = Path(path) if path else fav_state_path()
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(clean), encoding="utf-8")
     os.replace(tmp, p)
 
 def load_favorites(path: Optional[Path] = None) -> list[str]:
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            res = (sb.table("favorites")
+                     .select("symbols")
+                     .eq("actor", _current_actor())
+                     .limit(1)
+                     .execute())
+            if res.data:
+                d = res.data[0]["symbols"]
+                return [s for s in d if s in SUPPORTED_ASSETS] if isinstance(d, list) else []
+        except Exception:
+            pass  # ตกไป fallback local
+
     p = Path(path) if path else fav_state_path()
     if not p.is_file():
         return []
@@ -1835,6 +1996,7 @@ def load_favorites(path: Optional[Path] = None) -> list[str]:
     except (OSError, json.JSONDecodeError):
         return []
     return [s for s in d if s in SUPPORTED_ASSETS] if isinstance(d, list) else []
+
 
 def _current_actor() -> str:
     try:
@@ -1878,24 +2040,16 @@ def render_audit_log_sidebar():
     log = st.session_state.get("audit_log", [])
     title = f"🧾 Audit Log — การเปลี่ยนพารามิเตอร์ ({len(log)})"
     with st.expander(title, expanded=False):
+        sb = _get_supabase()
+        backend_label = "Supabase (cloud database)" if sb is not None else f"ไฟล์ local `{audit_log_path()}`"
         st.caption(
             f"Model v{MODEL_VERSION} · บันทึกอัตโนมัติทุกครั้งที่พารามิเตอร์ที่มีผล"
-            "ต่อการคำนวณเปลี่ยนค่า · ช่อง actor จะมีชื่อผู้ใช้ก็ต่อเมื่อแอปตั้ง "
+            f"ต่อการคำนวณเปลี่ยนค่า · เก็บลง: {backend_label} · ช่อง actor จะมีชื่อผู้ใช้ก็ต่อเมื่อแอปตั้ง "
             "authentication หรือกำหนด env XSPRING_USER (ไม่งั้นเป็น 'unknown')"
         )
         err = st.session_state.get("audit_write_error")
         if err:
-            st.error(f"⚠️ เขียน audit log ลงไฟล์ไม่สำเร็จ — {err}")
-        else:
-            st.caption(f"💾 บันทึกถาวรที่ `{audit_log_path()}` (JSON Lines) · "
-                       f"config: `{CONFIG_INFO['source'] or 'built-in defaults'}`")
-        _p = audit_log_path()
-        if _p.is_file():
-            st.download_button(
-                "⬇️ ดาวน์โหลดไฟล์ Audit Log ถาวรล็กทั้งไฟล์ (JSONL)",
-                _p.read_bytes(), "xspring_audit_log.jsonl",
-                "application/x-ndjson", key="dl_audit_jsonl", **WIDE,
-            )
+            st.error(f"⚠️ เขียน audit log ไม่สำเร็จ — {err}")
         if not log:
             st.caption("ยังไม่มีการเปลี่ยนพารามิเตอร์ในเซสชันนี้")
             return
