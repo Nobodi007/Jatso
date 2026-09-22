@@ -3464,6 +3464,8 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         preview = bt[cols].sort_index(ascending=False).head(100)
         st.dataframe(preview, height=400, **WIDE)
 
+    render_ledger_anomaly_detector(cfg, bt)
+
     render_phase2_tools_bottom(cfg, data, bt_baseline=bt)
 
 
@@ -5521,7 +5523,7 @@ AI_SYSTEM = (
     "และห้ามรับรอง compliance ถ้าถามนอกเรื่อง ให้ปฏิเสธสุภาพแล้วชวนกลับมาเรื่องแอป"
 )
 
-def ask_ai(messages, api_key):
+def ask_ai(messages, api_key, system_override: Optional[str] = None):
     AI_MODEL = "gemini-3-flash-preview"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{AI_MODEL}:generateContent?key={api_key}"
 
@@ -5531,7 +5533,7 @@ def ask_ai(messages, api_key):
         formatted_messages.append({"role": role, "parts": [{"text": msg["content"]}]})
 
     payload = {
-        "systemInstruction": {"parts": [{"text": AI_SYSTEM}]},
+        "systemInstruction": {"parts": [{"text": system_override or AI_SYSTEM}]},
         "contents": formatted_messages,
         "generationConfig": {
             "maxOutputTokens": 1500,
@@ -5561,6 +5563,188 @@ def ask_ai(messages, api_key):
 
     except Exception as e:
         return f"ข้อผิดพลาดระบบ: {str(e)}"
+
+# =========================================================================
+# LEDGER ANOMALY DETECTOR — สถิติ (z-score) + AI สรุปเป็นภาษาคน
+# =========================================================================
+
+ANOMALY_AI_SYSTEM = (
+    "คุณคือนักวิเคราะห์ความเสี่ยงของ Dealer คริปโท ได้รับรายการ anomaly ที่ระบบตรวจจับได้จาก order ledger "
+    "(เช่น slippage พุ่ง, hedge fee พุ่ง, P&L ร่วงหนัก, reject rate สูงผิดปกติเป็นกลุ่ม) "
+    "สรุปเป็นภาษาไทย กระชับ ไม่เกิน 6-8 ประโยค บอกว่าเกิดอะไรขึ้น ช่วงไหนน่าเป็นห่วงที่สุด และมีสาเหตุที่เป็นไปได้อะไรบ้าง "
+    "พร้อมคำแนะนำเชิงปฏิบัติการทั่วไป (เช่น ตรวจสอบพารามิเตอร์ hedge, ทบทวน slippage sensitivity, ลด order size ชั่วคราว) "
+    "ห้ามให้คำแนะนำการลงทุนหรือรับรอง compliance"
+)
+
+
+def ask_ai_anomaly(anomaly_summary_text: str, api_key: str) -> str:
+    return ask_ai([{"role": "user", "content": anomaly_summary_text}], api_key,
+                  system_override=ANOMALY_AI_SYSTEM)
+
+
+def _rolling_zscore(s: pd.Series, window: int = 20, min_periods: int = 10) -> pd.Series:
+    roll_mean = s.rolling(window, min_periods=min_periods).mean()
+    roll_std = s.rolling(window, min_periods=min_periods).std().replace(0, np.nan)
+    z = (s - roll_mean) / roll_std
+    return z.fillna(0.0)
+
+
+def detect_ledger_anomalies(bt: pd.DataFrame, z_threshold: float = 2.5,
+                            reject_window: int = 7) -> pd.DataFrame:
+    """สแกน Daily Ledger หา pattern ผิดปกติ: slippage/hedge fee พุ่ง, P&L ร่วงหนัก,
+    reject rate (FX Limit Hit) สูงผิดปกติเป็นกลุ่ม, ความผันผวนพุ่ง"""
+    if bt.empty or len(bt) < 15:
+        return pd.DataFrame()
+
+    rows: list[dict[str, Any]] = []
+
+    def _flag(date, metric, value, z, kind, note, severity):
+        rows.append(dict(date=date, metric=metric, value=value, z_score=float(z),
+                         kind=kind, note=note, severity=severity))
+
+    if "Slippage_Cost_THB" in bt.columns and bt["Slippage_Cost_THB"].abs().sum() > 0:
+        z_slip = _rolling_zscore(bt["Slippage_Cost_THB"])
+        for d, v, z in zip(bt.index, bt["Slippage_Cost_THB"], z_slip):
+            if z >= z_threshold:
+                sev = "critical" if z >= z_threshold * 1.6 else "warning"
+                _flag(d, "Slippage Cost", v, z, "slippage",
+                     f"Slippage วันนี้ {fmt_baht(v)} สูงกว่าค่าเฉลี่ยเคลื่อนที่ {z:.1f} SD", sev)
+
+    if "Hedge_Fee_Cost_THB" in bt.columns:
+        z_fee = _rolling_zscore(bt["Hedge_Fee_Cost_THB"])
+        for d, v, z in zip(bt.index, bt["Hedge_Fee_Cost_THB"], z_fee):
+            if z >= z_threshold:
+                sev = "critical" if z >= z_threshold * 1.6 else "warning"
+                _flag(d, "Hedge Fee Cost", v, z, "hedge_fee",
+                     f"ต้นทุน Hedge Fee วันนี้ {fmt_baht(v)} สูงกว่าปกติ {z:.1f} SD", sev)
+
+    if "Daily_PnL_THB" in bt.columns:
+        z_pnl = _rolling_zscore(bt["Daily_PnL_THB"])
+        for d, v, z in zip(bt.index, bt["Daily_PnL_THB"], z_pnl):
+            if z <= -z_threshold:
+                sev = "critical" if z <= -z_threshold * 1.6 else "warning"
+                _flag(d, "Daily P&L", v, z, "pnl_crash",
+                     f"P&L วันนี้ {fmt_baht(v, True)} ต่ำผิดปกติ {abs(z):.1f} SD จากค่าเฉลี่ย", sev)
+
+    if "FX_Limit_Hit" in bt.columns:
+        overall_rate = float(bt["FX_Limit_Hit"].mean())
+        rolling_rate = bt["FX_Limit_Hit"].rolling(reject_window, min_periods=reject_window).mean()
+        if overall_rate > 0:
+            for d, rr in zip(bt.index, rolling_rate):
+                if pd.notna(rr) and rr >= max(0.4, overall_rate * 2.5):
+                    _flag(d, f"FX Limit Hit Rate ({reject_window}D)", rr * 100,
+                         rr / max(overall_rate, 1e-9), "reject_cluster",
+                         f"อัตราติด FX Limit ใน {reject_window} วันล่าสุด {rr*100:.0f}% "
+                         f"สูงกว่าค่าเฉลี่ยทั้งช่วง ({overall_rate*100:.0f}%) มาก",
+                         "critical" if rr >= 0.7 else "warning")
+
+    if "Volatility_Pct" in bt.columns:
+        z_vol = _rolling_zscore(bt["Volatility_Pct"])
+        for d, v, z in zip(bt.index, bt["Volatility_Pct"], z_vol):
+            if z >= z_threshold:
+                _flag(d, "Volatility (High-Low)", v * 100, z, "volatility",
+                     f"ความผันผวนรายวัน {v*100:.2f}% สูงกว่าปกติ {z:.1f} SD", "warning")
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows).sort_values("date", ascending=False)
+    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+    return df.reset_index(drop=True)
+
+
+_ANOMALY_KIND_LABEL = {
+    "slippage": "💥 Slippage พุ่ง", "hedge_fee": "💸 Hedge Fee พุ่ง",
+    "pnl_crash": "📉 P&L ร่วงหนัก", "reject_cluster": "🚫 Reject Rate สูงเป็นกลุ่ม",
+    "volatility": "🌪️ ความผันผวนพุ่ง",
+}
+_ANOMALY_KIND_COLOR = {
+    "slippage": "#f6465d", "hedge_fee": "#fcd535", "pnl_crash": "#f6465d",
+    "reject_cluster": "#9945FF", "volatility": "#3B82F6",
+}
+
+
+def render_ledger_anomaly_detector(cfg: dict[str, Any], bt: pd.DataFrame) -> None:
+    with st.expander("🕵️ Anomaly Detector — สแกนหา Pattern ผิดปกติใน Ledger", expanded=False):
+        st.caption(
+            "สแกน Daily Ledger อัตโนมัติด้วยสถิติ (rolling z-score) หา slippage/hedge fee ที่พุ่งผิดปกติ, "
+            "P&L ร่วงหนัก, และช่วงที่ reject rate (FX Limit Hit) สูงผิดปกติเป็นกลุ่ม — จากนั้นให้ AI ช่วยสรุปได้"
+        )
+        c1, c2 = st.columns(2)
+        z_th = c1.slider("ความไวในการจับ Anomaly (Z-score threshold)", 1.5, 4.0, 2.5, 0.1, key="anom_z")
+        reject_win = c2.number_input("หน้าต่าง Reject Rate (วัน)", value=7, min_value=3,
+                                     max_value=30, step=1, key="anom_win")
+
+        if st.button("🕵️ สแกนหา Anomaly", key="anom_scan", **WIDE):
+            st.session_state["anom_result"] = detect_ledger_anomalies(
+                bt, z_threshold=z_th, reject_window=int(reject_win))
+            st.session_state.pop("anom_ai_summary", None)
+
+        anoms = st.session_state.get("anom_result")
+        if anoms is None:
+            return
+        if anoms.empty:
+            st.success("✅ ไม่พบ pattern ผิดปกติในช่วงเวลาที่เลือก")
+            return
+
+        n_crit = int((anoms["severity"] == "critical").sum())
+        n_warn = int((anoms["severity"] == "warning").sum())
+        k = st.columns(3)
+        metric_card(k[0], "Anomaly ที่พบทั้งหมด", f"{len(anoms)}", None)
+        metric_card(k[1], "ระดับ Critical", f"{n_crit}", -1 if n_crit else 0)
+        metric_card(k[2], "ระดับ Warning", f"{n_warn}", 0)
+
+        show = anoms.copy()
+        show["ประเภท"] = show["kind"].map(_ANOMALY_KIND_LABEL).fillna(show["kind"])
+        show_disp = show[["date", "ประเภท", "note", "severity"]].rename(
+            columns={"date": "วันที่", "note": "รายละเอียด", "severity": "ระดับ"})
+        st.dataframe(show_disp, height=min(360, 40 + 35 * len(show_disp)), **WIDE)
+
+        fig = go.Figure()
+        for kind, color in _ANOMALY_KIND_COLOR.items():
+            sub = anoms[anoms["kind"] == kind]
+            if not sub.empty:
+                fig.add_trace(go.Scatter(
+                    x=sub["date"], y=sub["z_score"], mode="markers",
+                    name=_ANOMALY_KIND_LABEL.get(kind, kind),
+                    marker=dict(size=9, color=color, symbol="x")))
+        fig.add_hline(y=0, line=dict(color="#848e9c", dash="dot"))
+        fig.update_layout(
+            template="plotly_dark", height=320, margin=dict(t=20, b=20),
+            yaxis_title="Z-score / Severity", title=dict(text="Anomaly Timeline", font=dict(size=13)),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            legend=dict(orientation="h", y=1.15, yanchor="bottom"))
+        st.plotly_chart(fig, **WIDE)
+
+        try:
+            api_key = st.secrets["gemini_api_key"]
+        except Exception:
+            api_key = os.environ.get("GEMINI_API_KEY", "")
+
+        if st.button("🤖 ให้ AI สรุปและวิเคราะห์", key="anom_ai_btn",
+                    disabled=not bool(api_key), **WIDE):
+            top = anoms.reindex(anoms["z_score"].abs().sort_values(ascending=False).index).head(25)
+            lines = [f"{r['date']} · {_ANOMALY_KIND_LABEL.get(r['kind'], r['kind'])} · {r['note']}"
+                    for _, r in top.iterrows()]
+            prompt = (
+                f"เหรียญ: {cfg['asset']} · พบ anomaly ทั้งหมด {len(anoms)} รายการ "
+                f"(critical {n_crit}, warning {n_warn})\n\nรายการที่รุนแรงที่สุด 25 อันดับแรก:\n"
+                + "\n".join(lines)
+            )
+            with st.spinner("AI กำลังวิเคราะห์…"):
+                st.session_state["anom_ai_summary"] = ask_ai_anomaly(prompt, api_key)
+
+        if not api_key:
+            st.caption("🔒 ยังไม่ได้ตั้งค่า `gemini_api_key` — ใช้ได้เฉพาะการสแกนด้วยสถิติ")
+
+        ai_txt = st.session_state.get("anom_ai_summary")
+        if ai_txt:
+            st.markdown(
+                f'<div style="background:rgba(14,203,129,.06);border-left:3px solid #0ecb81;'
+                f'border-radius:4px;padding:12px 16px;margin-top:8px;color:#EAECEF;'
+                f'font-size:.88rem;line-height:1.7;white-space:pre-wrap;">🤖 {_html.escape(ai_txt)}</div>',
+                unsafe_allow_html=True,
+            )
+
 
 AI_SUGGESTIONS = [
     "Max Drawdown กับ Win Rate ในหน้า Backtest หมายถึงอะไร",
