@@ -4626,16 +4626,22 @@ def _main_body() -> None:
     unsafe_allow_html=True,
 )
     with top_news:
-        st.markdown('<div style="height:6px;"></div>', unsafe_allow_html=True)
+        st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
         news_active = st.session_state.get("main_nav") == NAV_NEWS
-        if st.button(
-            "📰 ข่าวคริปโท",
-            key="top_news_btn",
-            type="primary" if news_active else "secondary",
-            use_container_width=True,
-        ):
-            st.session_state["main_nav"] = NAV_NEWS
-            st.rerun()
+        # ปุ่มข่าวให้เล็กและอยู่กึ่งกลาง ไม่กินพื้นที่ทั้งคอลัมน์
+        _, news_btn, _ = st.columns([1.6, 2.2, 1.6])
+        with news_btn:
+            if st.button(
+                "📰 ข่าว",
+                key="top_news_btn",
+                type="primary" if news_active else "secondary",
+                use_container_width=True,
+            ):
+                current = st.session_state.get("main_nav")
+                if current in [x for x in NAV_LABELS if x != NAV_NEWS]:
+                    st.session_state["news_last_tab"] = current
+                st.session_state["main_nav"] = NAV_NEWS
+                st.rerun()
 
     with top_r:
         if avatar_b64:
@@ -4673,15 +4679,40 @@ def _main_body() -> None:
     if "main_nav" not in st.session_state:
         st.session_state["main_nav"] = NAV_LABELS[0]
 
+    # แถบเมนูหลักยังคงแสดงแท็บเดิมทั้งหมด ยกเว้นข่าวที่ย้ายไปเป็นปุ่มเล็กด้านบน
+    # ใช้ key แยกจาก main_nav เพื่อให้ radio ไม่หายไปเมื่ออยู่หน้า News
     nav_labels_main = [label for label in NAV_LABELS if label != NAV_NEWS]
-    if st.session_state.get("main_nav") == NAV_NEWS:
-        # ข่าวถูกย้ายขึ้นไปไว้ในปุ่มด้านบนแล้ว
-        nav = NAV_NEWS
+    current_nav = st.session_state.get("main_nav", nav_labels_main[0])
+    if current_nav not in nav_labels_main and current_nav != NAV_NEWS:
+        current_nav = nav_labels_main[0]
+        st.session_state["main_nav"] = current_nav
+
+    if current_nav == NAV_NEWS:
+        # หน้า News: แสดงแท็บอื่นครบ แต่ไม่เลือกแท็บใดไว้
+        # เพื่อให้ผู้ใช้กดกลับไปแท็บไหนก็ได้ รวมถึงแท็บแรก
+        selected_nav = st.radio(
+            "เมนูหลัก",
+            nav_labels_main,
+            horizontal=True,
+            index=None,
+            key="main_nav_tabs_news",
+            label_visibility="collapsed",
+        )
+        nav = selected_nav if selected_nav else NAV_NEWS
+        if selected_nav:
+            st.session_state["main_nav"] = selected_nav
     else:
-        if st.session_state.get("main_nav") not in nav_labels_main:
-            st.session_state["main_nav"] = nav_labels_main[0]
-        nav = st.radio("เมนูหลัก", nav_labels_main, horizontal=True, key="main_nav",
-                       label_visibility="collapsed")
+        default_idx = nav_labels_main.index(current_nav)
+        selected_nav = st.radio(
+            "เมนูหลัก",
+            nav_labels_main,
+            horizontal=True,
+            index=default_idx,
+            key="main_nav_tabs",
+            label_visibility="collapsed",
+        )
+        nav = selected_nav
+        st.session_state["main_nav"] = selected_nav
 
     if nav == NAV_LABELS[0]:
         render_tab1(cfg, data, data_err)
