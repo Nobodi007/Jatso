@@ -5254,18 +5254,23 @@ def render_auto_dca(cfg: dict[str, Any], sim: dict[str, Any], data: pd.DataFrame
         r6 = _asset_return_pct(a, 6, cfg)
         r1_txt = f"{'+' if (r1 or 0) >= 0 else ''}{r1:.2f}%" if r1 is not None else "—"
         r6_txt = f"{'+' if (r6 or 0) >= 0 else ''}{r6:.2f}%" if r6 is not None else "—"
-        r1_cls = "ex-green" if (r1 or 0) >= 0 else "ex-red"
-        r6_cls = "ex-green" if (r6 or 0) >= 0 else "ex-red"
+        r1_cls = "#0ecb81" if (r1 or 0) >= 0 else "#f6465d"
+        r6_cls = "#0ecb81" if (r6 or 0) >= 0 else "#f6465d"
         with col:
             st.markdown(
-                f'<div style="background:#181a20;border:1px solid #2b3139;border-radius:10px;padding:10px 12px;">'
-                f'<div style="display:flex;align-items:center;gap:6px;font-weight:700;color:#EAECEF;font-size:.85rem;">'
+                f'<div style="background:#181a20;border:1px solid #2b3139;border-radius:10px;'
+                f'padding:10px 12px;min-width:0;">'
+                f'<div style="display:flex;align-items:center;gap:6px;font-weight:700;color:#EAECEF;'
+                f'font-size:.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
                 f'{coin_icon_html(a, 20)}{a}</div>'
-                f'<div style="font-size:.72rem;color:#848e9c;margin-top:6px;">ย้อนหลัง 1 ปี '
-                f'<span class="{r1_cls}" style="float:right;">{r1_txt}</span></div>'
-                f'<div style="font-size:.72rem;color:#848e9c;">ย้อนหลัง 6 เดือน '
-                f'<span class="{r6_cls}" style="float:right;">{r6_txt}</span></div>'
+                f'<div style="display:flex;justify-content:space-between;gap:4px;'
+                f'font-size:.7rem;color:#848e9c;margin-top:6px;white-space:nowrap;">'
+                f'<span>1 ปี</span><b style="color:{r1_cls};">{r1_txt}</b></div>'
+                f'<div style="display:flex;justify-content:space-between;gap:4px;'
+                f'font-size:.7rem;color:#848e9c;margin-top:2px;white-space:nowrap;">'
+                f'<span>6 เดือน</span><b style="color:{r6_cls};">{r6_txt}</b></div>'
                 f'</div>', unsafe_allow_html=True)
+
 
 
 def _bo_fig(fig, h=300, title=""):
