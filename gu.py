@@ -1733,6 +1733,8 @@ def profile_state_path() -> Path:
     return Path(os.environ.get(PROFILE_STATE_ENV_VAR) or (_HERE / "user_profiles.json"))
 
 def load_profiles() -> dict[str, dict[str, str]]:
+    if is_guest_mode():
+        return {}
     sb = _get_supabase()
     if sb is not None:
         try:
@@ -1765,6 +1767,8 @@ def load_profiles() -> dict[str, dict[str, str]]:
 
 def save_profile(email: str, display_name: str, avatar_b64: Optional[str] = None,
                  role: Optional[str] = None) -> None:
+    if is_guest_mode():
+        return
     email = str(email or "").strip().lower()
     existing = load_profiles()
     if role is None:
@@ -1813,6 +1817,29 @@ ROLE_LABEL_TH = {
     ROLE_TRADER: "💼 Trader (ซื้อขายได้)",
     ROLE_ADMIN: "🛡️ Admin (จัดการระบบ)",
 }
+
+# Guest / Demo mode: ใช้ session_state เท่านั้นและห้ามแตะ persistence backend
+GUEST_ROLE = ROLE_TRADER
+
+def is_guest_mode() -> bool:
+    return bool(st.session_state.get("guest_mode", False))
+
+def _guest_email() -> str:
+    st.session_state.setdefault("guest_id", uuid.uuid4().hex[:8])
+    return f"guest-{st.session_state['guest_id']}@guest.local"
+
+def _start_guest_session() -> None:
+    st.session_state.clear()
+    st.session_state["guest_mode"] = True
+    st.session_state["guest_id"] = uuid.uuid4().hex[:8]
+    st.session_state["current_role"] = GUEST_ROLE
+    st.rerun()
+
+def _end_guest_session() -> None:
+    # ล้าง session ทั้งหมดทันที — ข้อมูล Guest ไม่เคยถูกเขียนลง Supabase/ไฟล์
+    st.session_state.clear()
+    st.rerun()
+
 ADMIN_EMAILS_ENV_VAR = "XSPRING_ADMIN_EMAILS"
 
 
@@ -1900,7 +1927,7 @@ def build_audit_records(prev: Optional[Mapping[str, Any]], current: Mapping[str,
     return records
 
 def append_audit_records(records: list[dict[str, Any]], path: Optional[Path] = None) -> None:
-    if not records:
+    if is_guest_mode() or not records:
         return
 
     sb = _get_supabase()
@@ -1932,6 +1959,8 @@ def append_audit_records(records: list[dict[str, Any]], path: Optional[Path] = N
         os.fsync(fh.fileno())
 
 def read_audit_records(path: Optional[Path] = None, limit: Optional[int] = None) -> list[dict[str, Any]]:
+    if is_guest_mode():
+        return []
     sb = _get_supabase()
     if sb is not None:
         try:
@@ -1975,7 +2004,7 @@ def sim_state_path() -> Path:
     return Path(os.environ.get(SIM_STATE_ENV_VAR) or (_HERE / "sim_state.json"))
 
 def save_sim_state(sim: Any, path: Optional[Path] = None) -> None:
-    if not isinstance(sim, dict):
+    if is_guest_mode() or not isinstance(sim, dict):
         return
 
     sb = _get_supabase()
@@ -1996,6 +2025,8 @@ def save_sim_state(sim: Any, path: Optional[Path] = None) -> None:
     os.replace(tmp, p)
 
 def load_sim_state(path: Optional[Path] = None) -> Optional[dict[str, Any]]:
+    if is_guest_mode():
+        return None
     sb = _get_supabase()
     if sb is not None:
         try:
@@ -2038,6 +2069,8 @@ def fav_state_path() -> Path:
     return Path(os.environ.get(FAV_STATE_ENV_VAR) or (_HERE / "favorites.json"))
 
 def save_favorites(favs: Any, path: Optional[Path] = None) -> None:
+    if is_guest_mode():
+        return
     clean = [s for s in (favs or []) if s in SUPPORTED_ASSETS]
 
     sb = _get_supabase()
@@ -2058,6 +2091,8 @@ def save_favorites(favs: Any, path: Optional[Path] = None) -> None:
     os.replace(tmp, p)
 
 def load_favorites(path: Optional[Path] = None) -> list[str]:
+    if is_guest_mode():
+        return []
     sb = _get_supabase()
     if sb is not None:
         try:
@@ -2678,6 +2713,8 @@ def save_nc_snapshot(cfg: dict[str, Any], data: pd.DataFrame) -> bool:
         return False
     st.session_state.setdefault("nc_snapshots", []).append(payload)
     st.session_state["nc_snapshots"] = st.session_state["nc_snapshots"][-100:]
+    if is_guest_mode():
+        return False
     sb = _get_supabase()
     if sb is not None:
         try:
@@ -2697,6 +2734,8 @@ def save_nc_snapshot(cfg: dict[str, Any], data: pd.DataFrame) -> bool:
 
 
 def load_nc_snapshots(limit: int = 100) -> list[dict[str, Any]]:
+    if is_guest_mode():
+        return list(st.session_state.get("nc_snapshots", []))[-limit:]
     sb = _get_supabase()
     if sb is not None:
         try:
@@ -5314,19 +5353,26 @@ def render_alert_banner(alerts: list[dict[str, str]]) -> None:
 def _main_body() -> None:
     st.markdown(THEME_CSS, unsafe_allow_html=True)
 
-    if "sim" not in st.session_state:
-        saved = load_sim_state()
-        if saved:
-            st.session_state["sim"] = saved
+    if is_guest_mode():
+        st.session_state.setdefault("favorite_tickers", [])
+        st.session_state["current_role"] = GUEST_ROLE
+        email = _guest_email()
+        d_name = f"Guest ({st.session_state.get('guest_id', '')})"
+        avatar_b64 = ""
+    else:
+        if "sim" not in st.session_state:
+            saved = load_sim_state()
+            if saved:
+                st.session_state["sim"] = saved
 
-    if "favorite_tickers" not in st.session_state:
-        st.session_state["favorite_tickers"] = load_favorites()
+        if "favorite_tickers" not in st.session_state:
+            st.session_state["favorite_tickers"] = load_favorites()
 
-    email = getattr(st.user, 'email', '')
-    user_prof = load_profiles().get(email, {})
-    st.session_state["current_role"] = _normalize_role(user_prof.get("role"))
-    d_name = user_prof.get("display_name", email)
-    avatar_b64 = user_prof.get("avatar_b64", "")
+        email = getattr(st.user, 'email', '')
+        user_prof = load_profiles().get(email, {})
+        st.session_state["current_role"] = _normalize_role(user_prof.get("role"))
+        d_name = user_prof.get("display_name", email)
+        avatar_b64 = user_prof.get("avatar_b64", "")
 
     # ---- แสดงส่วนหัวด้านบนของหน้าหลัก ----
     top_l, top_news, top_r = st.columns([3.8, 4.4, 2.0])
@@ -5336,7 +5382,7 @@ def _main_body() -> None:
     f'<img src="{DEV_AVATAR_B64}" width="40" height="40" '
     f'style="border-radius:50%;object-fit:cover;border:2px solid #2b3139;">'
     f'<div>'
-    f'<div style="color:#EAECEF;font-weight:700;font-size:0.9rem;line-height:1.6;padding-top:2px;">Made in {DEV_NAME}</div>'
+    f'<div style="color:#EAECEF;font-weight:700;font-size:0.9rem;line-height:1.6;padding-top:2px;">ทำโดย {DEV_NAME}</div>'
     f'<a href="{DEV_LINKEDIN}" target="_blank" '
     f'style="color:#0ecb81;font-size:0.75rem;text-decoration:none;line-height:1.6;">🔗 ดูโปรไฟล์ LinkedIn</a>'
     f'</div></div>',
@@ -5385,7 +5431,15 @@ f'<div style="font-size:0.68rem;color:#0ecb81;">{ROLE_LABEL_TH[current_role()]}<
 
     with st.sidebar:
         st.divider()
-        st.button("ออกจากระบบ", key="logout_btn", on_click=st.logout, use_container_width=True)
+        if is_guest_mode():
+            st.button(
+                "🚪 ออกจากระบบ Guest (ล้างข้อมูลทั้งหมด)",
+                key="logout_btn",
+                on_click=_end_guest_session,
+                use_container_width=True,
+            )
+        else:
+            st.button("ออกจากระบบ", key="logout_btn", on_click=st.logout, use_container_width=True)
 
     if not cfg["dates_ok"]:
         data, data_err = pd.DataFrame(), "ช่วงวันที่ไม่ถูกต้อง"
@@ -5503,6 +5557,10 @@ def _allowed_email() -> str:
     return str(v or os.environ.get("XSPRING_EMAIL", "")).strip().lower()
 
 def require_login() -> bool:
+    if is_guest_mode():
+        st.session_state["current_role"] = GUEST_ROLE
+        return True
+
     try:
         logged_in = bool(st.user.is_logged_in)
     except Exception:
@@ -5583,6 +5641,17 @@ def require_login() -> bool:
         """, unsafe_allow_html=True)
         st.button("🔐  Continue with Google", key="login_google", on_click=st.login,
                   use_container_width=True)
+        st.markdown(
+            '<div style="margin:10px 0;color:#5e6673;font-size:.75rem;">หรือ</div>',
+            unsafe_allow_html=True,
+        )
+        st.button(
+            "👤 ทดลองใช้แบบ Guest (ไม่ต้องล็อกอิน)",
+            key="login_guest",
+            on_click=_start_guest_session,
+            use_container_width=True,
+        )
+        st.caption("โหมด Guest: ข้อมูลทั้งหมดจะหายทันทีเมื่อออกจากระบบ และไม่ถูกบันทึกไว้ที่ไหน")
         st.markdown(f"""
             <div class="login-foot">XSpring Dealer Suite · Model v{MODEL_VERSION}</div>
           </div>
