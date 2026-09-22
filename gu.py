@@ -3100,6 +3100,42 @@ def _news_parse_rss(xml_bytes: bytes, source: str) -> list[dict]:
 
 
 @_cache_data(ttl=600, show_spinner=False)
+def fetch_crypto_news_rss(limit: int = 30) -> list[dict]:
+    """ดึงข่าวจาก RSS feeds และคืนค่าเฉพาะข่าวที่เกี่ยวข้องกับเหรียญในระบบ."""
+    out = []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (XSpring-Dealer-Suite/1.0)",
+        "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
+    }
+
+    for source, feed_url in NEWS_RSS_FEEDS.items():
+        try:
+            req = urllib.request.Request(feed_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                xml_bytes = resp.read()
+            items = _news_parse_rss(xml_bytes, source)
+            for item in items:
+                if _news_match_assets(item):
+                    out.append(item)
+        except Exception:
+            # RSS เป็นแหล่งเสริม ถ้า feed ใดล่มให้ CryptoCompare ทำงานต่อได้ตามปกติ
+            continue
+
+    seen = set()
+    deduped = []
+    for item in sorted(out, key=lambda x: x.get("published_on", 0), reverse=True):
+        key = item.get("url") or item.get("title") or ""
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+        if len(deduped) >= max(limit, 1):
+            break
+
+    return deduped
+
+
+@_cache_data(ttl=600, show_spinner=False)
 def fetch_crypto_news(limit: int = 30) -> list[dict]:
     """
     รวมข่าวจาก CryptoCompare + RSS แล้ว dedupe/filter ตามเหรียญในระบบ.
@@ -4575,8 +4611,8 @@ def _main_body() -> None:
     d_name = user_prof.get("display_name", email)
     avatar_b64 = user_prof.get("avatar_b64", "")
 
-    # ---- แสดงโปรไฟล์ที่ด้านบนของหน้าหลัก ----
-    top_l, top_r = st.columns([8, 2])
+    # ---- แสดงส่วนหัวด้านบนของหน้าหลัก ----
+    top_l, top_news, top_r = st.columns([3.8, 4.4, 2.0])
     with top_l:
         st.markdown(
     f'<div style="display:flex;align-items:center;gap:12px;padding:6px 0;">'
@@ -4589,6 +4625,18 @@ def _main_body() -> None:
     f'</div></div>',
     unsafe_allow_html=True,
 )
+    with top_news:
+        st.markdown('<div style="height:6px;"></div>', unsafe_allow_html=True)
+        news_active = st.session_state.get("main_nav") == NAV_NEWS
+        if st.button(
+            "📰 ข่าวคริปโท",
+            key="top_news_btn",
+            type="primary" if news_active else "secondary",
+            use_container_width=True,
+        ):
+            st.session_state["main_nav"] = NAV_NEWS
+            st.rerun()
+
     with top_r:
         if avatar_b64:
             img_src = f"data:image/png;base64,{avatar_b64}" if not avatar_b64.startswith("http") else avatar_b64
@@ -4625,8 +4673,15 @@ def _main_body() -> None:
     if "main_nav" not in st.session_state:
         st.session_state["main_nav"] = NAV_LABELS[0]
 
-    nav = st.radio("เมนูหลัก", NAV_LABELS, horizontal=True, key="main_nav",
-                   label_visibility="collapsed")
+    nav_labels_main = [label for label in NAV_LABELS if label != NAV_NEWS]
+    if st.session_state.get("main_nav") == NAV_NEWS:
+        # ข่าวถูกย้ายขึ้นไปไว้ในปุ่มด้านบนแล้ว
+        nav = NAV_NEWS
+    else:
+        if st.session_state.get("main_nav") not in nav_labels_main:
+            st.session_state["main_nav"] = nav_labels_main[0]
+        nav = st.radio("เมนูหลัก", nav_labels_main, horizontal=True, key="main_nav",
+                       label_visibility="collapsed")
 
     if nav == NAV_LABELS[0]:
         render_tab1(cfg, data, data_err)
