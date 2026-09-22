@@ -4806,19 +4806,6 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                                     norm_w[a_] * indiv_haircuts[a_]
                                     for a_ in indiv_haircuts) / w_sum
 
-                        if len(ret_df.columns) >= 2:
-                            section("🔥 Correlation Heatmap (Daily Returns)")
-                            corr = ret_df.corr()
-                            fig_corr = go.Figure(go.Heatmap(
-                                z=corr.values, x=list(corr.columns), y=list(corr.columns),
-                                colorscale=[[0, "#f6465d"], [0.5, "#181a20"], [1, "#0ecb81"]],
-                                zmin=-1, zmax=1, texttemplate="%{z:.2f}", textfont={"size": 11},
-                            ))
-                            fig_corr.update_layout(
-                                template="plotly_dark", height=380, margin=dict(t=20, b=20),
-                                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-                            st.plotly_chart(fig_corr, **WIDE)
-                            st.caption("ยิ่งใกล้ +1 = เคลื่อนไหวไปทางเดียวกันมาก (กระจายความเสี่ยงได้น้อย) · ใกล้ -1 = สวนทางกัน (ช่วยลดความเสี่ยงพอร์ตได้ดี)")
 
     if rp is None:
         return
@@ -4860,23 +4847,91 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         warn=(nc_buffer_thb < 0.5 * required_nc_total),
     )
 
-    if weighted_avg_haircut is not None:
+    # Multi-Asset Portfolio NC Planner: ใช้ตัวเลือกเหรียญ + น้ำหนักด้านบนโดยตรง
+    # ไม่มี asset picker ซ้ำ และไม่สร้าง correlation heatmap เพิ่ม
+    if cp_mode.startswith("Multi") and weighted_avg_haircut is not None:
+        per_asset_rows = []
+        total_vol = cfg["monthly_volume_thb"]
+        for a_ in ret_df.columns:
+            vol_i = total_vol * norm_w.get(a_, 0.0)
+            rp_i = risk_profile(price_map[a_]["Global_USD"])
+            h_i = crypto_haircut(rp_i["es99"], settlement_days) if rp_i else cfg["custody_rate_blended"]
+            per_asset_rows.append({
+                "asset": a_,
+                "weight": norm_w.get(a_, 0.0),
+                "monthly_volume": vol_i,
+                "haircut": h_i,
+                "required_stock": a_factor * vol_i,
+                "stock_after_haircut": a_factor * vol_i * (1 - h_i),
+            })
+        pnc_df = pd.DataFrame(per_asset_rows)
+        per_asset_stock_value = float(pnc_df["stock_after_haircut"].sum()) if not pnc_df.empty else 0.0
+        portfolio_stock_value = required_stock_thb * (1 - h_crypto)
+        base_nc = (cash_after_stock_thb
+                   + cfg["cex_margin_thb"] * (1 - h_cex)
+                   - cfg["liab_thb"])
+        per_asset_actual_nc = base_nc + per_asset_stock_value
+        portfolio_actual_nc = base_nc + portfolio_stock_value
+        per_asset_buffer = per_asset_actual_nc - required_nc_total
+        portfolio_buffer = portfolio_actual_nc - required_nc_total
+
+        section("🧺 Multi-Asset Portfolio NC Planner")
+        st.caption(
+            "ใช้เหรียญและ % น้ำหนักจากตัวเลือกด้านบนโดยตรง · เปรียบเทียบ Haircut แยกรายเหรียญ "
+            "กับ Portfolio ES99 ที่คำนึงถึงการกระจายความเสี่ยง โดยไม่สร้างตัวเลือกซ้ำ"
+        )
+        pc1, pc2, pc3, pc4 = st.columns(4)
+        metric_card(pc1, "ปริมาณธุรกรรมรวม/เดือน", fmt_baht(total_vol))
+        metric_card(pc2, "Required Stock รวม", fmt_baht(required_stock_thb))
+        metric_card(pc3, "Haircut แยกรายเหรียญ", f"{weighted_avg_haircut * 100:.2f}%")
+        metric_card(pc4, "Portfolio ES99 Haircut", f"{h_crypto * 100:.2f}%")
+
+        nc1, nc2 = st.columns(2)
+        with nc1:
+            st.markdown("**Haircut แยกรายเหรียญ**")
+            verdict_box(
+                per_asset_buffer >= 0,
+                f"NC จริง {fmt_baht(per_asset_actual_nc)}",
+                f"Buffer {fmt_baht(per_asset_buffer, True)}",
+                warn=(per_asset_buffer < 0.5 * required_nc_total),
+            )
+        with nc2:
+            st.markdown("**Portfolio ES99 (Correlation)**")
+            verdict_box(
+                portfolio_buffer >= 0,
+                f"NC จริง {fmt_baht(portfolio_actual_nc)}",
+                f"Buffer {fmt_baht(portfolio_buffer, True)}",
+                warn=(portfolio_buffer < 0.5 * required_nc_total),
+            )
+
         diff_pp = (weighted_avg_haircut - h_crypto) * 100
         if diff_pp > 0.01:
             st.caption(
-                f"💡 Diversification benefit: Haircut รวมพอร์ต (คำนึงถึง Correlation) "
-                f"{h_crypto * 100:.2f}% ต่ำกว่าค่าเฉลี่ยถ่วงน้ำหนักแบบแยกรายเหรียญ "
-                f"{weighted_avg_haircut * 100:.2f}% (ต่างกัน {diff_pp:.2f} จุด) "
-                "— เพราะเหรียญในพอร์ตไม่เคลื่อนไหวทางเดียวกันหมด")
+                f"💡 Diversification benefit: Portfolio ES99 Haircut {h_crypto * 100:.2f}% "
+                f"ต่ำกว่าค่าเฉลี่ยถ่วงน้ำหนักรายเหรียญ {weighted_avg_haircut * 100:.2f}% "
+                f"(ต่างกัน {diff_pp:.2f} จุด) — ได้ประโยชน์จากการกระจายพอร์ต")
         elif diff_pp < -0.01:
             st.caption(
-                f"⚠️ Haircut รวมพอร์ต {h_crypto * 100:.2f}% สูงกว่าค่าเฉลี่ยแยกรายเหรียญ "
-                f"{weighted_avg_haircut * 100:.2f}% — เหรียญในพอร์ตเคลื่อนไหวสัมพันธ์กันสูง "
-                "จึงแทบไม่ได้ประโยชน์จากการกระจายความเสี่ยง")
+                f"⚠️ Portfolio ES99 Haircut {h_crypto * 100:.2f}% สูงกว่าค่าเฉลี่ยรายเหรียญ "
+                f"{weighted_avg_haircut * 100:.2f}% (ต่างกัน {abs(diff_pp):.2f} จุด) "
+                "— การกระจายพอร์ตช่วยลดความเสี่ยงได้น้อย")
         else:
             st.caption(
-                f"Haircut รวมพอร์ต ({h_crypto * 100:.2f}%) ใกล้เคียงค่าเฉลี่ยแยกรายเหรียญ "
-                "— ไม่ได้ประโยชน์จากการกระจายความเสี่ยงมากนัก")
+                f"Haircut Portfolio ES99 ({h_crypto * 100:.2f}%) ใกล้เคียงค่าเฉลี่ยรายเหรียญ "
+                "— diversification benefit มีไม่มาก")
+
+        disp = pnc_df.copy()
+        disp["weight"] = disp["weight"].map(lambda v: f"{v * 100:.0f}%")
+        disp["monthly_volume"] = disp["monthly_volume"].map(fmt_baht)
+        disp["haircut"] = disp["haircut"].map(lambda v: f"{v * 100:.2f}%")
+        disp["required_stock"] = disp["required_stock"].map(fmt_baht)
+        disp["stock_after_haircut"] = disp["stock_after_haircut"].map(fmt_baht)
+        disp = disp.rename(columns={
+            "asset": "เหรียญ", "weight": "น้ำหนัก", "monthly_volume": "ปริมาณ/เดือน",
+            "haircut": "Haircut", "required_stock": "Required Stock",
+            "stock_after_haircut": "Stock หลัง Haircut",
+        })
+        st.dataframe(disp, height=min(300, 40 + 35 * len(disp)), **WIDE)
 
     section("📊 รายละเอียดตัวเลข")
     k1 = st.columns(4)
