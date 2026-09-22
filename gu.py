@@ -11,6 +11,7 @@ LAYERS
   3. UI THEME & COMPONENTS  CSS, metric card, timeline, gauge, TradingView
   4. AUDIT TRAIL            log การเปลี่ยนพารามิเตอร์
   5. APP                    sidebar + 4 tabs + AI FAB (อยู่ใน main() ทั้งหมด)
+  PHASE 2. CORE BUSINESS VALUE scenario/stress, snapshots, config compare, exports, ratios
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.33"
+MODEL_VERSION = "1.6.0"
 
 try:
     import yaml
@@ -2551,6 +2552,253 @@ def build_sidebar() -> dict[str, Any]:
     )
 
 
+# =========================================================================
+# PHASE 2 — CORE BUSINESS VALUE
+# Scenario / Stress · Historical Snapshot · Config Compare · PDF/Excel ·
+# Sharpe / Sortino
+# =========================================================================
+
+
+def _backtest_frame(cfg: dict[str, Any], data: pd.DataFrame,
+                    shock_pct: float = 0.0, shock_days: int = 0) -> pd.DataFrame:
+    """สร้าง backtest ledger แบบ pure-ish เพื่อให้ baseline/scenario ใช้สูตรชุดเดียวกัน"""
+    bt = data.copy()
+    if shock_pct and shock_days > 0 and not bt.empty:
+        n = min(int(shock_days), len(bt))
+        bt.iloc[:n, bt.columns.get_loc("Global_USD")] *= (1.0 + float(shock_pct))
+
+    asset = cfg["asset"]
+    trade_vol = float(cfg["trade_vol"])
+    hedge_fee = float(cfg["hedge_fee"])
+    bt["Local_THB"] = bt["Global_USD"] * bt["USDTHB"] * (1 + cfg["local_premium"])
+    bt["Coin_Volume"] = trade_vol / bt["Global_USD"].replace(0, np.nan)
+    bt["Gross_Notional_THB"] = bt["Coin_Volume"] * bt["Local_THB"]
+    bt["Spread_Revenue_THB"] = bt["Gross_Notional_THB"] * cfg["dealer_spread"]
+    bt["FX_Basis_PnL_THB"] = trade_vol * bt["USDTHB"] * cfg["local_premium"]
+    bt["Hedge_Fee_Cost_THB"] = trade_vol * hedge_fee * bt["USDTHB"]
+    bt["Hedge_Notional_USD"] = trade_vol * (1 + hedge_fee)
+    bt["KTB_FX_Benefit_THB"] = trade_vol * bt["USDTHB"] * (cfg["ktb_fx_spread_bps"] / 10000.0)
+    if asset in STABLECOINS:
+        bt["Depeg_Deviation"] = cfg["peg_target"] - bt["Global_USD"]
+        bt["Depeg_PnL_THB"] = bt["Coin_Volume"] * bt["Depeg_Deviation"] * bt["USDTHB"] * cfg["depeg_capture_pct"]
+        bt["Carry_Yield_THB"] = trade_vol * (cfg["carry_apy"] / 365) * bt["USDTHB"]
+        bt["Slippage_Cost_THB"] = 0.0
+    else:
+        bt["Depeg_Deviation"] = 0.0
+        bt["Depeg_PnL_THB"] = 0.0
+        bt["Carry_Yield_THB"] = 0.0
+        impact_rate = market_impact_rate(trade_vol, cfg["market_depth_usd"], cfg["impact_penalty"])
+        bt["Slippage_Cost_THB"] = (trade_vol * bt["Volatility_Pct"] * cfg["slippage_sensitivity"] * bt["USDTHB"]
+                                   + trade_vol * impact_rate * bt["USDTHB"])
+    bt["Trading_Fee_Revenue_THB"] = (bt["Gross_Notional_THB"] * LOCAL_TRADING_FEE_PCT
+                                      if cfg["include_trading_fee_revenue"] else 0.0)
+    wd_network_cost = WITHDRAWAL_FEE_TABLE.get(asset, 0.0) * bt["Global_USD"] * bt["USDTHB"] * cfg["settlements_per_day"]
+    bt["Withdrawal_Fee_Markup_Revenue_THB"] = wd_network_cost * cfg["withdrawal_fee_markup_pct"]
+    bt["THB_WD_Fee"] = bt["USDTHB"].map(lambda fx: calc_thb_withdrawal_fee(
+        trade_vol * fx, cfg["bank_type"], cfg["ktb_wd_fee_thb"]))
+    bt["THB_Fee_Markup_Revenue_THB"] = bt["THB_WD_Fee"] * cfg["settlements_per_day"] * cfg["withdrawal_fee_markup_pct"]
+    bt["Fee_Revenue_THB"] = bt["Trading_Fee_Revenue_THB"] + bt["Withdrawal_Fee_Markup_Revenue_THB"] + bt["THB_Fee_Markup_Revenue_THB"]
+    bt["Revenue_THB"] = (bt["Spread_Revenue_THB"] + bt["FX_Basis_PnL_THB"] + bt["Fee_Revenue_THB"]
+                         + bt["Depeg_PnL_THB"] + bt["Carry_Yield_THB"] + bt["KTB_FX_Benefit_THB"])
+    bt["Cost_THB"] = bt["Hedge_Fee_Cost_THB"] + bt["Slippage_Cost_THB"]
+    bt["Daily_PnL_THB"] = bt["Revenue_THB"] - bt["Cost_THB"]
+    allowed, usage = apply_fx_limit(bt["Hedge_Notional_USD"], bt.index, cfg["fx_limit_max"])
+    bt["Trade_Allowed"] = allowed
+    bt["Current_FX_Usage"] = usage
+    bt["FX_Limit_Hit"] = 1 - allowed
+    bt["Actual_Daily_PnL"] = np.where(allowed == 1, bt["Daily_PnL_THB"], 0.0)
+    bt["Actual_Cum_PnL"] = bt["Actual_Daily_PnL"].cumsum()
+    return bt
+
+
+def _performance_ratios(pnl: pd.Series) -> tuple[float, float]:
+    r = pd.Series(pnl, dtype=float).replace([np.inf, -np.inf], np.nan).dropna()
+    if len(r) < 2 or float(r.std(ddof=1)) == 0:
+        return 0.0, 0.0
+    mean = float(r.mean())
+    std = float(r.std(ddof=1))
+    sharpe = mean / std * math.sqrt(252.0)
+    downside = r[r < 0]
+    dstd = float(downside.std(ddof=1)) if len(downside) >= 2 else 0.0
+    sortino = mean / dstd * math.sqrt(252.0) if dstd > 0 else 0.0
+    return sharpe, sortino
+
+
+def _backtest_metrics(bt: pd.DataFrame) -> dict[str, Any]:
+    traded = bt[bt["Trade_Allowed"] == 1]
+    pnl = bt["Actual_Daily_PnL"]
+    total = float(bt["Actual_Cum_PnL"].iloc[-1]) if not bt.empty else 0.0
+    peak = bt["Actual_Cum_PnL"].cummax() if not bt.empty else pd.Series(dtype=float)
+    dd = float((bt["Actual_Cum_PnL"] - peak).min()) if not bt.empty else 0.0
+    sharpe, sortino = _performance_ratios(pnl)
+    traded_days = int(bt["Trade_Allowed"].sum()) if not bt.empty else 0
+    win_days = int((pnl > 0).sum()) if not bt.empty else 0
+    return {
+        "net_pnl": total,
+        "revenue": float(traded["Revenue_THB"].sum()) if not traded.empty else 0.0,
+        "cost": float(traded["Cost_THB"].sum()) if not traded.empty else 0.0,
+        "max_drawdown": dd,
+        "win_rate": win_days / traded_days * 100 if traded_days else 0.0,
+        "fx_hit_days": int(bt["FX_Limit_Hit"].sum()) if not bt.empty else 0,
+        "traded_days": traded_days,
+        "sharpe": sharpe,
+        "sortino": sortino,
+    }
+
+
+def _scenario_result(cfg: dict[str, Any], data: pd.DataFrame, shock_pct: float, shock_days: int) -> dict[str, Any]:
+    bt = _backtest_frame(cfg, data, shock_pct=shock_pct, shock_days=shock_days)
+    return {"frame": bt, **_backtest_metrics(bt)}
+
+
+def _snapshot_payload(cfg: dict[str, Any], data: pd.DataFrame) -> dict[str, Any]:
+    built = build_dealer_ctx(cfg, data)
+    if built is None:
+        return {}
+    ctx, target = built
+    asset = cfg["asset"]
+    last = data.iloc[-1]
+    nc = nc_snapshot(target, ctx["capital"], ctx["cex_margin"], ctx["liab"],
+                     ctx["h_crypto"], ctx["h_cex"], ctx["fixed_min_nc"],
+                     ctx["trading_risk_rate"], ctx["daily_volume_thb"], ctx["custody_rate"])
+    return {
+        "snapshot_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "actor": _current_actor(), "asset": asset,
+        "price_usd": float(last["Global_USD"]), "usdthb": float(last["USDTHB"]),
+        "required_stock_thb": float(target), "total_capital_thb": float(ctx["capital"]),
+        "cex_margin_thb": float(ctx["cex_margin"]), "liab_thb": float(ctx["liab"]),
+        "nc_actual": float(nc["actual"]), "nc_required": float(nc["required"]),
+        "nc_buffer": float(nc["buffer"]), "config": _json_safe(cfg),
+    }
+
+
+def save_nc_snapshot(cfg: dict[str, Any], data: pd.DataFrame) -> bool:
+    payload = _snapshot_payload(cfg, data)
+    if not payload:
+        return False
+    st.session_state.setdefault("nc_snapshots", []).append(payload)
+    st.session_state["nc_snapshots"] = st.session_state["nc_snapshots"][-100:]
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            sb.table("nc_snapshots").insert(payload).execute()
+            return True
+        except Exception:
+            pass
+    p = _HERE / "nc_snapshots.json"
+    try:
+        old = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else []
+        old = old if isinstance(old, list) else []
+        old.append(payload)
+        p.write_text(json.dumps(old[-1000:], ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    return False
+
+
+def load_nc_snapshots(limit: int = 100) -> list[dict[str, Any]]:
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            res = (sb.table("nc_snapshots").select("*").order("snapshot_at", desc=True).limit(limit).execute())
+            return list(reversed(res.data or []))
+        except Exception:
+            pass
+    return list(st.session_state.get("nc_snapshots", []))[-limit:]
+
+
+def _config_for_compare(cfg: dict[str, Any]) -> dict[str, Any]:
+    keys = ["asset", "dealer_spread", "hedge_fee", "local_premium", "fx_limit_max",
+            "trade_vol", "slippage_sensitivity", "market_depth_usd", "impact_penalty",
+            "monthly_volume_thb", "total_capital_thb", "cex_margin_thb", "liab_thb"]
+    return {k: cfg.get(k) for k in keys}
+
+
+def _phase2_excel_bytes(frames: dict[str, pd.DataFrame], summary: pd.DataFrame) -> bytes:
+    from openpyxl import Workbook
+    from openpyxl.utils.dataframe import dataframe_to_rows
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Summary"
+    for row in dataframe_to_rows(summary, index=False, header=True): ws.append(row)
+    for name, frame in frames.items():
+        ws2 = wb.create_sheet(str(name)[:31])
+        for row in dataframe_to_rows(frame.reset_index(), index=False, header=True): ws2.append(row)
+    out = BytesIO(); wb.save(out); return out.getvalue()
+
+
+def _phase2_pdf_bytes(title: str, summary: pd.DataFrame) -> bytes:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet
+    out = BytesIO(); doc = SimpleDocTemplate(out, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    styles = getSampleStyleSheet(); story = [Paragraph(title, styles["Title"]), Spacer(1, 12)]
+    story.append(Paragraph(f"Model v{MODEL_VERSION} · Generated {datetime.now(timezone.utc).isoformat(timespec='seconds')}", styles["Normal"]))
+    story.append(Spacer(1, 12))
+    data = [list(summary.columns)] + summary.astype(str).values.tolist()
+    t = Table(data, repeatRows=1)
+    t.setStyle(TableStyle([("BACKGROUND", (0,0), (-1,0), colors.HexColor("#20242b")),
+                           ("TEXTCOLOR", (0,0), (-1,0), colors.white), ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
+                           ("FONTSIZE", (0,0), (-1,-1), 7), ("VALIGN", (0,0), (-1,-1), "TOP")]))
+    story.append(t); doc.build(story); return out.getvalue()
+
+
+def render_phase2_tools(cfg: dict[str, Any], data: pd.DataFrame, bt_baseline: Optional[pd.DataFrame] = None) -> None:
+    if data.empty:
+        return
+    with st.expander("🧪 Phase 2 — Scenario / Stress Test", expanded=False):
+        st.caption("จำลอง shock ราคาสินทรัพย์ในช่วงต้นของช่วง backtest โดยไม่แก้ sim wallet จริง")
+        c1, c2, c3 = st.columns(3)
+        shock_pct = c1.number_input("Shock ราคา (%)", value=-30.0, step=5.0, key="p2_shock_pct")
+        shock_days = c2.number_input("ระยะเวลา shock (วัน)", value=min(30, len(data)), min_value=1, max_value=max(1, len(data)), step=1, key="p2_shock_days")
+        if c3.button("🧪 Run Stress Test", key="p2_run_stress", **WIDE):
+            st.session_state["p2_stress_result"] = _scenario_result(cfg, data, shock_pct / 100.0, int(shock_days))
+        sr = st.session_state.get("p2_stress_result")
+        if sr:
+            base = _backtest_metrics(bt_baseline if bt_baseline is not None else _backtest_frame(cfg, data))
+            st.dataframe(pd.DataFrame([
+                {"Metric":"Net P&L", "Baseline":base["net_pnl"], "Stress":sr["net_pnl"], "Δ":sr["net_pnl"]-base["net_pnl"]},
+                {"Metric":"Max Drawdown", "Baseline":base["max_drawdown"], "Stress":sr["max_drawdown"], "Δ":sr["max_drawdown"]-base["max_drawdown"]},
+                {"Metric":"Sharpe", "Baseline":base["sharpe"], "Stress":sr["sharpe"], "Δ":sr["sharpe"]-base["sharpe"]},
+                {"Metric":"Sortino", "Baseline":base["sortino"], "Stress":sr["sortino"], "Δ":sr["sortino"]-base["sortino"]},
+                {"Metric":"FX Limit Hit (days)", "Baseline":base["fx_hit_days"], "Stress":sr["fx_hit_days"], "Δ":sr["fx_hit_days"]-base["fx_hit_days"]},
+            ]), **WIDE)
+
+    with st.expander("🆚 Compare Config A / B", expanded=False):
+        saved = st.session_state.setdefault("p2_configs", {})
+        name = st.text_input("ชื่อ Config ที่ต้องการบันทึก", value="Config A", key="p2_cfg_name")
+        if st.button("💾 บันทึก Config ปัจจุบัน", key="p2_save_cfg", **WIDE):
+            saved[name.strip() or f"Config {len(saved)+1}"] = _config_for_compare(cfg)
+            st.session_state["p2_configs"] = saved
+        if saved:
+            chosen = st.multiselect("เลือก Config ที่จะเปรียบเทียบ", list(saved.keys()), default=list(saved.keys())[:2], max_selections=4, key="p2_compare_sel")
+            if len(chosen) >= 2:
+                rows=[]
+                for nm in chosen:
+                    c = dict(cfg); c.update(saved[nm])
+                    m = _backtest_metrics(_backtest_frame(c, data))
+                    rows.append({"Config":nm, "Net P&L":m["net_pnl"], "Max DD":m["max_drawdown"], "Win Rate %":m["win_rate"], "Sharpe":m["sharpe"], "Sortino":m["sortino"], "FX Hit Days":m["fx_hit_days"]})
+                st.dataframe(pd.DataFrame(rows), **WIDE)
+
+    with st.expander("📸 Historical NC / Capital Snapshot", expanded=False):
+        if st.button("📌 บันทึก Snapshot ตอนนี้", key="p2_snapshot", **WIDE):
+            cloud = save_nc_snapshot(cfg, data)
+            st.success("บันทึก Snapshot ลง Supabase แล้ว" if cloud else "บันทึก Snapshot แล้ว (local fallback)")
+        snaps = load_nc_snapshots(50)
+        if snaps:
+            cols=["snapshot_at","actor","asset","required_stock_thb","nc_actual","nc_required","nc_buffer"]
+            st.dataframe(pd.DataFrame(snaps)[[c for c in cols if c in pd.DataFrame(snaps).columns]], **WIDE)
+
+    with st.expander("📄 Export PDF / Excel", expanded=False):
+        base = _backtest_metrics(bt_baseline if bt_baseline is not None else _backtest_frame(cfg, data))
+        summary = pd.DataFrame([{"Metric":k, "Value":v} for k,v in base.items() if k != "frame"])
+        excel = _phase2_excel_bytes({"Backtest": bt_baseline if bt_baseline is not None else _backtest_frame(cfg, data)}, summary)
+        pdf = _phase2_pdf_bytes(f"XSpring Dealer Suite — Phase 2 Report ({cfg['asset']})", summary)
+        a,b=st.columns(2)
+        a.download_button("⬇️ Excel Report", excel, "xspring_phase2_report.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", **WIDE)
+        b.download_button("⬇️ PDF Report", pdf, "xspring_phase2_report.pdf", "application/pdf", **WIDE)
+
 # ---- 5.2 TAB 1 — BACKTEST ----------------------------------------------
 
 def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]) -> None:
@@ -2736,6 +2984,13 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     else:
         metric_card(r3[2], "Avg Daily Volatility", f"{bt['Volatility_Pct'].mean() * 100:.2f}%")
         metric_card(r3[3], "Total Slippage Cost", fmt_baht(traded["Slippage_Cost_THB"].sum()), -abs(traded["Slippage_Cost_THB"].sum()))
+
+    sharpe, sortino = _performance_ratios(bt["Actual_Daily_PnL"])
+    r4 = st.columns(2)
+    metric_card(r4[0], "Sharpe Ratio", f"{sharpe:.2f}", sharpe, "annualized จาก Daily P&L")
+    metric_card(r4[1], "Sortino Ratio", f"{sortino:.2f}", sortino, "annualized; downside deviation")
+
+    render_phase2_tools(cfg, data, bt_baseline=bt)
 
     # ---- Waterfall ----
     section("💧 Revenue & Cost Waterfall")
