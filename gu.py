@@ -991,6 +991,9 @@ def execute_order(
 TELEGRAM_ENGINE_TAG = "_exchange_engine_v36"
 
 
+TELEGRAM_ENGINE_TAG = "_exchange_engine_v37"
+
+
 def sync_telegram_orders_to_exchange_ledger(
     sim: dict[str, Any],
     data: pd.DataFrame,
@@ -1012,9 +1015,11 @@ def sync_telegram_orders_to_exchange_ledger(
     }
 
     def _is_pending(rec: Any) -> bool:
-        return (isinstance(rec, dict)
-                and str(rec.get("Source", "")).lower() == "telegram"
-                and not rec.get(TELEGRAM_ENGINE_TAG))
+        return (
+            isinstance(rec, dict)
+            and str(rec.get("Source", "")).lower() == "telegram"
+            and not rec.get(TELEGRAM_ENGINE_TAG)
+        )
 
     pending = [(i, r) for i, r in enumerate(orders) if _is_pending(r)]
     if not pending:
@@ -1026,12 +1031,20 @@ def sync_telegram_orders_to_exchange_ledger(
         px_row = data.loc[current_date_val].copy()
     except Exception:
         px_row = data.iloc[-1].copy()
-    coin_price_now = float(px_row["Global_USD"]) * float(px_row["USDTHB"])
 
-    # ---- 1) สร้าง baseline จากออเดอร์ที่ประมวลผลครบแล้วทั้งหมด (เว็บ + Telegram ที่ผ่านแล้ว) ----
-    done_rows = [r for i, r in enumerate(orders)
-                 if isinstance(r, dict) and not _is_pending(r)
-                 and required.issubset(r.keys())]
+    coin_price_now = (
+        float(px_row["Global_USD"]) * float(px_row["USDTHB"])
+    )
+
+    # Baseline = all already-processed rows, including prior web rows and
+    # Telegram rows processed by an earlier pass. Pending Telegram rows are
+    # excluded so that their corrected values are rebuilt exactly once here.
+    done_rows = [
+        r for _, r in enumerate(orders)
+        if isinstance(r, dict)
+        and not _is_pending(r)
+        and required.issubset(r.keys())
+    ]
 
     baseline_sim = copy.deepcopy(sim)
     baseline_sim["inv_coins"] = {}
@@ -1045,15 +1058,19 @@ def sync_telegram_orders_to_exchange_ledger(
     for rec in done_rows:
         asset_r = str(rec.get("เหรียญ") or "").upper()
         if asset_r:
+            # The latest completed row for an asset is its current dealer stock.
+            # Processing order below is chronological for pending Telegram rows.
             baseline_sim["inv_coins"][asset_r] = float(
                 rec.get("สต็อกคงเหลือ", 0.0) or 0.0
             )
+
         baseline_sim["pnl_thb"] += float(
             rec.get("กำไรออเดอร์", 0.0) or 0.0
         )
         baseline_sim["cex_used_thb"] += float(
             rec.get("CEX Liquidity ใช้ (บาท)", 0.0) or 0.0
         )
+
         if str(rec.get("ฝั่ง", "")).strip() == "ซื้อ":
             m = str(rec.get("วันที่", ""))[:7]
             if m:
@@ -1064,9 +1081,11 @@ def sync_telegram_orders_to_exchange_ledger(
             baseline_sim["fx_used_usd"] += float(
                 rec.get("Hedge (USD)", 0.0) or 0.0
             )
+
     baseline_sim["fx_used_usd_by_month"] = fx_by_month
 
     changed = False
+
     for original_idx, tg in sorted(
         pending,
         key=lambda x: (
@@ -1083,20 +1102,21 @@ def sync_telegram_orders_to_exchange_ledger(
             if str(tg.get("ฝั่ง", "")).strip() == "ซื้อ"
             else "sell"
         )
-        amount_thb = float(tg.get("มูลค่า (บาท)", 0.0) or 0.0)
+        amount_thb = float(
+            tg.get("มูลค่า (บาท)", 0.0) or 0.0
+        )
         if amount_thb <= 0:
             continue
 
-        # เหรียญที่ยังไม่เคยมีสต็อก dealer -> เริ่มที่ target เหมือน sim_defaults
-        # (ห้ามเริ่มที่ 0 ไม่งั้นระบบจะ hedge เติมทั้งกอง target ใส่ออเดอร์นี้)
+        # Initialize a never-seen dealer asset at target stock, not zero.
+        # This mirrors sim_defaults and prevents the first Telegram trade from
+        # incorrectly hedging the entire target inventory.
         if asset not in baseline_sim["inv_coins"]:
             baseline_sim["inv_coins"][asset] = (
                 float(target_stock_thb) / coin_price_now
                 if coin_price_now > 0 else 0.0
             )
 
-        # เดือนของออเดอร์ใช้วันที่จริง แต่ราคาฐาน/target ใช้ราคาปัจจุบัน
-        # เพื่อให้สอดคล้องกับ inventory
         try:
             order_date = (
                 pd.Timestamp(tg.get("วันที่"))
@@ -1110,10 +1130,8 @@ def sync_telegram_orders_to_exchange_ledger(
         engine_sim["asset"] = asset
         engine_sim["target_thb"] = float(target_stock_thb)
 
-        quote = float(
-            tg.get("ราคาที่ลูกค้าได้", 0.0) or 0.0
-        ) or None
-
+        # Dealer P&L / hedge / NC must use the exact quote formula used by
+        # the Exchange UI. Do NOT use Telegram's customer-facing quote here.
         _, rec = execute_order(
             engine_sim,
             side,
@@ -1122,7 +1140,7 @@ def sync_telegram_orders_to_exchange_ledger(
             px_row,
             ctx,
             affect_wallet=False,
-            forced_quote=quote,
+            forced_quote=None,
         )
         if not rec:
             continue
@@ -1140,7 +1158,7 @@ def sync_telegram_orders_to_exchange_ledger(
             if key in engine_sim:
                 sim[key] = copy.deepcopy(engine_sim[key])
 
-        # ช่องของ Telegram ที่ต้องคงไว้
+        # Preserve the actual Telegram transaction fields visible to customer.
         rec["Source"] = tg.get("Source", "Telegram")
         rec["Exchange"] = tg.get("Exchange", "Bitkub")
         rec["Order ID"] = tg.get("Order ID")
@@ -1150,6 +1168,7 @@ def sync_telegram_orders_to_exchange_ledger(
         rec["วันที่"] = tg.get(
             "วันที่", order_date.strftime("%Y-%m-%d")
         )
+
         for key in (
             "มูลค่า (บาท)",
             "ราคาที่ลูกค้าได้",
@@ -1165,8 +1184,9 @@ def sync_telegram_orders_to_exchange_ledger(
 
     if changed:
         sim["orders"] = orders
-        # engine เพิ่ม record ซ้ำเข้า engine_sim["orders"] แต่เรา copy กลับเฉพาะ key ด้านบน
-        # จึงไม่มีออเดอร์ซ้ำใน sim["orders"]
+        # execute_order appends to engine_sim["orders"], but only the dealer
+        # state keys above are copied back; the real ledger row is replaced
+        # exactly once in sim["orders"].
     return changed
 
 
