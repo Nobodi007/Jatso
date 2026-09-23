@@ -982,11 +982,13 @@ def sync_telegram_orders_to_exchange_ledger(
     target_stock_thb: float,
     price_lookup: Optional[Mapping[str, float]] = None,
 ) -> bool:
-    """Sync Telegram orders through the exact Exchange Simulator execution engine.
+    """Sync new Telegram trades using the exact same Exchange Simulator engine.
 
-    Telegram already changes the customer wallet at /confirm.  Here we only run
-    the dealer-side ledger/hedge/NC/P&L engine with affect_wallet=False, then
-    replace the incomplete Telegram ledger row with that exact engine result.
+    Important: the web Exchange tab executes against data.loc[current_date_val].
+    Therefore Telegram ledger calculations also use that exact current web row
+    (Global_USD, USDTHB, Volatility_Pct), not a synthetic price and not the
+    Telegram/Bitkub quote. The Telegram quote is preserved only as the actual
+    customer-facing execution price.
     """
     orders = sim.get("orders", [])
     if not isinstance(orders, list) or not orders:
@@ -999,20 +1001,24 @@ def sync_telegram_orders_to_exchange_ledger(
         "CEX Liquidity ใช้สะสม (บาท)", "NC Buffer", "ผลด่าน",
     }
 
+    # Only rows produced by the Telegram bot that have not yet been passed
+    # through the common Exchange engine are processed.
     pending = [
         (idx, rec) for idx, rec in enumerate(orders)
         if isinstance(rec, dict)
         and str(rec.get("Source", "")).lower() == "telegram"
+        and not rec.get("_exchange_engine_v31")
         and not required.issubset(rec.keys())
     ]
     if not pending:
         return False
 
-    pending.sort(key=lambda x: (
-        str(x[1].get("วันที่", "")),
-        str(x[1].get("เวลา", "")),
-        x[0],
-    ))
+    # The Exchange UI uses the current/latest web simulation row.
+    try:
+        web_row = data.loc[current_date_val].copy()
+    except Exception:
+        web_row = data.iloc[-1].copy()
+        current_date_val = pd.Timestamp(data.index[-1])
 
     changed = False
 
@@ -1021,63 +1027,18 @@ def sync_telegram_orders_to_exchange_ledger(
         side = "buy" if str(telegram_rec.get("ฝั่ง", "")).strip() == "ซื้อ" else "sell"
 
         amount_thb = float(telegram_rec.get("มูลค่า (บาท)", 0.0) or 0.0)
-        quote = float(telegram_rec.get("ราคาที่ลูกค้าได้", 0.0) or 0.0)
-
-        if amount_thb <= 0 or quote <= 0:
+        if amount_thb <= 0:
             continue
 
-        try:
-            order_date = pd.Timestamp(str(
-                telegram_rec.get("วันที่") or current_date_val
-            )).normalize()
-        except Exception:
-            order_date = pd.Timestamp(current_date_val).normalize()
+        # Exact Exchange UI inputs:
+        # execute_order(..., data.loc[order_date], ctx)
+        order_date = pd.Timestamp(current_date_val)
+        px_row = web_row.copy()
 
-        # Use the same FX/volatility inputs as the Exchange Simulator.
-        if len(data):
-            try:
-                if order_date in data.index:
-                    px_row = data.loc[order_date].copy()
-                else:
-                    pos = data.index.get_indexer([order_date], method="nearest")[0]
-                    px_row = data.iloc[pos].copy() if pos >= 0 else data.iloc[-1].copy()
-            except Exception:
-                px_row = data.iloc[-1].copy()
-        else:
-            continue
-
-        fx = float(px_row.get("USDTHB", 0.0) or 0.0)
-        daily_vol = float(px_row.get("Volatility_Pct", 0.0) or 0.0)
-        premium = float(ctx.get("local_premium", 0.0) or 0.0)
-        spread = float(ctx.get("spread", 0.0) or 0.0)
-
-        # execute_order calculates:
-        #   BUY  quote = global * (1+premium) * (1+spread)
-        #   SELL quote = global * (1+premium) * (1-spread)
-        # Build a synthetic Global_USD only for this historical simulator row
-        # so the engine reproduces the Telegram's actual customer quote exactly.
-        denom = (
-            (1.0 + premium) * (1.0 + spread)
-            if side == "buy"
-            else (1.0 + premium) * (1.0 - spread)
-        )
-        if fx <= 0 or denom <= 0:
-            continue
-
-        synthetic_spot = quote / (fx * denom)
-        if synthetic_spot <= 0:
-            continue
-
-        px_row = px_row.copy()
-        px_row["Global_USD"] = synthetic_spot
-        px_row["USDTHB"] = fx
-        px_row["Volatility_Pct"] = daily_vol
-
-        # Run the EXACT same engine as the web Exchange UI.
-        # Work on a deep copy so execute_order's own record append is isolated.
+        # Exchange Simulator is single-asset per selected tab.
         engine_sim = copy.deepcopy(sim)
         engine_sim["asset"] = asset
-        engine_sim["target_thb"] = float(sim.get("target_thb", target_stock_thb))
+        engine_sim["target_thb"] = float(target_stock_thb)
 
         _, engine_record = execute_order(
             engine_sim,
@@ -1092,12 +1053,7 @@ def sync_telegram_orders_to_exchange_ledger(
         if not engine_record:
             continue
 
-        # If the Exchange engine rejected the transaction, do not fabricate
-        # ledger numbers. Keep the original Telegram row untouched.
-        if str(engine_record.get("ผลด่าน", "")).startswith("Reject"):
-            continue
-
-        # Transfer ONLY dealer-side state changed by execute_order.
+        # Transfer the exact dealer-side state produced by execute_order.
         for key in (
             "inv_coins",
             "fx_used_usd",
@@ -1109,7 +1065,7 @@ def sync_telegram_orders_to_exchange_ledger(
             if key in engine_sim:
                 sim[key] = copy.deepcopy(engine_sim[key])
 
-        # Preserve Telegram-specific metadata and actual customer-facing quote.
+        # Keep the actual Telegram customer execution metadata/quote.
         engine_record["Source"] = telegram_rec.get("Source", "Telegram")
         engine_record["Exchange"] = telegram_rec.get("Exchange", "Bitkub")
         engine_record["Order ID"] = telegram_rec.get("Order ID")
@@ -1120,8 +1076,6 @@ def sync_telegram_orders_to_exchange_ledger(
             "วันที่", order_date.strftime("%Y-%m-%d")
         )
 
-        # Keep the exact Telegram customer quote/value/fee fields if the bot
-        # stored them, while all dealer-side fields come from execute_order.
         for key in (
             "มูลค่า (บาท)",
             "ราคาที่ลูกค้าได้",
@@ -1130,6 +1084,10 @@ def sync_telegram_orders_to_exchange_ledger(
         ):
             if key in telegram_rec:
                 engine_record[key] = telegram_rec[key]
+
+        # This is the only marker used by the bridge. It prevents a Streamlit
+        # rerun from executing the same Telegram order twice.
+        engine_record["_exchange_engine_v31"] = True
 
         orders[original_idx] = engine_record
         changed = True
