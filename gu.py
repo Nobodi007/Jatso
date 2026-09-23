@@ -988,9 +988,6 @@ def execute_order(
 
 
 
-TELEGRAM_ENGINE_TAG = "_exchange_engine_v36"
-
-
 TELEGRAM_ENGINE_TAG = "_exchange_engine_v37"
 
 
