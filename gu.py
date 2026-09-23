@@ -1015,12 +1015,11 @@ def sync_telegram_orders_to_exchange_ledger(
         "CEX Liquidity ใช้สะสม (บาท)", "NC Buffer", "ผลด่าน",
     }
 
-    pending = [
+       pending = [
         (idx, rec) for idx, rec in enumerate(orders)
         if isinstance(rec, dict)
         and str(rec.get("Source", "")).lower() == "telegram"
         and not rec.get("_exchange_engine_v35")
-        and not required.issubset(rec.keys())
     ]
     if not pending:
         return False
