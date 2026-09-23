@@ -1020,7 +1020,7 @@ def sync_telegram_orders_to_exchange_ledger(
         if isinstance(rec, dict)
         and str(rec.get("Source", "")).lower() == "telegram"
         and not rec.get("_exchange_engine_v35")
-        and not required.issubset(rec.keys())
+        
     ]
     if not pending:
         return False
