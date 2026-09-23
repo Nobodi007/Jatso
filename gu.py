@@ -1020,7 +1020,7 @@ def sync_telegram_orders_to_exchange_ledger(
         if isinstance(rec, dict)
         and str(rec.get("Source", "")).lower() == "telegram"
         and not rec.get("_exchange_engine_v35")
-        
+        and not required.issubset(rec.keys())
     ]
     if not pending:
         return False
@@ -1093,29 +1093,15 @@ def sync_telegram_orders_to_exchange_ledger(
         # baseline instead of always using today's selected simulation row.
         # This keeps coin_price_global / Market Edge aligned with the
         # customer-confirmed Telegram quote.
-        # ราคาฐานสำหรับคำนวณ target_coins/hedge/NC ต้องใช้ราคาปัจจุบันเสมอ
-        # (ตรงกับ baseline_sim["inv_coins"] ที่มาจากสต็อกของ order เว็บล่าสุด
-        # ซึ่งคำนวณด้วยราคาปัจจุบันเช่นกัน) ไม่งั้นเกิดส่วนต่าง "ปลอม" ระหว่าง
-        # target_coins (ราคาวันเก่า) กับ inv_coins (ราคาวันนี้) ทำให้ hedge
-        # และต้นทุนบวมผิดปกติเมื่อ Telegram order เก่ามากและราคาต่างจากปัจจุบันมาก
-                raw_order_date = telegram_rec.get("วันที่")
+        raw_order_date = telegram_rec.get("วันที่")
         try:
-            order_ts = pd.Timestamp(raw_order_date) if raw_order_date else pd.Timestamp(current_date_val)
+            order_ts = (
+                pd.Timestamp(raw_order_date)
+                if raw_order_date
+                else pd.Timestamp(current_date_val)
+            )
         except (TypeError, ValueError):
             order_ts = pd.Timestamp(current_date_val)
-
-        try:
-            if order_ts in data.index:
-                px_row = data.loc[order_ts].copy()
-            else:
-                pos = data.index.get_indexer([order_ts], method="pad")
-                px_row = data.iloc[pos[0]].copy() if pos[0] != -1 else data.loc[current_date_val].copy()
-        except Exception:
-            if len(data) == 0:
-                continue
-            px_row = data.iloc[-1].copy()
-
-        order_date = order_ts
 
         try:
             if order_ts in data.index:
