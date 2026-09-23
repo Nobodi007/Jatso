@@ -2284,14 +2284,6 @@ def sync_remote_config_from_cfg(cfg: Mapping[str, Any]) -> None:
         st.session_state["remote_config_updated_at"] = datetime.now(timezone.utc).isoformat()
 
 
-def render_remote_config_status(remote: Optional[dict[str, Any]]) -> None:
-    if not remote:
-        return
-    updated = str(remote.get("updated_at") or "-")[:19].replace("T", " ")
-    source = remote.get("source") or "-"
-    st.caption(f"📡 Remote Control: เชื่อมกับ Telegram/Supabase · ล่าสุด {updated} UTC · source: {source}")
-
-
 SIM_STATE_ENV_VAR = "XSPRING_SIM_STATE"
 
 def sim_state_path() -> Path:
@@ -6779,7 +6771,6 @@ f'<div style="font-size:0.68rem;color:#0ecb81;">{ROLE_LABEL_TH[current_role()]}<
     apply_remote_config_to_widgets(remote_config)
     cfg = build_sidebar()
     sync_remote_config_from_cfg(cfg)
-    render_remote_config_status(remote_config)
 
     with st.sidebar:
         st.divider()
