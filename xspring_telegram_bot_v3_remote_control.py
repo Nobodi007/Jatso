@@ -1257,8 +1257,8 @@ def _parse_trade_arg(arg: str, side: str) -> tuple[str, float, str, Optional[flo
     parts = arg.strip().split()
     if len(parts) < 2:
         raise ValueError(
-            "ใช้ /buy BTC 500000 [market] หรือ /buy BTC 500000 limit 2800000\n"
-            "ขายใช้ /sell BTC 0.1 [market] หรือ /sell BTC 0.1 limit 2800000"
+            "ใช้ /buy BTC 500000 market หรือ /buy BTC 500000 limit 2800000\n"
+            "ขายใช้ /sell BTC 0.1 market หรือ /sell BTC 0.1 limit 2800000"
         )
     asset = parts[0].upper()
     amount = float(parts[1].replace(",", ""))
