@@ -1019,7 +1019,7 @@ def sync_telegram_orders_to_exchange_ledger(
         (idx, rec) for idx, rec in enumerate(orders)
         if isinstance(rec, dict)
         and str(rec.get("Source", "")).lower() == "telegram"
-        and not rec.get("_exchange_engine_v34")
+        and not rec.get("_exchange_engine_v35")
         and not required.issubset(rec.keys())
     ]
     if not pending:
@@ -1089,15 +1089,37 @@ def sync_telegram_orders_to_exchange_ledger(
         if amount_thb <= 0:
             continue
 
-        # The web Exchange uses the selected current simulation row.
+        # Use the actual Telegram order date for the Exchange planning/market
+        # baseline instead of always using today's selected simulation row.
+        # This keeps coin_price_global / Market Edge aligned with the
+        # customer-confirmed Telegram quote.
+        raw_order_date = telegram_rec.get("วันที่")
         try:
-            px_row = data.loc[current_date_val].copy()
+            order_ts = (
+                pd.Timestamp(raw_order_date)
+                if raw_order_date
+                else pd.Timestamp(current_date_val)
+            )
+        except (TypeError, ValueError):
+            order_ts = pd.Timestamp(current_date_val)
+
+        try:
+            if order_ts in data.index:
+                px_row = data.loc[order_ts].copy()
+            else:
+                # Weekend/holiday or missing exact bar: use the latest
+                # available market bar on or before the Telegram order date.
+                pos = data.index.get_indexer([order_ts], method="pad")
+                if pos[0] != -1:
+                    px_row = data.iloc[pos[0]].copy()
+                else:
+                    px_row = data.loc[current_date_val].copy()
         except Exception:
             if len(data) == 0:
                 continue
             px_row = data.iloc[-1].copy()
 
-        order_date = pd.Timestamp(current_date_val)
+        order_date = order_ts
 
         engine_sim = copy.deepcopy(baseline_sim)
         engine_sim["asset"] = asset
@@ -1156,7 +1178,7 @@ def sync_telegram_orders_to_exchange_ledger(
             if key in telegram_rec:
                 engine_record[key] = telegram_rec[key]
 
-        engine_record["_exchange_engine_v34"] = True
+        engine_record["_exchange_engine_v35"] = True
         orders[original_idx] = engine_record
         changed = True
 
