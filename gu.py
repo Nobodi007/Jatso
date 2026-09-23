@@ -988,6 +988,9 @@ def execute_order(
 
 
 
+TELEGRAM_ENGINE_TAG = "_exchange_engine_v36"
+
+
 def sync_telegram_orders_to_exchange_ledger(
     sim: dict[str, Any],
     data: pd.DataFrame,
@@ -996,7 +999,7 @@ def sync_telegram_orders_to_exchange_ledger(
     target_stock_thb: float,
     price_lookup: Optional[Mapping[str, float]] = None,
 ) -> bool:
-    """Sync Telegram trades through the same dealer-side engine as Exchange."""
+    """ประมวลผลออเดอร์ Telegram ผ่าน execute_order ตัวเดียวกับเว็บ"""
     orders = sim.get("orders", [])
     if not isinstance(orders, list) or not orders:
         return False
@@ -1008,17 +1011,28 @@ def sync_telegram_orders_to_exchange_ledger(
         "CEX Liquidity ใช้สะสม (บาท)", "NC Buffer", "ผลด่าน",
     }
 
-    # Rebuild old Telegram rows once with the corrected engine.
-    pending = [
-        (idx, rec) for idx, rec in enumerate(orders)
-        if isinstance(rec, dict)
-        and str(rec.get("Source", "")).lower() == "telegram"
-        and not rec.get("_exchange_engine_v35")
-    ]
+    def _is_pending(rec: Any) -> bool:
+        return (isinstance(rec, dict)
+                and str(rec.get("Source", "")).lower() == "telegram"
+                and not rec.get(TELEGRAM_ENGINE_TAG))
+
+    pending = [(i, r) for i, r in enumerate(orders) if _is_pending(r)]
     if not pending:
         return False
 
-    # Dealer inventory baseline comes only from completed non-Telegram ledger rows.
+    if len(data) == 0:
+        return False
+    try:
+        px_row = data.loc[current_date_val].copy()
+    except Exception:
+        px_row = data.iloc[-1].copy()
+    coin_price_now = float(px_row["Global_USD"]) * float(px_row["USDTHB"])
+
+    # ---- 1) สร้าง baseline จากออเดอร์ที่ประมวลผลครบแล้วทั้งหมด (เว็บ + Telegram ที่ผ่านแล้ว) ----
+    done_rows = [r for i, r in enumerate(orders)
+                 if isinstance(r, dict) and not _is_pending(r)
+                 and required.issubset(r.keys())]
+
     baseline_sim = copy.deepcopy(sim)
     baseline_sim["inv_coins"] = {}
     baseline_sim["fx_used_usd"] = 0.0
@@ -1027,33 +1041,33 @@ def sync_telegram_orders_to_exchange_ledger(
     baseline_sim["unhedged_thb"] = 0.0
     baseline_sim["pnl_thb"] = 0.0
 
-    web_rows = [
-        rec for rec in orders
-        if isinstance(rec, dict)
-        and str(rec.get("Source", "")).lower() != "telegram"
-        and required.issubset(rec.keys())
-    ]
-
-    if web_rows:
-        latest_by_asset: dict[str, tuple[str, dict[str, Any]]] = {}
-        for rec in web_rows:
-            asset = str(rec.get("เหรียญ") or "").upper()
-            if not asset:
-                continue
-            stamp = f"{rec.get('วันที่','')} {rec.get('เวลา','')}"
-            prev = latest_by_asset.get(asset)
-            if prev is None or stamp >= prev[0]:
-                latest_by_asset[asset] = (stamp, rec)
-
-        for asset, (_, rec) in latest_by_asset.items():
-            if "สต็อกคงเหลือ" in rec:
-                baseline_sim["inv_coins"][asset] = float(
-                    rec.get("สต็อกคงเหลือ", 0.0) or 0.0
+    fx_by_month: dict[str, float] = {}
+    for rec in done_rows:
+        asset_r = str(rec.get("เหรียญ") or "").upper()
+        if asset_r:
+            baseline_sim["inv_coins"][asset_r] = float(
+                rec.get("สต็อกคงเหลือ", 0.0) or 0.0
+            )
+        baseline_sim["pnl_thb"] += float(
+            rec.get("กำไรออเดอร์", 0.0) or 0.0
+        )
+        baseline_sim["cex_used_thb"] += float(
+            rec.get("CEX Liquidity ใช้ (บาท)", 0.0) or 0.0
+        )
+        if str(rec.get("ฝั่ง", "")).strip() == "ซื้อ":
+            m = str(rec.get("วันที่", ""))[:7]
+            if m:
+                fx_by_month[m] = (
+                    fx_by_month.get(m, 0.0)
+                    + float(rec.get("Hedge (USD)", 0.0) or 0.0)
                 )
+            baseline_sim["fx_used_usd"] += float(
+                rec.get("Hedge (USD)", 0.0) or 0.0
+            )
+    baseline_sim["fx_used_usd_by_month"] = fx_by_month
 
     changed = False
-
-    for original_idx, telegram_rec in sorted(
+    for original_idx, tg in sorted(
         pending,
         key=lambda x: (
             str(x[1].get("วันที่", "")),
@@ -1062,58 +1076,45 @@ def sync_telegram_orders_to_exchange_ledger(
         ),
     ):
         asset = str(
-            telegram_rec.get("เหรียญ") or sim.get("asset") or "BTC"
+            tg.get("เหรียญ") or sim.get("asset") or "BTC"
         ).upper()
         side = (
             "buy"
-            if str(telegram_rec.get("ฝั่ง", "")).strip() == "ซื้อ"
+            if str(tg.get("ฝั่ง", "")).strip() == "ซื้อ"
             else "sell"
         )
-        amount_thb = float(
-            telegram_rec.get("มูลค่า (บาท)", 0.0) or 0.0
-        )
+        amount_thb = float(tg.get("มูลค่า (บาท)", 0.0) or 0.0)
         if amount_thb <= 0:
             continue
 
-        # Use the actual Telegram order date for the market baseline.
-        raw_order_date = telegram_rec.get("วันที่")
+        # เหรียญที่ยังไม่เคยมีสต็อก dealer -> เริ่มที่ target เหมือน sim_defaults
+        # (ห้ามเริ่มที่ 0 ไม่งั้นระบบจะ hedge เติมทั้งกอง target ใส่ออเดอร์นี้)
+        if asset not in baseline_sim["inv_coins"]:
+            baseline_sim["inv_coins"][asset] = (
+                float(target_stock_thb) / coin_price_now
+                if coin_price_now > 0 else 0.0
+            )
+
+        # เดือนของออเดอร์ใช้วันที่จริง แต่ราคาฐาน/target ใช้ราคาปัจจุบัน
+        # เพื่อให้สอดคล้องกับ inventory
         try:
-            order_ts = (
-                pd.Timestamp(raw_order_date)
-                if raw_order_date
-                else current_date_val
+            order_date = (
+                pd.Timestamp(tg.get("วันที่"))
+                if tg.get("วันที่")
+                else pd.Timestamp(current_date_val)
             )
         except (TypeError, ValueError):
-            order_ts = current_date_val
-
-        px_row = None
-        try:
-            if order_ts in data.index:
-                px_row = data.loc[order_ts].copy()
-            else:
-                pos = data.index.get_indexer([order_ts], method="pad")
-                if len(pos) and pos[0] != -1:
-                    px_row = data.iloc[pos[0]].copy()
-        except Exception:
-            px_row = None
-
-        if px_row is None:
-            if len(data) == 0:
-                continue
-            px_row = data.iloc[-1].copy()
-            order_date = pd.Timestamp(current_date_val)
-        else:
-            order_date = order_ts
+            order_date = current_date_val
 
         engine_sim = copy.deepcopy(baseline_sim)
         engine_sim["asset"] = asset
         engine_sim["target_thb"] = float(target_stock_thb)
 
-        telegram_quote = float(
-            telegram_rec.get("ราคาที่ลูกค้าได้", 0.0) or 0.0
+        quote = float(
+            tg.get("ราคาที่ลูกค้าได้", 0.0) or 0.0
         ) or None
 
-        _, engine_record = execute_order(
+        _, rec = execute_order(
             engine_sim,
             side,
             amount_thb,
@@ -1121,9 +1122,9 @@ def sync_telegram_orders_to_exchange_ledger(
             px_row,
             ctx,
             affect_wallet=False,
-            forced_quote=telegram_quote,
+            forced_quote=quote,
         )
-        if not engine_record:
+        if not rec:
             continue
 
         baseline_sim = engine_sim
@@ -1139,33 +1140,35 @@ def sync_telegram_orders_to_exchange_ledger(
             if key in engine_sim:
                 sim[key] = copy.deepcopy(engine_sim[key])
 
-        engine_record["Source"] = telegram_rec.get("Source", "Telegram")
-        engine_record["Exchange"] = telegram_rec.get("Exchange", "Bitkub")
-        engine_record["Order ID"] = telegram_rec.get("Order ID")
-        engine_record["สถานะ"] = telegram_rec.get("สถานะ", "Filled")
-        engine_record["ประเภท"] = telegram_rec.get("ประเภท", "MARKET")
-        engine_record["เวลา"] = telegram_rec.get("เวลา", "")
-        engine_record["วันที่"] = telegram_rec.get(
+        # ช่องของ Telegram ที่ต้องคงไว้
+        rec["Source"] = tg.get("Source", "Telegram")
+        rec["Exchange"] = tg.get("Exchange", "Bitkub")
+        rec["Order ID"] = tg.get("Order ID")
+        rec["สถานะ"] = tg.get("สถานะ", "Filled")
+        rec["ประเภท"] = tg.get("ประเภท", "MARKET")
+        rec["เวลา"] = tg.get("เวลา", "")
+        rec["วันที่"] = tg.get(
             "วันที่", order_date.strftime("%Y-%m-%d")
         )
-
         for key in (
             "มูลค่า (บาท)",
             "ราคาที่ลูกค้าได้",
             "เหรียญที่ส่งมอบ",
             "ค่าธรรมเนียม",
         ):
-            if key in telegram_rec:
-                engine_record[key] = telegram_rec[key]
+            if key in tg:
+                rec[key] = tg[key]
 
-        engine_record["_exchange_engine_v35"] = True
-        orders[original_idx] = engine_record
+        rec[TELEGRAM_ENGINE_TAG] = True
+        orders[original_idx] = rec
         changed = True
 
     if changed:
         sim["orders"] = orders
-
+        # engine เพิ่ม record ซ้ำเข้า engine_sim["orders"] แต่เรา copy กลับเฉพาะ key ด้านบน
+        # จึงไม่มีออเดอร์ซ้ำใน sim["orders"]
     return changed
+
 
 
 
