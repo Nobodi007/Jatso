@@ -973,6 +973,180 @@ def execute_order(
     return steps, record
 
 
+
+def sync_telegram_orders_to_exchange_ledger(
+    sim: dict[str, Any],
+    data: pd.DataFrame,
+    current_date_val: pd.Timestamp,
+    ctx: Mapping[str, Any],
+    target_stock_thb: float,
+    price_lookup: Optional[Mapping[str, float]] = None,
+) -> bool:
+    """Sync Telegram trades through the same dealer-side engine as Exchange.
+
+    The customer wallet is already mutated by Telegram /confirm.  For the
+    dealer ledger, rebuild only the inventory baseline from the persisted
+    Exchange orders, then apply the Telegram trade in chronological order.
+    This prevents the Telegram bot's wallet state from suppressing the hedge
+    calculation while keeping NC/FX/CEX/P&L on the web engine.
+    """
+    orders = sim.get("orders", [])
+    if not isinstance(orders, list) or not orders:
+        return False
+
+    required = {
+        "Hedge (เหรียญ)", "Hedge (USD)", "CEX Liquidity ใช้ (บาท)",
+        "Unhedged (บาท)", "Market Edge", "รายได้", "ต้นทุน",
+        "กำไรออเดอร์", "สต็อกคงเหลือ", "FX ใช้สะสม (USD)",
+        "CEX Liquidity ใช้สะสม (บาท)", "NC Buffer", "ผลด่าน",
+    }
+
+    pending = [
+        (idx, rec) for idx, rec in enumerate(orders)
+        if isinstance(rec, dict)
+        and str(rec.get("Source", "")).lower() == "telegram"
+        and not rec.get("_exchange_engine_v32")
+        and not required.issubset(rec.keys())
+    ]
+    if not pending:
+        return False
+
+    # Build dealer inventory from the last known Exchange ledger state rather
+    # than from the Telegram bot's customer wallet state.
+    base_inv = copy.deepcopy(sim.get("inv_coins", {}))
+    base_fx = float(sim.get("fx_used_usd", 0.0) or 0.0)
+    base_fx_months = copy.deepcopy(sim.get("fx_used_usd_by_month", {}))
+    base_cex = float(sim.get("cex_used_thb", 0.0) or 0.0)
+    base_unhedged = float(sim.get("unhedged_thb", 0.0) or 0.0)
+    base_pnl = float(sim.get("pnl_thb", 0.0) or 0.0)
+
+    # Only replay the already-complete web ledger rows into the dealer
+    # inventory baseline. Do not replay Telegram rows here.
+    baseline_sim = copy.deepcopy(sim)
+    baseline_sim["inv_coins"] = {}
+    baseline_sim["fx_used_usd"] = 0.0
+    baseline_sim["fx_used_usd_by_month"] = {}
+    baseline_sim["cex_used_thb"] = 0.0
+    baseline_sim["unhedged_thb"] = 0.0
+    baseline_sim["pnl_thb"] = 0.0
+
+    web_rows = [
+        rec for rec in orders
+        if isinstance(rec, dict)
+        and str(rec.get("Source", "")).lower() != "telegram"
+        and required.issubset(rec.keys())
+    ]
+
+    # The persisted Exchange rows already contain the resulting stock. Use
+    # their latest stock as the authoritative dealer inventory baseline.
+    if web_rows:
+        latest_by_asset: dict[str, tuple[str, dict[str, Any]]] = {}
+        for rec in web_rows:
+            asset = str(rec.get("เหรียญ") or "").upper()
+            if not asset:
+                continue
+            stamp = f"{rec.get('วันที่','')} {rec.get('เวลา','')}"
+            prev = latest_by_asset.get(asset)
+            if prev is None or stamp >= prev[0]:
+                latest_by_asset[asset] = (stamp, rec)
+
+        for asset, (_, rec) in latest_by_asset.items():
+            if "สต็อกคงเหลือ" in rec:
+                baseline_sim["inv_coins"][asset] = float(
+                    rec.get("สต็อกคงเหลือ", 0.0) or 0.0
+                )
+
+    changed = False
+
+    for original_idx, telegram_rec in sorted(
+        pending,
+        key=lambda x: (str(x[1].get("วันที่", "")),
+                       str(x[1].get("เวลา", "")), x[0]),
+    ):
+        asset = str(
+            telegram_rec.get("เหรียญ") or sim.get("asset") or "BTC"
+        ).upper()
+        side = (
+            "buy"
+            if str(telegram_rec.get("ฝั่ง", "")).strip() == "ซื้อ"
+            else "sell"
+        )
+        amount_thb = float(telegram_rec.get("มูลค่า (บาท)", 0.0) or 0.0)
+        if amount_thb <= 0:
+            continue
+
+        # The web Exchange uses the selected current simulation row.
+        try:
+            px_row = data.loc[current_date_val].copy()
+        except Exception:
+            if len(data) == 0:
+                continue
+            px_row = data.iloc[-1].copy()
+
+        order_date = pd.Timestamp(current_date_val)
+
+        engine_sim = copy.deepcopy(baseline_sim)
+        engine_sim["asset"] = asset
+        engine_sim["target_thb"] = float(target_stock_thb)
+
+        _, engine_record = execute_order(
+            engine_sim,
+            side,
+            amount_thb,
+            order_date,
+            px_row,
+            ctx,
+            affect_wallet=False,
+        )
+
+        if not engine_record:
+            continue
+
+        # The engine has now calculated hedge/cost/NC/P&L from the dealer
+        # inventory baseline, exactly as the Exchange transaction does.
+        baseline_sim = engine_sim
+
+        for key in (
+            "inv_coins",
+            "fx_used_usd",
+            "fx_used_usd_by_month",
+            "cex_used_thb",
+            "unhedged_thb",
+            "pnl_thb",
+        ):
+            if key in engine_sim:
+                sim[key] = copy.deepcopy(engine_sim[key])
+
+        engine_record["Source"] = telegram_rec.get("Source", "Telegram")
+        engine_record["Exchange"] = telegram_rec.get("Exchange", "Bitkub")
+        engine_record["Order ID"] = telegram_rec.get("Order ID")
+        engine_record["สถานะ"] = telegram_rec.get("สถานะ", "Filled")
+        engine_record["ประเภท"] = telegram_rec.get("ประเภท", "MARKET")
+        engine_record["เวลา"] = telegram_rec.get("เวลา", "")
+        engine_record["วันที่"] = telegram_rec.get(
+            "วันที่", order_date.strftime("%Y-%m-%d")
+        )
+
+        # Preserve customer-facing Telegram execution fields.
+        for key in (
+            "มูลค่า (บาท)",
+            "ราคาที่ลูกค้าได้",
+            "เหรียญที่ส่งมอบ",
+            "ค่าธรรมเนียม",
+        ):
+            if key in telegram_rec:
+                engine_record[key] = telegram_rec[key]
+
+        engine_record["_exchange_engine_v32"] = True
+        orders[original_idx] = engine_record
+        changed = True
+
+    if changed:
+        sim["orders"] = orders
+
+    return changed
+
+
 def _letter_logo(sym: str) -> str:
     svg = (f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>"
            f"<circle cx='50' cy='50' r='50' fill='{_LOGO_BG.get(sym, '#5e6673')}'/>"
@@ -5974,6 +6148,17 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
     sim = sim_normalize_state(st.session_state.sim, asset, current_date_val, spot_usd_current, usdthb_current, target_stock_thb)
     st.session_state.sim = sim
+
+    # Telegram /confirm อัปเดต customer wallet เองแล้ว
+    # ตรงนี้จึงเติมเฉพาะ dealer-side ledger ให้ใช้ schema เดียวกับ Exchange Simulator
+    sync_telegram_orders_to_exchange_ledger(
+        sim,
+        data,
+        current_date_val,
+        ctx,
+        target_stock_thb,
+        price_lookup=price_lookup,
+    )
 
     mid_now = spot_usd_current * usdthb_current * (1 + cfg["local_premium"])
     
