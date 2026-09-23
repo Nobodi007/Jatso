@@ -6301,6 +6301,32 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 led = pd.DataFrame(sim["orders"])
                 if st.checkbox(f"แสดงเฉพาะ {asset}", key="led_only_asset"):
                     led = led[led["เหรียญ"] == asset]
+
+                # Keep the Exchange Ledger in the same compact column layout
+                # as the native Exchange transaction table. Telegram is only
+                # another order source; it must not create a different table.
+                ledger_columns = [
+                    "วันที่", "ฝั่ง", "เหรียญ", "มูลค่า (บาท)",
+                    "ราคาที่ลูกค้าได้", "เหรียญที่ส่งมอบ",
+                    "Hedge (เหรียญ)", "Hedge (USD)",
+                    "CEX Liquidity ใช้ (บาท)", "Unhedged (บาท)",
+                    "Market Edge", "ต้นทุน", "ผลด่าน", "รายได้",
+                    "กำไรออเดอร์", "FX ใช้สะสม (USD)",
+                    "มูลค่า (บาท)", "CEX Liquidity ใช้สะสม (บาท)",
+                    "สต็อกคงเหลือ", "NC Buffer", "Exchange",
+                    "Order ID", "เวลา", "สถานะ", "ประเภท", "Source",
+                    "ค่าธรรมเนียม",
+                ]
+                # Remove duplicate labels while preserving the first occurrence.
+                seen = set()
+                ordered = []
+                for col in ledger_columns:
+                    if col in led.columns and col not in seen:
+                        ordered.append(col)
+                        seen.add(col)
+                ordered.extend([col for col in led.columns if col not in seen])
+                led = led[ordered]
+
                 led.index = range(1, len(led) + 1)
                 st.dataframe(led.sort_index(ascending=False), height=240, **WIDE)
 
