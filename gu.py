@@ -973,6 +973,230 @@ def execute_order(
     return steps, record
 
 
+
+def sync_telegram_orders_to_exchange_ledger(
+    sim: dict[str, Any],
+    data: pd.DataFrame,
+    current_date_val: pd.Timestamp,
+    ctx: Mapping[str, Any],
+    target_stock_thb: float,
+    price_lookup: Optional[Mapping[str, float]] = None,
+) -> bool:
+    """เติม Telegram trades เข้า Exchange Ledger ด้วย business rules เดียวกับ execute_order.
+    ไม่แตะ customer wallet ซ้ำ เพราะ Telegram bot หัก/เพิ่ม wallet ไปแล้วตอน /confirm
+    """
+    orders = sim.get("orders", [])
+    if not isinstance(orders, list) or not orders:
+        return False
+
+    required = {
+        "Hedge (เหรียญ)", "Hedge (USD)", "CEX Liquidity ใช้ (บาท)",
+        "Unhedged (บาท)", "Market Edge", "รายได้", "ต้นทุน",
+        "กำไรออเดอร์", "สต็อกคงเหลือ", "FX ใช้สะสม (USD)",
+        "CEX Liquidity ใช้สะสม (บาท)", "NC Buffer", "ผลด่าน",
+    }
+    telegram = [
+        (idx, rec) for idx, rec in enumerate(orders)
+        if isinstance(rec, dict)
+        and str(rec.get("Source", "")).lower() == "telegram"
+        and not required.issubset(rec.keys())
+    ]
+    if not telegram:
+        return False
+
+    telegram.sort(key=lambda x: (
+        str(x[1].get("วันที่", "")),
+        str(x[1].get("เวลา", "")),
+        x[0],
+    ))
+
+    inv = sim.setdefault("inv_coins", {})
+    fx_used = float(sim.get("fx_used_usd", 0.0) or 0.0)
+    cex_used = float(sim.get("cex_used_thb", 0.0) or 0.0)
+    pnl_total = float(sim.get("pnl_thb", 0.0) or 0.0)
+    unhedged_total = float(sim.get("unhedged_thb", 0.0) or 0.0)
+    fx_months = sim.setdefault("fx_used_usd_by_month", {})
+    current_asset = str(ctx.get("asset") or sim.get("asset") or "BTC")
+
+    def _row_for(rec: dict[str, Any], asset: str) -> tuple[pd.Series, pd.Timestamp]:
+        try:
+            d = pd.Timestamp(str(rec.get("วันที่") or current_date_val)).normalize()
+        except Exception:
+            d = pd.Timestamp(current_date_val).normalize()
+
+        if asset == current_asset and d in data.index:
+            return data.loc[d], d
+
+        if asset == current_asset and len(data):
+            pos = data.index.get_indexer([d], method="nearest")[0]
+            if pos >= 0:
+                return data.iloc[pos], pd.Timestamp(data.index[pos])
+
+        if price_lookup and asset in price_lookup and len(data):
+            base = data.iloc[-1].copy()
+            spot_now = float(price_lookup[asset])
+            fx_now = float(base["USDTHB"])
+            base["Global_USD"] = spot_now / fx_now if fx_now > 0 else float(base["Global_USD"])
+            return base, pd.Timestamp(data.index[-1])
+
+        return data.iloc[-1], pd.Timestamp(data.index[-1])
+
+    changed = False
+
+    for _, rec in telegram:
+        asset = str(rec.get("เหรียญ") or current_asset).upper()
+        side = "buy" if str(rec.get("ฝั่ง", "")).strip() == "ซื้อ" else "sell"
+
+        row, order_date = _row_for(rec, asset)
+        spot = float(row.get("Global_USD", 0.0) or 0.0)
+        fx = float(row.get("USDTHB", 0.0) or 0.0)
+        daily_vol = float(row.get("Volatility_Pct", 0.0) or 0.0)
+        global_px = spot * fx
+
+        quote = float(rec.get("ราคาที่ลูกค้าได้", 0.0) or 0.0)
+        qty = float(rec.get("เหรียญที่ส่งมอบ", 0.0) or 0.0)
+        fee = float(rec.get("ค่าธรรมเนียม", 0.0) or 0.0)
+
+        if qty <= 0 or quote <= 0 or global_px <= 0:
+            continue
+
+        month = order_date.strftime("%Y-%m")
+        month_used = float(fx_months.get(month, 0.0) or 0.0)
+        inv_before = float(inv.get(asset, 0.0) or 0.0)
+        target_coins = float(target_stock_thb) / global_px if global_px > 0 else 0.0
+        hedge_fee = float(ctx.get("hedge_fee", 0.0) or 0.0)
+        fx_limit = float(ctx.get("fx_limit", 0.0) or 0.0)
+        cex_limit = float(ctx.get("cex_liquidity_thb", 0.0) or 0.0)
+
+        hedge_coins = 0.0
+        hedge_usd = 0.0
+        cex_this = 0.0
+
+        if side == "buy":
+            inv_after_customer = inv_before - qty
+            required_hedge = max(0.0, target_coins - inv_after_customer)
+            fx_left = max(0.0, fx_limit - month_used)
+            max_hedge = (
+                fx_left / (spot * (1 + hedge_fee))
+                if spot > 0 else 0.0
+            )
+            hedge_coins = min(required_hedge, max_hedge)
+            residual = max(0.0, required_hedge - hedge_coins)
+            hedge_thb = hedge_coins * global_px
+            hedge_usd = hedge_coins * spot * (1 + hedge_fee)
+            fx_used += hedge_usd
+            fx_months[month] = month_used + hedge_usd
+            inv_after = inv_after_customer + hedge_coins
+        else:
+            inv_after_customer = inv_before + qty
+            required_hedge = max(0.0, inv_after_customer - target_coins)
+            cex_left = max(0.0, cex_limit - cex_used)
+            max_hedge = cex_left / global_px if global_px > 0 else 0.0
+            hedge_coins = min(required_hedge, max_hedge)
+            residual = max(0.0, required_hedge - hedge_coins)
+            hedge_thb = hedge_coins * global_px
+            hedge_usd = hedge_coins * spot * (1 + hedge_fee)
+            cex_this = hedge_thb
+            cex_used += cex_this
+            inv_after = inv_after_customer - hedge_coins
+
+        inv[asset] = inv_after
+        unhedged_this = residual * global_px
+        unhedged_total += unhedged_this
+
+        if side == "buy":
+            market_edge = qty * (quote - global_px)
+        else:
+            market_edge = qty * (global_px - quote)
+
+        fee_rev = fee if bool(ctx.get("include_fee_rev", True)) else 0.0
+
+        wd_markup_rev = 0.0
+        if side == "buy":
+            wd_fee_coin = float(WITHDRAWAL_FEE_TABLE.get(asset, 0.0) or 0.0)
+            amount_thb = float(rec.get("มูลค่า (บาท)", 0.0) or 0.0)
+            wd_base = (
+                wd_fee_coin * qty * global_px
+                + calc_thb_withdrawal_fee(
+                    amount_thb,
+                    ctx.get("bank_type"),
+                    float(ctx.get("ktb_wd_fee", 0.0) or 0.0),
+                )
+            )
+            wd_markup_rev = wd_base * float(ctx.get("wd_markup", 0.0) or 0.0)
+
+        hedge_fee_cost = hedge_thb * hedge_fee
+        depth_usd = float(ctx.get("market_depth_usd", 0.0) or 0.0)
+        impact_pen = float(ctx.get("impact_penalty", 0.0) or 0.0)
+        hedge_order_usd = hedge_coins * spot
+        impact_cost = hedge_thb * market_impact_rate(
+            hedge_order_usd, depth_usd, impact_pen
+        )
+        slippage_cost = (
+            hedge_thb * daily_vol * float(ctx.get("slip_sens", 0.0) or 0.0)
+            + impact_cost
+        )
+        ktb_fx_benefit = hedge_thb * (
+            float(ctx.get("ktb_fx_bps", 0.0) or 0.0) / 10000.0
+        )
+
+        revenue = market_edge + fee_rev + wd_markup_rev + ktb_fx_benefit
+        cost = hedge_fee_cost + slippage_cost
+        net = revenue - cost
+        pnl_total += net
+
+        stock_thb = max(0.0, inv_after) * global_px
+        nc = nc_snapshot(
+            stock_thb,
+            float(ctx.get("capital", 0.0) or 0.0),
+            float(ctx.get("cex_margin", 0.0) or 0.0),
+            float(ctx.get("liab", 0.0) or 0.0),
+            float(ctx.get("h_crypto", 0.0) or 0.0),
+            float(ctx.get("h_cex", 0.0) or 0.0),
+            float(ctx.get("fixed_min_nc", 0.0) or 0.0),
+            float(ctx.get("trading_risk_rate", 0.0) or 0.0),
+            float(ctx.get("daily_volume_thb", 0.0) or 0.0),
+            float(ctx.get("custody_rate", 0.0) or 0.0),
+        )
+
+        if nc["buffer"] < 0:
+            gate = "NC ไม่พอ"
+        elif residual <= 1e-12 and not bool(ctx.get("hot_breach", False)):
+            gate = "ผ่าน"
+        else:
+            gate = "เฝ้าระวัง"
+
+        rec.update({
+            "Hedge (เหรียญ)": hedge_coins,
+            "Hedge (USD)": hedge_usd,
+            "CEX Liquidity ใช้ (บาท)": cex_this,
+            "Unhedged (บาท)": unhedged_this,
+            "Market Edge": market_edge,
+            "รายได้": revenue,
+            "ต้นทุน": cost,
+            "กำไรออเดอร์": net,
+            "สต็อกคงเหลือ": inv_after,
+            "FX ใช้สะสม (USD)": (
+                month_used + hedge_usd if side == "buy" else month_used
+            ),
+            "CEX Liquidity ใช้สะสม (บาท)": cex_used,
+            "NC Buffer": nc["buffer"],
+            "ผลด่าน": gate,
+        })
+        rec.setdefault("Exchange", "Bitkub")
+        rec.setdefault("Source", "Telegram")
+        rec.setdefault("สถานะ", "Filled")
+        changed = True
+
+    if changed:
+        sim["fx_used_usd"] = fx_used
+        sim["cex_used_thb"] = cex_used
+        sim["pnl_thb"] = pnl_total
+        sim["unhedged_thb"] = unhedged_total
+        sim["_telegram_ledger_synced"] = True
+
+    return changed
+
 def _letter_logo(sym: str) -> str:
     svg = (f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>"
            f"<circle cx='50' cy='50' r='50' fill='{_LOGO_BG.get(sym, '#5e6673')}'/>"
@@ -5974,6 +6198,17 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
     sim = sim_normalize_state(st.session_state.sim, asset, current_date_val, spot_usd_current, usdthb_current, target_stock_thb)
     st.session_state.sim = sim
+
+    # Telegram /confirm อัปเดต customer wallet เองแล้ว
+    # ตรงนี้จึงเติมเฉพาะ dealer-side ledger ให้ใช้ schema เดียวกับ Exchange Simulator
+    sync_telegram_orders_to_exchange_ledger(
+        sim,
+        data,
+        current_date_val,
+        ctx,
+        target_stock_thb,
+        price_lookup=price_lookup,
+    )
 
     mid_now = spot_usd_current * usdthb_current * (1 + cfg["local_premium"])
     
