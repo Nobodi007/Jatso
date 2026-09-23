@@ -1021,18 +1021,55 @@ def _clean_html(text: str) -> str:
     return text
 
 
-def _latest_news_item() -> tuple[str, dict]:
+def _news_keywords(asset: str) -> list[str]:
+    asset = (asset or "").strip().upper()
+    return {
+        "BTC": ["BTC", "BITCOIN"],
+        "ETH": ["ETH", "ETHEREUM"],
+        "SOL": ["SOL", "SOLANA"],
+        "XRP": ["XRP", "RIPPLE"],
+        "DOGE": ["DOGE", "DOGECOIN"],
+        "ADA": ["ADA", "CARDANO"],
+        "LINK": ["LINK", "CHAINLINK"],
+        "XLM": ["XLM", "STELLAR"],
+        "HBAR": ["HBAR", "HEDERA"],
+        "USDT": ["USDT", "TETHER"],
+        "USDC": ["USDC", "CIRCLE"],
+    }.get(asset, [asset] if asset else [])
+
+
+def _latest_news_item(asset: str = "") -> tuple[str, dict]:
     last_exc = None
+    keywords = _news_keywords(asset)
     for source, url in NEWS_FEEDS:
         try:
             raw = _http_text(url)
             root = ET.fromstring(raw)
-            item = root.find(".//item")
-            if item is None:
-                # Atom fallback
-                item = root.find(".//{http://www.w3.org/2005/Atom}entry")
-                if item is None:
-                    raise RuntimeError("ไม่พบรายการข่าว")
+            candidates = root.findall(".//item")
+            is_atom = False
+            if not candidates:
+                candidates = root.findall(".//{http://www.w3.org/2005/Atom}entry")
+                is_atom = True
+            if not candidates:
+                raise RuntimeError("ไม่พบรายการข่าว")
+
+            selected = candidates[0]
+            # หาเรื่องล่าสุดที่เกี่ยวกับเหรียญที่ระบุ โดยค้นจาก title + description/summary
+            if keywords:
+                for candidate in candidates:
+                    if is_atom:
+                        title0 = candidate.findtext("{http://www.w3.org/2005/Atom}title") or ""
+                        desc0 = candidate.findtext("{http://www.w3.org/2005/Atom}summary") or ""
+                    else:
+                        title0 = candidate.findtext("title") or ""
+                        desc0 = candidate.findtext("description") or ""
+                    hay = f"{title0} {desc0}".upper()
+                    if any(k in hay for k in keywords):
+                        selected = candidate
+                        break
+
+            item = selected
+            if is_atom:
                 title = item.findtext("{http://www.w3.org/2005/Atom}title") or ""
                 link_node = item.find("{http://www.w3.org/2005/Atom}link")
                 link = link_node.attrib.get("href", "") if link_node is not None else ""
@@ -1046,7 +1083,12 @@ def _latest_news_item() -> tuple[str, dict]:
                 desc = item.findtext("description") or ""
             if not title.strip() or not link.strip():
                 raise RuntimeError("ข่าวไม่มีหัวข้อหรือลิงก์")
-            return source, {"title": _clean_html(title), "link": link.strip(), "published": published.strip(), "description": _clean_html(desc)}
+            return source, {
+                "title": _clean_html(title),
+                "link": link.strip(),
+                "published": published.strip(),
+                "description": _clean_html(desc),
+            }
         except Exception as exc:
             last_exc = exc
             print(f"[news] feed failed: {source} -> {exc}")
@@ -1067,14 +1109,15 @@ def _format_news_time(value: str) -> str:
         return value[:80]
 
 
-def cmd_news() -> str:
+def cmd_news(asset: str = "") -> str:
     try:
-        source, item = _latest_news_item()
+        source, item = _latest_news_item(asset)
         desc = item.get("description", "")
         if len(desc) > 260:
             desc = desc[:257].rstrip() + "..."
+        headline = f"📰 ข่าว {asset.upper()} ล่าสุด" if asset.strip() else "📰 ข่าวคริปโทล่าสุด"
         lines = [
-            "📰 ข่าวคริปโทล่าสุด",
+            headline,
             "",
             item["title"],
         ]
@@ -1417,7 +1460,7 @@ HELP_TEXT = (
     "📈 Market\n"
     "/price BTC — เช็คราคาเหรียญ\n"
     "/prices — ดู BTC/ETH/SOL หรือระบุเหรียญเอง\n"
-    "/news — ข่าวคริปโทล่าสุด 1 ข่าว\n\n"
+    "/news — ข่าวคริปโทล่าสุด 1 ข่าว (เช่น /news BTC)\n\n"
     "🛒 Exchange Simulator\n"
     "/buy BTC 500000 — ซื้อ BTC ด้วย THB\n"
     "/sell BTC 0.1 — ขาย BTC\n"
@@ -1493,7 +1536,7 @@ def handle_command(chat_id: int, text: str) -> str:
         return cmd_prices(arg)
 
     if cmd == "/news":
-        return cmd_news()
+        return cmd_news(arg)
 
     if cmd == "/buy":
         return cmd_trade_preview(chat_id, arg, "buy")
