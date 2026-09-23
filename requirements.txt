@@ -7,6 +7,8 @@ numpy
 pandas
 pyyaml
 pillow
-supabase
 openpyxl
 reportlab
+# XSpring Telegram Bot - Railway
+# Tested with the current XSpring Telegram bot v3
+supabase==2.31.0
