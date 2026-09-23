@@ -381,27 +381,55 @@ def cmd_wallet(chat_id: int) -> str:
         return "❌ อ่านกระเป๋าจำลองไม่สำเร็จ"
 
 
+def _binance_spot_ticker_24h(symbol: str) -> dict:
+    """ดึง Spot 24h ticker จาก public Binance market-data endpoint
+
+    ใช้ data-api.binance.vision เป็นหลัก เพราะเป็น public market-data
+    endpoint และเหมาะกับ server/container ที่อาจอยู่ใน region จำกัด
+    """
+    symbol = symbol.strip().upper()
+    if not symbol.isalnum():
+        raise ValueError("invalid symbol")
+
+    encoded = urllib.parse.quote(f"{symbol}USDT")
+    endpoints = [
+        f"https://data-api.binance.vision/api/v3/ticker/24hr?symbol={encoded}",
+        f"https://api.binance.com/api/v3/ticker/24hr?symbol={encoded}",
+        f"https://api1.binance.com/api/v3/ticker/24hr?symbol={encoded}",
+    ]
+
+    last_exc = None
+    for url in endpoints:
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": "XSpring-Dealer-Bot/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
+                d = json.loads(response.read().decode("utf-8"))
+
+            if not isinstance(d, dict) or "lastPrice" not in d:
+                raise RuntimeError("invalid Binance ticker response")
+            return d
+        except Exception as exc:
+            last_exc = exc
+
+    raise RuntimeError(f"Binance market-data unavailable: {last_exc}")
+
+
 def cmd_price(symbol: str) -> str:
     symbol = symbol.strip().upper()
 
     if not symbol:
         return "ใช้แบบนี้: /price BTC"
 
-    # จำกัด symbol ให้เป็นรูปแบบที่ Binance รับได้ง่าย
     if not symbol.isalnum():
         return "❌ Symbol ไม่ถูกต้อง เช่น BTC, ETH, SOL"
 
     try:
-        req = urllib.request.Request(
-            f"https://fapi.binance.com/fapi/v1/ticker/24hr"
-            f"?symbol={urllib.parse.quote(symbol)}USDT"
-        )
-
-        with urllib.request.urlopen(req, timeout=10) as response:
-            d = json.loads(response.read().decode("utf-8"))
-
+        d = _binance_spot_ticker_24h(symbol)
         return (
-            f"💹 {symbol}/USDT (Binance)\n"
+            f"💹 {symbol}/USDT (Binance Spot)\n"
             f"ราคา: ${float(d['lastPrice']):,.2f}\n"
             f"เปลี่ยน 24H: {float(d['priceChangePercent']):+.2f}%"
         )
@@ -412,7 +440,6 @@ def cmd_price(symbol: str) -> str:
             f"ดึงราคา {symbol} ไม่สำเร็จ\n"
             "เช็คว่าสะกดถูกไหม เช่น BTC, ETH, SOL"
         )
-
 
 
 def get_latest_snapshot(email: str):
@@ -906,13 +933,7 @@ def cmd_prices(arg: str = "") -> str:
             continue
 
         try:
-            req = urllib.request.Request(
-                f"https://fapi.binance.com/fapi/v1/ticker/24hr"
-                f"?symbol={urllib.parse.quote(symbol)}USDT"
-            )
-            with urllib.request.urlopen(req, timeout=10) as response:
-                d = json.loads(response.read().decode("utf-8"))
-
+            d = _binance_spot_ticker_24h(symbol)
             lines.append(
                 f"{symbol}: ${float(d['lastPrice']):,.2f} "
                 f"({float(d['priceChangePercent']):+.2f}%)"
