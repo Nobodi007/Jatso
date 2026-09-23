@@ -2079,6 +2079,219 @@ def read_audit_records(path: Optional[Path] = None, limit: Optional[int] = None)
     return out[-limit:] if limit else out
 
 
+# =========================================================================
+# TELEGRAM / REMOTE CONFIG — ค่าพารามิเตอร์ร่วมระหว่างเว็บกับ Telegram
+# =========================================================================
+
+REMOTE_CONFIG_TABLE = "dealer_remote_config"
+
+# ชื่อที่เก็บใน Supabase -> widget key ใน Streamlit
+REMOTE_CONFIG_WIDGET_KEYS = {
+    "asset": "bt_asset",
+    "exchange": "bt_global_exchange",
+    "trade_vol": "bt_trade_vol",
+    "spread": "bt_spread",
+    "hedge_taker": "bt_hedge_fee",
+    "hedge_maker": "bt_hedge_fee_maker",
+    "maker_ratio": "bt_maker_ratio",
+    "fx_limit": "bt_fx_limit",
+    "premium": "bt_local_premium",
+    "slippage": "bt_slip",
+    "depth": "bt_depth",
+    "impact_penalty": "bt_impact_pen",
+    "monthly_volume": "fl_monthly_vol",
+    "net_bias": "fl_bias",
+    "flow_cv": "fl_cv",
+    "lag": "fl_lag",
+    "confidence": "fl_conf",
+    "capital": "cp_total_capital",
+    "margin": "cp_cex_margin",
+    "liab": "cp_liab",
+    "margin_asset": "cp_margin_asset",
+    "cp_haircut": "cp_cp_haircut",
+    "custodian": "nc_custodian",
+    "trading_risk": "nc_trading_rate",
+    "cold_foreign": "nc_cold_foreign",
+    "hot_wallet": "nc_hot",
+    "cold_domestic": "nc_cold_dom",
+}
+
+
+def _remote_actor_email() -> str:
+    if is_guest_mode():
+        return ""
+    try:
+        return str(getattr(st.user, "email", "") or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def load_remote_config(email: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """โหลดค่าที่ Telegram/เว็บบันทึกไว้สำหรับผู้ใช้ปัจจุบัน."""
+    actor = str(email or _remote_actor_email()).strip().lower()
+    if not actor or is_guest_mode():
+        return None
+    sb = _get_supabase()
+    if sb is None:
+        return None
+    try:
+        res = (sb.table(REMOTE_CONFIG_TABLE)
+                 .select("actor,config,updated_at,updated_by,source")
+                 .eq("actor", actor)
+                 .limit(1)
+                 .execute())
+        if not res.data:
+            return None
+        row = res.data[0]
+        cfg = row.get("config") or {}
+        if not isinstance(cfg, dict):
+            cfg = {}
+        return {
+            "actor": actor,
+            "config": cfg,
+            "updated_at": row.get("updated_at"),
+            "updated_by": row.get("updated_by"),
+            "source": row.get("source"),
+        }
+    except Exception as exc:
+        print(f"[remote_config] load error: {exc}")
+        return None
+
+
+def _remote_widget_value(key: str, value: Any) -> Any:
+    """แปลงค่าที่เก็บใน remote config ให้ตรงกับ widget state ของ Streamlit."""
+    if key in {"trade_vol", "fx_limit", "depth", "monthly_volume", "capital", "margin", "liab"}:
+        try:
+            f = float(value)
+            return f"{f:,.0f}" if f == int(f) else f"{f:,.2f}"
+        except (TypeError, ValueError):
+            return value
+    if key in {"spread", "hedge_taker", "hedge_maker", "premium", "slippage",
+               "impact_penalty", "cp_haircut", "trading_risk", "cold_foreign"}:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return value
+    if key in {"maker_ratio", "net_bias", "flow_cv", "lag"}:
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return value
+    if key == "confidence":
+        try:
+            f = float(value)
+            return 99.9 if abs(f - 99.9) < 1e-9 else int(f)
+        except (TypeError, ValueError):
+            return value
+    if key in {"custodian"}:
+        return bool(value)
+    return value
+
+
+def apply_remote_config_to_widgets(remote: Optional[dict[str, Any]]) -> None:
+    """ใช้ค่าจาก Supabase เฉพาะตอน remote version เปลี่ยน เพื่อไม่ทับการแก้จาก UI ทุก rerun."""
+    if not remote:
+        if "remote_config_initialized" not in st.session_state:
+            st.session_state["remote_config_initialized"] = True
+            st.session_state["remote_config_baseline"] = None
+        return
+
+    updated_at = str(remote.get("updated_at") or "")
+    previous = st.session_state.get("remote_config_updated_at")
+    if previous == updated_at and st.session_state.get("remote_config_initialized"):
+        return
+
+    cfg = remote.get("config") or {}
+    for name, widget_key in REMOTE_CONFIG_WIDGET_KEYS.items():
+        if name in cfg:
+            st.session_state[widget_key] = _remote_widget_value(name, cfg[name])
+
+    # build_sidebar() มี logic reset CEX fee เมื่อเปลี่ยน exchange
+    # จึงต้อง sync marker นี้ด้วย เพื่อไม่ให้ค่าที่ Telegram ตั้งไว้ถูกทับด้วย preset
+    if "exchange" in cfg:
+        st.session_state["bt_prev_gx"] = cfg["exchange"]
+
+    st.session_state["remote_config_updated_at"] = updated_at
+    st.session_state["remote_config_initialized"] = True
+    st.session_state["remote_config_baseline"] = dict(cfg)
+
+
+def remote_config_from_cfg(cfg: Mapping[str, Any]) -> dict[str, Any]:
+    """แปลง cfg ของเว็บกลับเป็นหน่วยที่ Telegram ใช้ (เปอร์เซ็นต์ = % ไม่ใช่ decimal)."""
+    return {
+        "asset": cfg["asset"],
+        "exchange": cfg["global_exchange"],
+        "trade_vol": float(cfg["trade_vol"]),
+        "spread": float(cfg["dealer_spread"] * 100),
+        "hedge_taker": float(cfg["hedge_fee_taker"] * 100),
+        "hedge_maker": float(cfg["hedge_fee_maker"] * 100),
+        "maker_ratio": float(cfg["maker_ratio"] * 100),
+        "fx_limit": float(cfg["fx_limit_max"]),
+        "premium": float(cfg["local_premium"] * 100),
+        "slippage": float(cfg["slippage_sensitivity"] * 100),
+        "depth": float(cfg["market_depth_usd"]),
+        "impact_penalty": float(cfg["impact_penalty"] * 100),
+        "monthly_volume": float(cfg["monthly_volume_thb"]),
+        "net_bias": float(cfg["net_bias_pct"] * 100),
+        "flow_cv": float(cfg["flow_cv_pct"] * 100),
+        "lag": int(cfg["settlement_days"]),
+        "confidence": float(cfg["confidence"]),
+        "capital": float(cfg["total_capital_thb"]),
+        "margin": float(cfg["cex_margin_thb"]),
+        "liab": float(cfg["liab_thb"]),
+        "margin_asset": cfg["cex_margin_asset"],
+        "cp_haircut": float(cfg["cex_counterparty_haircut"] * 100),
+        "custodian": bool(cfg["is_custodian"]),
+        "trading_risk": float(cfg["trading_risk_rate"] * 100),
+        "cold_foreign": float(cfg["cold_foreign_rate"] * 100),
+        "hot_wallet": float(cfg["hot_wallet_pct"] * 100),
+        "cold_domestic": float(cfg["cold_domestic_split_pct"] * 100),
+    }
+
+
+def save_remote_config(config: Mapping[str, Any], *, source: str = "web") -> bool:
+    """บันทึก remote config แบบ upsert; ใช้ร่วมกับ Telegram bot."""
+    actor = _remote_actor_email()
+    if not actor or is_guest_mode():
+        return False
+    sb = _get_supabase()
+    if sb is None:
+        return False
+    try:
+        sb.table(REMOTE_CONFIG_TABLE).upsert({
+            "actor": actor,
+            "config": _json_safe(dict(config)),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_by": actor,
+            "source": source,
+        }).execute()
+        return True
+    except Exception as exc:
+        print(f"[remote_config] save error: {exc}")
+        return False
+
+
+def sync_remote_config_from_cfg(cfg: Mapping[str, Any]) -> None:
+    """ถ้าผู้ใช้แก้ค่าจากเว็บ ให้ sync กลับ Supabase เพื่อให้ Telegram เห็นค่าล่าสุดด้วย."""
+    if is_guest_mode() or not can_edit_config():
+        return
+    current = remote_config_from_cfg(cfg)
+    baseline = st.session_state.get("remote_config_baseline")
+    if baseline == current:
+        return
+    if save_remote_config(current, source="web"):
+        st.session_state["remote_config_baseline"] = dict(current)
+        st.session_state["remote_config_updated_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def render_remote_config_status(remote: Optional[dict[str, Any]]) -> None:
+    if not remote:
+        return
+    updated = str(remote.get("updated_at") or "-")[:19].replace("T", " ")
+    source = remote.get("source") or "-"
+    st.caption(f"📡 Remote Control: เชื่อมกับ Telegram/Supabase · ล่าสุด {updated} UTC · source: {source}")
+
+
 SIM_STATE_ENV_VAR = "XSPRING_SIM_STATE"
 
 def sim_state_path() -> Path:
@@ -6562,7 +6775,11 @@ f'<div style="font-size:0.68rem;color:#0ecb81;">{ROLE_LABEL_TH[current_role()]}<
                 f'<div style="font-size:0.68rem;color:#0ecb81;">{ROLE_LABEL_TH[current_role()]}</div></div>',
                 unsafe_allow_html=True)
 
+    remote_config = None if is_guest_mode() else load_remote_config(email)
+    apply_remote_config_to_widgets(remote_config)
     cfg = build_sidebar()
+    sync_remote_config_from_cfg(cfg)
+    render_remote_config_status(remote_config)
 
     with st.sidebar:
         st.divider()
