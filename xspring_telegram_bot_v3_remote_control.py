@@ -1136,20 +1136,73 @@ def cmd_news(asset: str = "") -> str:
 
 
 def _bitkub_ticker(symbol: str) -> dict:
+    """Fetch a Bitkub public ticker with v3-first + legacy fallback.
+
+    Bitkub's current public market docs expose v3 ticker data, while the
+    legacy /api/market/ticker endpoint is deprecated. Responses may be
+    wrapped as {"error": 0, "result": {...}} or returned as a direct
+    {"THB_BTC": {...}} mapping, so accept both shapes.
+    """
     symbol = symbol.upper().strip()
     if symbol not in SUPPORTED_TRADE_ASSETS:
         raise ValueError("รองรับเฉพาะเหรียญใน XSpring Exchange Simulator")
-    req = urllib.request.Request(
+
+    pair = f"{symbol}_THB"
+    endpoints = [
+        # Current Bitkub v3 market ticker.
+        f"https://api.bitkub.com/api/v3/market/ticker?sym={urllib.parse.quote(pair.lower())}",
+        # Legacy public ticker kept as a compatibility fallback.
         f"https://api.bitkub.com/api/market/ticker?sym=THB_{urllib.parse.quote(symbol)}",
-        headers={"User-Agent": "XSpring-Dealer-Bot/1.0", "Accept": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=10) as response:
-        data = json.loads(response.read().decode("utf-8"))
-    # Bitkub may return either THB_BTC or BTC_THB depending on API version.
-    row = data.get(f"THB_{symbol}") or data.get(f"{symbol}_THB")
-    if not isinstance(row, dict) or "last" not in row:
-        raise RuntimeError("Bitkub ticker response ไม่ถูกต้อง")
-    return row
+        f"https://api.bitkub.com/api/market/ticker",
+    ]
+    last_error = None
+
+    for url in endpoints:
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": "XSpring-Dealer-Bot/1.0",
+                    "Accept": "application/json",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
+                raw = response.read().decode("utf-8")
+            data = json.loads(raw)
+
+            # Current v3 shape: {error: 0, result: {...}}.
+            if isinstance(data, dict) and isinstance(data.get("result"), dict):
+                result = data["result"]
+                # Some versions may return a pair map inside result.
+                row = result.get(pair) or result.get(f"THB_{symbol}") or result.get(symbol)
+                if isinstance(row, dict):
+                    data = row
+                elif "last" in result:
+                    data = result
+
+            # Legacy shape: {"THB_BTC": {...}} or {"BTC_THB": {...}}.
+            if isinstance(data, dict) and "last" not in data:
+                row = data.get(f"THB_{symbol}") or data.get(pair)
+                if isinstance(row, dict):
+                    data = row
+
+            if not isinstance(data, dict) or "last" not in data:
+                raise RuntimeError(f"Bitkub ticker response ไม่ถูกต้อง: {str(data)[:300]}")
+
+            # Normalize numeric fields so downstream trade code is stable.
+            out = dict(data)
+            for key in ("last", "lowestAsk", "highestBid", "percentChange", "high24hr", "low24hr"):
+                if key in out and out[key] not in (None, ""):
+                    try:
+                        out[key] = float(out[key])
+                    except (TypeError, ValueError):
+                        pass
+            return out
+        except Exception as exc:
+            last_error = exc
+            continue
+
+    raise RuntimeError(f"Bitkub ticker ใช้งานไม่ได้: {last_error}")
 
 
 def _remote_trade_config(email: str) -> dict:
