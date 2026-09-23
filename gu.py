@@ -580,6 +580,7 @@ def sim_normalize_state(sim: Any, asset: str, start_date_val: Any,
 def execute_order(
     sim: dict[str, Any], side: str, amount_thb: float, order_date: pd.Timestamp,
     px_row: pd.Series, ctx: Mapping[str, Any], affect_wallet: bool = True,
+    forced_quote: Optional[float] = None,
 ) -> tuple[list[dict[str, Any]], Optional[dict[str, Any]]]:
     p = ctx
     side = "buy" if side == "buy" else "sell"
@@ -602,6 +603,19 @@ def execute_order(
 
     mid = coin_price_global * (1 + p["local_premium"])
     quote = mid * (1 + p["spread"]) if side == "buy" else mid * (1 - p["spread"])
+
+    # Telegram orders already have a customer-confirmed execution quote.
+    # Keep the existing Exchange engine for all hedge/FX/CEX/NC calculations,
+    # but prevent it from recalculating the delivered coin quantity from a
+    # different cached market quote.
+    if forced_quote is not None:
+        try:
+            forced_quote = float(forced_quote)
+        except (TypeError, ValueError):
+            forced_quote = None
+        if forced_quote is not None and forced_quote > 0:
+            quote = forced_quote
+
     steps = []
 
     if amount_thb < MIN_TRADE_THB:
@@ -1005,7 +1019,7 @@ def sync_telegram_orders_to_exchange_ledger(
         (idx, rec) for idx, rec in enumerate(orders)
         if isinstance(rec, dict)
         and str(rec.get("Source", "")).lower() == "telegram"
-        and not rec.get("_exchange_engine_v32")
+        and not rec.get("_exchange_engine_v34")
         and not required.issubset(rec.keys())
     ]
     if not pending:
@@ -1089,6 +1103,10 @@ def sync_telegram_orders_to_exchange_ledger(
         engine_sim["asset"] = asset
         engine_sim["target_thb"] = float(target_stock_thb)
 
+        telegram_quote = float(
+            telegram_rec.get("ราคาที่ลูกค้าได้", 0.0) or 0.0
+        ) or None
+
         _, engine_record = execute_order(
             engine_sim,
             side,
@@ -1097,6 +1115,7 @@ def sync_telegram_orders_to_exchange_ledger(
             px_row,
             ctx,
             affect_wallet=False,
+            forced_quote=telegram_quote,
         )
 
         if not engine_record:
@@ -1137,7 +1156,7 @@ def sync_telegram_orders_to_exchange_ledger(
             if key in telegram_rec:
                 engine_record[key] = telegram_rec[key]
 
-        engine_record["_exchange_engine_v32"] = True
+        engine_record["_exchange_engine_v34"] = True
         orders[original_idx] = engine_record
         changed = True
 
