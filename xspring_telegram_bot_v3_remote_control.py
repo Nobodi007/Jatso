@@ -37,6 +37,7 @@ import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Optional
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
@@ -381,40 +382,67 @@ def cmd_wallet(chat_id: int) -> str:
         return "❌ อ่านกระเป๋าจำลองไม่สำเร็จ"
 
 
-def _binance_spot_ticker_24h(symbol: str) -> dict:
-    """ดึง Spot 24h ticker จาก public Binance market-data endpoint
+def _binance_spot_ticker_24h(symbol: str):
+    """Return (ticker_json, source_label, close_time_ms).
 
-    ใช้ data-api.binance.vision เป็นหลัก เพราะเป็น public market-data
-    endpoint และเหมาะกับ server/container ที่อาจอยู่ใน region จำกัด
+    Try Binance public Spot endpoints in order so the bot can still work
+    when one hostname is blocked/unreachable from the Railway region.
     """
-    symbol = symbol.strip().upper()
-    if not symbol.isalnum():
-        raise ValueError("invalid symbol")
+    symbol = symbol.upper().strip()
+    encoded = urllib.parse.quote(f"{symbol}USDT", safe="")
 
-    encoded = urllib.parse.quote(f"{symbol}USDT")
     endpoints = [
-        f"https://data-api.binance.vision/api/v3/ticker/24hr?symbol={encoded}",
-        f"https://api.binance.com/api/v3/ticker/24hr?symbol={encoded}",
-        f"https://api1.binance.com/api/v3/ticker/24hr?symbol={encoded}",
+        (
+            f"https://data-api.binance.vision/api/v3/ticker/24hr?symbol={encoded}",
+            "Binance Spot API · data-api.binance.vision",
+        ),
+        (
+            f"https://api.binance.com/api/v3/ticker/24hr?symbol={encoded}",
+            "Binance Spot API · api.binance.com",
+        ),
+        (
+            f"https://api1.binance.com/api/v3/ticker/24hr?symbol={encoded}",
+            "Binance Spot API · api1.binance.com",
+        ),
     ]
 
     last_exc = None
-    for url in endpoints:
+    for url, source in endpoints:
         try:
             req = urllib.request.Request(
                 url,
-                headers={"User-Agent": "XSpring-Dealer-Bot/1.0"},
+                headers={
+                    "User-Agent": "XSpring-Dealer-Bot/1.0",
+                    "Accept": "application/json",
+                },
             )
             with urllib.request.urlopen(req, timeout=10) as response:
                 d = json.loads(response.read().decode("utf-8"))
 
-            if not isinstance(d, dict) or "lastPrice" not in d:
-                raise RuntimeError("invalid Binance ticker response")
-            return d
+            # Validate the minimum fields before accepting the endpoint.
+            float(d["lastPrice"])
+            float(d["priceChangePercent"])
+            close_time_ms = int(d.get("closeTime") or 0)
+            return d, source, close_time_ms
         except Exception as exc:
             last_exc = exc
+            print(f"[price] endpoint failed: {url} -> {exc}")
 
-    raise RuntimeError(f"Binance market-data unavailable: {last_exc}")
+    raise RuntimeError(f"Binance price endpoints unavailable: {last_exc}")
+
+
+def _format_price_time(close_time_ms: int) -> str:
+    """Format Binance ticker time as Thailand local time."""
+    if not close_time_ms:
+        return "ไม่ทราบเวลา"
+
+    dt = datetime.fromtimestamp(close_time_ms / 1000.0, tz=timezone.utc)
+    try:
+        dt = dt.astimezone(ZoneInfo("Asia/Bangkok"))
+    except Exception:
+        # Fallback: keep UTC if zoneinfo data is unavailable.
+        pass
+    return dt.strftime("%d/%m/%Y %H:%M:%S") + " น."
 
 
 def cmd_price(symbol: str) -> str:
@@ -427,11 +455,16 @@ def cmd_price(symbol: str) -> str:
         return "❌ Symbol ไม่ถูกต้อง เช่น BTC, ETH, SOL"
 
     try:
-        d = _binance_spot_ticker_24h(symbol)
+        d, source, close_time_ms = _binance_spot_ticker_24h(symbol)
+        price = float(d["lastPrice"])
+        change = float(d["priceChangePercent"])
+
         return (
-            f"💹 {symbol}/USDT (Binance Spot)\n"
-            f"ราคา: ${float(d['lastPrice']):,.2f}\n"
-            f"เปลี่ยน 24H: {float(d['priceChangePercent']):+.2f}%"
+            f"💹 {symbol}/USDT (Binance)\n"
+            f"ราคา: ${price:,.2f}\n"
+            f"เปลี่ยน 24H: {change:+.2f}%\n"
+            f"Source: {source}\n"
+            f"Time: {_format_price_time(close_time_ms)}"
         )
 
     except Exception as exc:
@@ -926,17 +959,21 @@ def cmd_prices(arg: str = "") -> str:
     if len(symbols) > 8:
         return "ใส่ได้สูงสุด 8 เหรียญ เช่น /prices BTC ETH SOL"
 
-    lines = ["📈 Market Prices (Binance)"]
+    lines = ["📈 Market Prices (Binance Spot)"]
     for symbol in symbols:
         if not symbol.isalnum():
             lines.append(f"{symbol}: ❌ symbol ไม่ถูกต้อง")
             continue
 
         try:
-            d = _binance_spot_ticker_24h(symbol)
+            d, source, close_time_ms = _binance_spot_ticker_24h(symbol)
+            price = float(d["lastPrice"])
+            change = float(d["priceChangePercent"])
+
             lines.append(
-                f"{symbol}: ${float(d['lastPrice']):,.2f} "
-                f"({float(d['priceChangePercent']):+.2f}%)"
+                f"{symbol}: ${price:,.2f} ({change:+.2f}%)\n"
+                f"   Source: {source}\n"
+                f"   Time: {_format_price_time(close_time_ms)}"
             )
         except Exception as exc:
             print(f"[prices] error for {symbol}: {exc}")
