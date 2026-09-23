@@ -32,6 +32,7 @@ Environment variables:
 """
 
 import json
+import math
 import os
 import time
 import urllib.parse
@@ -1253,6 +1254,278 @@ def _quote_for_trade(email: str, asset: str, side: str) -> tuple[float, dict]:
     return quote, ticker
 
 
+
+def _trade_model_config(email: str, sim: dict) -> dict:
+    """โหลด model context ให้ Telegram ledger ใช้ schema/logic เดียวกับ Exchange UI."""
+    cfg = {}
+    try:
+        row = (
+            sb.table("nc_snapshots")
+            .select("config,required_stock_thb")
+            .eq("actor", email)
+            .order("snapshot_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if row.data:
+            raw_cfg = row.data[0].get("config")
+            if isinstance(raw_cfg, dict):
+                cfg.update(raw_cfg)
+            if not sim.get("target_thb"):
+                try:
+                    sim["target_thb"] = float(row.data[0].get("required_stock_thb") or 0.0)
+                except (TypeError, ValueError):
+                    pass
+    except Exception as exc:
+        print(f"[trade model] snapshot config unavailable: {exc}")
+
+    remote = _remote_config(email)
+    # dealer_remote_config stores human UI units; convert them to web-model units.
+    cfg.update({
+        "dealer_spread": float(remote.get("spread", 0.5)) / 100.0,
+        "local_premium": float(remote.get("premium", 0.1)) / 100.0,
+        "hedge_fee_taker": float(remote.get("hedge_taker", 0.10)) / 100.0,
+        "hedge_fee_maker": float(remote.get("hedge_maker", 0.10)) / 100.0,
+        "maker_ratio": float(remote.get("maker_ratio", 0.0)) / 100.0,
+        "fx_limit_max": float(remote.get("fx_limit", 5_000_000.0)),
+        "slippage_sensitivity": float(remote.get("slippage", 10.0)) / 100.0,
+        "market_depth_usd": float(remote.get("depth", 0.0)),
+        "impact_penalty": float(remote.get("impact_penalty", 0.5)) / 100.0,
+        "monthly_volume_thb": float(remote.get("monthly_volume", 80_000_000.0)),
+        "net_bias_pct": float(remote.get("net_bias", 15.0)) / 100.0,
+        "flow_cv_pct": float(remote.get("flow_cv", 50.0)) / 100.0,
+        "settlement_days": int(remote.get("lag", 1)),
+        "confidence": float(remote.get("confidence", 99)),
+        "total_capital_thb": float(remote.get("capital", 150_000_000.0)),
+        "cex_margin_thb": float(remote.get("margin", 30_000_000.0)),
+        "liab_thb": float(remote.get("liab", 100_000_000.0)),
+        "cex_counterparty_haircut": float(remote.get("cp_haircut", 2.0)) / 100.0,
+        "trading_risk_rate": float(remote.get("trading_risk", 2.0)) / 100.0,
+        "hot_wallet_pct": float(remote.get("hot_wallet", 30.0)) / 100.0,
+        "cold_domestic_split_pct": float(remote.get("cold_domestic", 80.0)) / 100.0,
+        "cold_foreign_rate": float(remote.get("cold_foreign", 1.5)) / 100.0,
+        "include_trading_fee_revenue": bool(cfg.get("include_trading_fee_revenue", True)),
+        "withdrawal_fee_markup_pct": float(cfg.get("withdrawal_fee_markup_pct", 0.0) or 0.0),
+        "ktb_fx_spread_bps": float(cfg.get("ktb_fx_spread_bps", 0.0) or 0.0),
+        "fixed_min_nc": float(cfg.get("fixed_min_nc", 0.0) or 0.0),
+        "h_crypto": float(cfg.get("h_crypto", 0.0) or 0.0),
+        "h_cex": float(cfg.get("h_cex", float(remote.get("cp_haircut", 2.0)) / 100.0)),
+        "custody_rate_blended": float(cfg.get("custody_rate_blended", 0.0) or 0.0),
+        "hot_wallet_cap_breach": bool(cfg.get("hot_wallet_cap_breach", False)),
+    })
+
+    # Keep the blended hedge fee exactly aligned with the web model.
+    maker_ratio = min(max(float(cfg["maker_ratio"]), 0.0), 1.0)
+    cfg["hedge_fee"] = (
+        cfg["hedge_fee_taker"] * (1.0 - maker_ratio)
+        + cfg["hedge_fee_maker"] * maker_ratio
+    )
+    cfg["daily_volume_thb"] = cfg["monthly_volume_thb"] / 30.0
+
+    # Fallback target stock only when sim_state has never been initialized by web.
+    if float(sim.get("target_thb", 0.0) or 0.0) <= 0:
+        z_map = {90.0: 1.2816, 95.0: 1.6449, 99.0: 2.3263, 99.9: 3.0902}
+        z = z_map.get(float(cfg["confidence"]), 2.3263)
+        factor = (
+            max(0.0, cfg["net_bias_pct"]) * cfg["settlement_days"]
+            + z * cfg["flow_cv_pct"] * math.sqrt(max(cfg["settlement_days"], 1))
+        ) / 30.0
+        sim["target_thb"] = factor * cfg["monthly_volume_thb"]
+
+    return cfg
+
+
+def _global_trade_reference(asset: str, local_ticker: dict) -> tuple[float, float, str]:
+    """คืน global USD, USD/THB proxy และ source โดยใช้ Binance + Bitkub USDT/THB."""
+    try:
+        d, source, _close = _binance_spot_ticker_24h(asset)
+        spot_usd = float(d["lastPrice"])
+    except Exception:
+        # ถ้า Binance ใช้งานไม่ได้ ให้ย้อนคำนวณจาก local quote ได้
+        spot_usd = 0.0
+
+    try:
+        usdt_ticker = _bitkub_ticker("USDT")
+        usdthb = float(usdt_ticker.get("last") or 0.0)
+    except Exception:
+        usdthb = 0.0
+
+    if usdthb <= 0:
+        usdthb = 35.0
+
+    if spot_usd <= 0:
+        # local_ticker.last is THB/coin; use it as a last-resort global proxy.
+        spot_usd = float(local_ticker.get("last") or 0.0) / usdthb
+
+    return spot_usd, usdthb, "Binance Spot + Bitkub USDT/THB"
+
+
+def _enrich_trade_ledger_record(
+    email: str,
+    sim: dict,
+    side: str,
+    asset: str,
+    amount_thb: float,
+    exec_price: float,
+    qty: float,
+    fee: float,
+    ticker: dict,
+    order_id: str,
+    order_type: str,
+) -> dict:
+    """ทำ ledger record ให้ตรงกับ execute_order() ของ Exchange UI มากที่สุด."""
+    cfg = _trade_model_config(email, sim)
+    spot_usd, usdthb, global_source = _global_trade_reference(asset, ticker)
+    coin_price_global = spot_usd * usdthb
+
+    if coin_price_global <= 0:
+        coin_price_global = exec_price / max(
+            1e-12,
+            (1.0 + cfg["local_premium"])
+            * (1.0 + cfg["dealer_spread"] if side == "buy" else 1.0 - cfg["dealer_spread"])
+        )
+
+    inv = sim.setdefault("inv_coins", {})
+    target_thb = float(sim.get("target_thb", 0.0) or 0.0)
+    target_coins = target_thb / coin_price_global if coin_price_global > 0 else 0.0
+    inv_before = float(inv.get(asset, target_coins) or 0.0)
+    inv.setdefault(asset, inv_before)
+
+    month_str = datetime.now(timezone.utc).strftime("%Y-%m")
+    fx_by_month = sim.setdefault("fx_used_usd_by_month", {})
+    month_used = float(fx_by_month.get(month_str, 0.0) or 0.0)
+
+    # Same inventory/hedge flow as the web Exchange Simulator.
+    if side == "buy":
+        inv_after_customer = inv_before - qty
+        hedge_required = max(0.0, target_coins - inv_after_customer)
+        fx_left = max(0.0, cfg["fx_limit_max"] - month_used)
+        max_hedge = (
+            fx_left / (spot_usd * (1.0 + cfg["hedge_fee"]))
+            if spot_usd > 0 else 0.0
+        )
+        hedged_coins = min(hedge_required, max_hedge)
+        residual_unhedged = max(0.0, hedge_required - hedged_coins)
+        hedge_thb = hedged_coins * coin_price_global
+        hedge_usd = hedged_coins * spot_usd * (1.0 + cfg["hedge_fee"])
+        cex_used_this = 0.0
+        inv_after = inv_after_customer + hedged_coins
+
+        fx_by_month[month_str] = month_used + hedge_usd
+        sim["fx_used_usd"] = float(sim.get("fx_used_usd", 0.0) or 0.0) + hedge_usd
+    else:
+        inv_after_customer = inv_before + qty
+        hedge_required = max(0.0, inv_after_customer - target_coins)
+        cex_before = float(sim.get("cex_used_thb", 0.0) or 0.0)
+        cex_limit = float(cfg["cex_margin_thb"])
+        cex_left = max(0.0, cex_limit - cex_before)
+        max_hedge = cex_left / coin_price_global if coin_price_global > 0 else 0.0
+        hedged_coins = min(hedge_required, max_hedge)
+        residual_unhedged = max(0.0, hedge_required - hedged_coins)
+        hedge_thb = hedged_coins * coin_price_global
+        hedge_usd = hedged_coins * spot_usd * (1.0 + cfg["hedge_fee"])
+        cex_used_this = hedge_thb
+        inv_after = max(0.0, inv_after_customer - hedged_coins)
+        sim["cex_used_thb"] = cex_before + cex_used_this
+
+    inv[asset] = inv_after
+    unhedged_thb_this = residual_unhedged * coin_price_global
+    sim["unhedged_thb"] = float(sim.get("unhedged_thb", 0.0) or 0.0) + unhedged_thb_this
+
+    # Dealer P&L — same structure as the web order model.
+    if side == "buy":
+        market_edge = qty * (exec_price - coin_price_global)
+    else:
+        market_edge = qty * (coin_price_global - exec_price)
+
+    fee_rev = fee if cfg["include_trading_fee_revenue"] else 0.0
+    ktb_fx_benefit = hedge_thb * (cfg["ktb_fx_spread_bps"] / 10000.0)
+
+    daily_vol = abs(float(ticker.get("percentChange") or 0.0)) / 100.0
+    depth_usd = float(cfg["market_depth_usd"])
+    impact_pen = float(cfg["impact_penalty"])
+    hedge_order_usd = hedged_coins * spot_usd
+    hedge_part = (
+        hedge_order_usd / depth_usd
+        if depth_usd > 0 and hedge_order_usd > 0 else 0.0
+    )
+    impact_cost = (
+        hedge_thb * hedge_part * impact_pen
+        if hedge_thb > 0 and depth_usd > 0 and impact_pen > 0 else 0.0
+    )
+    slippage_cost = (
+        hedge_thb * daily_vol * cfg["slippage_sensitivity"] + impact_cost
+        if hedged_coins > 0 else 0.0
+    )
+    hedge_fee_cost = hedge_thb * cfg["hedge_fee"]
+
+    revenue = market_edge + fee_rev + ktb_fx_benefit
+    cost = hedge_fee_cost + slippage_cost
+    net = revenue - cost
+    sim["pnl_thb"] = float(sim.get("pnl_thb", 0.0) or 0.0) + net
+
+    # NC after the hedge, using the same nc_snapshot formula/inputs saved by web.
+    stock_thb = max(0.0, inv_after) * coin_price_global
+    h_crypto = float(cfg["h_crypto"])
+    h_cex = float(cfg["h_cex"])
+    custody_rate = float(cfg["custody_rate_blended"])
+    capital = float(cfg["total_capital_thb"])
+    cex_margin = float(cfg["cex_margin_thb"])
+    liab = float(cfg["liab_thb"])
+    trading_nc = float(cfg["trading_risk_rate"]) * float(cfg["daily_volume_thb"])
+    custody_nc = stock_thb * custody_rate
+    nc_actual = (
+        capital - stock_thb
+        + stock_thb * (1.0 - h_crypto)
+        + cex_margin * (1.0 - h_cex)
+        - liab
+    )
+    nc_required = float(cfg["fixed_min_nc"]) + trading_nc + custody_nc
+    nc_buffer = nc_actual - nc_required
+
+    if nc_buffer < 0:
+        nc_status = "NC ไม่พอ"
+    elif nc_buffer < 0.5 * nc_required or cfg["hot_wallet_cap_breach"]:
+        nc_status = "เฝ้าระวัง"
+    else:
+        nc_status = "ผ่าน"
+
+    record = {
+        "วันที่": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "เวลา": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "ฝั่ง": "ซื้อ" if side == "buy" else "ขาย",
+        "เหรียญ": asset,
+        "มูลค่า (บาท)": amount_thb,
+        "ราคาที่ลูกค้าได้": exec_price,
+        "เหรียญที่ส่งมอบ": qty,
+        "Hedge (เหรียญ)": hedged_coins,
+        "Hedge (USD)": hedge_usd,
+        "CEX Liquidity ใช้ (บาท)": cex_used_this,
+        "Unhedged (บาท)": unhedged_thb_this,
+        "Market Edge": market_edge,
+        "รายได้": revenue,
+        "ต้นทุน": cost,
+        "กำไรออเดอร์": net,
+        "สต็อกคงเหลือ": inv_after,
+        "FX ใช้สะสม (USD)": month_used + hedge_usd if side == "buy" else month_used,
+        "CEX Liquidity ใช้สะสม (บาท)": float(sim.get("cex_used_thb", 0.0) or 0.0),
+        "NC Buffer": nc_buffer,
+        "ผลด่าน": nc_status if residual_unhedged <= 1e-12 and nc_buffer >= 0 else (
+            "NC ไม่พอ" if nc_buffer < 0 else "เฝ้าระวัง"
+        ),
+        "ค่าธรรมเนียม": fee,
+        "ประเภท": order_type.upper(),
+        "Exchange": "Bitkub",
+        "Source": "Telegram",
+        "Order ID": order_id,
+        "สถานะ": "Filled",
+        "Global Reference (THB)": coin_price_global,
+        "Global Source": global_source,
+        "NC Actual": nc_actual,
+        "NC Required": nc_required,
+    }
+    return record
+
 def _parse_trade_arg(arg: str, side: str) -> tuple[str, float, str, Optional[float]]:
     parts = arg.strip().split()
     if len(parts) < 2:
@@ -1360,6 +1633,7 @@ def _execute_pending(chat_id: int) -> str:
     if email != pending.get("email"):
         PENDING_ORDERS.pop(chat_id, None)
         return "❌ บัญชี Telegram ไม่ตรงกับคำสั่งที่รอยืนยัน"
+
     try:
         sim = _sim_state(email)
         side = pending["side"]
@@ -1373,39 +1647,47 @@ def _execute_pending(chat_id: int) -> str:
         market_bid = float(ticker.get("highestBid") or quote)
 
         if typ == "limit":
-            crossed = (side == "buy" and limit_price >= market_ask) or (side == "sell" and limit_price <= market_bid)
+            crossed = (
+                (side == "buy" and limit_price >= market_ask)
+                or (side == "sell" and limit_price <= market_bid)
+            )
             if not crossed:
-                # Keep it as an open simulated order; reserve the customer balance.
+                # ใช้ schema เดียวกับ Exchange UI Simulator
+                # และไม่ reserve เงิน/เหรียญ เพราะ web simulator ก็ตรวจยอดตอน match
                 open_orders = sim.setdefault("open_orders", [])
                 order = {
-                    "id": pending["id"], "side": side, "asset": asset, "type": "limit",
-                    "amount": amount, "limit_price": limit_price,
-                    "created_at": pending["created_at"], "status": "open", "source": "telegram",
+                    "id": pending["id"],
+                    "side": side,
+                    "asset": asset,
+                    "amount_thb": amount if side == "buy" else 0.0,
+                    "qty": amount if side == "sell" else 0.0,
+                    "px": limit_price,
+                    "type": "limit",
+                    "source": "telegram",
+                    "created_at": pending["created_at"],
+                    "status": "open",
                 }
-                if side == "buy":
-                    cash = float(sim.get("customer_thb", 0.0))
-                    if amount > cash:
-                        raise ValueError(f"THB ในกระเป๋าไม่พอ (มี ฿{cash:,.2f})")
-                    sim["customer_thb"] = cash - amount
-                    order["reserved_thb"] = amount
-                else:
-                    coins = float((sim.get("customer_coins") or {}).get(asset, 0.0))
-                    if amount > coins:
-                        raise ValueError(f"{asset} ในกระเป๋าไม่พอ")
-                    sim["customer_coins"][asset] = coins - amount
-                    order["reserved_coins"] = amount
                 open_orders.append(order)
                 _save_sim_state(email, sim)
-                _audit_trade(email, chat_id, "telegram_sim_order_open", asset, None, order, {"order_id": pending["id"]})
+                _audit_trade(
+                    email, chat_id, "telegram_sim_order_open",
+                    asset, None, order, {"order_id": pending["id"]},
+                )
                 PENDING_ORDERS.pop(chat_id, None)
-                return f"🟡 LIMIT ORDER เปิดแล้ว\nOrder ID: {pending['id']}\n{side.upper()} {amount:,.8f} {asset} @ ฿{limit_price:,.2f}\nStatus: OPEN\nใช้ /orders ดูรายการ"
+                return (
+                    f"🟡 LIMIT ORDER เปิดแล้ว\n"
+                    f"Order ID: {pending['id']}\n"
+                    f"{side.upper()} {amount:,.8f} {asset} @ ฿{limit_price:,.2f}\n"
+                    "Status: OPEN\n"
+                    "ใช้ /orders ดูรายการ"
+                )
 
-        # Market order, or crossed limit: execute immediately.
-        exec_price = (limit_price if typ == "limit" else quote)
-        fee = 0.0
+        # Market order หรือ crossed limit
+        exec_price = limit_price if typ == "limit" else quote
         customer_coins = sim.setdefault("customer_coins", {})
-        cash_before = float(sim.get("customer_thb", 0.0))
-        coins_before = float(customer_coins.get(asset, 0.0))
+        cash_before = float(sim.get("customer_thb", 0.0) or 0.0)
+        coins_before = float(customer_coins.get(asset, 0.0) or 0.0)
+
         if side == "buy":
             amount_thb = amount
             fee = amount_thb * LOCAL_TRADE_FEE
@@ -1417,7 +1699,6 @@ def _execute_pending(chat_id: int) -> str:
                 raise ValueError(f"THB ในกระเป๋าไม่พอ (มี ฿{cash_before:,.2f})")
             sim["customer_thb"] = cash_before - amount_thb
             customer_coins[asset] = coins_before + received
-            settlement_value = amount_thb
             qty = received
         else:
             qty = amount
@@ -1428,27 +1709,40 @@ def _execute_pending(chat_id: int) -> str:
             received_thb = gross - fee
             customer_coins[asset] = max(0.0, coins_before - qty)
             sim["customer_thb"] = cash_before + received_thb
-            settlement_value = received_thb
+            amount_thb = gross
 
-        record = {
-            "วันที่": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-            "เวลา": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "ฝั่ง": "ซื้อ" if side == "buy" else "ขาย", "เหรียญ": asset,
-            "มูลค่า (บาท)": amount if side == "buy" else settlement_value,
-            "ราคาที่ลูกค้าได้": exec_price,
-            "เหรียญที่ส่งมอบ": qty, "ค่าธรรมเนียม": fee,
-            "ประเภท": typ.upper(), "Exchange": "Bitkub", "Source": "Telegram",
-            "Order ID": pending["id"], "สถานะ": "Filled",
-        }
+        record = _enrich_trade_ledger_record(
+            email=email,
+            sim=sim,
+            side=side,
+            asset=asset,
+            amount_thb=amount_thb,
+            exec_price=exec_price,
+            qty=qty,
+            fee=fee,
+            ticker=ticker,
+            order_id=pending["id"],
+            order_type=typ,
+        )
+
         sim.setdefault("orders", []).append(record)
         sim["orders"] = sim["orders"][-500:]
         _save_sim_state(email, sim)
-        _audit_trade(email, chat_id, "telegram_sim_order_filled", asset, None, record, {"order_id": pending["id"]})
+        _audit_trade(
+            email, chat_id, "telegram_sim_order_filled",
+            asset, None, record, {"order_id": pending["id"]},
+        )
         PENDING_ORDERS.pop(chat_id, None)
+
         return (
-            f"✅ ORDER FILLED\nOrder ID: {pending['id']}\nExchange: Bitkub\n"
-            f"{record['ฝั่ง']} {qty:,.8f} {asset}\nราคา: ฿{exec_price:,.2f}\n"
-            f"Fee: ฿{fee:,.2f}\n\n"
+            f"✅ ORDER FILLED\n"
+            f"Order ID: {pending['id']}\n"
+            "Exchange: Bitkub\n"
+            f"{record['ฝั่ง']} {qty:,.8f} {asset}\n"
+            f"ราคา: ฿{exec_price:,.2f}\n"
+            f"Fee: ฿{fee:,.2f}\n"
+            f"Dealer P&L: ฿{float(record['กำไรออเดอร์']):+,.2f}\n"
+            f"NC Buffer: ฿{float(record['NC Buffer']):+,.2f}\n\n"
             f"💰 THB คงเหลือ: ฿{sim['customer_thb']:,.2f}\n"
             f"🪙 {asset}: {customer_coins.get(asset, 0.0):,.8f}"
         )
