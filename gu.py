@@ -513,6 +513,7 @@ def sim_config_signature(ctx: Mapping[str, Any], target_stock_thb: float,
         "capital", "cex_margin", "cex_liquidity_thb", "liab",
         "fixed_min_nc", "trading_risk_rate", "daily_volume_thb", "custody_rate",
         "hot_breach", "market_depth_usd", "impact_penalty",
+        "hedge_trigger_pct", "hedge_vol_block_pct",
     ]
     values = []
     for key in keys:
@@ -661,8 +662,23 @@ def execute_order(
     fx_month_dict = sim.setdefault("fx_used_usd_by_month", {})
     month_used = float(fx_month_dict.get(month_str, 0.0))
 
+    _trig = float(p.get("hedge_trigger_pct", 0.0) or 0.0)
+    _vblk = float(p.get("hedge_vol_block_pct", 0.0) or 0.0)
+
+    def _apply_hedge_rule(required_coins: float) -> tuple[float, Optional[str]]:
+        """คืน (เหรียญที่ต้อง hedge หลังผ่านกฎ, เหตุผลถ้าถูกข้าม)"""
+        if required_coins <= 0:
+            return 0.0, None
+        if _vblk > 0 and daily_vol > _vblk:
+            return 0.0, f"ความผันผวนวันนี้ {daily_vol * 100:.1f}% > เพดาน {_vblk * 100:.1f}%"
+        dev = required_coins / target_coins if target_coins > 0 else 1.0
+        if dev < _trig:
+            return 0.0, f"deviation {dev * 100:.1f}% ต่ำกว่า trigger {_trig * 100:.0f}%"
+        return required_coins, None
+
     if side == "buy":
-        required_topup_coins = max(0.0, target_coins - inv_after_customer)
+        required_topup_coins, _ = _apply_hedge_rule(
+            max(0.0, target_coins - inv_after_customer))
         fx_left_usd = max(0.0, float(p["fx_limit"]) - month_used)
         if spot > 0 and p["hedge_fee"] >= 0:
             max_hedge_by_fx = fx_left_usd / (spot * (1 + p["hedge_fee"]))
@@ -746,7 +762,8 @@ def execute_order(
                fmt_baht(max(0.0, sim["inv_coins"][current_asset]) * coin_price_global)),
     ))
 
-    hedge_required_coins = short_coins if side == "buy" else excess_coins
+    raw_required = short_coins if side == "buy" else excess_coins
+    hedge_required_coins, skip_reason = _apply_hedge_rule(raw_required)
     cex_used_thb_this_order = 0.0
 
     if side == "buy":
@@ -799,6 +816,11 @@ def execute_order(
             hedge_note = ("CEX liquidity ไม่พอขาย inventory ส่วนเกินทั้งหมด "
                           "จึงเหลือ long exposure ค้าง")
         fx_left_usd = max(0.0, float(p["fx_limit"]) - month_used)
+
+    if skip_reason:
+        hedge_status = "warn"
+        hedge_note = (f"ข้าม hedge ตามกฎ: {skip_reason} · "
+                      f"ปล่อย exposure {fmt_coin(raw_required, current_asset)}")
 
     steps.append(dict(
         n=4, t="ระบบตัดสินใจ Hedge อัตโนมัติ", s=hedge_status, note=hedge_note,
@@ -988,7 +1010,7 @@ def execute_order(
 
 
 
-TELEGRAM_ENGINE_TAG = "_exchange_engine_v37"
+TELEGRAM_ENGINE_TAG = "_exchange_engine_v38"
 
 
 def sync_telegram_orders_to_exchange_ledger(
@@ -3025,6 +3047,15 @@ def build_sidebar() -> dict[str, Any]:
                 "สัดส่วน Cold Wallet ฝากในประเทศ (%)", 0, 100, 80,
                 key="nc_cold_dom", disabled=RO) / 100
 
+        with st.expander("🛡️ กฎ Auto-Hedge", expanded=False):
+            hedge_trigger_pct = st.slider(
+                "Hedge เมื่อส่วนต่างจาก target เกิน (%) — 0 = hedge ทุกครั้ง",
+                0, 50, 0, key="bt_hedge_trigger", disabled=RO) / 100
+            hedge_vol_block_pct = st.number_input(
+                "งด hedge เมื่อความผันผวนรายวันเกิน (%) — 0 = ปิด",
+                value=0.0, step=0.5, min_value=0.0,
+                key="bt_hedge_volblock", disabled=RO) / 100
+
         st.divider()
         _audit_log_param_changes(dict(
             asset=asset, global_exchange=global_exchange,
@@ -3049,6 +3080,7 @@ def build_sidebar() -> dict[str, Any]:
             is_custodian=is_custodian, trading_risk_rate=trading_risk_rate,
             cold_foreign_rate=cold_foreign_rate, hot_wallet_pct=hot_wallet_pct,
             cold_domestic_split_pct=cold_domestic_split_pct,
+            hedge_trigger_pct=hedge_trigger_pct, hedge_vol_block_pct=hedge_vol_block_pct,
         ))
         render_audit_log_sidebar()
         render_role_admin_panel()
@@ -3086,6 +3118,8 @@ def build_sidebar() -> dict[str, Any]:
         cold_domestic_split_pct=cold_domestic_split_pct,
         custody_rate_blended=custody_rate_blended,
         hot_wallet_cap_breach=hot_wallet_cap_breach,
+        hedge_trigger_pct=hedge_trigger_pct,
+        hedge_vol_block_pct=hedge_vol_block_pct,
     )
 
 
@@ -6251,6 +6285,8 @@ def build_dealer_ctx(cfg: dict[str, Any], data: pd.DataFrame) -> Optional[tuple[
         h_crypto=h_crypto_sim, h_cex=h_cex_sim, fixed_min_nc=cfg["fixed_min_nc"],
         trading_risk_rate=cfg["trading_risk_rate"], daily_volume_thb=cfg["daily_volume_thb"],
         custody_rate=cfg["custody_rate_blended"], hot_breach=cfg["hot_wallet_cap_breach"],
+        hedge_trigger_pct=cfg.get("hedge_trigger_pct", 0.0),
+        hedge_vol_block_pct=cfg.get("hedge_vol_block_pct", 0.0),
     )
     return ctx, target_stock_thb
 
@@ -6365,6 +6401,83 @@ if HAS_FRAGMENT:
     _risk_dashboard_live = st.fragment(run_every=30)(_risk_dashboard_body)
 else:
     _risk_dashboard_live = _risk_dashboard_body
+
+
+# =========================================================================
+# HEDGE RULE LAB — รันชุดออเดอร์สุ่มชุดเดียวกันภายใต้กฎ hedge ต่างกัน
+# =========================================================================
+
+HEDGE_RULE_PRESETS = {
+    "Hedge ทุกครั้ง (เดิม)": (0.0, 0.0),
+    "Trigger 10%": (0.10, 0.0),
+    "Trigger 25%": (0.25, 0.0),
+    "Trigger 10% + งดเมื่อ vol > 8%": (0.10, 0.08),
+}
+
+
+def compare_hedge_rules(sim, cfg, ctx, target_stock_thb, coins, n_orders, seed,
+                        amt_min, amt_max, rules: dict) -> pd.DataFrame:
+    rows = []
+    for name, (trig, vblk) in rules.items():
+        s2 = copy.deepcopy(sim)
+        s2.update(orders=[], pnl_thb=0.0, fx_used_usd=0.0, fx_used_usd_by_month={},
+                  cex_used_thb=0.0, unhedged_thb=0.0, open_orders=[])
+        c2 = {**ctx, "hedge_trigger_pct": trig, "hedge_vol_block_pct": vblk}
+        run_random_batch(s2, cfg, c2, target_stock_thb, coins, n_orders, seed,
+                         amt_min, amt_max)
+        o = pd.DataFrame(s2["orders"])
+        if o.empty:
+            continue
+        rej = o["ผลด่าน"].astype(str).str.startswith("Reject")
+        ok = o[~rej]
+        expo = (ok["สต็อกคงเหลือ"] * ok["ราคาที่ลูกค้าได้"] - target_stock_thb).abs()
+        rows.append({
+            "กฎ": name,
+            "Net P&L": float(s2["pnl_thb"]),
+            "ต้นทุน Hedge+Slippage": float(ok["ต้นทุน"].sum()),
+            "จำนวนครั้งที่ hedge": int((ok["Hedge (เหรียญ)"] > 0).sum()),
+            "Hedge USD รวม": float(ok["Hedge (USD)"].sum()),
+            "Exposure เฉลี่ย (THB)": float(expo.mean()) if len(expo) else 0.0,
+            "Exposure สูงสุด (THB)": float(expo.max()) if len(expo) else 0.0,
+            "ถูกปฏิเสธ": int(rej.sum()),
+            "NC Buffer ต่ำสุด": float(ok["NC Buffer"].min()) if len(ok) else 0.0,
+        })
+    return pd.DataFrame(rows)
+
+
+def render_hedge_rule_lab(sim, cfg, ctx, target_stock_thb) -> None:
+    with st.expander("🛡️ Hedge Rule Lab — เทียบกฎ Auto-Hedge", expanded=False):
+        st.caption(
+            "รันออเดอร์สุ่มชุดเดียวกัน (seed เดียวกัน) ผ่าน engine จริงภายใต้กฎต่างกัน · "
+            "ไม่แตะสมุดออเดอร์จริง (ทำงานบนสำเนา) · Exposure เป็นค่าประมาณไว้เทียบกฎเท่านั้น")
+        coins = st.multiselect("เหรียญ", SUPPORTED_ASSETS, default=["BTC", "ETH"], key="hr_coins")
+        c1, c2, c3, c4 = st.columns(4)
+        n_orders = c1.number_input("จำนวนออเดอร์", value=100, min_value=10, step=10, key="hr_n")
+        seed = c2.number_input("Seed", value=11, step=1, key="hr_seed")
+        amt_min = c3.number_input("ยอดต่ำสุด (THB)", value=1000.0, min_value=float(MIN_TRADE_THB),
+                                  step=500.0, key="hr_min")
+        amt_max = c4.number_input("ยอดสูงสุด (THB)", value=500000.0, min_value=float(MIN_TRADE_THB),
+                                  step=10000.0, key="hr_max")
+        rules = dict(HEDGE_RULE_PRESETS)
+        rules["กฎปัจจุบันใน sidebar"] = (cfg.get("hedge_trigger_pct", 0.0),
+                                         cfg.get("hedge_vol_block_pct", 0.0))
+        if st.button("🛡️ รันเปรียบเทียบ", key="hr_run", disabled=not coins, **WIDE):
+            with st.spinner("กำลังรันหลายกฎ…"):
+                st.session_state["hr_result"] = compare_hedge_rules(
+                    sim, cfg, ctx, target_stock_thb, coins, n_orders, seed,
+                    amt_min, amt_max, rules)
+        res = st.session_state.get("hr_result")
+        if res is not None and not res.empty:
+            st.dataframe(res, **WIDE)
+            fig = go.Figure()
+            fig.add_trace(go.Bar(name="Net P&L", x=res["กฎ"], y=res["Net P&L"],
+                                 marker_color="#0ecb81"))
+            fig.add_trace(go.Bar(name="Exposure เฉลี่ย", x=res["กฎ"],
+                                 y=res["Exposure เฉลี่ย (THB)"], marker_color="#f6465d"))
+            fig.update_layout(template="plotly_dark", height=320, barmode="group",
+                              margin=dict(t=20, b=20), paper_bgcolor="rgba(0,0,0,0)",
+                              plot_bgcolor="rgba(0,0,0,0)")
+            st.plotly_chart(fig, **WIDE)
 
 
 def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str],
@@ -6532,6 +6645,8 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 st.session_state.sim_batch_summary = txt
                 st.rerun()
 
+
+        render_hedge_rule_lab(sim, cfg, ctx, target_stock_thb)
 
         st.markdown('<div style="margin-top:14px;"></div>', unsafe_allow_html=True)
         t_risk, t_route, t_ledger, t_wallet, t_dca = st.tabs(
