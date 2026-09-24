@@ -4118,17 +4118,55 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 hovertemplate=("วันที่: %{text}<br>ราคา: $%{y:,.2f}<br>"
                                f"{view_3d}: {z_hover}<extra></extra>"),
             )])
+            # ---- รูปแบบ 3D ให้เหมือนกราฟตัวอย่าง ----
+            # แกน X = Time Steps, Y = ราคาโลก, Z = ตัวชี้วัด
+            # สีของจุดไล่ตามค่า Z ด้วย Rainbow และใช้พื้นหลัง/grid แบบ dark 3D
             fig_3d.update_layout(
-                title=dict(text=f"3D — {asset} (Time vs Price vs {view_3d})",
-                           font=dict(size=14)),
+                title=dict(
+                    text=f"3D — {asset} (Time vs Price vs {view_3d})",
+                    font=dict(size=14),
+                ),
                 scene=dict(
-                    xaxis_title="ลำดับเวลา (Time Steps)",
-                    yaxis_title="ราคาโลก (USD)",
-                    zaxis_title=z_title,
-                    bgcolor="#181a20",
+                    xaxis=dict(
+                        title="ลำดับเวลา (Time Steps)",
+                        backgroundcolor="#0d0d0d",
+                        gridcolor="#49647f",
+                        linecolor="#8aa0b5",
+                        zerolinecolor="#8aa0b5",
+                        showbackground=True,
+                        showgrid=True,
+                    ),
+                    yaxis=dict(
+                        title="ราคาโลก (USD)",
+                        tickprefix="$",
+                        tickformat=",.0f",
+                        backgroundcolor="#0d0d0d",
+                        gridcolor="#49647f",
+                        linecolor="#8aa0b5",
+                        zerolinecolor="#8aa0b5",
+                        showbackground=True,
+                        showgrid=True,
+                    ),
+                    zaxis=dict(
+                        title=z_title,
+                        backgroundcolor="#0d0d0d",
+                        gridcolor="#49647f",
+                        linecolor="#8aa0b5",
+                        zerolinecolor="#8aa0b5",
+                        showbackground=True,
+                        showgrid=True,
+                    ),
+                    bgcolor="#0d0d0d",
+                    aspectmode="manual",
+                    aspectratio=dict(x=1.65, y=1.25, z=1.05),
+                    camera=dict(
+                        eye=dict(x=1.55, y=1.55, z=1.15),
+                        center=dict(x=0, y=0, z=0),
+                        up=dict(x=0, y=0, z=1),
+                    ),
                 ),
                 template="plotly_dark",
-                height=600,
+                height=650,
                 margin=dict(l=0, r=0, b=0, t=40),
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
