@@ -88,37 +88,57 @@ def _make_3d_orderbook(asks, bids, symbol="BTC/THB"):
     bx, by, bz, bhover = _side_scatter(bids, -1, unit, "🟢 BID — ซื้อ")
     ax, ay, az, ahover = _side_scatter(asks, 1, unit, "🔴 ASK — ขาย")
 
-    xs = bx + ax
-    ys = by + ay
-    zs = bz + az
-    hover = bhover + ahover
+    fig = go.Figure()
 
-    fig = go.Figure(
-        data=[
-            go.Scatter3d(
-                x=xs,
-                y=ys,
-                z=zs,
-                mode="markers",
-                marker=dict(
-                    size=6,
-                    color=zs,
-                    colorscale="Turbo",
-                    opacity=0.9,
-                    colorbar=dict(
-                        title=f"ปริมาณ<br>({unit})",
-                        thickness=14,
-                        len=0.75,
-                        x=1.02,
-                    ),
-                    line=dict(width=0),
+    if bx:
+        fig.add_trace(go.Scatter3d(
+            x=bx, y=by, z=bz,
+            mode="markers",
+            name="BID",
+            marker=dict(
+                size=6,
+                color=bz,
+                colorscale="Greens",
+                opacity=0.9,
+                colorbar=dict(
+                    title=f"BID<br>({unit})",
+                    thickness=14,
+                    len=0.42,
+                    x=1.02,
+                    y=0.78,
                 ),
-                hovertext=hover,
-                hoverinfo="text",
-                showlegend=False,
-            )
-        ]
-    )
+                line=dict(width=0),
+            ),
+            hovertext=bhover,
+            hoverinfo="text",
+            showlegend=False,
+        ))
+
+    if ax:
+        fig.add_trace(go.Scatter3d(
+            x=ax, y=ay, z=az,
+            mode="markers",
+            name="ASK",
+            marker=dict(
+                size=6,
+                color=az,
+                colorscale="Reds",
+                opacity=0.9,
+                colorbar=dict(
+                    title=f"ASK<br>({unit})",
+                    thickness=14,
+                    len=0.42,
+                    x=1.02,
+                    y=0.22,
+                ),
+                line=dict(width=0),
+            ),
+            hovertext=ahover,
+            hoverinfo="text",
+            showlegend=False,
+        ))
+
+    zs = bz + az
 
     best_bid = bids[0][0] if bids else None
     best_ask = asks[0][0] if asks else None
