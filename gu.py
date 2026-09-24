@@ -7624,7 +7624,7 @@ MOBILE_CSS = r'''<style>
   .st-key-desktop_chrome { display:none !important; }
   .st-key-desktop_navigation { display:none !important; }
   .st-key-desktop_route { display:none !important; }
-  .st-key-mobile_shell { display:block !important; }
+  .st-key-mobile_shell { display:block !important; margin-left:130px !important; width:calc(100% - 130px) !important; box-sizing:border-box !important; }
   .st-key-mobile_nav { position:fixed !important; z-index:999999 !important; left:0 !important; right:0 !important; bottom:0 !important; width:100vw !important; margin:0 !important; padding:7px 6px calc(7px + env(safe-area-inset-bottom)) !important; background:rgba(24,26,32,.98) !important; border-top:1px solid #2b3139 !important; box-sizing:border-box !important; }
   .st-key-mobile_nav [role="radiogroup"] { width:100% !important; display:grid !important; grid-template-columns:repeat(5,minmax(0,1fr)) !important; gap:2px !important; }
   .st-key-mobile_nav [role="radiogroup"] > label { min-width:0 !important; height:42px !important; margin:0 !important; padding:4px 2px !important; display:flex !important; align-items:center !important; justify-content:center !important; border:0 !important; border-radius:10px !important; text-align:center !important; }
@@ -7736,78 +7736,181 @@ MOBILE_CSS = r'''<style>
 # ---- ปุ่มสามเหลี่ยมเล็ก แทนแถบเมนู mobile nav แนวนอนที่ overflow ----
 MOBILE_NAV_TRIGGER_CSS = r"""<style>
 @media (max-width: 768px) {
-  .st-key-mobile_nav_trigger {
+  /* Mobile left navigation rail — ไม่ใช้ bottom bar / popover แล้ว */
+  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) {
     position: fixed !important;
-    left: 12px !important;
-    bottom: calc(12px + env(safe-area-inset-bottom)) !important;
-    z-index: 999995 !important;
-    width: 42px !important;
-  }
-  .st-key-mobile_nav_trigger button {
-    width: 42px !important;
-    height: 42px !important;
+    left: 0 !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    z-index: 999999 !important;
+    width: 130px !important;
+    margin: 0 !important;
     padding: 0 !important;
-    border-radius: 50% !important;
-    background: #181a20 !important;
-    border: 1px solid #2b3139 !important;
-    box-shadow: 0 6px 18px rgba(0,0,0,.35) !important;
+    background: #171a1f !important;
+    border-right: 1px solid #242a30 !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+  }
+
+  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-toggle {
+    height: 64px !important;
+    padding: 0 0 0 16px !important;
+    display: flex !important;
+    align-items: center !important;
+  }
+
+  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-toggle button {
+    width: 38px !important;
+    height: 38px !important;
+    min-height: 38px !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 9px !important;
+    background: transparent !important;
+    color: #eaecef !important;
+    box-shadow: none !important;
+    font-size: 0 !important;
+  }
+
+  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-toggle button:hover {
+    background: rgba(255,255,255,.06) !important;
+  }
+
+  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-toggle button p {
+    font-size: 0 !important;
+    margin: 0 !important;
+    width: 20px !important;
+    height: 14px !important;
+    border-top: 2px solid #eaecef !important;
+    border-bottom: 2px solid #eaecef !important;
+    position: relative !important;
+  }
+
+  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-toggle button p::after {
+    content: "" !important;
+    position: absolute !important;
+    left: 0 !important;
+    right: 0 !important;
+    top: 5px !important;
+    border-top: 2px solid #eaecef !important;
+  }
+
+  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-list {
+    padding: 4px 0 !important;
+  }
+
+  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-list [data-testid="stRadio"] > label {
+    display: none !important;
+  }
+
+  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-list [role="radiogroup"] {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 4px !important;
+    width: 100% !important;
+  }
+
+  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-list [role="radiogroup"] > label {
+    width: 100% !important;
+    min-width: 0 !important;
+    height: 48px !important;
+    margin: 0 !important;
+    padding: 0 12px !important;
+    display: flex !important;
+    align-items: center !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    color: #a7b0bb !important;
+    box-sizing: border-box !important;
+    cursor: pointer !important;
+  }
+
+  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-list [role="radiogroup"] > label:hover {
+    background: rgba(255,255,255,.045) !important;
+    color: #f5f7fa !important;
+  }
+
+  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-list [role="radiogroup"] > label[data-checked="true"] {
+    background: #087f5b !important;
+    color: #ffffff !important;
+  }
+
+  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-list [role="radiogroup"] > label > div:first-child {
+    display: none !important;
+  }
+
+  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-list [role="radiogroup"] > label p {
+    margin: 0 !important;
+    color: inherit !important;
+    font-size: 12px !important;
+    line-height: 1.2 !important;
+    font-weight: 650 !important;
+    white-space: nowrap !important;
+  }
+
+  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-list [role="radiogroup"] > label p::first-letter {
+    font-size: 16px !important;
+  }
+
+  /* ย่อแถบจริง: เหลือเฉพาะ icon และคืนพื้นที่ให้ content */
+  .st-key-mobile_nav_trigger_collapsed {
+    width: 56px !important;
+  }
+  .st-key-mobile_nav_trigger_collapsed .mobile-nav-toggle {
+    padding-left: 9px !important;
+  }
+  .st-key-mobile_nav_trigger_collapsed .mobile-nav-list [role="radiogroup"] > label {
+    justify-content: center !important;
+    padding: 0 !important;
+  }
+  .st-key-mobile_nav_trigger_collapsed .mobile-nav-list [role="radiogroup"] > label p {
+    font-size: 0 !important;
+    width: 22px !important;
+    height: 22px !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
   }
-  .st-key-mobile_nav_trigger button p {
-    width: 0 !important;
-    height: 0 !important;
-    border-left: 7px solid transparent !important;
-    border-right: 7px solid transparent !important;
-    border-bottom: 11px solid #0ecb81 !important;
-    font-size: 0 !important;
-    margin: 0 !important;
+  body:has(.st-key-mobile_nav_trigger_collapsed) .st-key-mobile_shell {
+    margin-left: 56px !important;
+    width: calc(100% - 56px) !important;
   }
-  .st-key-mobile_nav_trigger button:hover p {
-    border-bottom-color: #12e08f !important;
+
+  /* เมื่อย่อแถบ: เหลือเฉพาะ icon เพื่อให้พื้นที่ content กลับมา */
+  /* ไม่ให้ old bottom navigation กลับมา */
+  .st-key-mobile_nav {
+    display: none !important;
   }
-  div[data-testid="stPopoverBody"] {
-    width: min(230px, 68vw) !important;
-    background: #181a20 !important;
-    border: 1px solid #2b3139 !important;
-    border-radius: 14px !important;
+}
+
+@media (min-width: 769px) {
+  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) {
+    display: none !important;
   }
-  .st-key-mobile_nav_trigger [role="radiogroup"] {
-    display: flex !important;
-    flex-direction: column !important;
-    gap: 4px !important;
-  }
-  .st-key-mobile_nav_trigger label[data-baseweb="radio"] {
-    padding: 6px 8px !important;
-    border-radius: 8px !important;
-  }
-  .st-key-mobile_nav_trigger label[data-baseweb="radio"]:has(input:checked) {
-    background: rgba(14,203,129,.12) !important;
-  }
-  .st-key-mobile_nav_trigger label[data-baseweb="radio"] p {
-    border: 0 !important;
-    width: auto !important;
-    height: auto !important;
-    font-size: .85rem !important;
-    font-weight: 600 !important;
-    color: #b8bac2 !important;
-    margin: 0 !important;
-  }
-  .st-key-mobile_nav_trigger label[data-baseweb="radio"]:has(input:checked) p {
-    color: #0ecb81 !important;
-  }
-  .st-key-mobile_nav { display: none !important; }
 }
 </style>"""
 
 
-
 def render_mobile_nav_trigger() -> str:
-    """ปุ่มสามเหลี่ยมเล็กลอย กดแล้วเปิดเมนู mobile nav แบบ popover"""
+    """Mobile left rail navigation — สลับหน้าได้ตลอด และย่อ/ขยายแถบได้"""
     current = st.session_state.get("mobile_nav", MOBILE_NAV[0])
-    with st.container(key="mobile_nav_trigger"):
-        with st.popover("▾"):
+    collapsed = bool(st.session_state.get("mobile_nav_collapsed", False))
+
+    # ต้องใช้ container เดียวกับ CSS rail เพื่อให้ปุ่มและ radio อยู่ในแถบเดียวกัน
+    rail_key = "mobile_nav_trigger_collapsed" if collapsed else "mobile_nav_trigger"
+    with st.container(key=rail_key):
+        with st.container(key="mobile_nav_toggle"):
+            if st.button(
+                "☰",
+                key="mobile_nav_toggle_btn",
+                help="ย่อ/ขยายเมนู",
+                use_container_width=False,
+            ):
+                st.session_state["mobile_nav_collapsed"] = not collapsed
+                st.rerun()
+
+        with st.container(key="mobile_nav_list"):
             current = st.radio(
                 "Mobile navigation",
                 MOBILE_NAV,
@@ -7815,6 +7918,7 @@ def render_mobile_nav_trigger() -> str:
                 key="mobile_nav",
                 label_visibility="collapsed",
             )
+
     return current
 
 def _mobile_money(v: float, signed: bool=False) -> str:
