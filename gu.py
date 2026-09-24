@@ -6257,18 +6257,17 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         for sub, mode in zip((sub1, sub2, sub3, sub4),
                              ("favorite", "volume", "top_gain", "top_loss")):
             with sub:
-                try:
-                    cont = st.container(height=480, border=False)
-                except Exception:
-                    cont = st.container()
-                with cont:
-                    render_market_column_view(m_df, mode, asset, usdthb_current)
-                    # ใส่ 3D Order Book ลงในพื้นที่ว่างเดิมของ Market column
-                    render_orderbook_3d(
-                        symbol=f"{asset.lower()}_thb",
-                        title=f"3D Order Book — {asset}/THB",
-                        limit=15,
-                    )
+                # แสดง Market list ตามเดิม แต่ไม่ล็อกความสูง 480px
+                # เพื่อให้ Order Book ด้านล่างขึ้นมาเติมพื้นที่ว่างพอดี
+                render_market_column_view(m_df, mode, asset, usdthb_current)
+
+        # 3D Order Book แสดงเพียงครั้งเดียวใต้ Market tabs
+        # และไม่กระทบ TradingView ทางฝั่งขวา
+        render_orderbook_3d(
+            symbol=f"{asset.lower()}_thb",
+            title=f"3D Order Book — {asset}/THB",
+            limit=15,
+        )
 
     with col_center:
         # TradingView เดิมต้องอยู่ที่นี่ — ไม่ลบกราฟ
