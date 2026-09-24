@@ -38,7 +38,7 @@ from typing import Any, Callable, Optional
 import numpy as np
 import pandas as pd
 
-SB_VERSION = "1.0.0"
+SB_VERSION = "1.0.1"
 
 # =========================================================================
 # LAYER 1 — ENGINE (pure)
@@ -583,11 +583,85 @@ def render_simple_backtest(fetch_fn: Optional[FetchFn] = None, assets: Optional[
     # ---------- ฟอร์ม ----------
     c1, c2, c3 = st.columns([1, 1, 1])
     asset = c1.selectbox("เหรียญ", assets, key="sb_asset")
+
+    # เลือกวันแบบ dropdown แทนปฏิทินของ st.date_input
+    # เพื่อไม่ต้องเลื่อนเดือนยาว ๆ โดยเฉพาะเวลาย้อนกลับไปหลายปี
     today = date.today()
-    start = c2.date_input("เริ่มลงทุนเมื่อ", value=today - timedelta(days=3 * 365),
-                          min_value=date(2015, 1, 1), max_value=today - timedelta(days=30), key="sb_start")
-    end = c3.date_input("ถึงวันที่", value=today, min_value=start + timedelta(days=30),
-                        max_value=today, key="sb_end")
+    min_allowed = date(2015, 1, 1)
+    max_start = today - timedelta(days=30)
+
+    month_names = [
+        "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+        "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม",
+    ]
+
+    def _pick_date(label: str, default: date, min_date: date, max_date: date, prefix: str) -> date:
+        default = max(min(default, max_date), min_date)
+
+        years = list(range(min_date.year, max_date.year + 1))
+        y = st.selectbox(
+            f"{label} — ปี",
+            years,
+            index=years.index(default.year),
+            format_func=lambda v: str(v),
+            key=f"{prefix}_year",
+        )
+
+        month_options = [
+            (m, month_names[m - 1])
+            for m in range(1, 13)
+            if not (y == min_date.year and m < min_date.month)
+            and not (y == max_date.year and m > max_date.month)
+        ]
+        valid_months = [m for m, _ in month_options]
+        default_month = default.month if default.month in valid_months else valid_months[-1]
+        m = st.selectbox(
+            f"{label} — เดือน",
+            valid_months,
+            index=valid_months.index(default_month),
+            format_func=lambda v: month_names[v - 1],
+            key=f"{prefix}_month",
+        )
+
+        first_day = date(y, m, 1)
+        last_day = date(y, m, calendar.monthrange(y, m)[1])
+        lo = max(first_day, min_date)
+        hi = min(last_day, max_date)
+        day_options = list(range(lo.day, hi.day + 1))
+        default_day = min(max(default.day, day_options[0]), day_options[-1])
+        d = st.selectbox(
+            f"{label} — วัน",
+            day_options,
+            index=day_options.index(default_day),
+            format_func=lambda v: str(v),
+            key=f"{prefix}_day",
+        )
+        return date(y, m, d)
+
+    # แยกเป็น 3 dropdown ต่อวัน: ปี → เดือน → วัน
+    with c2:
+        start = _pick_date(
+            "เริ่มลงทุนเมื่อ",
+            today - timedelta(days=3 * 365),
+            min_allowed,
+            max_start,
+            "sb_start",
+        )
+
+    # วันสิ้นสุดต้องไม่น้อยกว่าวันเริ่ม + 30 วัน
+    min_end = start + timedelta(days=30)
+    if min_end > today:
+        st.warning("วันเริ่มลงทุนต้องห่างจากวันนี้อย่างน้อย 30 วัน")
+        return
+
+    with c3:
+        end = _pick_date(
+            "ถึงวันที่",
+            today,
+            min_end,
+            today,
+            "sb_end",
+        )
 
     keys = list(STRATEGIES)
     strategy = st.radio("เลือกวิธีลงทุน", keys, format_func=lambda k: STRATEGIES[k]["label"],
