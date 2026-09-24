@@ -7652,17 +7652,24 @@ MOBILE_CSS = r'''<style>
   .mobile-mini { background:#181a20; border:1px solid #2b3139; border-radius:14px; padding:12px; min-height:76px; }
   .mobile-mini-label { color:#848e9c; font-size:10px; margin-bottom:7px; }
   .mobile-mini-value { color:#EAECEF; font-size:16px; font-weight:800; font-variant-numeric:tabular-nums; }
-  .mobile-trade-market { background:#202421; border-bottom:1px solid #2b3139; padding:10px 4px 11px; margin:-4px -4px 10px; }
-  .mobile-trade-market-left { display:flex; align-items:center; gap:9px; min-width:0; }
+  .mobile-trade-market { background:#202421; border-bottom:1px solid #2b3139; padding:8px 2px 10px; margin:-4px -4px 10px; overflow:hidden; }
+  .mobile-trade-market-left { display:flex; align-items:center; gap:8px; min-width:0; }
   .mobile-trade-market-logo { flex:0 0 auto; }
-  .mobile-trade-market-name { color:#F5F7FA; font-size:19px; font-weight:850; line-height:1.1; white-space:nowrap; }
+  .mobile-trade-market-name { color:#F5F7FA; font-size:18px; font-weight:850; line-height:1.1; white-space:nowrap; }
   .mobile-trade-market-sub { color:#848e9c; font-size:9px; margin-top:3px; }
-  .mobile-trade-market-price { color:#00c853; font-size:28px; font-weight:850; line-height:1.05; font-variant-numeric:tabular-nums; margin-top:9px; }
-  .mobile-trade-market-change { color:#00c853; font-size:12px; margin-top:5px; font-variant-numeric:tabular-nums; }
-  .mobile-trade-market-level { color:#00c853; font-size:11px; font-weight:700; margin-top:7px; }
-  .mobile-trade-market-stats { display:grid; grid-template-columns:1fr; gap:5px; padding-left:4px; }
-  .mobile-trade-market-stat { display:flex; justify-content:space-between; align-items:center; gap:10px; color:#a7b0bb; font-size:10px; line-height:1.2; }
-  .mobile-trade-market-stat b { color:#F5F7FA; font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .mobile-trade-market-price { color:#00c853; font-size:25px; font-weight:850; line-height:1.05; font-variant-numeric:tabular-nums; margin-top:8px; letter-spacing:-.3px; overflow-wrap:anywhere; }
+  .mobile-trade-market-change { color:#00c853; font-size:11px; margin-top:5px; font-variant-numeric:tabular-nums; }
+  .mobile-trade-market-level { color:#00c853; font-size:10px; font-weight:700; margin-top:7px; line-height:1.35; overflow-wrap:anywhere; }
+  .mobile-trade-market-stats { display:grid; grid-template-columns:1fr; gap:7px; padding-left:0; min-width:0; }
+  .mobile-trade-market-stat { display:grid; grid-template-columns:minmax(0,1fr) auto; justify-content:space-between; align-items:center; gap:7px; color:#a7b0bb; font-size:9px; line-height:1.15; min-width:0; }
+  .mobile-trade-market-stat span { min-width:0; overflow-wrap:anywhere; }
+  .mobile-trade-market-stat b { color:#F5F7FA; font-size:10px; font-variant-numeric:tabular-nums; white-space:nowrap; max-width:100%; }
+  .mobile-trade-side-row { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:12px 0 10px; }
+  .st-key-mobile_side_buy button, .st-key-mobile_side_sell button { min-height:46px !important; border-radius:12px !important; font-weight:850 !important; font-size:14px !important; }
+  .st-key-mobile_side_buy button { background:#00c853 !important; color:#fff !important; border:1px solid #00c853 !important; }
+  .st-key-mobile_side_buy button:hover { background:#00b84a !important; border-color:#00b84a !important; }
+  .st-key-mobile_side_sell button { background:#f6465d !important; color:#fff !important; border:1px solid #f6465d !important; }
+  .st-key-mobile_side_sell button:hover { background:#df3d51 !important; border-color:#df3d51 !important; }
   .mobile-trade-quote { background:linear-gradient(145deg,#181a20,#20242b); border:1px solid #2b3139; border-radius:17px; padding:15px; margin-bottom:10px; }
   .mobile-trade-quote-top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
   .mobile-trade-symbol { color:#EAECEF; font-size:20px; font-weight:800; }
@@ -7679,20 +7686,6 @@ MOBILE_CSS = r'''<style>
   .mobile-trade-summary b { color:#EAECEF; font-size:11px; font-variant-numeric:tabular-nums; }
   .mobile-trade-history { display:flex; justify-content:space-between; gap:10px; background:#181a20; border:1px solid #2b3139; border-radius:11px; padding:10px 11px; margin-bottom:7px; color:#EAECEF; font-size:11px; }
   .mobile-trade-history span { color:#848e9c; font-variant-numeric:tabular-nums; }
-  /* Mobile trade actions: our own dealer palette */
-  .st-key-mobile_real_buy button {
-    background:#00c853 !important; color:#ffffff !important; border:1px solid #00c853 !important;
-    font-weight:800 !important; min-height:52px !important; border-radius:12px !important;
-  }
-  .st-key-mobile_real_buy button:hover { background:#00b84a !important; border-color:#00b84a !important; }
-  .st-key-mobile_real_sell button {
-    background:#ff4d4f !important; color:#ffffff !important; border:1px solid #ff4d4f !important;
-    font-weight:800 !important; min-height:52px !important; border-radius:12px !important;
-  }
-  .st-key-mobile_real_sell button:hover { background:#e83f42 !important; border-color:#e83f42 !important; }
-  .st-key-mobile_real_buy button:disabled, .st-key-mobile_real_sell button:disabled {
-    opacity:.42 !important;
-  }
   .mobile-green { color:#0ecb81 !important; } .mobile-red { color:#f6465d !important; }
 }
 @media (min-width:769px) {
@@ -7709,6 +7702,24 @@ def _mobile_money(v: float, signed: bool=False) -> str:
     if a>=1_000_000: return f'{sign}฿{a/1_000_000:.2f}M'
     if a>=1_000: return f'{sign}฿{a/1_000:.1f}K'
     return f'{sign}฿{a:,.0f}'
+
+def _mobile_compact_number(v: float, decimals: int = 2) -> str:
+    """Compact large market numbers so mobile stats never overflow."""
+    try:
+        n = float(v or 0)
+    except Exception:
+        n = 0.0
+    a = abs(n)
+    if a >= 1_000_000_000_000:
+        return f"{n / 1_000_000_000_000:.2f}T"
+    if a >= 1_000_000_000:
+        return f"{n / 1_000_000_000:.2f}B"
+    if a >= 1_000_000:
+        return f"{n / 1_000_000:.2f}M"
+    if a >= 1_000:
+        return f"{n / 1_000:.2f}K"
+    return f"{n:,.{decimals}f}"
+
 
 def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     sim=st.session_state.get('sim',{}) or {}; asset=cfg.get('asset','BTC')
@@ -7836,15 +7847,15 @@ def render_mobile_trade(cfg: dict[str, Any], data: pd.DataFrame) -> None:
                   <div class="mobile-trade-market-sub">{COIN_NAMES.get(asset, asset)} · Bitkub</div>
                 </div>
               </div>
-              <div class="mobile-trade-market-price">฿{mid_now:,.2f}</div>
+              <div class="mobile-trade-market-price">฿{mid_now:,.1f}</div>
               <div class="mobile-trade-market-change {change_cls}">เปลี่ยน 24H&nbsp;&nbsp;{change_sign}{change_24h:.2f}%</div>
-              <div class="mobile-trade-market-level">Bid ฿{quote_sell:,.2f} &nbsp;·&nbsp; Ask ฿{quote_buy:,.2f}</div>
+              <div class="mobile-trade-market-level">Bid ฿{quote_sell:,.1f} &nbsp;·&nbsp; Ask ฿{quote_buy:,.1f}</div>
             </div>
             <div class="mobile-trade-market-stats">
               <div class="mobile-trade-market-stat"><span>สูงสุด 24H (THB)</span><b>{high_24h:,.2f}</b></div>
               <div class="mobile-trade-market-stat"><span>ต่ำสุด 24H (THB)</span><b>{low_24h:,.2f}</b></div>
-              <div class="mobile-trade-market-stat"><span>ปริมาณ 24H ({asset})</span><b>{volume_coin:,.8f}</b></div>
-              <div class="mobile-trade-market-stat"><span>ปริมาณ 24H (THB)</span><b>{volume_thb/1_000_000:,.2f}M</b></div>
+              <div class="mobile-trade-market-stat"><span>ปริมาณ 24H ({asset})</span><b>{_mobile_compact_number(volume_coin, 2)}</b></div>
+              <div class="mobile-trade-market-stat"><span>ปริมาณ 24H (THB)</span><b>฿{_mobile_compact_number(volume_thb, 2)}</b></div>
             </div>
           </div>
         </div>
@@ -7856,7 +7867,13 @@ def render_mobile_trade(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     st.markdown('<div class="mobile-section-title">กราฟตลาด · Bitkub</div>', unsafe_allow_html=True)
     render_tradingview(tv_symbol, f"tv_mobile_trade_{asset}", height=330, interval="60")
 
-    side = st.radio("ฝั่งคำสั่ง", ["BUY", "SELL"], horizontal=True, key="mobile_order_side", label_visibility="collapsed")
+    if st.session_state.get("mobile_order_side") not in {"BUY", "SELL"}:
+        st.session_state["mobile_order_side"] = "BUY"
+
+    def _mobile_choose_side(side_value: str) -> None:
+        st.session_state["mobile_order_side"] = side_value
+
+    side = str(st.session_state.get("mobile_order_side", "BUY"))
     order_type = st.radio("ประเภทออเดอร์", ["Limit", "Market"], horizontal=True, key="mobile_order_type", label_visibility="collapsed")
     is_limit = order_type == "Limit"
     st.markdown(
@@ -7892,18 +7909,8 @@ def render_mobile_trade(cfg: dict[str, Any], data: pd.DataFrame) -> None:
         )
         if over_cash:
             st.warning("ยอดเงินบาทในกระเป๋าไม่พอ")
-        clicked = st.button(
-            f"ซื้อ {asset}",
-            key="mobile_real_buy",
-            type="primary",
-            use_container_width=True,
-            disabled=(buy_amt <= 0 or over_cash or not trade_ok or (is_limit and buy_px <= 0)),
-        )
-        if clicked:
-            if is_limit:
-                _place_limit("buy", float(buy_amt), 0.0, float(buy_px))
-            else:
-                _submit_order(sim, "buy", float(buy_amt), data, current_date_val, ctx)
+        # Buy/Sell action buttons are rendered together at the bottom.
+        pass
     else:
         st.session_state.setdefault("mobile_sell_qty", 0.0)
         sell_qty = st.number_input(
@@ -7938,17 +7945,39 @@ def render_mobile_trade(cfg: dict[str, Any], data: pd.DataFrame) -> None:
         )
         if over_coin:
             st.warning(f"{asset} ในกระเป๋าไม่พอ")
-        clicked = st.button(
-            f"ขาย {asset}",
-            key="mobile_real_sell",
-            use_container_width=True,
-            disabled=(sell_qty <= 0 or over_coin or not trade_ok or (is_limit and sell_px <= 0)),
-        )
-        if clicked:
-            if is_limit:
+        pass
+
+    # Recover the inactive side's values from session state so the bottom buttons can submit either side.
+    if side == "BUY":
+        sell_qty = float(st.session_state.get("mobile_sell_qty", 0.0) or 0.0)
+        sell_px = float(st.session_state.get(f"mobile_sell_px_{asset}", quote_sell) or quote_sell)
+        over_coin = sell_qty > coin_bal + 1e-9
+    else:
+        buy_amt = float(st.session_state.get("mobile_buy_amount", 0.0) or 0.0)
+        buy_px = float(st.session_state.get(f"mobile_buy_px_{asset}", quote_buy) or quote_buy)
+        over_cash = buy_amt > cash + 1e-9
+
+    # Bottom BUY / SELL split. These replace the old side selector and action button.
+    st.markdown('<div class="mobile-trade-side-row">', unsafe_allow_html=True)
+    c_buy, c_sell = st.columns(2, gap="small")
+    with c_buy:
+        buy_clicked = st.button("BUY", key="mobile_side_buy", use_container_width=True, on_click=_mobile_choose_side, args=("BUY",))
+    with c_sell:
+        sell_clicked = st.button("SELL", key="mobile_side_sell", use_container_width=True, on_click=_mobile_choose_side, args=("SELL",))
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if buy_clicked:
+        if is_limit:
+            if buy_amt > 0 and not over_cash and trade_ok and buy_px > 0:
+                _place_limit("buy", float(buy_amt), 0.0, float(buy_px))
+        elif buy_amt > 0 and not over_cash and trade_ok:
+            _submit_order(sim, "buy", float(buy_amt), data, current_date_val, ctx)
+    elif sell_clicked:
+        if is_limit:
+            if sell_qty > 0 and not over_coin and trade_ok and sell_px > 0:
                 _place_limit("sell", 0.0, float(sell_qty), float(sell_px))
-            else:
-                _submit_order(sim, "sell", float(sell_qty * quote_sell), data, current_date_val, ctx)
+        elif sell_qty > 0 and not over_coin and trade_ok:
+            _submit_order(sim, "sell", float(sell_qty * quote_sell), data, current_date_val, ctx)
 
 
 def render_mobile_asset(cfg: dict[str, Any], data: pd.DataFrame) -> None:
