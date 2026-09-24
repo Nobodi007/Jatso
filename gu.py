@@ -7978,7 +7978,7 @@ def require_login() -> bool:
             <div class="login-brand">
               <div class="login-icon">♻️</div>
               <div class="login-kicker">Crypto Dealer OS</div>
-              <div class="login-title">XSpring <span>Dealer Suite</span></div>
+              <div class="login-title">Nobodi <span>007</span></div>
               <div class="login-sub">
                 ระบบจำลองและวางแผนสภาพคล่องสำหรับ Dealer คริปโท —
                 ล็อกอินเพื่อเข้าใช้งาน Backtest, Liquidity Planner และ Exchange Simulator
