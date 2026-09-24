@@ -57,6 +57,8 @@ try:
     import streamlit.components.v1 as components
     import yfinance as yf
     HAS_UI = True
+    from orderbook_3d import render_orderbook_3d
+
 except ImportError:
     go = st = components = yf = None
     HAS_UI = False
@@ -6621,6 +6623,16 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
         with st.container(border=True):
             _order_panel_live(cfg, sim, asset, mid_now, data, current_date_val, ctx)
+
+        # Bitkub 3D Order Book — lightweight version (2 Mesh3d traces + 10-min cache)
+        try:
+            render_orderbook_3d(
+                symbol=f"{asset.lower()}_thb",
+                title=f"3D Order Book — {asset}/THB",
+                limit=20,
+            )
+        except Exception as exc:
+            st.warning(f"3D Order Book ใช้งานไม่ได้: {exc}")
 
         with st.expander("🎲 เครื่องมือจำลอง — สุ่มออเดอร์ / รีเซ็ต", expanded=False):
             st.caption("สุ่มออเดอร์ = ลูกค้าคนอื่นในตลาด ไม่แตะกระเป๋าของคุณ · "
