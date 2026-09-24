@@ -7612,8 +7612,73 @@ def render_customer_leaderboard(sim: dict[str, Any], cfg: dict[str, Any]) -> Non
                           yaxis_title="Dealer P&L (THB)",
                           paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig, **WIDE)
+# =========================================================================
+# MOBILE UI — responsive shell, reusing existing engine/state
+# =========================================================================
+
+MOBILE_NAV = ["⌂  Home", "⇄  Trade", "▣  Asset", "◫  Backtest", "⚙  Settings"]
+
+MOBILE_CSS = r'''<style>
+@media (max-width: 768px) {
+  .block-container { padding: .65rem .75rem 5.8rem .75rem !important; max-width:100% !important; }
+  .st-key-desktop_route { display:none !important; }
+  .st-key-mobile_nav { position:fixed !important; z-index:999999 !important; left:0 !important; right:0 !important; bottom:0 !important; width:100vw !important; margin:0 !important; padding:7px 6px calc(7px + env(safe-area-inset-bottom)) !important; background:rgba(24,26,32,.98) !important; border-top:1px solid #2b3139 !important; box-sizing:border-box !important; }
+  .st-key-mobile_nav [role="radiogroup"] { width:100% !important; display:grid !important; grid-template-columns:repeat(5,minmax(0,1fr)) !important; gap:2px !important; }
+  .st-key-mobile_nav [role="radiogroup"] > label { min-width:0 !important; height:42px !important; margin:0 !important; padding:4px 2px !important; display:flex !important; align-items:center !important; justify-content:center !important; border:0 !important; border-radius:10px !important; text-align:center !important; }
+  .st-key-mobile_nav [role="radiogroup"] > label > div:first-child { display:none !important; }
+  .st-key-mobile_nav [role="radiogroup"] > label p { color:#848e9c !important; font-size:9px !important; line-height:1.15 !important; font-weight:600 !important; margin:0 !important; }
+  .st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"] { background:rgba(14,203,129,.12) !important; }
+  .st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"] p { color:#0ecb81 !important; }
+  .mobile-page-title { color:#EAECEF; font-size:22px; font-weight:800; margin:2px 0; }
+  .mobile-page-sub { color:#848e9c; font-size:11px; margin-bottom:12px; }
+  .mobile-card { background:#181a20; border:1px solid #2b3139; border-radius:16px; padding:14px; margin-bottom:10px; }
+  .mobile-kicker { color:#848e9c; font-size:11px; margin-bottom:4px; }
+  .mobile-big { color:#EAECEF; font-size:25px; line-height:1.15; font-weight:800; font-variant-numeric:tabular-nums; }
+  .mobile-grid { display:grid; grid-template-columns:1fr 1fr; gap:9px; margin-bottom:10px; }
+  .mobile-mini { background:#181a20; border:1px solid #2b3139; border-radius:14px; padding:12px; min-height:76px; }
+  .mobile-mini-label { color:#848e9c; font-size:10px; margin-bottom:7px; }
+  .mobile-mini-value { color:#EAECEF; font-size:16px; font-weight:800; font-variant-numeric:tabular-nums; }
+  .mobile-green { color:#0ecb81 !important; } .mobile-red { color:#f6465d !important; }
+}
+@media (min-width:769px) { .st-key-mobile_nav { display:none !important; } }
+</style>'''
+
+def _mobile_money(v: float, signed: bool=False) -> str:
+    v=float(v or 0); sign='+' if signed and v>=0 else ('-' if signed else ''); a=abs(v)
+    if a>=1_000_000_000: return f'{sign}฿{a/1_000_000_000:.2f}B'
+    if a>=1_000_000: return f'{sign}฿{a/1_000_000:.2f}M'
+    if a>=1_000: return f'{sign}฿{a/1_000:.1f}K'
+    return f'{sign}฿{a:,.0f}'
+
+def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
+    sim=st.session_state.get('sim',{}) or {}; asset=cfg.get('asset','BTC')
+    cap=float(cfg.get('total_capital_thb',0) or 0); cex=float(cfg.get('cex_margin_thb',0) or 0); liab=float(cfg.get('liab_thb',0) or 0)
+    target=float(sim.get('target_thb',0) or 0); fx=float(sim.get('fx_used_usd',0) or 0); fxlim=float(cfg.get('fx_limit_max',0) or 0)
+    pnl=0.0
+    for o in sim.get('orders',[]) if isinstance(sim,dict) else []:
+        try: pnl += float(o.get('dealer_pnl',o.get('Dealer P&L',0)) or 0)
+        except Exception: pass
+    ncbuf=0.0
+    try:
+        if not data.empty:
+            built=build_dealer_ctx(cfg,data)
+            if built:
+                ctx,t=built; nc=nc_snapshot(t,ctx['capital'],ctx['cex_margin'],ctx['liab'],ctx['h_crypto'],ctx['h_cex'],ctx['fixed_min_nc'],ctx['trading_risk_rate'],ctx['daily_volume_thb'],ctx['custody_rate']); ncbuf=float(nc.get('buffer',0) or 0)
+    except Exception: pass
+    st.markdown('<div class="mobile-page-title">Dashboard</div><div class="mobile-page-sub">ภาพรวม Dealer · Live configuration</div>',unsafe_allow_html=True)
+    st.markdown(f'''<div class="mobile-card"><div class="mobile-kicker">Total Capital</div><div class="mobile-big">{_mobile_money(cap)}</div><div class="mobile-kicker" style="margin-top:7px">{asset} · Inventory target {_mobile_money(target)}</div></div><div class="mobile-grid"><div class="mobile-mini"><div class="mobile-mini-label">P&L จาก Ledger</div><div class="mobile-mini-value {'mobile-green' if pnl>=0 else 'mobile-red'}">{_mobile_money(pnl,True)}</div></div><div class="mobile-mini"><div class="mobile-mini-label">NC Buffer</div><div class="mobile-mini-value {'mobile-green' if ncbuf>=0 else 'mobile-red'}">{_mobile_money(ncbuf,True)}</div></div><div class="mobile-mini"><div class="mobile-mini-label">CEX Margin</div><div class="mobile-mini-value">{_mobile_money(cex)}</div></div><div class="mobile-mini"><div class="mobile-mini-label">FX Used</div><div class="mobile-mini-value">${fx:,.0f} / ${fxlim:,.0f}</div></div></div><div class="mobile-card"><div class="mobile-kicker">Customer Liabilities</div><div class="mobile-big">{_mobile_money(liab)}</div></div>''',unsafe_allow_html=True)
+    st.markdown('### 📌 สถานะล่าสุด')
+    orders=sim.get('orders',[]) if isinstance(sim,dict) else []
+    if orders:
+        for o in reversed(orders[-3:]):
+            sym=str(o.get('เหรียญ',o.get('asset',asset))); side=str(o.get('side',o.get('ฝั่ง','Order'))); amount=o.get('amount_thb',o.get('จำนวนเงิน',''))
+            st.markdown(f'<div class="mobile-card"><b style="color:#EAECEF">{sym}</b> · {side}<span style="float:right;color:#848e9c">{amount}</span></div>',unsafe_allow_html=True)
+    else: st.caption('ยังไม่มีออเดอร์ล่าสุด')
+
+
 def _main_body() -> None:
     st.markdown(THEME_CSS, unsafe_allow_html=True)
+    st.markdown(MOBILE_CSS, unsafe_allow_html=True)
 
     if is_guest_mode():
         st.session_state.setdefault("favorite_tickers", [])
@@ -7824,26 +7889,45 @@ f'<div style="font-size:0.68rem;color:#0ecb81;">{ROLE_LABEL_TH[current_role()]}<
         nav = selected_nav
         st.session_state["main_nav"] = selected_nav
 
-    if nav == NAV_LABELS[0]:
-        render_tab1(cfg, data, data_err)
-    elif nav == NAV_LABELS[1]:
-        render_tab2(cfg, data, data_err)
-    elif nav == NAV_LABELS[2]:
-        render_tab3(cfg, data, data_err,
-                    price_lookup={row["symbol"]: row["price_usd"] for _, row in market_df.iterrows()} if not market_df.empty else {},
-                    market_df=market_df)
-    elif nav == NAV_NEWS:
-        render_news_section(cfg)
-    elif nav == NAV_SIMPLE:
-        from simple_backtest import render_simple_backtest
-        render_simple_backtest(
-            fetch_fn=fetch_price_data,
-            assets=SUPPORTED_ASSETS,
-            fee_pct=LOCAL_TRADING_FEE_PCT,
-            premium=cfg["local_premium"],
-        )
-    else:
-        render_tab4(cfg, data, market_df=market_df)
+    mobile_selected = st.session_state.get("mobile_nav", MOBILE_NAV[0])
+    mobile_nav = st.radio("Mobile navigation", MOBILE_NAV, index=MOBILE_NAV.index(mobile_selected),
+                          horizontal=True, key="mobile_nav", label_visibility="collapsed")
+    st.session_state["mobile_nav"] = mobile_nav
+
+    mobile_active = mobile_nav == MOBILE_NAV[0]
+    if mobile_nav == MOBILE_NAV[1]:
+        st.session_state["main_nav"] = NAV_EXCHANGE
+    elif mobile_nav == MOBILE_NAV[2]:
+        st.session_state["main_nav"] = NAV_LABELS[4]
+    elif mobile_nav == MOBILE_NAV[3]:
+        st.session_state["main_nav"] = NAV_SIMPLE
+    elif mobile_nav == MOBILE_NAV[4]:
+        st.session_state["main_nav"] = NAV_LABELS[1]
+
+    if mobile_active:
+        render_mobile_home(cfg, data)
+
+    with st.container(key="desktop_route"):
+        if nav == NAV_LABELS[0]:
+            render_tab1(cfg, data, data_err)
+        elif nav == NAV_LABELS[1]:
+            render_tab2(cfg, data, data_err)
+        elif nav == NAV_LABELS[2]:
+            render_tab3(cfg, data, data_err,
+                        price_lookup={row["symbol"]: row["price_usd"] for _, row in market_df.iterrows()} if not market_df.empty else {},
+                        market_df=market_df)
+        elif nav == NAV_NEWS:
+            render_news_section(cfg)
+        elif nav == NAV_SIMPLE:
+            from simple_backtest import render_simple_backtest
+            render_simple_backtest(
+                fetch_fn=fetch_price_data,
+                assets=SUPPORTED_ASSETS,
+                fee_pct=LOCAL_TRADING_FEE_PCT,
+                premium=cfg["local_premium"],
+            )
+        else:
+            render_tab4(cfg, data, market_df=market_df)
 
     render_ai_fab()
 
