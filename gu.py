@@ -7616,7 +7616,7 @@ def render_customer_leaderboard(sim: dict[str, Any], cfg: dict[str, Any]) -> Non
 # MOBILE UI — responsive shell, reusing existing engine/state
 # =========================================================================
 
-MOBILE_NAV = ["⌂  Home", "⇄  Trade", "▣  Asset", "◫  Backtest", "⚙  Settings"]
+MOBILE_NAV = ["🏠  Home", "💱  Trade", "💼  Asset", "📊  Backtest", "⚙️  Settings"]
 
 MOBILE_NAV_CSS = r'''<style>
 /* ---------- Mobile bottom nav ---------- */
