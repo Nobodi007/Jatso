@@ -7630,8 +7630,25 @@ MOBILE_CSS = r'''<style>
   .st-key-mobile_nav [role="radiogroup"] > label { min-width:0 !important; height:42px !important; margin:0 !important; padding:4px 2px !important; display:flex !important; align-items:center !important; justify-content:center !important; border:0 !important; border-radius:10px !important; text-align:center !important; }
   .st-key-mobile_nav [role="radiogroup"] > label > div:first-child { display:none !important; }
   .st-key-mobile_nav [role="radiogroup"] > label p { color:#848e9c !important; font-size:9px !important; line-height:1.15 !important; font-weight:600 !important; margin:0 !important; }
-  .st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"] { background:rgba(14,203,129,.12) !important; }
-  .st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"] p { color:#0ecb81 !important; }
+  .st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"] {
+    position:relative !important;
+    background:#087a3f !important;
+  }
+  .st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"] p { color:#ffffff !important; }
+  /* สามเหลี่ยมเล็กในพื้นที่เมนูที่เลือก */
+  .st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"]::after {
+    content:"" !important;
+    position:absolute !important;
+    right:6px !important;
+    top:50% !important;
+    transform:translateY(-50%) !important;
+    width:0 !important;
+    height:0 !important;
+    border-top:4px solid transparent !important;
+    border-bottom:4px solid transparent !important;
+    border-left:5px solid #ffffff !important;
+    pointer-events:none !important;
+  }
   .mobile-page-title { color:#EAECEF; font-size:22px; font-weight:800; margin:2px 0; }
   .mobile-page-sub { color:#848e9c; font-size:11px; margin-bottom:12px; }
   .mobile-card { background:#181a20; border:1px solid #2b3139; border-radius:16px; padding:14px; margin-bottom:10px; }
@@ -8282,9 +8299,26 @@ def _main_body() -> None:
             color: #ffffff !important;
         }
         div[data-testid="stRadio"] div[role="radiogroup"] > label[data-checked="true"] {
-            background: rgba(255,255,255,.07) !important;
+            position: relative !important;
+            background: #087a3f !important;
             color: #ffffff !important;
             font-weight: 600 !important;
+            padding-right: 22px !important;
+            border-radius: 7px !important;
+        }
+        /* สามเหลี่ยมเล็กภายในแท็บที่ถูกเลือก */
+        div[data-testid="stRadio"] div[role="radiogroup"] > label[data-checked="true"]::after {
+            content: "" !important;
+            position: absolute !important;
+            right: 7px !important;
+            top: 50% !important;
+            transform: translateY(-50%) !important;
+            width: 0 !important;
+            height: 0 !important;
+            border-top: 4px solid transparent !important;
+            border-bottom: 4px solid transparent !important;
+            border-left: 5px solid #ffffff !important;
+            pointer-events: none !important;
         }
         div[data-testid="stRadio"] div[role="radiogroup"] > label > div:first-child {
             flex: 0 0 auto !important;
