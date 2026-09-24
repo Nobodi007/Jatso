@@ -7628,26 +7628,35 @@ MOBILE_CSS = r'''<style>
   .st-key-mobile_nav { position:fixed !important; z-index:999999 !important; left:0 !important; right:0 !important; bottom:0 !important; width:100vw !important; margin:0 !important; padding:7px 6px calc(7px + env(safe-area-inset-bottom)) !important; background:rgba(24,26,32,.98) !important; border-top:1px solid #2b3139 !important; box-sizing:border-box !important; }
   .st-key-mobile_nav [role="radiogroup"] { width:100% !important; display:grid !important; grid-template-columns:repeat(5,minmax(0,1fr)) !important; gap:2px !important; }
   .st-key-mobile_nav [role="radiogroup"] > label { min-width:0 !important; height:42px !important; margin:0 !important; padding:4px 2px !important; display:flex !important; align-items:center !important; justify-content:center !important; border:0 !important; border-radius:10px !important; text-align:center !important; }
-  .st-key-mobile_nav [role="radiogroup"] > label > div:first-child { display:none !important; }
+  /* ซ่อนไอคอนเดิมที่ Streamlit ใส่มาใน radio ทุกตัว */
+  .st-key-mobile_nav [role="radiogroup"] > label > div:not(:last-child),
+  .st-key-mobile_nav [role="radiogroup"] > label svg,
+  .st-key-mobile_nav [role="radiogroup"] > label img {
+    display:none !important;
+  }
   .st-key-mobile_nav [role="radiogroup"] > label p { color:#848e9c !important; font-size:9px !important; line-height:1.15 !important; font-weight:600 !important; margin:0 !important; }
-  .st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"] {
+  .st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"],
+  .st-key-mobile_nav [role="radiogroup"] > label:has(input:checked) {
     position:relative !important;
     background:#087a3f !important;
   }
-  .st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"] p { color:#ffffff !important; }
+  .st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"] p,
+  .st-key-mobile_nav [role="radiogroup"] > label:has(input:checked) p { color:#ffffff !important; }
   /* สามเหลี่ยมเล็กในพื้นที่เมนูที่เลือก */
-  .st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"]::after {
+  .st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"]::after,
+  .st-key-mobile_nav [role="radiogroup"] > label:has(input:checked)::after {
     content:"" !important;
     position:absolute !important;
-    right:6px !important;
+    right:5px !important;
     top:50% !important;
     transform:translateY(-50%) !important;
     width:0 !important;
     height:0 !important;
-    border-top:4px solid transparent !important;
-    border-bottom:4px solid transparent !important;
+    border-top:3px solid transparent !important;
+    border-bottom:3px solid transparent !important;
     border-left:5px solid #ffffff !important;
     pointer-events:none !important;
+  }
   }
   .mobile-page-title { color:#EAECEF; font-size:22px; font-weight:800; margin:2px 0; }
   .mobile-page-sub { color:#848e9c; font-size:11px; margin-bottom:12px; }
@@ -8250,7 +8259,7 @@ def _main_body() -> None:
         st.session_state["main_nav"] = current_nav
 
     with st.container(key="desktop_navigation"):
-        # Compact top navigation — ไม่ให้แต่ละเมนูยืดเต็มความกว้าง
+        # Desktop navigation ใช้ st.radio จริง เพื่อให้คลิกและ sync กับ session state ได้
         st.markdown("""
         <style>
         div[data-testid="stRadio"] {
@@ -8280,12 +8289,13 @@ def _main_body() -> None:
             display: none !important;
         }
         div[data-testid="stRadio"] div[role="radiogroup"] > label {
+            position: relative !important;
             flex: 0 0 auto !important;
             width: auto !important;
             min-width: 0 !important;
             max-width: none !important;
             margin: 0 !important;
-            padding: 4px 7px !important;
+            padding: 4px 24px 4px 7px !important;
             white-space: nowrap !important;
             border-radius: 7px !important;
             background: transparent !important;
@@ -8298,39 +8308,49 @@ def _main_body() -> None:
             background: rgba(255,255,255,.055) !important;
             color: #ffffff !important;
         }
-        div[data-testid="stRadio"] div[role="radiogroup"] > label[data-checked="true"] {
+
+        /* ซ่อนไอคอนเดิมที่ Streamlit ใส่มาใน radio ทุกตัว */
+        div[data-testid="stRadio"] div[role="radiogroup"] > label > div:not(:last-child),
+        div[data-testid="stRadio"] div[role="radiogroup"] > label svg,
+        div[data-testid="stRadio"] div[role="radiogroup"] > label img {
+            display: none !important;
+        }
+
+        /* แท็บที่เลือก */
+        div[data-testid="stRadio"] div[role="radiogroup"] > label[data-checked="true"],
+        div[data-testid="stRadio"] div[role="radiogroup"] > label:has(input:checked) {
             position: relative !important;
             background: #087a3f !important;
             color: #ffffff !important;
             font-weight: 600 !important;
-            padding-right: 22px !important;
+            padding-right: 24px !important;
             border-radius: 7px !important;
         }
-        /* สามเหลี่ยมเล็กภายในแท็บที่ถูกเลือก */
-        div[data-testid="stRadio"] div[role="radiogroup"] > label[data-checked="true"]::after {
+
+        /* สามเหลี่ยมเล็กอยู่ข้างใน */
+        div[data-testid="stRadio"] div[role="radiogroup"] > label[data-checked="true"]::after,
+        div[data-testid="stRadio"] div[role="radiogroup"] > label:has(input:checked)::after {
             content: "" !important;
             position: absolute !important;
-            right: 7px !important;
+            right: 8px !important;
             top: 50% !important;
             transform: translateY(-50%) !important;
             width: 0 !important;
             height: 0 !important;
             border-top: 4px solid transparent !important;
             border-bottom: 4px solid transparent !important;
-            border-left: 5px solid #ffffff !important;
+            border-left: 6px solid #ffffff !important;
             pointer-events: none !important;
+            background: none !important;
         }
-        div[data-testid="stRadio"] div[role="radiogroup"] > label > div:first-child {
-            flex: 0 0 auto !important;
-            margin-right: 4px !important;
-        }
+
         @media (max-width: 900px) {
             div[data-testid="stRadio"] div[role="radiogroup"] {
                 width: 100% !important;
                 gap: 2px !important;
             }
             div[data-testid="stRadio"] div[role="radiogroup"] > label {
-                padding: 4px 6px !important;
+                padding: 4px 24px 4px 6px !important;
                 font-size: 11px !important;
             }
         }
@@ -8338,8 +8358,6 @@ def _main_body() -> None:
         """, unsafe_allow_html=True)
 
         if current_nav == NAV_NEWS:
-            # หน้า News: แสดงแท็บอื่นครบ แต่ไม่เลือกแท็บใดไว้
-            # เพื่อให้ผู้ใช้กดกลับไปแท็บไหนก็ได้ รวมถึงแท็บแรก
             selected_nav = st.radio(
                 "เมนูหลัก",
                 nav_labels_main,
