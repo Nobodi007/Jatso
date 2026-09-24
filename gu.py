@@ -8159,126 +8159,375 @@ def render_mobile_asset(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     st.caption(f"อัปเดตล่าสุด · {pd.Timestamp.now(tz='Asia/Bangkok').strftime('%H:%M:%S')}")
 
 
-def render_mobile_backtest(cfg: dict[str, Any], data: pd.DataFrame) -> None:
-    """Mobile Backtest UI — compact historical-investment form."""
+MOBILE_BT_CSS
+# ต้องมีอยู่แล้วในไฟล์หลัก: np, pd, go, st, WIDE, SUPPORTED_ASSETS,
+# LOCAL_TRADING_FEE_PCT, fetch_price_data, _mobile_money
+# =========================================================================
+
+MOBILE_BT_CSS = r'''<style>
+.mobile-bt-label { color:#EAECEF; font-size:12px; font-weight:700; margin:14px 0 8px; }
+.mobile-bt-helper {
+    color:#848e9c; font-size:11px; line-height:1.5;
+    background:#111318; border:1px solid #252a31; border-radius:12px;
+    padding:10px 12px; margin:10px 0 14px;
+}
+
+/* ===== chip radio (ช่วงเวลา / กลยุทธ์ / ความถี่ DCA) ===== */
+.st-key-mobile_bt_period [role="radiogroup"],
+.st-key-mobile_bt_strategy [role="radiogroup"],
+.st-key-mobile_bt_freq [role="radiogroup"] {
+    display:flex !important; flex-wrap:wrap !important; gap:8px !important;
+}
+.st-key-mobile_bt_period label,
+.st-key-mobile_bt_strategy label,
+.st-key-mobile_bt_freq label {
+    position:relative !important; margin:0 !important;
+    background:#181a20 !important; border:1px solid #2b3139 !important;
+    border-radius:999px !important; padding:7px 14px !important;
+    cursor:pointer !important;
+}
+/* ซ่อนวงกลม radio เดิมทุกแบบ */
+.st-key-mobile_bt_period label > div:first-child,
+.st-key-mobile_bt_strategy label > div:first-child,
+.st-key-mobile_bt_freq label > div:first-child,
+.st-key-mobile_bt_period label svg,
+.st-key-mobile_bt_strategy label svg,
+.st-key-mobile_bt_freq label svg,
+.st-key-mobile_bt_period label input,
+.st-key-mobile_bt_strategy label input,
+.st-key-mobile_bt_freq label input { display:none !important; }
+
+.st-key-mobile_bt_period label p,
+.st-key-mobile_bt_strategy label p,
+.st-key-mobile_bt_freq label p {
+    color:#848e9c !important; font-size:12px !important;
+    font-weight:600 !important; margin:0 !important; white-space:nowrap !important;
+}
+/* ที่เลือก = พื้นเขียว + สามเหลี่ยมเล็ก */
+.st-key-mobile_bt_period label:has(input:checked),
+.st-key-mobile_bt_strategy label:has(input:checked),
+.st-key-mobile_bt_freq label:has(input:checked) {
+    background:#087a3f !important; border-color:#087a3f !important;
+    padding-right:26px !important;
+}
+.st-key-mobile_bt_period label:has(input:checked) p,
+.st-key-mobile_bt_strategy label:has(input:checked) p,
+.st-key-mobile_bt_freq label:has(input:checked) p { color:#fff !important; }
+.st-key-mobile_bt_period label:has(input:checked)::after,
+.st-key-mobile_bt_strategy label:has(input:checked)::after,
+.st-key-mobile_bt_freq label:has(input:checked)::after {
+    content:"" !important; position:absolute !important;
+    right:10px !important; top:50% !important; transform:translateY(-50%) !important;
+    width:0 !important; height:0 !important;
+    border-top:4px solid transparent !important;
+    border-bottom:4px solid transparent !important;
+    border-left:6px solid #fff !important;
+    pointer-events:none !important;
+}
+/* กลยุทธ์ = การ์ดเต็มแถว */
+.st-key-mobile_bt_strategy [role="radiogroup"] { flex-direction:column !important; }
+.st-key-mobile_bt_strategy label {
+    width:100% !important; border-radius:14px !important; padding:12px 14px !important;
+}
+.st-key-mobile_bt_strategy label:has(input:checked) { padding-right:30px !important; }
+
+/* input / select */
+.st-key-mobile_bt_amount input { background:#181a20 !important; border-radius:12px !important; }
+
+/* ปุ่มรัน */
+.st-key-mobile_bt_run button {
+    width:100% !important; min-height:50px !important; border-radius:14px !important;
+    background:#087a3f !important; border:none !important;
+    color:#fff !important; font-weight:800 !important; font-size:15px !important;
+    margin-top:12px !important;
+}
+.st-key-mobile_bt_run button:hover { background:#096b4d !important; }
+
+/* การ์ดผลลัพธ์ */
+.mbt-hero { background:linear-gradient(145deg,#181a20,#20242b); border:1px solid #2b3139;
+            border-radius:17px; padding:15px; margin:14px 0 10px; }
+.mbt-hero .k { color:#848e9c; font-size:11px; }
+.mbt-hero .v { font-size:28px; font-weight:850; margin-top:4px; font-variant-numeric:tabular-nums; }
+.mbt-hero .s { color:#848e9c; font-size:11px; margin-top:4px; }
+.mbt-grid { display:grid; grid-template-columns:1fr 1fr; gap:9px; margin-bottom:10px; }
+.mbt-cell { background:#181a20; border:1px solid #2b3139; border-radius:14px; padding:12px; }
+.mbt-cell .k { color:#848e9c; font-size:10px; margin-bottom:6px; }
+.mbt-cell .v { color:#EAECEF; font-size:15px; font-weight:800; font-variant-numeric:tabular-nums; }
+.mbt-verdict { background:rgba(14,203,129,.08); border-left:3px solid #0ecb81;
+               border-radius:6px; padding:10px 12px; color:#b7bdc6; font-size:12px;
+               line-height:1.55; margin-bottom:10px; }
+.mbt-up { color:#0ecb81 !important; } .mbt-dn { color:#f6465d !important; }
+</style>'''
+
+# ---------------------------- ENGINE -------------------------------------
+
+MBT_SAVINGS_APY = 0.015          # ดอกเบี้ยออมทรัพย์สมมติ 1.5%/ปี
+MBT_TREND_WINDOW = 50            # เส้นค่าเฉลี่ย 50 วัน
+MBT_DIP_LEVELS = (0.10, 0.20, 0.30, 0.40, 0.50)
+
+MBT_STRATEGIES = {
+    "💰 ซื้อทีเดียวแล้วถือ": ("lump", "ซื้อทั้งก้อนวันแรก แล้วไม่ทำอะไรเลย"),
+    "🗓️ ทยอยซื้อสม่ำเสมอ (DCA)": ("dca", "แบ่งเงินเป็นงวดเท่า ๆ กันตามความถี่ที่เลือก"),
+    "📉 ซื้อเพิ่มตอนราคาตก": ("dip", "ซื้อ 50% วันแรก ที่เหลือแบ่งซื้อเมื่อราคาตกจากจุดสูงสุด 10/20/30/40/50%"),
+    "📈 ตามเทรนด์ (เส้นค่าเฉลี่ย)": ("trend", "ถือเมื่อราคาอยู่เหนือเส้นค่าเฉลี่ย 50 วัน ขายเป็นเงินสดเมื่อหลุดเส้น"),
+}
+
+
+def _mbt_dca_positions(idx: pd.DatetimeIndex, freq: str) -> list[int]:
+    pos, last, seen = [], None, set()
+    for i, d in enumerate(idx):
+        if freq == "รายสัปดาห์":
+            if last is None or (d - last).days >= 7:
+                pos.append(i)
+                last = d
+        else:  # รายเดือน
+            key = (d.year, d.month)
+            if key not in seen:
+                seen.add(key)
+                pos.append(i)
+    return pos
+
+
+def mobile_bt_simulate(df: pd.DataFrame, kind: str, amount: float,
+                       premium: float, spread: float, freq: str = "รายเดือน") -> dict:
+    """คืน equity รายวัน (THB) ด้วยราคา quote เดียวกับหน้า Exchange (premium + spread + fee)"""
+    fee = float(LOCAL_TRADING_FEE_PCT)
+    mid = (df["Global_USD"] * df["USDTHB"] * (1 + premium)).astype(float)
+    buy_px = (mid * (1 + spread)).to_numpy()
+    sell_px = (mid * (1 - spread)).to_numpy()
+    mid_np = mid.to_numpy()
+    n = len(df)
+    st_ = {"cash": float(amount), "coins": 0.0, "trades": 0}
+
+    def buy(i: int, thb: float) -> None:
+        thb = min(float(thb), st_["cash"])
+        if thb <= 0 or buy_px[i] <= 0:
+            return
+        st_["coins"] += thb * (1 - fee) / buy_px[i]
+        st_["cash"] -= thb
+        st_["trades"] += 1
+
+    def sell_all(i: int) -> None:
+        if st_["coins"] <= 0:
+            return
+        st_["cash"] += st_["coins"] * sell_px[i] * (1 - fee)
+        st_["coins"] = 0.0
+        st_["trades"] += 1
+
+    equity = np.zeros(n)
+
+    if kind == "lump":
+        buy(0, amount)
+        for i in range(n):
+            equity[i] = st_["cash"] + st_["coins"] * sell_px[i] * (1 - fee)
+
+    elif kind == "dca":
+        pos = set(_mbt_dca_positions(df.index, freq))
+        per = amount / max(len(pos), 1)
+        for i in range(n):
+            if i in pos:
+                buy(i, per)
+            equity[i] = st_["cash"] + st_["coins"] * sell_px[i] * (1 - fee)
+
+    elif kind == "dip":
+        buy(0, amount * 0.5)
+        tranche = amount * 0.10
+        done, peak = set(), mid_np[0]
+        for i in range(n):
+            peak = max(peak, mid_np[i])
+            dd = 1 - mid_np[i] / peak if peak > 0 else 0.0
+            for lvl in MBT_DIP_LEVELS:
+                if lvl not in done and dd >= lvl:
+                    buy(i, tranche)
+                    done.add(lvl)
+            equity[i] = st_["cash"] + st_["coins"] * sell_px[i] * (1 - fee)
+
+    else:  # trend
+        w = min(MBT_TREND_WINDOW, max(5, n // 3))
+        ma = pd.Series(mid_np).rolling(w, min_periods=w).mean()
+        sig = (pd.Series(mid_np) > ma).shift(1).fillna(False).to_numpy()  # ใช้ข้อมูลถึงเมื่อวานเท่านั้น
+        holding = False
+        for i in range(n):
+            if sig[i] and not holding:
+                buy(i, st_["cash"])
+                holding = True
+            elif (not sig[i]) and holding:
+                sell_all(i)
+                holding = False
+            equity[i] = st_["cash"] + st_["coins"] * sell_px[i] * (1 - fee)
+
+    eq = pd.Series(equity, index=df.index)
+    peak_eq = eq.cummax()
+    max_dd = float(((eq / peak_eq) - 1).min() * 100) if len(eq) else 0.0
+    return {"equity": eq, "final": float(eq.iloc[-1]), "trades": int(st_["trades"]),
+            "max_dd": max_dd, "cash_left": float(st_["cash"])}
+
+
+def mobile_bt_compare(df: pd.DataFrame, kind: str, amount: float, premium: float,
+                      spread: float, freq: str) -> dict:
+    strat = mobile_bt_simulate(df, kind, amount, premium, spread, freq)
+    hold = strat if kind == "lump" else mobile_bt_simulate(df, "lump", amount, premium, spread)
+    days = (df.index - df.index[0]).days.to_numpy()
+    savings = pd.Series(amount * (1 + MBT_SAVINGS_APY * days / 365.0), index=df.index)
+    return {"strategy": strat, "hold": hold, "savings": savings, "amount": float(amount)}
+
+
+# ------------------------------- UI --------------------------------------
+
+def _mbt_fmt_pct(v: float) -> str:
+    return f"{v:+.2f}%"
+
+
+def _mbt_render_result(res: dict, meta: dict) -> None:
+    amount = res["amount"]
+    s, h, sv = res["strategy"], res["hold"], res["savings"]
+    profit = s["final"] - amount
+    pct = profit / amount * 100 if amount else 0.0
+    hold_pct = (h["final"] / amount - 1) * 100
+    sav_final = float(sv.iloc[-1])
+    sav_pct = (sav_final / amount - 1) * 100
+    cls = "mbt-up" if profit >= 0 else "mbt-dn"
+
     st.markdown(
-        '<div class="mobile-page-title">🎯 ลองลงทุนย้อนหลัง</div>'
-        '<div class="mobile-page-sub">'
-        'ดูว่าถ้าลงทุนแบบนี้ในอดีต ผลจะออกมาเป็นยังไง — '
-        'ราคาเป็นบาท หักค่าธรรมเนียมแล้ว และเทียบกับการฝากออมทรัพย์/ถือเฉยๆให้เสมอ'
+        f'<div class="mbt-hero"><div class="k">มูลค่าสุดท้าย · {meta["asset"]} · {meta["strategy"]}</div>'
+        f'<div class="v {cls}">฿{s["final"]:,.0f}</div>'
+        f'<div class="s"><b class="{cls}">{_mobile_money(profit, True)} ({_mbt_fmt_pct(pct)})</b>'
+        f' จากเงินลงทุน ฿{amount:,.0f}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    vs_hold = s["final"] - h["final"]
+    vs_sav = s["final"] - sav_final
+    st.markdown(
+        '<div class="mbt-grid">'
+        f'<div class="mbt-cell"><div class="k">ขาดทุนสูงสุดระหว่างทาง</div><div class="v mbt-dn">{s["max_dd"]:.2f}%</div></div>'
+        f'<div class="mbt-cell"><div class="k">จำนวนครั้งที่ซื้อ/ขาย</div><div class="v">{s["trades"]} ครั้ง</div></div>'
+        f'<div class="mbt-cell"><div class="k">เทียบ "ถือเฉยๆ" ({_mbt_fmt_pct(hold_pct)})</div>'
+        f'<div class="v {"mbt-up" if vs_hold >= 0 else "mbt-dn"}">{_mobile_money(vs_hold, True)}</div></div>'
+        f'<div class="mbt-cell"><div class="k">เทียบ "ฝากออมทรัพย์" ({_mbt_fmt_pct(sav_pct)})</div>'
+        f'<div class="v {"mbt-up" if vs_sav >= 0 else "mbt-dn"}">{_mobile_money(vs_sav, True)}</div></div>'
         '</div>',
         unsafe_allow_html=True,
     )
 
-    # --- Asset ---
-    assets = SUPPORTED_ASSETS if SUPPORTED_ASSETS else [cfg.get("asset", "BTC")]
+    if s["cash_left"] > 1:
+        st.caption(f"มีเงินสดที่ยังไม่ได้ลงทุนคงเหลือ ฿{s['cash_left']:,.0f} (นับรวมในมูลค่าสุดท้ายแล้ว)")
+
+    if vs_sav < 0:
+        msg = "กลยุทธ์นี้ได้ผลแย่กว่าฝากออมทรัพย์ในช่วงนี้ ราคาคริปโตผันผวนสูง ผลย้อนหลังอาจเป็นลบได้"
+    elif vs_hold < 0:
+        msg = "ชนะการฝากออมทรัพย์ แต่ยังแพ้การซื้อทีเดียวแล้วถือในช่วงนี้"
+    else:
+        msg = "ชนะทั้งการถือเฉยๆ และการฝากออมทรัพย์ในช่วงนี้"
+    st.markdown(
+        f'<div class="mbt-verdict">{msg}<br><span style="color:#5e6673">'
+        'ผลย้อนหลังไม่ได้รับประกันอนาคต · คิดราคาบาท + Dealer Spread + ค่าธรรมเนียม 0.25% '
+        'ไม่รวมภาษี</span></div>',
+        unsafe_allow_html=True,
+    )
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=s["equity"].index, y=s["equity"], name="กลยุทธ์นี้",
+                             line=dict(color="#0ecb81", width=2.4)))
+    if meta["kind"] != "lump":
+        fig.add_trace(go.Scatter(x=h["equity"].index, y=h["equity"], name="ถือเฉยๆ",
+                                 line=dict(color="#848e9c", width=1.6)))
+    fig.add_trace(go.Scatter(x=sv.index, y=sv, name="ฝากออมทรัพย์",
+                             line=dict(color="#fcd535", width=1.6, dash="dot")))
+    fig.add_hline(y=amount, line=dict(color="#2b3139", dash="dash"))
+    fig.update_layout(
+        template="plotly_dark", height=300, margin=dict(t=10, b=10, l=8, r=8),
+        hovermode="x unified", yaxis_title="THB",
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", y=1.12, yanchor="bottom"),
+    )
+    st.plotly_chart(fig, **WIDE)
+
+
+def render_mobile_backtest(cfg: dict[str, Any], data: pd.DataFrame) -> None:
+    """Mobile Backtest — เลือกเงื่อนไข -> คำนวณจริง -> เทียบถือเฉยๆ/ออมทรัพย์"""
+    st.markdown(
+        '<div class="mobile-page-title">🎯 ลองลงทุนย้อนหลัง</div>'
+        '<div class="mobile-page-sub">ดูว่าถ้าลงทุนแบบนี้ในอดีต ผลจะเป็นยังไง · '
+        'ราคาเป็นบาท หักค่าธรรมเนียมแล้ว</div>',
+        unsafe_allow_html=True,
+    )
+
+    assets = SUPPORTED_ASSETS or [cfg.get("asset", "BTC")]
     default_asset = cfg.get("asset", assets[0])
     if default_asset not in assets:
         default_asset = assets[0]
 
-    asset = st.selectbox(
-        "เหรียญ",
-        assets,
-        index=assets.index(default_asset),
-        key="mobile_bt_asset",
-    )
+    st.markdown('<div class="mobile-bt-label">เหรียญ</div>', unsafe_allow_html=True)
+    asset = st.selectbox("เหรียญ", assets, index=assets.index(default_asset),
+                         key="mobile_bt_asset", label_visibility="collapsed")
 
-    # --- Period ---
+    st.markdown('<div class="mobile-bt-label">ช่วงเวลาย้อนหลัง</div>', unsafe_allow_html=True)
     period_labels = ["กำหนดเอง", "1 เดือน", "3 เดือน", "6 เดือน", "1 ปี", "3 ปี", "5 ปี"]
-    period = st.radio(
-        "ช่วงเวลาย้อนหลัง",
-        period_labels,
-        index=6,
-        horizontal=True,
-        key="mobile_bt_period",
-    )
+    period = st.radio("ช่วงเวลาย้อนหลัง", period_labels, index=4, horizontal=True,
+                      key="mobile_bt_period", label_visibility="collapsed")
 
-    # --- Strategy ---
-    strategy_labels = [
-        "💰 ซื้อทีเดียวแล้วถือ",
-        "🗓️ ทยอยซื้อสม่ำเสมอ (DCA)",
-        "📉 ซื้อเพิ่มตอนราคาตก",
-        "📈 ตามเทรนด์ (เส้นค่าเฉลี่ย)",
-    ]
-    strategy = st.radio(
-        "กลยุทธ์ลงทุน",
-        strategy_labels,
-        index=0,
-        horizontal=True,
-        key="mobile_bt_strategy",
-    )
-
-    helper = {
-        strategy_labels[0]: "ซื้อทั้งก้อนวันแรก แล้วไม่ทำอะไรเลย",
-        strategy_labels[1]: "แบ่งเงินลงทุนเป็นงวดเท่า ๆ กันตามช่วงเวลา",
-        strategy_labels[2]: "เพิ่มเงินลงทุนเมื่อราคาปรับตัวลงจากจุดอ้างอิง",
-        strategy_labels[3]: "ใช้แนวโน้มจากเส้นค่าเฉลี่ยเพื่อกำหนดจังหวะลงทุน",
-    }[strategy]
-    st.markdown(
-        f'<div class="mobile-bt-helper">{helper}</div>',
-        unsafe_allow_html=True,
-    )
-
-    # --- Investment amount ---
-    amount = st.number_input(
-        "เงินลงทุน (บาท)",
-        min_value=100.0,
-        value=float(st.session_state.get("mobile_bt_amount", 100000.0)),
-        step=1000.0,
-        format="%.0f",
-        key="mobile_bt_amount",
-    )
-
-    # --- Use the selected period to describe the data range. ---
     today = pd.Timestamp.now().normalize()
-    period_days = {
-        "1 เดือน": 30,
-        "3 เดือน": 90,
-        "6 เดือน": 180,
-        "1 ปี": 365,
-        "3 ปี": 365 * 3,
-        "5 ปี": 365 * 5,
-    }
+    period_days = {"1 เดือน": 30, "3 เดือน": 90, "6 เดือน": 180,
+                   "1 ปี": 365, "3 ปี": 365 * 3, "5 ปี": 365 * 5}
     if period == "กำหนดเอง":
-        start_date = cfg.get("start_date", today.date())
+        c1, c2 = st.columns(2)
+        start_date = c1.date_input("เริ่มต้น", value=(today - pd.Timedelta(days=365)).date(),
+                                   min_value=pd.Timestamp("2015-01-01").date(),
+                                   max_value=today.date(), key="mobile_bt_start")
+        end_date = c2.date_input("สิ้นสุด", value=today.date(),
+                                 min_value=pd.Timestamp("2015-01-01").date(),
+                                 max_value=today.date(), key="mobile_bt_end")
     else:
         start_date = (today - pd.Timedelta(days=period_days[period])).date()
+        end_date = today.date()
 
-    if data is not None and not data.empty:
-        price_col = "Global_USD" if "Global_USD" in data.columns else (
-            "Close" if "Close" in data.columns else None
-        )
-        if price_col is not None:
-            prices = pd.to_numeric(data[price_col], errors="coerce").dropna()
-            if len(prices) >= 2:
-                ret = (float(prices.iloc[-1]) / float(prices.iloc[0]) - 1.0) * 100.0
-                st.caption(
-                    f"ข้อมูลที่โหลดได้ · {asset} · "
-                    f"{pd.Timestamp(data.index.min()).date()} ถึง "
-                    f"{pd.Timestamp(data.index.max()).date()} · "
-                    f"ราคาช่วงข้อมูล {ret:+.2f}%"
-                )
-            else:
-                st.caption("มีข้อมูลราคา แต่ยังไม่เพียงพอสำหรับคำนวณผลย้อนหลัง")
-        else:
-            st.caption("ยังไม่พบคอลัมน์ราคาสำหรับคำนวณ")
-    else:
-        st.caption(f"ช่วงที่เลือก: {start_date} ถึง {today.date()}")
+    st.markdown('<div class="mobile-bt-label">กลยุทธ์ลงทุน</div>', unsafe_allow_html=True)
+    strategy_labels = list(MBT_STRATEGIES.keys())
+    strategy = st.radio("กลยุทธ์ลงทุน", strategy_labels, index=0,
+                        key="mobile_bt_strategy", label_visibility="collapsed")
+    kind, helper = MBT_STRATEGIES[strategy]
+    st.markdown(f'<div class="mobile-bt-helper">{helper}</div>', unsafe_allow_html=True)
 
-    # Keep this UI as the input layer; the existing Backtest engine remains
-    # unchanged and can be wired to these selections without duplicating it.
+    freq = "รายเดือน"
+    if kind == "dca":
+        st.markdown('<div class="mobile-bt-label">ความถี่ในการซื้อ</div>', unsafe_allow_html=True)
+        freq = st.radio("ความถี่", ["รายสัปดาห์", "รายเดือน"], index=1, horizontal=True,
+                        key="mobile_bt_freq", label_visibility="collapsed")
+
+    st.markdown('<div class="mobile-bt-label">เงินลงทุน (บาท)</div>', unsafe_allow_html=True)
+    st.session_state.setdefault("mobile_bt_amount", 100000.0)
+    amount = st.number_input("เงินลงทุน (บาท)", min_value=100.0, step=1000.0,
+                             format="%.0f", key="mobile_bt_amount",
+                             label_visibility="collapsed")
+
     if st.button("🎯 เริ่มลองลงทุนย้อนหลัง", type="primary",
                  use_container_width=True, key="mobile_bt_run"):
-        st.session_state["mobile_bt_last_run"] = {
-            "asset": asset,
-            "period": period,
-            "strategy": strategy,
-            "amount": float(amount),
-        }
-        st.success(
-            f"ตั้งค่า Backtest แล้ว · {asset} · {period} · "
-            f"{strategy} · ฿{amount:,.0f}"
-        )
+        if start_date >= end_date:
+            st.error("วันเริ่มต้นต้องมาก่อนวันสิ้นสุด")
+        else:
+            with st.spinner("กำลังคำนวณ…"):
+                df, err = fetch_price_data(asset, start_date, end_date,
+                                           use_fx_proxy=cfg.get("use_fx_proxy", False))
+            if df is None or df.empty or len(df) < 10:
+                st.error(f"ข้อมูลไม่พอสำหรับคำนวณ: {err or 'น้อยกว่า 10 วัน'}")
+                st.session_state.pop("mobile_bt_result", None)
+            else:
+                res = mobile_bt_compare(df, kind, float(amount),
+                                        float(cfg.get("local_premium", 0.0)),
+                                        float(cfg.get("dealer_spread", 0.0)), freq)
+                st.session_state["mobile_bt_result"] = {
+                    "res": res,
+                    "meta": {"asset": asset, "strategy": strategy, "kind": kind,
+                             "start": str(df.index.min().date()),
+                             "end": str(df.index.max().date())},
+                }
+
+    saved = st.session_state.get("mobile_bt_result")
+    if saved:
+        m = saved["meta"]
+        st.caption(f"ผลล่าสุด · {m['asset']} · {m['start']} → {m['end']}")
+        _mbt_render_result(saved["res"], m)
 
 
 def render_mobile_settings() -> None:
@@ -8294,6 +8543,7 @@ def _main_body() -> None:
     st.markdown(THEME_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_NAV_CSS, unsafe_allow_html=True)
+    st.markdown(MOBILE_BT_CSS, unsafe_allow_html=True)
 
     if is_guest_mode():
         st.session_state.setdefault("favorite_tickers", [])
