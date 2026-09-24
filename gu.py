@@ -8159,7 +8159,6 @@ def render_mobile_asset(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     st.caption(f"อัปเดตล่าสุด · {pd.Timestamp.now(tz='Asia/Bangkok').strftime('%H:%M:%S')}")
 
 
-MOBILE_BT_CSS
 # ต้องมีอยู่แล้วในไฟล์หลัก: np, pd, go, st, WIDE, SUPPORTED_ASSETS,
 # LOCAL_TRADING_FEE_PCT, fetch_price_data, _mobile_money
 # =========================================================================
