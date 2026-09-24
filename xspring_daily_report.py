@@ -55,45 +55,66 @@ def load_sim() -> dict:
 
 def load_prices(assets: list[str]) -> dict[str, float]:
     """
-    ใช้ fetch_price_data() ของ Dealer Suite เพื่อให้ราคา/FX ใช้ logic
-    เดียวกับตัวแอป ถ้าหาไฟล์แอปไม่เจอ จะข้ามและรายงาน exposure เป็น NaN.
+    ดึงราคาตลาดโดยตรงจาก Yahoo Finance และแปลง USD -> THB
+    โดยไม่เรียก fetch_price_data() ของ Dealer Suite เพื่อหลีกเลี่ยง
+    ปัญหา pandas/yfinance MultiIndex ที่ทำให้เกิด Length mismatch.
+
+    คืนค่าเป็นราคาต่อ 1 เหรียญใน THB เช่น BTC -> BTC/USD * USD/THB.
+    ถ้าดึงราคาเหรียญใดไม่ได้ จะข้ามเฉพาะเหรียญนั้นและยังสร้างรายงานต่อได้.
     """
-    candidates = [
-        env("XSPRING_APP_PY", ""),
-        str(BASE / "gu.py"),
-        str(BASE / "xspring_dealer_suite_full_v39_fixed.py"),
-    ]
-
-    app_path = next((Path(x) for x in candidates if x and Path(x).is_file()), None)
-    if app_path is None:
+    if not assets:
         return {}
 
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location(
-        "xspring_app_for_daily_report", str(app_path)
-    )
-    if spec is None or spec.loader is None:
+    try:
+        import yfinance as yf
+    except Exception as exc:
+        print(f"[price] yfinance import failed: {exc}")
         return {}
 
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-
-    today = pd.Timestamp.now().normalize()
-    start = today - pd.Timedelta(days=14)
-    prices: dict[str, float] = {}
-
-    for asset in sorted(set(assets)):
+    def last_close(ticker: str) -> float | None:
         try:
-            frame, _err = mod.fetch_price_data(
-                asset, start, today, use_fx_proxy=True
+            # history() ให้ DataFrame ตรง ๆ และไม่ต้องพึ่งโครงสร้างคอลัมน์
+            # ของ fetch_price_data() ใน Dealer Suite
+            frame = yf.Ticker(ticker).history(
+                period="5d",
+                interval="1d",
+                auto_adjust=False,
+                actions=False,
             )
-            if frame is not None and not frame.empty:
-                row = frame.iloc[-1]
-                prices[asset] = float(row["Global_USD"]) * float(row["USDTHB"])
+            if frame is None or frame.empty or "Close" not in frame.columns:
+                return None
+
+            close = pd.to_numeric(frame["Close"], errors="coerce").dropna()
+            if close.empty:
+                return None
+            return float(close.iloc[-1])
+        except Exception as exc:
+            print(f"[price] {ticker}: {exc}")
+            return None
+
+    # USD/THB สำหรับแปลงราคาสินทรัพย์จาก USD เป็นบาท
+    usdthb = last_close("USDTHB=X")
+    if usdthb is None or usdthb <= 0:
+        print("[price] USDTHB=X unavailable; cannot convert market prices to THB")
+        return {}
+
+    prices: dict[str, float] = {}
+    for asset in sorted(set(str(a).upper() for a in assets if a)):
+        try:
+            # Stablecoins ใช้ 1 USD เป็นฐานเพื่อให้รายงานไม่แกว่งจาก ticker เล็ก ๆ
+            if asset in {"USDT", "USDC"}:
+                prices[asset] = float(usdthb)
+                continue
+
+            usd_price = last_close(f"{asset}-USD")
+            if usd_price is not None and usd_price >= 0:
+                prices[asset] = float(usd_price) * float(usdthb)
+            else:
+                print(f"[price] {asset}: no valid USD price")
         except Exception as exc:
             print(f"[price] {asset}: {exc}")
 
+    print(f"[price] loaded {len(prices)}/{len(set(assets))} assets; USDTHB={usdthb:.4f}")
     return prices
 
 
