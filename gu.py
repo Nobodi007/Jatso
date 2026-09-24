@@ -7618,6 +7618,86 @@ def render_customer_leaderboard(sim: dict[str, Any], cfg: dict[str, Any]) -> Non
 
 MOBILE_NAV = ["⌂  Home", "⇄  Trade", "▣  Asset", "◫  Backtest", "⚙  Settings"]
 
+MOBILE_NAV_CSS = r'''<style>
+/* Mobile nav: standalone so it is not dependent on the main responsive CSS block */
+.st-key-mobile_nav {
+    position: fixed !important;
+    z-index: 999999 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100vw !important;
+    margin: 0 !important;
+    padding: 7px 6px calc(7px + env(safe-area-inset-bottom)) !important;
+    background: rgba(24,26,32,.98) !important;
+    border-top: 1px solid #2b3139 !important;
+    box-sizing: border-box !important;
+}
+
+.st-key-mobile_nav [role="radiogroup"] > label > div:not(:last-child),
+.st-key-mobile_nav [role="radiogroup"] > label svg,
+.st-key-mobile_nav [role="radiogroup"] > label img {
+    display: none !important;
+}
+
+.st-key-mobile_nav [role="radiogroup"] {
+    width: 100% !important;
+    display: grid !important;
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+    gap: 2px !important;
+}
+
+.st-key-mobile_nav [role="radiogroup"] > label {
+    position: relative !important;
+    flex: 1 1 0 !important;
+    min-width: 0 !important;
+    height: 42px !important;
+    margin: 0 !important;
+    padding: 4px 2px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    border: 0 !important;
+    border-radius: 10px !important;
+    background: transparent !important;
+    text-align: center !important;
+}
+
+.st-key-mobile_nav [role="radiogroup"] > label p {
+    color: #848e9c !important;
+    font-size: 10px !important;
+    font-weight: 600 !important;
+    line-height: 1.15 !important;
+    margin: 0 !important;
+    white-space: nowrap !important;
+}
+
+.st-key-mobile_nav [role="radiogroup"] > label:has(input:checked),
+.st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"] {
+    background: #087a3f !important;
+}
+
+.st-key-mobile_nav [role="radiogroup"] > label:has(input:checked) p,
+.st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"] p {
+    color: #ffffff !important;
+}
+
+.st-key-mobile_nav [role="radiogroup"] > label:has(input:checked)::after,
+.st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"]::after {
+    content: "" !important;
+    position: absolute !important;
+    right: 5px !important;
+    top: 50% !important;
+    transform: translateY(-50%) !important;
+    width: 0 !important;
+    height: 0 !important;
+    border-top: 3px solid transparent !important;
+    border-bottom: 3px solid transparent !important;
+    border-left: 5px solid #ffffff !important;
+    pointer-events: none !important;
+}
+</style>'''
+
 MOBILE_CSS = r'''<style>
 @media (max-width: 768px) {
   .block-container { padding: .65rem .75rem 5.8rem .75rem !important; max-width:100% !important; }
@@ -8144,6 +8224,7 @@ def render_mobile_settings() -> None:
 def _main_body() -> None:
     st.markdown(THEME_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
+    st.markdown(MOBILE_NAV_CSS, unsafe_allow_html=True)
 
     if is_guest_mode():
         st.session_state.setdefault("favorite_tickers", [])
