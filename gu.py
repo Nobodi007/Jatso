@@ -7676,6 +7676,103 @@ def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     else: st.caption('ยังไม่มีออเดอร์ล่าสุด')
 
 
+
+def render_mobile_trade(cfg: dict[str, Any], data: pd.DataFrame) -> None:
+    """Mobile Trade shell; keeps the existing engine as the source of truth."""
+    asset = str(cfg.get("asset", "BTC"))
+    sim = st.session_state.get("sim", {}) or {}
+    st.markdown(f'<div class="mobile-page-title">Trade</div><div class="mobile-page-sub">{asset} · Order Simulator</div>', unsafe_allow_html=True)
+
+    mid = 0.0
+    try:
+        if not data.empty and "Close" in data.columns:
+            mid = float(data["Close"].dropna().iloc[-1])
+    except Exception:
+        mid = 0.0
+
+    st.markdown(f'<div class="mobile-card"><div class="mobile-kicker">Market</div><div class="mobile-big">{asset} / THB</div><div class="mobile-kicker" style="margin-top:6px">Reference price: {mid:,.2f}</div></div>', unsafe_allow_html=True)
+
+    side = st.radio("ฝั่ง", ["BUY", "SELL"], horizontal=True, key="mobile_trade_side", label_visibility="collapsed")
+    amount = st.number_input("จำนวนเงิน (THB)", min_value=0.0, value=0.0, step=1000.0, key="mobile_trade_amount")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("BUY", key="mobile_trade_buy", type="primary", use_container_width=True, disabled=side != "BUY"):
+            st.session_state["mobile_trade_message"] = f"เตรียมส่ง BUY {amount:,.0f} THB · {asset}"
+    with c2:
+        if st.button("SELL", key="mobile_trade_sell", use_container_width=True, disabled=side != "SELL"):
+            st.session_state["mobile_trade_message"] = f"เตรียมส่ง SELL {amount:,.0f} THB · {asset}"
+
+    msg = st.session_state.get("mobile_trade_message")
+    if msg:
+        st.success(msg)
+        st.caption("หน้านี้เป็น Mobile UI shell และยังใช้ order engine เดิมของระบบเป็น source of truth")
+
+    orders = sim.get("orders", []) if isinstance(sim, dict) else []
+    st.markdown("### ล่าสุด")
+    if orders:
+        for o in reversed(orders[-5:]):
+            st.markdown(f'<div class="mobile-card"><b>{o.get("side", o.get("ฝั่ง", "Order"))}</b> · {o.get("asset", asset)}<span style="float:right;color:#848e9c">{o.get("amount_thb", o.get("จำนวนเงิน", ""))}</span></div>', unsafe_allow_html=True)
+    else:
+        st.caption("ยังไม่มีออเดอร์")
+
+
+def render_mobile_asset(cfg: dict[str, Any], data: pd.DataFrame) -> None:
+    sim = st.session_state.get("sim", {}) or {}
+    st.markdown('<div class="mobile-page-title">Asset</div><div class="mobile-page-sub">Portfolio & Inventory</div>', unsafe_allow_html=True)
+
+    asset = str(cfg.get("asset", "BTC"))
+    orders = sim.get("orders", []) if isinstance(sim, dict) else []
+    pnl = 0.0
+    for o in orders:
+        try:
+            pnl += float(o.get("dealer_pnl", o.get("Dealer P&L", 0)) or 0)
+        except Exception:
+            pass
+
+    st.markdown(f'<div class="mobile-card"><div class="mobile-kicker">Primary Asset</div><div class="mobile-big">{asset}</div><div class="mobile-kicker" style="margin-top:6px">Ledger P&L</div><div class="mobile-big {"mobile-green" if pnl >= 0 else "mobile-red"}">{_mobile_money(pnl, True)}</div></div>', unsafe_allow_html=True)
+
+    cap = float(cfg.get("total_capital_thb", 0) or 0)
+    cex = float(cfg.get("cex_margin_thb", 0) or 0)
+    liab = float(cfg.get("liab_thb", 0) or 0)
+    st.markdown(f'<div class="mobile-grid"><div class="mobile-mini"><div class="mobile-mini-label">Capital</div><div class="mobile-mini-value">{_mobile_money(cap)}</div></div><div class="mobile-mini"><div class="mobile-mini-label">CEX Margin</div><div class="mobile-mini-value">{_mobile_money(cex)}</div></div><div class="mobile-mini"><div class="mobile-mini-label">Liabilities</div><div class="mobile-mini-value">{_mobile_money(liab)}</div></div><div class="mobile-mini"><div class="mobile-mini-label">Orders</div><div class="mobile-mini-value">{len(orders)}</div></div></div>', unsafe_allow_html=True)
+
+
+def render_mobile_backtest(cfg: dict[str, Any], data: pd.DataFrame) -> None:
+    st.markdown('<div class="mobile-page-title">Backtest</div><div class="mobile-page-sub">ลงทุนย้อนหลัง</div>', unsafe_allow_html=True)
+    st.info("Mobile UI เชื่อมกับ Backtest engine เดิมของระบบ โดยไม่สร้าง logic คำนวณชุดใหม่")
+
+    if data is None or data.empty:
+        st.warning("ยังไม่มีข้อมูลราคาสำหรับช่วงวันที่เลือก")
+        return
+
+    try:
+        close = pd.to_numeric(data["Close"], errors="coerce").dropna()
+        if len(close) >= 2:
+            ret = (float(close.iloc[-1]) / float(close.iloc[0]) - 1.0) * 100.0
+            high = close.cummax()
+            dd = ((close / high) - 1.0).min() * 100.0
+            c1, c2 = st.columns(2)
+            with c1:
+                st.metric("Period Return", f"{ret:+.2f}%")
+            with c2:
+                st.metric("Max Drawdown", f"{dd:.2f}%")
+            st.line_chart(close, height=220)
+        else:
+            st.warning("ข้อมูลย้อนหลังไม่เพียงพอ")
+    except Exception as e:
+        st.warning(f"คำนวณ preview ไม่สำเร็จ: {e}")
+
+
+def render_mobile_settings() -> None:
+    st.markdown('<div class="mobile-page-title">Settings</div><div class="mobile-page-sub">ตั้งค่าการใช้งานบนมือถือ</div>', unsafe_allow_html=True)
+    st.toggle("Dark UI", value=True, key="mobile_dark_ui")
+    st.toggle("แจ้งเตือน Order", value=True, key="mobile_order_alert")
+    st.toggle("แจ้งเตือน Risk", value=True, key="mobile_risk_alert")
+    st.divider()
+    st.caption(f"XSpring Dealer Suite · Model v{MODEL_VERSION}")
+
+
 def _main_body() -> None:
     st.markdown(THEME_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
@@ -7892,20 +7989,19 @@ f'<div style="font-size:0.68rem;color:#0ecb81;">{ROLE_LABEL_TH[current_role()]}<
     mobile_selected = st.session_state.get("mobile_nav", MOBILE_NAV[0])
     mobile_nav = st.radio("Mobile navigation", MOBILE_NAV, index=MOBILE_NAV.index(mobile_selected),
                           horizontal=True, key="mobile_nav", label_visibility="collapsed")
-    st.session_state["mobile_nav"] = mobile_nav
+    # สำคัญ: mobile_nav เป็น widget key แล้ว Streamlit จะ sync ค่าให้เอง
+    # ห้ามเขียน st.session_state["mobile_nav"] ซ้ำหลังสร้าง widget
 
-    mobile_active = mobile_nav == MOBILE_NAV[0]
-    if mobile_nav == MOBILE_NAV[1]:
-        st.session_state["main_nav"] = NAV_EXCHANGE
-    elif mobile_nav == MOBILE_NAV[2]:
-        st.session_state["main_nav"] = NAV_LABELS[4]
-    elif mobile_nav == MOBILE_NAV[3]:
-        st.session_state["main_nav"] = NAV_SIMPLE
-    elif mobile_nav == MOBILE_NAV[4]:
-        st.session_state["main_nav"] = NAV_LABELS[1]
-
-    if mobile_active:
+    if mobile_nav == MOBILE_NAV[0]:
         render_mobile_home(cfg, data)
+    elif mobile_nav == MOBILE_NAV[1]:
+        render_mobile_trade(cfg, data)
+    elif mobile_nav == MOBILE_NAV[2]:
+        render_mobile_asset(cfg, data)
+    elif mobile_nav == MOBILE_NAV[3]:
+        render_mobile_backtest(cfg, data)
+    elif mobile_nav == MOBILE_NAV[4]:
+        render_mobile_settings()
 
     with st.container(key="desktop_route"):
         if nav == NAV_LABELS[0]:
