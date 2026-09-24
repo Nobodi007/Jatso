@@ -8168,7 +8168,19 @@ def render_mobile_backtest(cfg: dict[str, Any], data: pd.DataFrame) -> None:
         return
 
     try:
-        close = pd.to_numeric(data["Close"], errors="coerce").dropna()
+        # fetch_price_data() normalizes Yahoo Finance columns into
+        # Global_USD / Day_High / Day_Low. The preview must use Global_USD.
+        price_col = "Global_USD" if "Global_USD" in data.columns else (
+            "Close" if "Close" in data.columns else None
+        )
+        if price_col is None:
+            st.warning(
+                "ไม่พบคอลัมน์ราคาสำหรับ Backtest preview "
+                "(ต้องมี Global_USD หรือ Close)"
+            )
+            return
+
+        close = pd.to_numeric(data[price_col], errors="coerce").dropna()
         if len(close) >= 2:
             ret = (float(close.iloc[-1]) / float(close.iloc[0]) - 1.0) * 100.0
             high = close.cummax()
