@@ -7668,6 +7668,20 @@ MOBILE_CSS = r'''<style>
   .mobile-trade-summary b { color:#EAECEF; font-size:11px; font-variant-numeric:tabular-nums; }
   .mobile-trade-history { display:flex; justify-content:space-between; gap:10px; background:#181a20; border:1px solid #2b3139; border-radius:11px; padding:10px 11px; margin-bottom:7px; color:#EAECEF; font-size:11px; }
   .mobile-trade-history span { color:#848e9c; font-variant-numeric:tabular-nums; }
+  /* Mobile trade actions: our own dealer palette */
+  .st-key-mobile_real_buy button {
+    background:#00c853 !important; color:#ffffff !important; border:1px solid #00c853 !important;
+    font-weight:800 !important; min-height:52px !important; border-radius:12px !important;
+  }
+  .st-key-mobile_real_buy button:hover { background:#00b84a !important; border-color:#00b84a !important; }
+  .st-key-mobile_real_sell button {
+    background:#ff4d4f !important; color:#ffffff !important; border:1px solid #ff4d4f !important;
+    font-weight:800 !important; min-height:52px !important; border-radius:12px !important;
+  }
+  .st-key-mobile_real_sell button:hover { background:#e83f42 !important; border-color:#e83f42 !important; }
+  .st-key-mobile_real_buy button:disabled, .st-key-mobile_real_sell button:disabled {
+    opacity:.42 !important;
+  }
   .mobile-green { color:#0ecb81 !important; } .mobile-red { color:#f6465d !important; }
 }
 @media (min-width:769px) {
@@ -7759,8 +7773,8 @@ def render_mobile_trade(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     st.markdown(f'<div class="mobile-page-title">Trade</div><div class="mobile-page-sub">{asset}/THB · Order Simulator</div>', unsafe_allow_html=True)
     st.markdown(f'''<div class="mobile-trade-quote"><div class="mobile-trade-quote-top"><div><div class="mobile-kicker">ราคาตลาดอ้างอิง</div><div class="mobile-trade-symbol">{asset}/THB</div></div><div class="mobile-live-dot">● LIVE</div></div><div class="mobile-trade-price">฿{mid_now:,.2f}</div><div class="mobile-trade-spread">ซื้อ ฿{quote_buy:,.2f} · ขาย ฿{quote_sell:,.2f}</div></div>''', unsafe_allow_html=True)
     # TradingView กราฟจริงของตลาด
-    tv_symbol = TV_GLOBAL_SYMBOL.get(asset, f"BINANCE:{asset}USDT")
-    st.markdown('<div class="mobile-section-title">กราฟตลาด</div>', unsafe_allow_html=True)
+    tv_symbol = TV_LOCAL_SYMBOL.get(asset, f"BITKUB:{asset}THB")
+    st.markdown('<div class="mobile-section-title">กราฟตลาด · Bitkub</div>', unsafe_allow_html=True)
     render_tradingview(tv_symbol, f"tv_mobile_trade_{asset}", height=330, interval="60")
 
 
