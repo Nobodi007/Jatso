@@ -5736,6 +5736,8 @@ def run_random_batch(sim, cfg, ctx, target_stock_thb, coins, n_orders, seed,
         sim["asset"], sim["target_thb"] = saved_asset, saved_target
     return last_steps, counts, skipped
 
+QUOTE_REFRESH_SEC = 15   # ปรับตรงนี้ได้ เช่น 10 / 30
+
 def _frozen_mid(asset: str, mid_now: float) -> float:
     """คืนราคากลางที่ตรึงไว้ จะอัปเดตเมื่อครบ QUOTE_REFRESH_SEC วินาที หรือเปลี่ยนเหรียญ"""
     snap = st.session_state.get("quote_snap")
