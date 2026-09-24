@@ -6263,13 +6263,21 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                     cont = st.container()
                 with cont:
                     render_market_column_view(m_df, mode, asset, usdthb_current)
+                    # ใส่ 3D Order Book ลงในพื้นที่ว่างเดิมของ Market column
+                    render_orderbook_3d(
+                        symbol=f"{asset.lower()}_thb",
+                        title=f"3D Order Book — {asset}/THB",
+                        limit=15,
+                    )
 
     with col_center:
-        # 3D Order Book แทนพื้นที่กราฟ TradingView ที่ว่างอยู่
-        render_orderbook_3d(
-            symbol=f"{asset.lower()}_thb",
-            title=f"3D Order Book — {asset}/THB",
-            limit=25,
+        # TradingView เดิมต้องอยู่ที่นี่ — ไม่ลบกราฟ
+        local_sym = TV_LOCAL_SYMBOL.get(asset, f"BITKUB:{asset}THB")
+        render_tradingview(
+            local_sym,
+            f"tv_center_{asset}",
+            460,
+            studies=["MAExp@tv-basicstudies"],
         )
 
         with st.container(border=True):
