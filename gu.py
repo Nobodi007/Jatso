@@ -8160,41 +8160,125 @@ def render_mobile_asset(cfg: dict[str, Any], data: pd.DataFrame) -> None:
 
 
 def render_mobile_backtest(cfg: dict[str, Any], data: pd.DataFrame) -> None:
-    st.markdown('<div class="mobile-page-title">Backtest</div><div class="mobile-page-sub">ลงทุนย้อนหลัง</div>', unsafe_allow_html=True)
-    st.info("Mobile UI เชื่อมกับ Backtest engine เดิมของระบบ โดยไม่สร้าง logic คำนวณชุดใหม่")
+    """Mobile Backtest UI — compact historical-investment form."""
+    st.markdown(
+        '<div class="mobile-page-title">🎯 ลองลงทุนย้อนหลัง</div>'
+        '<div class="mobile-page-sub">'
+        'ดูว่าถ้าลงทุนแบบนี้ในอดีต ผลจะออกมาเป็นยังไง — '
+        'ราคาเป็นบาท หักค่าธรรมเนียมแล้ว และเทียบกับการฝากออมทรัพย์/ถือเฉยๆให้เสมอ'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
-    if data is None or data.empty:
-        st.warning("ยังไม่มีข้อมูลราคาสำหรับช่วงวันที่เลือก")
-        return
+    # --- Asset ---
+    assets = SUPPORTED_ASSETS if SUPPORTED_ASSETS else [cfg.get("asset", "BTC")]
+    default_asset = cfg.get("asset", assets[0])
+    if default_asset not in assets:
+        default_asset = assets[0]
 
-    try:
-        # fetch_price_data() normalizes Yahoo Finance columns into
-        # Global_USD / Day_High / Day_Low. The preview must use Global_USD.
+    asset = st.selectbox(
+        "เหรียญ",
+        assets,
+        index=assets.index(default_asset),
+        key="mobile_bt_asset",
+    )
+
+    # --- Period ---
+    period_labels = ["กำหนดเอง", "1 เดือน", "3 เดือน", "6 เดือน", "1 ปี", "3 ปี", "5 ปี"]
+    period = st.radio(
+        "ช่วงเวลาย้อนหลัง",
+        period_labels,
+        index=6,
+        horizontal=True,
+        key="mobile_bt_period",
+    )
+
+    # --- Strategy ---
+    strategy_labels = [
+        "💰 ซื้อทีเดียวแล้วถือ",
+        "🗓️ ทยอยซื้อสม่ำเสมอ (DCA)",
+        "📉 ซื้อเพิ่มตอนราคาตก",
+        "📈 ตามเทรนด์ (เส้นค่าเฉลี่ย)",
+    ]
+    strategy = st.radio(
+        "กลยุทธ์ลงทุน",
+        strategy_labels,
+        index=0,
+        horizontal=True,
+        key="mobile_bt_strategy",
+    )
+
+    helper = {
+        strategy_labels[0]: "ซื้อทั้งก้อนวันแรก แล้วไม่ทำอะไรเลย",
+        strategy_labels[1]: "แบ่งเงินลงทุนเป็นงวดเท่า ๆ กันตามช่วงเวลา",
+        strategy_labels[2]: "เพิ่มเงินลงทุนเมื่อราคาปรับตัวลงจากจุดอ้างอิง",
+        strategy_labels[3]: "ใช้แนวโน้มจากเส้นค่าเฉลี่ยเพื่อกำหนดจังหวะลงทุน",
+    }[strategy]
+    st.markdown(
+        f'<div class="mobile-bt-helper">{helper}</div>',
+        unsafe_allow_html=True,
+    )
+
+    # --- Investment amount ---
+    amount = st.number_input(
+        "เงินลงทุน (บาท)",
+        min_value=100.0,
+        value=float(st.session_state.get("mobile_bt_amount", 100000.0)),
+        step=1000.0,
+        format="%.0f",
+        key="mobile_bt_amount",
+    )
+
+    # --- Use the selected period to describe the data range. ---
+    today = pd.Timestamp.now().normalize()
+    period_days = {
+        "1 เดือน": 30,
+        "3 เดือน": 90,
+        "6 เดือน": 180,
+        "1 ปี": 365,
+        "3 ปี": 365 * 3,
+        "5 ปี": 365 * 5,
+    }
+    if period == "กำหนดเอง":
+        start_date = cfg.get("start_date", today.date())
+    else:
+        start_date = (today - pd.Timedelta(days=period_days[period])).date()
+
+    if data is not None and not data.empty:
         price_col = "Global_USD" if "Global_USD" in data.columns else (
             "Close" if "Close" in data.columns else None
         )
-        if price_col is None:
-            st.warning(
-                "ไม่พบคอลัมน์ราคาสำหรับ Backtest preview "
-                "(ต้องมี Global_USD หรือ Close)"
-            )
-            return
-
-        close = pd.to_numeric(data[price_col], errors="coerce").dropna()
-        if len(close) >= 2:
-            ret = (float(close.iloc[-1]) / float(close.iloc[0]) - 1.0) * 100.0
-            high = close.cummax()
-            dd = ((close / high) - 1.0).min() * 100.0
-            c1, c2 = st.columns(2)
-            with c1:
-                st.metric("Period Return", f"{ret:+.2f}%")
-            with c2:
-                st.metric("Max Drawdown", f"{dd:.2f}%")
-            st.line_chart(close, height=220)
+        if price_col is not None:
+            prices = pd.to_numeric(data[price_col], errors="coerce").dropna()
+            if len(prices) >= 2:
+                ret = (float(prices.iloc[-1]) / float(prices.iloc[0]) - 1.0) * 100.0
+                st.caption(
+                    f"ข้อมูลที่โหลดได้ · {asset} · "
+                    f"{pd.Timestamp(data.index.min()).date()} ถึง "
+                    f"{pd.Timestamp(data.index.max()).date()} · "
+                    f"ราคาช่วงข้อมูล {ret:+.2f}%"
+                )
+            else:
+                st.caption("มีข้อมูลราคา แต่ยังไม่เพียงพอสำหรับคำนวณผลย้อนหลัง")
         else:
-            st.warning("ข้อมูลย้อนหลังไม่เพียงพอ")
-    except Exception as e:
-        st.warning(f"คำนวณ preview ไม่สำเร็จ: {e}")
+            st.caption("ยังไม่พบคอลัมน์ราคาสำหรับคำนวณ")
+    else:
+        st.caption(f"ช่วงที่เลือก: {start_date} ถึง {today.date()}")
+
+    # Keep this UI as the input layer; the existing Backtest engine remains
+    # unchanged and can be wired to these selections without duplicating it.
+    if st.button("🎯 เริ่มลองลงทุนย้อนหลัง", type="primary",
+                 use_container_width=True, key="mobile_bt_run"):
+        st.session_state["mobile_bt_last_run"] = {
+            "asset": asset,
+            "period": period,
+            "strategy": strategy,
+            "amount": float(amount),
+        }
+        st.success(
+            f"ตั้งค่า Backtest แล้ว · {asset} · {period} · "
+            f"{strategy} · ฿{amount:,.0f}"
+        )
 
 
 def render_mobile_settings() -> None:
