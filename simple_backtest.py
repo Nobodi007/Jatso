@@ -584,8 +584,15 @@ def render_simple_backtest(fetch_fn: Optional[FetchFn] = None, assets: Optional[
     c1, c2, c3 = st.columns([1, 1, 1])
     asset = c1.selectbox("เหรียญ", assets, key="sb_asset")
     today = date.today()
-    # ใช้ key รุ่นใหม่เพื่อไม่ให้ Streamlit นำค่าวันที่เก่าใน session
-    # (เช่น ปี 2564) กลับมาเป็นค่าเริ่มต้นของแท็บนี้
+
+    # รีเซ็ตค่า date picker ที่ค้างจากเวอร์ชันเก่าเพียง 1 ครั้งหลังอัปเดตโค้ด
+    # เพื่อกัน Streamlit session เดิมดึงวันที่เก่า (เช่น 25 ก.ย. 2564) กลับมา
+    _SB_DATE_UI_VERSION = "2026-09-25-v3"
+    if st.session_state.get("sb_date_ui_version") != _SB_DATE_UI_VERSION:
+        for _k in ("sb_start", "sb_end", "sb_start_v2", "sb_end_v2"):
+            st.session_state.pop(_k, None)
+        st.session_state["sb_date_ui_version"] = _SB_DATE_UI_VERSION
+
     default_start = today - timedelta(days=3 * 365)
     default_end = today
 
@@ -594,14 +601,14 @@ def render_simple_backtest(fetch_fn: Optional[FetchFn] = None, assets: Optional[
         value=default_start,
         min_value=date(2015, 1, 1),
         max_value=today - timedelta(days=30),
-        key="sb_start_v2",
+        key="sb_start_v3",
     )
     end = c3.date_input(
         "ถึงวันที่",
         value=default_end,
         min_value=start + timedelta(days=30),
         max_value=today,
-        key="sb_end_v2",
+        key="sb_end_v3",
     )
 
     keys = list(STRATEGIES)
