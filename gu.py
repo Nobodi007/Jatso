@@ -3784,6 +3784,102 @@ def render_param_optimizer(cfg: dict[str, Any], data: pd.DataFrame) -> None:
             st.download_button("⬇️ ผลลัพธ์ Optimizer CSV", to_csv_bytes(res),
                                "xspring_param_optimizer.csv", "text/csv", **WIDE)
 
+# =========================================================================
+# DYNAMIC SPREAD — เสนอ spread ตามความผันผวน + backtest เทียบ fixed
+# =========================================================================
+
+def dynamic_spread_series(data: pd.DataFrame, base: float, k: float, window: int,
+                          floor: float, cap: float) -> pd.Series:
+    vol = data["Volatility_Pct"].rolling(window, min_periods=max(3, window // 4)).mean()
+    vol = vol.shift(1).bfill()          # ใช้ข้อมูลถึงเมื่อวานเท่านั้น
+    return (base + k * vol).clip(lower=floor, upper=cap)
+
+
+def backtest_with_dynamic_spread(cfg: dict[str, Any], data: pd.DataFrame,
+                                 spread_s: pd.Series) -> pd.DataFrame:
+    """ใช้ _backtest_frame เดิม แล้วปรับเฉพาะรายได้ส่วน spread ต่อวัน"""
+    bt = _backtest_frame(cfg, data)
+    delta = bt["Gross_Notional_THB"] * (spread_s.reindex(bt.index) - cfg["dealer_spread"])
+    bt["Spread_Revenue_THB"] = bt["Spread_Revenue_THB"] + delta
+    bt["Revenue_THB"] = bt["Revenue_THB"] + delta
+    bt["Daily_PnL_THB"] = bt["Daily_PnL_THB"] + delta
+    bt["Actual_Daily_PnL"] = np.where(bt["Trade_Allowed"] == 1, bt["Daily_PnL_THB"], 0.0)
+    bt["Actual_Cum_PnL"] = bt["Actual_Daily_PnL"].cumsum()
+    return bt
+
+
+def _apply_dynamic_spread(pct: float) -> None:
+    st.session_state["bt_spread"] = float(pct)
+    st.rerun()
+
+
+def render_dynamic_spread(cfg: dict[str, Any], data: pd.DataFrame,
+                          bt_baseline: Optional[pd.DataFrame]) -> None:
+    with st.expander("📐 Dynamic Spread Suggestion — spread ตามความผันผวน", expanded=False):
+        if data.empty or cfg["asset"] in STABLECOINS:
+            st.info("ใช้ได้กับเหรียญที่ไม่ใช่ Stablecoin และต้องมีข้อมูลราคา")
+            return
+        st.caption(
+            "สูตร: spread = base + k × ความผันผวนเฉลี่ยย้อนหลัง (ถึงเมื่อวาน) แล้วจำกัดด้วย floor/cap · "
+            "⚠️ backtest นี้ถือว่า volume ลูกค้าไม่เปลี่ยนเมื่อ spread กว้างขึ้น จึงมองโลกในแง่ดีกว่าความจริง"
+        )
+        c1, c2, c3, c4 = st.columns(4)
+        base_pct = c1.number_input("Base spread (%)", value=float(cfg["dealer_spread"] * 100),
+                                   step=0.05, min_value=0.0, key="ds_base")
+        k = c2.number_input("k (ตัวคูณ vol)", value=0.10, step=0.05, min_value=0.0, key="ds_k")
+        window = c3.number_input("Window (วัน)", value=20, min_value=3, max_value=120,
+                                 step=1, key="ds_win")
+        floor_pct, cap_pct = c4.slider("Floor–Cap (%)", 0.0, 5.0,
+                                       (max(0.0, base_pct * 0.5), max(1.0, base_pct * 3)),
+                                       0.05, key="ds_fc")
+
+        s = dynamic_spread_series(data, base_pct / 100, k, int(window),
+                                  floor_pct / 100, cap_pct / 100)
+        bt_dyn = backtest_with_dynamic_spread(cfg, data, s)
+        bt_fix = bt_baseline if bt_baseline is not None else _backtest_frame(cfg, data)
+        m_dyn, m_fix = _backtest_metrics(bt_dyn), _backtest_metrics(bt_fix)
+
+        suggested = float(s.iloc[-1] * 100)
+        cur = float(cfg["dealer_spread"] * 100)
+        k1 = st.columns(4)
+        metric_card(k1[0], "Spread ปัจจุบัน", f"{cur:.3f}%")
+        metric_card(k1[1], "Spread ที่แนะนำ (ล่าสุด)", f"{suggested:.3f}%",
+                    suggested - cur, f"{suggested - cur:+.3f} จุด")
+        metric_card(k1[2], "Net P&L: Dynamic", fmt_baht(m_dyn["net_pnl"], True), m_dyn["net_pnl"])
+        metric_card(k1[3], "Δ เทียบ Fixed", fmt_baht(m_dyn["net_pnl"] - m_fix["net_pnl"], True),
+                    m_dyn["net_pnl"] - m_fix["net_pnl"])
+
+        st.dataframe(pd.DataFrame([
+            {"โหมด": "Fixed", "Net P&L": m_fix["net_pnl"], "Max DD": m_fix["max_drawdown"],
+             "Sharpe": m_fix["sharpe"], "Sortino": m_fix["sortino"]},
+            {"โหมด": "Dynamic", "Net P&L": m_dyn["net_pnl"], "Max DD": m_dyn["max_drawdown"],
+             "Sharpe": m_dyn["sharpe"], "Sortino": m_dyn["sortino"]},
+        ]), **WIDE)
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=bt_fix.index, y=bt_fix["Actual_Cum_PnL"], name="Fixed",
+                                 line=dict(color="#848e9c", width=2)))
+        fig.add_trace(go.Scatter(x=bt_dyn.index, y=bt_dyn["Actual_Cum_PnL"], name="Dynamic",
+                                 line=dict(color="#0ecb81", width=2)))
+        fig.update_layout(template="plotly_dark", height=340, hovermode="x unified",
+                          margin=dict(t=20, b=20), yaxis_title="Cumulative P&L (THB)",
+                          paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                          legend=dict(orientation="h", y=1.02, yanchor="bottom"))
+        st.plotly_chart(fig, **WIDE)
+
+        fig2 = go.Figure(go.Scatter(x=s.index, y=s * 100, line=dict(color="#fcd535", width=1.6)))
+        fig2.update_layout(template="plotly_dark", height=220, margin=dict(t=20, b=20),
+                           yaxis_title="Spread (%)", paper_bgcolor="rgba(0,0,0,0)",
+                           plot_bgcolor="rgba(0,0,0,0)")
+        st.plotly_chart(fig2, **WIDE)
+
+        if can_edit_config():
+            st.button(f"✅ ใช้ spread {suggested:.3f}% กับแถบซ้าย", key="ds_apply",
+                      on_click=_apply_dynamic_spread, args=(round(suggested, 3),), **WIDE)
+        else:
+            st.caption("🔒 บัญชี Viewer ไม่สามารถนำค่าไปใช้ได้")
+
+
 def render_phase2_tools_top(cfg: dict[str, Any], data: pd.DataFrame,
                             bt_baseline: Optional[pd.DataFrame] = None) -> None:
     """เครื่องมือที่โชว์เร็ว ต่อจาก Performance Summary — Stress / Monte Carlo / Crisis / Hedge"""
@@ -3811,6 +3907,7 @@ def render_phase2_tools_top(cfg: dict[str, Any], data: pd.DataFrame,
     _render_crisis_replay(cfg, data, bt_baseline)
     _render_hedge_comparator(cfg, data)
     render_param_optimizer(cfg, data)
+    render_dynamic_spread(cfg, data, bt_baseline)
 
 
 def render_phase2_tools_bottom(cfg: dict[str, Any], data: pd.DataFrame,
@@ -6158,6 +6255,118 @@ def build_dealer_ctx(cfg: dict[str, Any], data: pd.DataFrame) -> Optional[tuple[
     return ctx, target_stock_thb
 
 
+# =========================================================================
+# LIVE RISK DASHBOARD — ไฟจราจรรวม NC / FX / CEX / Exposure / Unhedged
+# =========================================================================
+
+RISK_ICON = {"ok": "🟢", "warn": "🟡", "crit": "🔴"}
+RISK_COLOR = {"ok": "#0ecb81", "warn": "#fcd535", "crit": "#f6465d"}
+_RISK_RANK = {"ok": 0, "warn": 1, "crit": 2}
+
+
+def _ratio_level(r: float, warn: float = 0.70, crit: float = 0.90) -> str:
+    return "crit" if r >= crit else ("warn" if r >= warn else "ok")
+
+
+def compute_risk_snapshot(cfg: dict[str, Any], sim: dict[str, Any], ctx: dict[str, Any],
+                          target_stock_thb: float,
+                          price_thb: Mapping[str, float]) -> dict[str, Any]:
+    inv = {c: float(q) for c, q in sim.get("inv_coins", {}).items()}
+    stock_by = {c: max(0.0, q) * float(price_thb.get(c, 0.0)) for c, q in inv.items()}
+    exposure_by = {c: v - target_stock_thb for c, v in stock_by.items()}
+    total_stock = sum(stock_by.values())
+    total_target = target_stock_thb * max(1, len(inv))
+    gross_exp = sum(abs(v) for v in exposure_by.values())
+    net_exp = sum(exposure_by.values())
+
+    nc = nc_snapshot(total_stock, ctx["capital"], ctx["cex_margin"], ctx["liab"],
+                     ctx["h_crypto"], ctx["h_cex"], ctx["fixed_min_nc"],
+                     ctx["trading_risk_rate"], ctx["daily_volume_thb"], ctx["custody_rate"])
+
+    try:
+        cur_m = pd.to_datetime(sim.get("current_date")).strftime("%Y-%m")
+    except Exception:
+        cur_m = ""
+    fx_used = float(sim.get("fx_used_usd_by_month", {}).get(cur_m, 0.0))
+    fx_lim = float(cfg["fx_limit_max"])
+    cex_used = float(sim.get("cex_used_thb", 0.0))
+    cex_lim = float(ctx["cex_liquidity_thb"])
+    unhedged = float(sim.get("unhedged_thb", 0.0))
+
+    # NC level
+    if nc["buffer"] < 0:
+        nc_lv = "crit"
+    elif nc["buffer"] < 0.5 * nc["required"]:
+        nc_lv = "warn"
+    else:
+        nc_lv = "ok"
+
+    fx_r = fx_used / fx_lim if fx_lim > 0 else 0.0
+    cex_r = cex_used / cex_lim if cex_lim > 0 else 0.0
+    exp_r = gross_exp / total_target if total_target > 0 else 0.0
+    unh_r = unhedged / total_target if total_target > 0 else 0.0
+
+    cards = [
+        dict(title="NC Buffer", level=nc_lv, value=fmt_baht(nc["buffer"], True),
+             sub=f"ขั้นต่ำ {fmt_baht(nc['required'])}"),
+        dict(title="FX Quota (เดือนนี้)", level=_ratio_level(fx_r),
+             value=f"{fx_r * 100:.0f}%", sub=f"${fx_used:,.0f} / ${fx_lim:,.0f}"),
+        dict(title="CEX Liquidity", level=_ratio_level(cex_r),
+             value=f"{cex_r * 100:.0f}%",
+             sub=f"{fmt_baht(cex_used)} / {fmt_baht(cex_lim)}"),
+        dict(title="Gross Exposure ÷ Target", level=_ratio_level(exp_r, 0.25, 0.50),
+             value=f"{exp_r * 100:.0f}%",
+             sub=f"Net {fmt_baht(net_exp, True)}"),
+        dict(title="Unhedged สะสม", level=_ratio_level(unh_r, 0.05, 0.15),
+             value=fmt_baht(unhedged), sub=f"{unh_r * 100:.1f}% ของ target รวม"),
+    ]
+    overall = max((c["level"] for c in cards), key=lambda l: _RISK_RANK[l])
+    return dict(cards=cards, overall=overall, exposure_by=exposure_by,
+                stock_by=stock_by, n_orders=len(sim.get("orders", [])))
+
+
+def _risk_card_html(c: dict[str, Any]) -> str:
+    col = RISK_COLOR[c["level"]]
+    return (f"<div style='background:#181a20;border:1px solid #2b3139;"
+            f"border-top:3px solid {col};border-radius:8px;padding:12px 14px;'>"
+            f"<div style='font-size:.75rem;color:#848e9c;'>{RISK_ICON[c['level']]} {c['title']}</div>"
+            f"<div style='font-size:1.35rem;font-weight:700;color:{col};margin-top:4px;"
+            f"font-variant-numeric:tabular-nums;'>{c['value']}</div>"
+            f"<div style='font-size:.72rem;color:#5e6673;margin-top:2px;'>{c['sub']}</div></div>")
+
+
+def _risk_dashboard_body(cfg, ctx, target_stock_thb, price_thb) -> None:
+    sim = st.session_state.get("sim")
+    if not isinstance(sim, dict):
+        st.info("ยังไม่มีข้อมูล sim")
+        return
+    snap = compute_risk_snapshot(cfg, sim, ctx, target_stock_thb, price_thb)
+    ov = snap["overall"]
+    msg = {"ok": "ระบบอยู่ในเกณฑ์ปกติ", "warn": "มีตัวชี้วัดที่ต้องเฝ้าระวัง",
+           "crit": "มีตัวชี้วัดวิกฤติ ต้องตรวจสอบทันที"}[ov]
+    verdict_box(ov != "crit", f"สถานะรวม: {msg}",
+                f"อัปเดต {pd.Timestamp.now(tz='Asia/Bangkok').strftime('%H:%M:%S')} · "
+                f"{snap['n_orders']} ออเดอร์ในสมุด", warn=(ov == "warn"))
+
+    cols = st.columns(len(snap["cards"]))
+    for col, c in zip(cols, snap["cards"]):
+        col.markdown(_risk_card_html(c), unsafe_allow_html=True)
+
+    if snap["exposure_by"]:
+        rows = [{"เหรียญ": c, "สต็อก (THB)": snap["stock_by"][c],
+                 "Exposure vs Target (THB)": v}
+                for c, v in snap["exposure_by"].items()]
+        st.dataframe(pd.DataFrame(rows).sort_values("Exposure vs Target (THB)",
+                                                    key=lambda s: s.abs(), ascending=False),
+                     height=min(300, 40 + 35 * len(rows)), **WIDE)
+
+
+if HAS_FRAGMENT:
+    _risk_dashboard_live = st.fragment(run_every=30)(_risk_dashboard_body)
+else:
+    _risk_dashboard_live = _risk_dashboard_body
+
+
 def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str],
                 price_lookup: Optional[dict[str, float]] = None,
                 market_df: Optional[pd.DataFrame] = None) -> None:
@@ -6325,8 +6534,15 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
 
         st.markdown('<div style="margin-top:14px;"></div>', unsafe_allow_html=True)
-        t_route, t_ledger, t_wallet, t_dca = st.tabs(
-            ["🚀 System Routing", "📒 สมุดออเดอร์ (Ledger)", "🏢 Back Office", "🔄 Auto DCA"])
+        t_risk, t_route, t_ledger, t_wallet, t_dca = st.tabs(
+            ["📡 Risk Dashboard", "🚀 System Routing", "📒 สมุดออเดอร์ (Ledger)",
+             "🏢 Back Office", "🔄 Auto DCA"])
+
+        with t_risk:
+            _pt = {r["symbol"]: float(r["price_usd"]) * usdthb_current
+                   for _, r in (market_df if market_df is not None else pd.DataFrame()).iterrows()}
+            _pt[asset] = spot_usd_current * usdthb_current
+            _risk_dashboard_live(cfg, ctx, target_stock_thb, _pt)
 
         with t_route:
             steps_now = st.session_state.get("sim_steps", [])
