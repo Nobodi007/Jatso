@@ -1,0 +1,34 @@
+name: XSpring Daily Report
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    - cron: "30 11 * * *"
+
+jobs:
+  daily-report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-daily-report.txt
+
+      - name: Run XSpring Daily Report
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          XSPRING_REPORT_ACTOR: ${{ secrets.XSPRING_REPORT_ACTOR }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python xspring_daily_report.py
