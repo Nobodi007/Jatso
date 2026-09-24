@@ -5,22 +5,29 @@ import json
 import argparse
 import smtplib
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from email.message import EmailMessage
 from io import BytesIO
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import numpy as np
 
 
 BASE = Path(__file__).resolve().parent
+BANGKOK = ZoneInfo("Asia/Bangkok")
 
 
 def env(name: str, default: str = "") -> str:
     return str(os.environ.get(name, default) or "").strip()
 
 
+def report_today_bangkok() -> date:
+    return datetime.now(BANGKOK).date()
+
+
 def load_sim() -> dict:
+    """โหลด sim_state จากไฟล์ก่อน; ถ้าไม่มีให้โหลดจาก Supabase."""
     path = Path(env("XSPRING_SIM_STATE", str(BASE / "sim_state.json")))
     if path.is_file():
         try:
@@ -29,7 +36,6 @@ def load_sim() -> dict:
         except Exception as exc:
             raise RuntimeError(f"อ่าน sim state ไม่สำเร็จ: {exc}") from exc
 
-    # Optional cloud mode: read the user's sim_state from Supabase.
     url = env("SUPABASE_URL")
     key = env("SUPABASE_KEY")
     actor = env("XSPRING_REPORT_ACTOR")
@@ -38,8 +44,15 @@ def load_sim() -> dict:
 
         res = requests.get(
             f"{url.rstrip('/')}/rest/v1/sim_state",
-            params={"select": "data", "actor": f"eq.{actor}", "limit": "1"},
-            headers={"apikey": key, "Authorization": f"Bearer {key}"},
+            params={
+                "select": "data",
+                "actor": f"eq.{actor}",
+                "limit": "1",
+            },
+            headers={
+                "apikey": key,
+                "Authorization": f"Bearer {key}",
+            },
             timeout=30,
         )
         res.raise_for_status()
@@ -54,100 +67,150 @@ def load_sim() -> dict:
 
 
 def load_prices(assets: list[str]) -> dict[str, float]:
-    """
-    ดึงราคาตลาดโดยตรงจาก Yahoo Finance และแปลง USD -> THB
-    โดยไม่เรียก fetch_price_data() ของ Dealer Suite เพื่อหลีกเลี่ยง
-    ปัญหา pandas/yfinance MultiIndex ที่ทำให้เกิด Length mismatch.
-
-    คืนค่าเป็นราคาต่อ 1 เหรียญใน THB เช่น BTC -> BTC/USD * USD/THB.
-    ถ้าดึงราคาเหรียญใดไม่ได้ จะข้ามเฉพาะเหรียญนั้นและยังสร้างรายงานต่อได้.
-    """
+    """ดึงราคาปัจจุบันจาก Bitkub โดยตรงเป็น THB เพื่อไม่ใช้ yfinance."""
     if not assets:
         return {}
 
     try:
-        import yfinance as yf
+        import requests
     except Exception as exc:
-        print(f"[price] yfinance import failed: {exc}")
-        return {}
-
-    def last_close(ticker: str) -> float | None:
-        try:
-            # history() ให้ DataFrame ตรง ๆ และไม่ต้องพึ่งโครงสร้างคอลัมน์
-            # ของ fetch_price_data() ใน Dealer Suite
-            frame = yf.Ticker(ticker).history(
-                period="5d",
-                interval="1d",
-                auto_adjust=False,
-                actions=False,
-            )
-            if frame is None or frame.empty or "Close" not in frame.columns:
-                return None
-
-            close = pd.to_numeric(frame["Close"], errors="coerce").dropna()
-            if close.empty:
-                return None
-            return float(close.iloc[-1])
-        except Exception as exc:
-            print(f"[price] {ticker}: {exc}")
-            return None
-
-    # USD/THB สำหรับแปลงราคาสินทรัพย์จาก USD เป็นบาท
-    usdthb = last_close("USDTHB=X")
-    if usdthb is None or usdthb <= 0:
-        print("[price] USDTHB=X unavailable; cannot convert market prices to THB")
+        print(f"[price] requests import failed: {exc}")
         return {}
 
     prices: dict[str, float] = {}
-    for asset in sorted(set(str(a).upper() for a in assets if a)):
+    for raw_asset in sorted(set(str(a).upper().strip() for a in assets if a)):
+        asset = raw_asset
         try:
-            # Stablecoins ใช้ 1 USD เป็นฐานเพื่อให้รายงานไม่แกว่งจาก ticker เล็ก ๆ
-            if asset in {"USDT", "USDC"}:
-                prices[asset] = float(usdthb)
+            url = "https://api.bitkub.com/api/market/ticker"
+            res = requests.get(
+                url,
+                params={"sym": f"THB_{asset}"},
+                headers={"User-Agent": "XSpring-Dealer-Daily-Report/1.0"},
+                timeout=15,
+            )
+            res.raise_for_status()
+            data = res.json()
+
+            row = data.get(f"THB_{asset}") or data.get(f"{asset}_THB")
+            if not isinstance(row, dict):
+                print(f"[price] {asset}: ticker row not found")
                 continue
 
-            usd_price = last_close(f"{asset}-USD")
-            if usd_price is not None and usd_price >= 0:
-                prices[asset] = float(usd_price) * float(usdthb)
-            else:
-                print(f"[price] {asset}: no valid USD price")
+            value = row.get("last")
+            if value in (None, ""):
+                print(f"[price] {asset}: last price missing")
+                continue
+
+            price = float(value)
+            if price >= 0:
+                prices[asset] = price
         except Exception as exc:
             print(f"[price] {asset}: {exc}")
 
-    print(f"[price] loaded {len(prices)}/{len(set(assets))} assets; USDTHB={usdthb:.4f}")
+    print(f"[price] loaded {len(prices)}/{len(set(assets))} assets from Bitkub")
     return prices
 
 
-def build_report(sim: dict, report_date):
+def _normalize_order_date(value) -> date | None:
+    """รองรับทั้ง YYYY-MM-DD และ ISO timestamp พร้อม timezone."""
+    if value in (None, ""):
+        return None
+
+    try:
+        text = str(value).strip()
+        if not text:
+            return None
+
+        # วันที่ใน ledger ปัจจุบันเป็น YYYY-MM-DD
+        if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+            # ถ้ามีเวลา/offset ต่อท้าย ให้ parse เป็น timestamp ก่อน
+            if len(text) == 10:
+                return pd.Timestamp(text).date()
+
+        ts = pd.Timestamp(text)
+        if pd.isna(ts):
+            return None
+
+        # ถ้ามี timezone ให้แปลงเป็นเวลาไทยก่อนตัดวันที่
+        if ts.tzinfo is not None:
+            ts = ts.tz_convert(BANGKOK)
+        return ts.date()
+    except Exception:
+        return None
+
+
+def _extract_order_date(record: dict) -> date | None:
+    for key in (
+        "วันที่",
+        "date",
+        "created_at",
+        "timestamp",
+        "datetime",
+        "เวลา",
+    ):
+        if key in record:
+            parsed = _normalize_order_date(record.get(key))
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _empty_orders_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            "วันที่",
+            "ฝั่ง",
+            "เหรียญ",
+            "มูลค่า (บาท)",
+            "ราคาที่ลูกค้าได้",
+            "เหรียญที่ส่งมอบ",
+            "Hedge (เหรียญ)",
+            "Hedge (USD)",
+            "CEX Liquidity ใช้ (บาท)",
+            "Unhedged (บาท)",
+            "Market Edge",
+            "รายได้",
+            "ต้นทุน",
+            "กำไรออเดอร์",
+            "สต็อกคงเหลือ",
+            "FX ใช้สะสม (USD)",
+            "CEX Liquidity ใช้สะสม (บาท)",
+            "NC Buffer",
+            "ผลด่าน",
+        ]
+    )
+
+
+def build_report(sim: dict, report_date: date):
     orders = [x for x in sim.get("orders", []) if isinstance(x, dict)]
-    all_df = pd.DataFrame(orders)
 
-    if all_df.empty:
-        today_df = pd.DataFrame()
+    # ใช้การ parse ทีละ record เพื่อรองรับทั้งวันที่แบบเดิมและ timestamp แบบใหม่
+    today_orders = [
+        rec for rec in orders
+        if _extract_order_date(rec) == report_date
+    ]
+
+    today_df = pd.DataFrame(today_orders) if today_orders else _empty_orders_frame()
+    all_df = pd.DataFrame(orders) if orders else _empty_orders_frame()
+
+    if not today_df.empty:
+        result_col = today_df.get(
+            "ผลด่าน", pd.Series(index=today_df.index, dtype=str)
+        ).fillna("").astype(str)
+        rejected = today_df[result_col.str.startswith("Reject")].copy()
+        successful = today_df[~result_col.str.startswith("Reject")].copy()
     else:
-        dates = pd.to_datetime(all_df.get("วันที่"), errors="coerce")
-        today_df = all_df[dates.dt.date == report_date].copy()
+        rejected = today_df.copy()
+        successful = today_df.copy()
 
-    result_col = (
-        today_df.get("ผลด่าน", pd.Series(dtype=str)).astype(str)
-        if not today_df.empty
-        else pd.Series(dtype=str)
-    )
-    rejected = (
-        today_df[result_col.str.startswith("Reject")].copy()
-        if not today_df.empty
-        else today_df.copy()
-    )
-    successful = (
-        today_df[~result_col.str.startswith("Reject")].copy()
-        if not today_df.empty
-        else today_df.copy()
-    )
-
-    def num(frame, col):
+    def num(frame: pd.DataFrame, col: str) -> float:
         if frame.empty or col not in frame.columns:
             return 0.0
-        return float(pd.to_numeric(frame[col], errors="coerce").fillna(0).sum())
+        return float(
+            pd.to_numeric(frame[col], errors="coerce")
+            .fillna(0)
+            .sum()
+        )
 
     pnl_today = num(successful, "กำไรออเดอร์")
     volume_today = num(today_df, "มูลค่า (บาท)")
@@ -155,7 +218,9 @@ def build_report(sim: dict, report_date):
 
     latest_nc = np.nan
     if not all_df.empty and "NC Buffer" in all_df.columns:
-        nc_series = pd.to_numeric(all_df["NC Buffer"], errors="coerce").dropna()
+        nc_series = pd.to_numeric(
+            all_df["NC Buffer"], errors="coerce"
+        ).dropna()
         if not nc_series.empty:
             latest_nc = float(nc_series.iloc[-1])
 
@@ -166,7 +231,7 @@ def build_report(sim: dict, report_date):
     exposure_rows = []
     for asset, quantity in (sim.get("inv_coins") or {}).items():
         qty = float(quantity or 0.0)
-        price = float(prices.get(asset, 0.0))
+        price = float(prices.get(str(asset).upper(), 0.0))
         stock_value = qty * price
         exposure_rows.append(
             {
@@ -175,11 +240,29 @@ def build_report(sim: dict, report_date):
                 "ราคาล่าสุด (THB)": price,
                 "มูลค่าสต็อก (THB)": stock_value,
                 "Target (THB)": target,
-                "Exposure (THB)": stock_value - target if price > 0 else np.nan,
+                "Exposure (THB)": (
+                    stock_value - target if price > 0 else np.nan
+                ),
             }
         )
 
     exposure = pd.DataFrame(exposure_rows)
+    if exposure.empty:
+        exposure = pd.DataFrame(
+            columns=[
+                "เหรียญ",
+                "จำนวน",
+                "ราคาล่าสุด (THB)",
+                "มูลค่าสต็อก (THB)",
+                "Target (THB)",
+                "Exposure (THB)",
+            ]
+        )
+
+    month_key = report_date.strftime("%Y-%m")
+    monthly_fx = float(
+        (sim.get("fx_used_usd_by_month") or {}).get(month_key, 0.0) or 0.0
+    )
 
     summary = pd.DataFrame(
         [
@@ -195,16 +278,18 @@ def build_report(sim: dict, report_date):
                 "Unhedged สะสม (THB)": float(
                     sim.get("unhedged_thb", 0.0) or 0.0
                 ),
-                "FX ใช้สะสมเดือน (USD)": float(
-                    (sim.get("fx_used_usd_by_month") or {}).get(
-                        report_date.strftime("%Y-%m"), 0.0
-                    )
-                ),
+                "FX ใช้สะสมเดือน (USD)": monthly_fx,
                 "CEX Liquidity ใช้สะสม (THB)": float(
                     sim.get("cex_used_thb", 0.0) or 0.0
                 ),
             }
         ]
+    )
+
+    print(
+        f"[report] date={report_date} total_orders={len(orders)} "
+        f"today_orders={len(today_df)} successful={len(successful)} "
+        f"reject={len(rejected)}"
     )
 
     return summary, today_df, rejected, exposure
@@ -236,7 +321,8 @@ def excel_bytes(summary, today, rejects, exposure) -> bytes:
         ws2.freeze_panes = "A2"
         for column in ws2.columns:
             width = min(
-                max(len(str(cell.value or "")) for cell in column) + 2, 40
+                max(len(str(cell.value or "")) for cell in column) + 2,
+                40,
             )
             ws2.column_dimensions[column[0].column_letter].width = width
 
@@ -245,8 +331,32 @@ def excel_bytes(summary, today, rejects, exposure) -> bytes:
     return out.getvalue()
 
 
+def _register_thai_font():
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    candidates = [
+        "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansThai-Regular.ttf",
+        "C:/Windows/Fonts/leelawui.ttf",
+        "C:/Windows/Fonts/THSarabunNew.ttf",
+    ]
+
+    for font_path in candidates:
+        if Path(font_path).is_file():
+            try:
+                pdfmetrics.registerFont(TTFont("DailyThai", font_path))
+                return "DailyThai"
+            except Exception as exc:
+                print(f"[pdf] font load failed {font_path}: {exc}")
+
+    print("[pdf] Thai font not found; fallback to Helvetica")
+    return "Helvetica"
+
+
 def pdf_bytes(summary, today, rejects, exposure) -> bytes:
     from reportlab.lib import colors
+    from reportlab.lib.enums import TA_LEFT
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.platypus import (
         SimpleDocTemplate,
@@ -255,82 +365,128 @@ def pdf_bytes(summary, today, rejects, exposure) -> bytes:
         Table,
         TableStyle,
     )
-    from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
-    font = "Helvetica"
-    font_candidates = [
-        "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
-        "C:/Windows/Fonts/leelawui.ttf",
-        "C:/Windows/Fonts/THSarabunNew.ttf",
-    ]
-
-    for font_path in font_candidates:
-        if Path(font_path).is_file():
-            try:
-                pdfmetrics.registerFont(TTFont("DailyThai", font_path))
-                font = "DailyThai"
-                break
-            except Exception:
-                pass
+    font = _register_thai_font()
 
     out = BytesIO()
     doc = SimpleDocTemplate(
         out,
         pagesize=landscape(A4),
-        rightMargin=24,
-        leftMargin=24,
-        topMargin=24,
-        bottomMargin=24,
+        rightMargin=22,
+        leftMargin=22,
+        topMargin=22,
+        bottomMargin=22,
     )
 
     styles = getSampleStyleSheet()
-    styles["Title"].fontName = font
-    styles["Normal"].fontName = font
-    styles["Heading3"].fontName = font
+    styles.add(
+        ParagraphStyle(
+            name="DailyTitle",
+            parent=styles["Title"],
+            fontName=font,
+            fontSize=18,
+            leading=22,
+            alignment=TA_LEFT,
+            spaceAfter=6,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="DailyHeading",
+            parent=styles["Heading3"],
+            fontName=font,
+            fontSize=12,
+            leading=15,
+            spaceBefore=8,
+            spaceAfter=5,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="DailyNormal",
+            parent=styles["Normal"],
+            fontName=font,
+            fontSize=9,
+            leading=12,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="DailyCell",
+            parent=styles["Normal"],
+            fontName=font,
+            fontSize=6.5,
+            leading=8,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="DailyHeader",
+            parent=styles["Normal"],
+            fontName=font,
+            fontSize=6.5,
+            leading=8,
+            textColor=colors.white,
+        )
+    )
 
     story = [
-        Paragraph("XSpring Dealer Suite — Daily Report", styles["Title"]),
-        Spacer(1, 8),
+        Paragraph("XSpring Dealer Suite — Daily Report", styles["DailyTitle"]),
         Paragraph(
-            datetime.now(timezone.utc)
-            .astimezone()
-            .strftime("Generated %Y-%m-%d %H:%M:%S %Z"),
-            styles["Normal"],
+            datetime.now(BANGKOK).strftime("สร้างเมื่อ %Y-%m-%d %H:%M:%S (เวลาไทย)"),
+            styles["DailyNormal"],
         ),
     ]
 
-    def add_dataframe(frame, title):
-        story.append(Spacer(1, 8))
-        story.append(Paragraph(title, styles["Heading3"]))
+    def fmt_value(value):
+        if value is None:
+            return "—"
+        if isinstance(value, float) and np.isnan(value):
+            return "—"
+        if isinstance(value, (float, np.floating)):
+            return f"{float(value):,.4f}"
+        if isinstance(value, (int, np.integer)):
+            return f"{int(value):,}"
+        return str(value)
+
+    def add_dataframe(frame: pd.DataFrame, title: str, max_rows: int = 30):
+        story.append(Spacer(1, 6))
+        story.append(Paragraph(title, styles["DailyHeading"]))
 
         if frame.empty:
-            story.append(Paragraph("ไม่มีข้อมูล", styles["Normal"]))
+            story.append(Paragraph("ไม่มีข้อมูล", styles["DailyNormal"]))
             return
 
-        view = frame.head(30).copy()
-        view = view.astype(object).where(pd.notna(view), "—").astype(str)
-        table_data = [list(view.columns)] + view.values.tolist()
+        view = frame.head(max_rows).copy()
+        headers = [Paragraph(str(c), styles["DailyHeader"]) for c in view.columns]
+        rows = [headers]
+        for values in view.itertuples(index=False, name=None):
+            rows.append(
+                [Paragraph(fmt_value(v), styles["DailyCell"]) for v in values]
+            )
 
-        table = Table(table_data, repeatRows=1)
+        # ป้องกันหัวตารางยาวจนล้นหน้า
+        table = Table(rows, repeatRows=1, hAlign="LEFT")
         table.setStyle(
             TableStyle(
                 [
                     ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#20242b")),
                     ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                     ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
-                    ("FONTSIZE", (0, 0), (-1, -1), 7),
-                    ("FONTNAME", (0, 0), (-1, -1), font),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
                 ]
             )
         )
         story.append(table)
 
-    add_dataframe(summary, "สรุปประจำวัน")
-    add_dataframe(exposure, "Exposure")
-    add_dataframe(rejects, "Reject วันนี้")
+    add_dataframe(summary, "สรุปประจำวัน", 5)
+    add_dataframe(exposure, "Exposure", 30)
+    add_dataframe(rejects, "Reject วันนี้", 30)
 
     doc.build(story)
     return out.getvalue()
@@ -340,6 +496,7 @@ def send_telegram(files: list[Path]) -> bool:
     token = env("TELEGRAM_BOT_TOKEN")
     chat_id = env("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
+        print("[telegram] TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID missing")
         return False
 
     import requests
@@ -363,17 +520,17 @@ def send_telegram(files: list[Path]) -> bool:
                     },
                     timeout=60,
                 )
-            ok = ok and response.ok
             if not response.ok:
+                ok = False
                 print("[telegram]", response.text[:500])
         except Exception as exc:
-            print("[telegram]", exc)
             ok = False
+            print("[telegram]", exc)
 
     return ok
 
 
-def send_email(files: list[Path], report_date) -> bool:
+def send_email(files: list[Path], report_date: date) -> bool:
     host = env("SMTP_HOST")
     user = env("SMTP_USER")
     password = env("SMTP_PASSWORD")
@@ -422,7 +579,7 @@ def main():
     )
     parser.add_argument(
         "--date",
-        help="YYYY-MM-DD; default = today",
+        help="YYYY-MM-DD; default = วันนี้ตามเวลา Asia/Bangkok",
     )
     parser.add_argument(
         "--out-dir",
@@ -433,8 +590,10 @@ def main():
     report_date = (
         pd.Timestamp(args.date).date()
         if args.date
-        else datetime.now().date()
+        else report_today_bangkok()
     )
+
+    print(f"[report] using report date: {report_date}")
 
     sim = load_sim()
     summary, today, rejects, exposure = build_report(sim, report_date)
@@ -462,13 +621,15 @@ def main():
         "xlsx": str(xlsx_path),
         "email": email_ok,
         "telegram": telegram_ok,
+        "orders_today": int(len(today)),
+        "rejects_today": int(len(rejects)),
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
     if not (email_ok or telegram_ok):
         raise SystemExit(
             "สร้างไฟล์แล้ว แต่ยังไม่ได้ส่ง: "
-            "ตั้งค่า SMTP_* หรือ TELEGRAM_* อย่างน้อยหนึ่งช่องทาง"
+            "ตั้งค่า TELEGRAM_* หรือ SMTP_* อย่างน้อยหนึ่งช่องทาง"
         )
 
 
