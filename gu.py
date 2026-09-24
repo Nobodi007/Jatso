@@ -7622,6 +7622,7 @@ MOBILE_CSS = r'''<style>
 @media (max-width: 768px) {
   .block-container { padding: .65rem .75rem 5.8rem .75rem !important; max-width:100% !important; }
   .st-key-desktop_route { display:none !important; }
+  .st-key-mobile_shell { display:block !important; }
   .st-key-mobile_nav { position:fixed !important; z-index:999999 !important; left:0 !important; right:0 !important; bottom:0 !important; width:100vw !important; margin:0 !important; padding:7px 6px calc(7px + env(safe-area-inset-bottom)) !important; background:rgba(24,26,32,.98) !important; border-top:1px solid #2b3139 !important; box-sizing:border-box !important; }
   .st-key-mobile_nav [role="radiogroup"] { width:100% !important; display:grid !important; grid-template-columns:repeat(5,minmax(0,1fr)) !important; gap:2px !important; }
   .st-key-mobile_nav [role="radiogroup"] > label { min-width:0 !important; height:42px !important; margin:0 !important; padding:4px 2px !important; display:flex !important; align-items:center !important; justify-content:center !important; border:0 !important; border-radius:10px !important; text-align:center !important; }
@@ -7640,7 +7641,10 @@ MOBILE_CSS = r'''<style>
   .mobile-mini-value { color:#EAECEF; font-size:16px; font-weight:800; font-variant-numeric:tabular-nums; }
   .mobile-green { color:#0ecb81 !important; } .mobile-red { color:#f6465d !important; }
 }
-@media (min-width:769px) { .st-key-mobile_nav { display:none !important; } }
+@media (min-width:769px) {
+  .st-key-mobile_shell { display:none !important; }
+  .st-key-mobile_nav { display:none !important; }
+}
 </style>'''
 
 def _mobile_money(v: float, signed: bool=False) -> str:
@@ -7986,22 +7990,25 @@ f'<div style="font-size:0.68rem;color:#0ecb81;">{ROLE_LABEL_TH[current_role()]}<
         nav = selected_nav
         st.session_state["main_nav"] = selected_nav
 
-    mobile_selected = st.session_state.get("mobile_nav", MOBILE_NAV[0])
-    mobile_nav = st.radio("Mobile navigation", MOBILE_NAV, index=MOBILE_NAV.index(mobile_selected),
-                          horizontal=True, key="mobile_nav", label_visibility="collapsed")
-    # สำคัญ: mobile_nav เป็น widget key แล้ว Streamlit จะ sync ค่าให้เอง
-    # ห้ามเขียน st.session_state["mobile_nav"] ซ้ำหลังสร้าง widget
+    # Mobile UI อยู่ใน shell แยก เพื่อไม่ให้ถูก render บน Desktop
+    # แต่ยังคงสร้าง widget ได้ปกติบน Mobile viewport
+    with st.container(key="mobile_shell"):
+        mobile_selected = st.session_state.get("mobile_nav", MOBILE_NAV[0])
+        mobile_nav = st.radio("Mobile navigation", MOBILE_NAV, index=MOBILE_NAV.index(mobile_selected),
+                              horizontal=True, key="mobile_nav", label_visibility="collapsed")
+        # สำคัญ: mobile_nav เป็น widget key แล้ว Streamlit จะ sync ค่าให้เอง
+        # ห้ามเขียน st.session_state["mobile_nav"] ซ้ำหลังสร้าง widget
 
-    if mobile_nav == MOBILE_NAV[0]:
-        render_mobile_home(cfg, data)
-    elif mobile_nav == MOBILE_NAV[1]:
-        render_mobile_trade(cfg, data)
-    elif mobile_nav == MOBILE_NAV[2]:
-        render_mobile_asset(cfg, data)
-    elif mobile_nav == MOBILE_NAV[3]:
-        render_mobile_backtest(cfg, data)
-    elif mobile_nav == MOBILE_NAV[4]:
-        render_mobile_settings()
+        if mobile_nav == MOBILE_NAV[0]:
+            render_mobile_home(cfg, data)
+        elif mobile_nav == MOBILE_NAV[1]:
+            render_mobile_trade(cfg, data)
+        elif mobile_nav == MOBILE_NAV[2]:
+            render_mobile_asset(cfg, data)
+        elif mobile_nav == MOBILE_NAV[3]:
+            render_mobile_backtest(cfg, data)
+        elif mobile_nav == MOBILE_NAV[4]:
+            render_mobile_settings()
 
     with st.container(key="desktop_route"):
         if nav == NAV_LABELS[0]:
