@@ -4077,8 +4077,8 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
     st.success(f"✅ โหลดข้อมูล **{asset}** สำเร็จ ({total_days} วัน | เทรดได้จริง {traded_days} วัน)")
 
-    # ---- ราคาเรียลไทม์ ----
-    section(f"📉 ราคาเรียลไทม์ — {asset}")
+    # ---- Real-time Price ----
+    section(f"📉 Real-time Price — {asset}")
     render_tv_panel(asset)
 
     # ---- 3D Interactive Chart Feature ----
