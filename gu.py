@@ -7621,6 +7621,8 @@ MOBILE_NAV = ["⌂  Home", "⇄  Trade", "▣  Asset", "◫  Backtest", "⚙  Se
 MOBILE_CSS = r'''<style>
 @media (max-width: 768px) {
   .block-container { padding: .65rem .75rem 5.8rem .75rem !important; max-width:100% !important; }
+  .st-key-desktop_chrome { display:none !important; }
+  .st-key-desktop_navigation { display:none !important; }
   .st-key-desktop_route { display:none !important; }
   .st-key-mobile_shell { display:block !important; }
   .st-key-mobile_nav { position:fixed !important; z-index:999999 !important; left:0 !important; right:0 !important; bottom:0 !important; width:100vw !important; margin:0 !important; padding:7px 6px calc(7px + env(safe-area-inset-bottom)) !important; background:rgba(24,26,32,.98) !important; border-top:1px solid #2b3139 !important; box-sizing:border-box !important; }
@@ -7636,6 +7638,17 @@ MOBILE_CSS = r'''<style>
   .mobile-kicker { color:#848e9c; font-size:11px; margin-bottom:4px; }
   .mobile-big { color:#EAECEF; font-size:25px; line-height:1.15; font-weight:800; font-variant-numeric:tabular-nums; }
   .mobile-grid { display:grid; grid-template-columns:1fr 1fr; gap:9px; margin-bottom:10px; }
+  .mobile-section-title { color:#EAECEF; font-size:15px; font-weight:800; margin:14px 0 9px; }
+  .mobile-asset-card { background:#181a20; border:1px solid #2b3139; border-radius:15px; padding:13px; margin-bottom:9px; }
+  .mobile-asset-top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .mobile-asset-left { display:flex; align-items:center; gap:10px; min-width:0; }
+  .mobile-coin-icon { width:30px; height:30px; flex:0 0 30px; }
+  .mobile-coin-icon img { width:30px !important; height:30px !important; border-radius:50%; }
+  .mobile-asset-symbol { color:#EAECEF; font-size:14px; font-weight:800; }
+  .mobile-asset-name { color:#848e9c; font-size:10px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:145px; }
+  .mobile-asset-total { color:#EAECEF; font-size:14px; font-weight:800; text-align:right; font-variant-numeric:tabular-nums; }
+  .mobile-asset-row { display:flex; justify-content:space-between; margin-top:9px; padding-top:8px; border-top:1px solid #252a31; color:#848e9c; font-size:10px; }
+  .mobile-asset-row b { color:#EAECEF; font-size:11px; font-variant-numeric:tabular-nums; }
   .mobile-mini { background:#181a20; border:1px solid #2b3139; border-radius:14px; padding:12px; min-height:76px; }
   .mobile-mini-label { color:#848e9c; font-size:10px; margin-bottom:7px; }
   .mobile-mini-value { color:#EAECEF; font-size:16px; font-weight:800; font-variant-numeric:tabular-nums; }
@@ -7644,6 +7657,8 @@ MOBILE_CSS = r'''<style>
 @media (min-width:769px) {
   .st-key-mobile_shell { display:none !important; }
   .st-key-mobile_nav { display:none !important; }
+  .st-key-desktop_chrome { display:block !important; }
+  .st-key-desktop_navigation { display:block !important; }
 }
 </style>'''
 
@@ -7722,24 +7737,66 @@ def render_mobile_trade(cfg: dict[str, Any], data: pd.DataFrame) -> None:
 
 
 def render_mobile_asset(cfg: dict[str, Any], data: pd.DataFrame) -> None:
+    '''Mobile Portfolio/Wallet view using the same simulated balances as Desktop Wallet.'''
     sim = st.session_state.get("sim", {}) or {}
-    st.markdown('<div class="mobile-page-title">Asset</div><div class="mobile-page-sub">Portfolio & Inventory</div>', unsafe_allow_html=True)
+    if data is None or data.empty:
+        st.warning("ยังไม่มีข้อมูลราคา")
+        return
 
     asset = str(cfg.get("asset", "BTC"))
-    orders = sim.get("orders", []) if isinstance(sim, dict) else []
-    pnl = 0.0
-    for o in orders:
-        try:
-            pnl += float(o.get("dealer_pnl", o.get("Dealer P&L", 0)) or 0)
-        except Exception:
-            pass
+    current_date_val = pd.to_datetime(data.index[-1])
+    usdthb_current = float(data.loc[current_date_val, "USDTHB"]) if "USDTHB" in data.columns else 1.0
+    cust_thb = float(sim.get("customer_thb", 0.0) or 0.0)
+    cust_coins = sim.get("customer_coins", {}) or {}
 
-    st.markdown(f'<div class="mobile-card"><div class="mobile-kicker">Primary Asset</div><div class="mobile-big">{asset}</div><div class="mobile-kicker" style="margin-top:6px">Ledger P&L</div><div class="mobile-big {"mobile-green" if pnl >= 0 else "mobile-red"}">{_mobile_money(pnl, True)}</div></div>', unsafe_allow_html=True)
+    price_thb_map = {"THB": 1.0}
+    try:
+        market_df = fetch_market_overview(SUPPORTED_ASSETS)
+        if market_df is not None and not market_df.empty:
+            for _, row in market_df.iterrows():
+                sym = str(row["symbol"])
+                price_thb_map[sym] = float(row["price_usd"]) * usdthb_current
+    except Exception:
+        market_df = pd.DataFrame()
+    if "Global_USD" in data.columns:
+        price_thb_map[asset] = float(data.loc[current_date_val, "Global_USD"]) * usdthb_current
 
-    cap = float(cfg.get("total_capital_thb", 0) or 0)
-    cex = float(cfg.get("cex_margin_thb", 0) or 0)
-    liab = float(cfg.get("liab_thb", 0) or 0)
-    st.markdown(f'<div class="mobile-grid"><div class="mobile-mini"><div class="mobile-mini-label">Capital</div><div class="mobile-mini-value">{_mobile_money(cap)}</div></div><div class="mobile-mini"><div class="mobile-mini-label">CEX Margin</div><div class="mobile-mini-value">{_mobile_money(cex)}</div></div><div class="mobile-mini"><div class="mobile-mini-label">Liabilities</div><div class="mobile-mini-value">{_mobile_money(liab)}</div></div><div class="mobile-mini"><div class="mobile-mini-label">Orders</div><div class="mobile-mini-value">{len(orders)}</div></div></div>', unsafe_allow_html=True)
+    assets = [{"sym": "THB", "qty": cust_thb, "price": 1.0, "val": cust_thb}]
+    for sym in SUPPORTED_ASSETS:
+        qty = float(cust_coins.get(sym, 0.0) or 0.0)
+        price = float(price_thb_map.get(sym, 0.0) or 0.0)
+        assets.append({"sym": sym, "qty": qty, "price": price, "val": qty * price})
+
+    total_thb = sum(float(a["val"]) for a in assets)
+    total_usdt = total_thb / usdthb_current if usdthb_current > 0 else 0.0
+
+    st.markdown('<div class="mobile-page-title">Portfolio</div><div class="mobile-page-sub">สินทรัพย์ของเรา · Wallet</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="mobile-card mobile-portfolio-total"><div class="mobile-kicker">มูลค่าพอร์ตทั้งหมด</div><div class="mobile-big">฿{total_thb:,.2f}</div><div class="mobile-kicker" style="margin-top:5px">≈ {total_usdt:,.2f} USDT</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    search_q = st.text_input("ค้นหาสินทรัพย์", placeholder="🔍  BTC, ETH, THB ...", key="mobile_asset_search", label_visibility="collapsed")
+    hide_small = st.checkbox("ซ่อนสินทรัพย์ที่มูลค่า < ฿1", value=False, key="mobile_hide_small")
+    st.markdown('<div class="mobile-section-title">สินทรัพย์</div>', unsafe_allow_html=True)
+
+    shown = 0
+    for a in assets:
+        sym = a["sym"]
+        name = COIN_NAMES.get(sym, "Thai Baht" if sym == "THB" else sym)
+        if hide_small and a["val"] < 1.0:
+            continue
+        if search_q and search_q.lower() not in sym.lower() and search_q.lower() not in name.lower():
+            continue
+        shown += 1
+        icon = coin_icon_html(sym, 30)
+        st.markdown(
+            f'<div class="mobile-asset-card"><div class="mobile-asset-top"><div class="mobile-asset-left"><div class="mobile-coin-icon">{icon}</div><div><div class="mobile-asset-symbol">{sym}</div><div class="mobile-asset-name">{name}</div></div></div><div class="mobile-asset-total">฿{a["val"]:,.2f}</div></div><div class="mobile-asset-row"><span>จำนวน</span><b>{a["qty"]:,.6f}</b></div><div class="mobile-asset-row"><span>ราคาปัจจุบัน</span><b>฿{a["price"]:,.2f}</b></div></div>',
+            unsafe_allow_html=True,
+        )
+    if shown == 0:
+        st.caption("ไม่พบสินทรัพย์ที่ค้นหา")
+    st.caption(f"อัปเดตล่าสุด · {pd.Timestamp.now(tz='Asia/Bangkok').strftime('%H:%M:%S')}")
 
 
 def render_mobile_backtest(cfg: dict[str, Any], data: pd.DataFrame) -> None:
@@ -7803,57 +7860,58 @@ def _main_body() -> None:
         avatar_b64 = user_prof.get("avatar_b64", "")
 
     # ---- แสดงส่วนหัวด้านบนของหน้าหลัก ----
-    top_l, top_news, top_r = st.columns([3.8, 4.4, 2.0])
-    with top_l:
-        st.markdown(
-    f'<div style="display:flex;align-items:center;gap:12px;padding:6px 0;">'
-    f'<img src="{DEV_AVATAR_B64}" width="40" height="40" '
-    f'style="border-radius:50%;object-fit:cover;border:2px solid #2b3139;">'
-    f'<div>'
-    f'<div style="color:#EAECEF;font-weight:700;font-size:0.9rem;line-height:1.6;padding-top:2px;">ทำโดย {DEV_NAME}</div>'
-    f'<a href="{DEV_LINKEDIN}" target="_blank" '
-    f'style="color:#0ecb81;font-size:0.75rem;text-decoration:none;line-height:1.6;">🔗 ดูโปรไฟล์ LinkedIn</a>'
-    f'</div></div>',
-    unsafe_allow_html=True,
-)
-    with top_news:
-        st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
-        news_active = st.session_state.get("main_nav") == NAV_NEWS
-        # ปุ่มข่าวให้เล็กและอยู่กึ่งกลาง ไม่กินพื้นที่ทั้งคอลัมน์
-        _, news_btn, _ = st.columns([1.6, 2.2, 1.6])
-        with news_btn:
-            if st.button(
-                "📰 ข่าว",
-                key="top_news_btn",
-                type="primary" if news_active else "secondary",
-                use_container_width=True,
-            ):
-                current = st.session_state.get("main_nav")
-                if current in [x for x in NAV_LABELS if x != NAV_NEWS]:
-                    st.session_state["news_last_tab"] = current
-                st.session_state["main_nav"] = NAV_NEWS
-                st.session_state.pop("main_nav_tabs_news", None)
-                st.rerun()
+    with st.container(key="desktop_chrome"):
+        top_l, top_news, top_r = st.columns([3.8, 4.4, 2.0])
+        with top_l:
+            st.markdown(
+        f'<div style="display:flex;align-items:center;gap:12px;padding:6px 0;">'
+        f'<img src="{DEV_AVATAR_B64}" width="40" height="40" '
+        f'style="border-radius:50%;object-fit:cover;border:2px solid #2b3139;">'
+        f'<div>'
+        f'<div style="color:#EAECEF;font-weight:700;font-size:0.9rem;line-height:1.6;padding-top:2px;">ทำโดย {DEV_NAME}</div>'
+        f'<a href="{DEV_LINKEDIN}" target="_blank" '
+        f'style="color:#0ecb81;font-size:0.75rem;text-decoration:none;line-height:1.6;">🔗 ดูโปรไฟล์ LinkedIn</a>'
+        f'</div></div>',
+        unsafe_allow_html=True,
+    )
+        with top_news:
+            st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
+            news_active = st.session_state.get("main_nav") == NAV_NEWS
+            # ปุ่มข่าวให้เล็กและอยู่กึ่งกลาง ไม่กินพื้นที่ทั้งคอลัมน์
+            _, news_btn, _ = st.columns([1.6, 2.2, 1.6])
+            with news_btn:
+                if st.button(
+                    "📰 ข่าว",
+                    key="top_news_btn",
+                    type="primary" if news_active else "secondary",
+                    use_container_width=True,
+                ):
+                    current = st.session_state.get("main_nav")
+                    if current in [x for x in NAV_LABELS if x != NAV_NEWS]:
+                        st.session_state["news_last_tab"] = current
+                    st.session_state["main_nav"] = NAV_NEWS
+                    st.session_state.pop("main_nav_tabs_news", None)
+                    st.rerun()
 
-    with top_r:
-        if avatar_b64:
-            img_src = f"data:image/png;base64,{avatar_b64}" if not avatar_b64.startswith("http") else avatar_b64
-            st.markdown(
-                f'<div style="display:flex;align-items:center;gap:10px;justify-content:flex-end;padding:6px 0;">'
-                f'<div style="text-align:right;">'
-                f'<div style="font-weight:bold;color:#EAECEF;font-size:0.9rem;">{d_name}</div>'
-                f'<div style="font-size:0.72rem;color:#848e9c;">{email}</div>'
-f'<div style="font-size:0.68rem;color:#0ecb81;">{ROLE_LABEL_TH[current_role()]}</div></div>'
-                f'<img src="{img_src}" width="36" height="36" style="border-radius:50%;object-fit:cover;">'
-                f'</div>',
-                unsafe_allow_html=True)
-        else:
-            st.markdown(
-                f'<div style="text-align:right;padding:6px 0;">'
-                f'<div style="font-weight:bold;color:#EAECEF;font-size:0.9rem;">👤 {d_name}</div>'
-                f'<div style="font-size:0.72rem;color:#848e9c;">{email}</div>'
-                f'<div style="font-size:0.68rem;color:#0ecb81;">{ROLE_LABEL_TH[current_role()]}</div></div>',
-                unsafe_allow_html=True)
+        with top_r:
+            if avatar_b64:
+                img_src = f"data:image/png;base64,{avatar_b64}" if not avatar_b64.startswith("http") else avatar_b64
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;gap:10px;justify-content:flex-end;padding:6px 0;">'
+                    f'<div style="text-align:right;">'
+                    f'<div style="font-weight:bold;color:#EAECEF;font-size:0.9rem;">{d_name}</div>'
+                    f'<div style="font-size:0.72rem;color:#848e9c;">{email}</div>'
+    f'<div style="font-size:0.68rem;color:#0ecb81;">{ROLE_LABEL_TH[current_role()]}</div></div>'
+                    f'<img src="{img_src}" width="36" height="36" style="border-radius:50%;object-fit:cover;">'
+                    f'</div>',
+                    unsafe_allow_html=True)
+            else:
+                st.markdown(
+                    f'<div style="text-align:right;padding:6px 0;">'
+                    f'<div style="font-weight:bold;color:#EAECEF;font-size:0.9rem;">👤 {d_name}</div>'
+                    f'<div style="font-size:0.72rem;color:#848e9c;">{email}</div>'
+                    f'<div style="font-size:0.68rem;color:#0ecb81;">{ROLE_LABEL_TH[current_role()]}</div></div>',
+                    unsafe_allow_html=True)
 
     remote_config = None if is_guest_mode() else load_remote_config(email)
     apply_remote_config_to_widgets(remote_config)
@@ -7893,102 +7951,103 @@ f'<div style="font-size:0.68rem;color:#0ecb81;">{ROLE_LABEL_TH[current_role()]}<
         current_nav = nav_labels_main[0]
         st.session_state["main_nav"] = current_nav
 
-    # Compact top navigation — ไม่ให้แต่ละเมนูยืดเต็มความกว้าง
-    st.markdown("""
-    <style>
-    div[data-testid="stRadio"] {
-        width: fit-content !important;
-        max-width: 100% !important;
-        margin: 0 !important;
-        padding: 0 !important;
-    }
-    div[data-testid="stRadio"] > label {
-        display: none !important;
-    }
-    div[data-testid="stRadio"] div[role="radiogroup"] {
-        display: flex !important;
-        flex-direction: row !important;
-        align-items: center !important;
-        justify-content: flex-start !important;
-        width: fit-content !important;
-        max-width: 100% !important;
-        gap: 5px !important;
-        margin: 0 !important;
-        padding: 0 !important;
-        overflow-x: auto !important;
-        overflow-y: hidden !important;
-        scrollbar-width: none !important;
-    }
-    div[data-testid="stRadio"] div[role="radiogroup"]::-webkit-scrollbar {
-        display: none !important;
-    }
-    div[data-testid="stRadio"] div[role="radiogroup"] > label {
-        flex: 0 0 auto !important;
-        width: auto !important;
-        min-width: 0 !important;
-        max-width: none !important;
-        margin: 0 !important;
-        padding: 4px 7px !important;
-        white-space: nowrap !important;
-        border-radius: 7px !important;
-        background: transparent !important;
-        color: #b8bac2 !important;
-        font-size: 12px !important;
-        font-weight: 500 !important;
-        line-height: 1.2 !important;
-    }
-    div[data-testid="stRadio"] div[role="radiogroup"] > label:hover {
-        background: rgba(255,255,255,.055) !important;
-        color: #ffffff !important;
-    }
-    div[data-testid="stRadio"] div[role="radiogroup"] > label[data-checked="true"] {
-        background: rgba(255,255,255,.07) !important;
-        color: #ffffff !important;
-        font-weight: 600 !important;
-    }
-    div[data-testid="stRadio"] div[role="radiogroup"] > label > div:first-child {
-        flex: 0 0 auto !important;
-        margin-right: 4px !important;
-    }
-    @media (max-width: 900px) {
+    with st.container(key="desktop_navigation"):
+        # Compact top navigation — ไม่ให้แต่ละเมนูยืดเต็มความกว้าง
+        st.markdown("""
+        <style>
+        div[data-testid="stRadio"] {
+            width: fit-content !important;
+            max-width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        div[data-testid="stRadio"] > label {
+            display: none !important;
+        }
         div[data-testid="stRadio"] div[role="radiogroup"] {
-            width: 100% !important;
-            gap: 2px !important;
+            display: flex !important;
+            flex-direction: row !important;
+            align-items: center !important;
+            justify-content: flex-start !important;
+            width: fit-content !important;
+            max-width: 100% !important;
+            gap: 5px !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow-x: auto !important;
+            overflow-y: hidden !important;
+            scrollbar-width: none !important;
+        }
+        div[data-testid="stRadio"] div[role="radiogroup"]::-webkit-scrollbar {
+            display: none !important;
         }
         div[data-testid="stRadio"] div[role="radiogroup"] > label {
-            padding: 4px 6px !important;
-            font-size: 11px !important;
+            flex: 0 0 auto !important;
+            width: auto !important;
+            min-width: 0 !important;
+            max-width: none !important;
+            margin: 0 !important;
+            padding: 4px 7px !important;
+            white-space: nowrap !important;
+            border-radius: 7px !important;
+            background: transparent !important;
+            color: #b8bac2 !important;
+            font-size: 12px !important;
+            font-weight: 500 !important;
+            line-height: 1.2 !important;
         }
-    }
-    </style>
-    """, unsafe_allow_html=True)
+        div[data-testid="stRadio"] div[role="radiogroup"] > label:hover {
+            background: rgba(255,255,255,.055) !important;
+            color: #ffffff !important;
+        }
+        div[data-testid="stRadio"] div[role="radiogroup"] > label[data-checked="true"] {
+            background: rgba(255,255,255,.07) !important;
+            color: #ffffff !important;
+            font-weight: 600 !important;
+        }
+        div[data-testid="stRadio"] div[role="radiogroup"] > label > div:first-child {
+            flex: 0 0 auto !important;
+            margin-right: 4px !important;
+        }
+        @media (max-width: 900px) {
+            div[data-testid="stRadio"] div[role="radiogroup"] {
+                width: 100% !important;
+                gap: 2px !important;
+            }
+            div[data-testid="stRadio"] div[role="radiogroup"] > label {
+                padding: 4px 6px !important;
+                font-size: 11px !important;
+            }
+        }
+        </style>
+        """, unsafe_allow_html=True)
 
-    if current_nav == NAV_NEWS:
-        # หน้า News: แสดงแท็บอื่นครบ แต่ไม่เลือกแท็บใดไว้
-        # เพื่อให้ผู้ใช้กดกลับไปแท็บไหนก็ได้ รวมถึงแท็บแรก
-        selected_nav = st.radio(
-            "เมนูหลัก",
-            nav_labels_main,
-            horizontal=True,
-            index=None,
-            key="main_nav_tabs_news",
-            label_visibility="collapsed",
-        )
-        nav = selected_nav if selected_nav else NAV_NEWS
-        if selected_nav:
+        if current_nav == NAV_NEWS:
+            # หน้า News: แสดงแท็บอื่นครบ แต่ไม่เลือกแท็บใดไว้
+            # เพื่อให้ผู้ใช้กดกลับไปแท็บไหนก็ได้ รวมถึงแท็บแรก
+            selected_nav = st.radio(
+                "เมนูหลัก",
+                nav_labels_main,
+                horizontal=True,
+                index=None,
+                key="main_nav_tabs_news",
+                label_visibility="collapsed",
+            )
+            nav = selected_nav if selected_nav else NAV_NEWS
+            if selected_nav:
+                st.session_state["main_nav"] = selected_nav
+        else:
+            default_idx = nav_labels_main.index(current_nav)
+            selected_nav = st.radio(
+                "เมนูหลัก",
+                nav_labels_main,
+                horizontal=True,
+                index=default_idx,
+                key="main_nav_tabs",
+                label_visibility="collapsed",
+            )
+            nav = selected_nav
             st.session_state["main_nav"] = selected_nav
-    else:
-        default_idx = nav_labels_main.index(current_nav)
-        selected_nav = st.radio(
-            "เมนูหลัก",
-            nav_labels_main,
-            horizontal=True,
-            index=default_idx,
-            key="main_nav_tabs",
-            label_visibility="collapsed",
-        )
-        nav = selected_nav
-        st.session_state["main_nav"] = selected_nav
 
     # Mobile UI อยู่ใน shell แยก เพื่อไม่ให้ถูก render บน Desktop
     # แต่ยังคงสร้าง widget ได้ปกติบน Mobile viewport
