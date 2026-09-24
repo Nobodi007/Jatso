@@ -8439,9 +8439,22 @@ def _main_body() -> None:
     # Mobile UI อยู่ใน shell แยก เพื่อไม่ให้ถูก render บน Desktop
     # แต่ยังคงสร้าง widget ได้ปกติบน Mobile viewport
     with st.container(key="mobile_shell"):
+        # Normalize any old session value (e.g. "Home", "Trade") after the
+        # navigation labels were changed to emoji labels.  Without this,
+        # MOBILE_NAV.index(old_value) raises ValueError on Streamlit Cloud.
         mobile_selected = st.session_state.get("mobile_nav", MOBILE_NAV[0])
-        mobile_nav = st.radio("Mobile navigation", MOBILE_NAV, index=MOBILE_NAV.index(mobile_selected),
-                              horizontal=True, key="mobile_nav", label_visibility="collapsed")
+        if mobile_selected not in MOBILE_NAV:
+            mobile_selected = MOBILE_NAV[0]
+            st.session_state["mobile_nav"] = mobile_selected
+
+        mobile_nav = st.radio(
+            "Mobile navigation",
+            MOBILE_NAV,
+            index=MOBILE_NAV.index(mobile_selected),
+            horizontal=True,
+            key="mobile_nav",
+            label_visibility="collapsed",
+        )
         # สำคัญ: mobile_nav เป็น widget key แล้ว Streamlit จะ sync ค่าให้เอง
         # ห้ามเขียน st.session_state["mobile_nav"] ซ้ำหลังสร้าง widget
 
