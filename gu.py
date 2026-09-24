@@ -7727,6 +7727,76 @@ f'<div style="font-size:0.68rem;color:#0ecb81;">{ROLE_LABEL_TH[current_role()]}<
         current_nav = nav_labels_main[0]
         st.session_state["main_nav"] = current_nav
 
+    # Compact top navigation — ไม่ให้แต่ละเมนูยืดเต็มความกว้าง
+    st.markdown("""
+    <style>
+    div[data-testid="stRadio"] {
+        width: fit-content !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    div[data-testid="stRadio"] > label {
+        display: none !important;
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"] {
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        width: fit-content !important;
+        max-width: 100% !important;
+        gap: 5px !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+        scrollbar-width: none !important;
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"]::-webkit-scrollbar {
+        display: none !important;
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"] > label {
+        flex: 0 0 auto !important;
+        width: auto !important;
+        min-width: 0 !important;
+        max-width: none !important;
+        margin: 0 !important;
+        padding: 4px 7px !important;
+        white-space: nowrap !important;
+        border-radius: 7px !important;
+        background: transparent !important;
+        color: #b8bac2 !important;
+        font-size: 12px !important;
+        font-weight: 500 !important;
+        line-height: 1.2 !important;
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"] > label:hover {
+        background: rgba(255,255,255,.055) !important;
+        color: #ffffff !important;
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"] > label[data-checked="true"] {
+        background: rgba(255,255,255,.07) !important;
+        color: #ffffff !important;
+        font-weight: 600 !important;
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"] > label > div:first-child {
+        flex: 0 0 auto !important;
+        margin-right: 4px !important;
+    }
+    @media (max-width: 900px) {
+        div[data-testid="stRadio"] div[role="radiogroup"] {
+            width: 100% !important;
+            gap: 2px !important;
+        }
+        div[data-testid="stRadio"] div[role="radiogroup"] > label {
+            padding: 4px 6px !important;
+            font-size: 11px !important;
+        }
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
     if current_nav == NAV_NEWS:
         # หน้า News: แสดงแท็บอื่นครบ แต่ไม่เลือกแท็บใดไว้
         # เพื่อให้ผู้ใช้กดกลับไปแท็บไหนก็ได้ รวมถึงแท็บแรก
