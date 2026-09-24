@@ -61,98 +61,93 @@ def fetch_orderbook(symbol: str = "btc_thb", limit: int = 20) -> dict:
     }
 
 
+def _side_scatter(rows, y_sign, unit, label):
+    """สร้างจุด (x=ราคา, y=Depth ตามฝั่ง, z=ปริมาณ) สำหรับฝั่งเดียว"""
+    xs, ys, zs, hover = [], [], [], []
+    for idx, (price, amount) in enumerate(rows):
+        xs.append(price)
+        ys.append(y_sign * (idx + 1))
+        zs.append(amount)
+        hover.append(
+            f"<b>{label}</b><br>ราคา: {price:,.2f} THB<br>"
+            f"ปริมาณ: {amount:,.8f} {unit}<br>Depth: {idx + 1}"
+        )
+    return xs, ys, zs, hover
+
+
 def _make_3d_orderbook(asks, bids, symbol="BTC/THB"):
-    """สร้าง Order Book แบบ 3D Scatter ให้หน้าตาใกล้เคียงกราฟตัวอย่าง"""
-    bids = sorted(bids, key=lambda r: r[0])
-    asks = sorted(asks, key=lambda r: r[0])
+    bids = sorted(bids, key=lambda r: r[0], reverse=True)  # best bid ใกล้ mid ก่อน
+    asks = sorted(asks, key=lambda r: r[0])                # best ask ใกล้ mid ก่อน
 
-    rows = []
-    # BID อยู่ฝั่ง Depth ติดลบ / ASK อยู่ฝั่ง Depth บวก
-    for idx, (price, amount) in enumerate(reversed(bids), start=1):
-        rows.append((price, -idx, amount, "🟢 BID — ซื้อ"))
-    for idx, (price, amount) in enumerate(asks, start=1):
-        rows.append((price, idx, amount, "🔴 ASK — ขาย"))
-
-    if not rows:
+    all_rows = bids + asks
+    if not all_rows:
         return go.Figure()
 
     unit = symbol.split("/")[0]
-    xs = [r[0] for r in rows]
-    ys = [r[1] for r in rows]
-    zs = [r[2] for r in rows]
-    labels = [r[3] for r in rows]
 
-    hover = [
-        f"<b>{label}</b><br>"
-        f"ราคา: {price:,.2f} THB<br>"
-        f"ปริมาณ: {amount:,.8f} {unit}<br>"
-        f"Depth: {abs(depth)}"
-        for (price, depth, amount, label) in rows
-    ]
+    bx, by, bz, bhover = _side_scatter(bids, -1, unit, "🟢 BID — ซื้อ")
+    ax, ay, az, ahover = _side_scatter(asks, 1, unit, "🔴 ASK — ขาย")
 
-    # ใช้ปริมาณเป็นทั้งแกน Z และสี เพื่อให้ได้ gradient แบบกราฟตัวอย่าง
-    fig = go.Figure(data=[go.Scatter3d(
-        x=xs,
-        y=ys,
-        z=zs,
-        mode="markers",
-        marker=dict(
-            size=5,
-            color=zs,
-            colorscale="Rainbow",
-            opacity=0.9,
-            line=dict(width=0),
-            colorbar=dict(title=f"ปริมาณ ({unit})", thickness=12),
-        ),
-        text=hover,
-        hovertemplate="%{text}<extra></extra>",
-        showlegend=False,
-    )])
+    xs = bx + ax
+    ys = by + ay
+    zs = bz + az
+    hover = bhover + ahover
 
-    best_bid = max((p for p, _ in bids), default=None)
-    best_ask = min((p for p, _ in asks), default=None)
+    fig = go.Figure(
+        data=[
+            go.Scatter3d(
+                x=xs,
+                y=ys,
+                z=zs,
+                mode="markers",
+                marker=dict(
+                    size=6,
+                    color=zs,
+                    colorscale="Turbo",
+                    opacity=0.9,
+                    colorbar=dict(
+                        title=f"ปริมาณ<br>({unit})",
+                        thickness=14,
+                        len=0.75,
+                        x=1.02,
+                    ),
+                    line=dict(width=0),
+                ),
+                hovertext=hover,
+                hoverinfo="text",
+                showlegend=False,
+            )
+        ]
+    )
+
+    best_bid = bids[0][0] if bids else None
+    best_ask = asks[0][0] if asks else None
     if best_bid is not None and best_ask is not None:
         mid = (best_bid + best_ask) / 2
+        max_z = max(zs) if zs else 1.0
         fig.add_trace(go.Scatter3d(
-            x=[mid],
-            y=[0],
-            z=[0],
-            mode="markers",
-            marker=dict(size=7, color="white", symbol="diamond"),
+            x=[mid, mid], y=[-1.5, 1.5], z=[0, 0],
+            mode="lines",
+            line=dict(width=5, color="#ffffff"),
             hovertemplate=f"Mid Price: {mid:,.2f} THB<extra></extra>",
             showlegend=False,
         ))
 
     fig.update_layout(
-        title=dict(text="3D Order Book — Scatter", font=dict(size=14)),
-        height=600,
-        margin=dict(l=0, r=0, t=40, b=0),
+        height=560,
+        margin=dict(l=0, r=0, t=30, b=0),
         template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="#07111f",
         scene=dict(
-            xaxis=dict(
-                title="ราคา (THB)",
-                tickformat=",",
-                backgroundcolor="#181a20",
-                gridcolor="#49647f",
-                zerolinecolor="#8aa0b5",
-            ),
-            yaxis=dict(
-                title="Depth",
-                backgroundcolor="#181a20",
-                gridcolor="#49647f",
-                zerolinecolor="#8aa0b5",
-            ),
-            zaxis=dict(
-                title=f"ปริมาณ ({unit})",
-                backgroundcolor="#181a20",
-                gridcolor="#49647f",
-                zerolinecolor="#8aa0b5",
-            ),
+            xaxis=dict(title="ราคา (THB)", tickformat=",", backgroundcolor="#07111f",
+                       gridcolor="#1d2b3a", zerolinecolor="#1d2b3a"),
+            yaxis=dict(title="Depth (ซ้าย=Bid / ขวา=Ask)", backgroundcolor="#07111f",
+                       gridcolor="#1d2b3a", zerolinecolor="#1d2b3a"),
+            zaxis=dict(title=f"ปริมาณ ({unit})", backgroundcolor="#07111f",
+                       gridcolor="#1d2b3a", zerolinecolor="#1d2b3a"),
             aspectmode="manual",
-            aspectratio=dict(x=2.0, y=1.15, z=1.0),
-            camera=dict(eye=dict(x=1.65, y=1.55, z=1.15)),
+            aspectratio=dict(x=2.0, y=1.2, z=0.9),
+            camera=dict(eye=dict(x=1.6, y=1.6, z=1.0)),
         ),
         showlegend=False,
     )
