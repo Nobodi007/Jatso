@@ -7616,7 +7616,7 @@ def render_customer_leaderboard(sim: dict[str, Any], cfg: dict[str, Any]) -> Non
 # MOBILE UI — responsive shell, reusing existing engine/state
 # =========================================================================
 
-MOBILE_NAV = ["🏠  Home", "💱  Trade", "💼  Asset", "📊  Backtest", "⚙️  Settings"]
+MOBILE_NAV = ["🏠 Home", "🌐 Market", "💱 Trade", "💼 Asset", "📊 Backtest", "⚙️ Settings"]
 
 MOBILE_NAV_CSS = r'''<style>
 /* ---------- Mobile bottom nav ---------- */
@@ -7701,6 +7701,15 @@ MOBILE_NAV_CSS = r'''<style>
 /* บน desktop ซ่อน nav ล่าง */
 @media (min-width: 769px) {
     .st-key-mobile_nav { display: none !important; }
+}
+
+/* Mobile Market layout */
+.st-key-mobile_shell .mobile-section-heading { color:#EAECEF; font-size:1rem; font-weight:750; margin:18px 0 9px; }
+.st-key-mobile_shell [key^="mobile_mkt_pick_"] { text-align:left !important; font-size:12px !important; line-height:1.35 !important; padding:9px 10px !important; border-radius:10px !important; white-space:normal !important; }
+.st-key-mobile_shell [key^="mobile_mkt_fav_"] { min-width:38px !important; padding:7px 4px !important; }
+@media (max-width: 700px) {
+  .st-key-mobile_shell [data-testid="stRadio"] div[role="radiogroup"] { flex-wrap:wrap !important; gap:5px !important; }
+  .st-key-mobile_shell [data-testid="stRadio"] label { font-size:11px !important; }
 }
 </style>'''
 
@@ -7887,6 +7896,81 @@ def _mobile_compact_number(v: float, decimals: int = 2) -> str:
     if a >= 1_000:
         return f"{n / 1_000:.2f}K"
     return f"{n:,.{decimals}f}"
+
+
+
+def render_mobile_market(cfg: dict[str, Any], market_df: pd.DataFrame, usdthb: float) -> None:
+    """Mobile-first market screen: compact ticker list + chart/order-book switch."""
+    st.markdown(
+        '<div class="mobile-page-title">🌐 Market</div>'
+        '<div class="mobile-page-sub">ตลาดสินทรัพย์ · ราคา THB · กราฟเรียลไทม์จาก TradingView</div>',
+        unsafe_allow_html=True,
+    )
+    current = str(cfg.get("asset", "BTC"))
+    if current not in SUPPORTED_ASSETS:
+        current = "BTC"
+    st.markdown('<div class="mobile-section-heading">📈 สินทรัพย์ที่ติดตาม</div>', unsafe_allow_html=True)
+    view_mode = st.radio(
+        "จัดเรียงตลาด", ["⭐ รายการโปรด", "ปริมาณ", "▲ เพิ่มขึ้น", "▼ ลดลง"],
+        horizontal=True, key="mobile_market_mode", label_visibility="collapsed",
+    )
+    mode_map = {"⭐ รายการโปรด":"favorite", "ปริมาณ":"volume", "▲ เพิ่มขึ้น":"top_gain", "▼ ลดลง":"top_loss"}
+    mode = mode_map.get(view_mode, "favorite")
+    df = market_df if isinstance(market_df, pd.DataFrame) else pd.DataFrame()
+    if df.empty:
+        st.info("ยังไม่มีข้อมูลตลาดในขณะนี้")
+    else:
+        if mode == "favorite":
+            favs = st.session_state.get("favorite_tickers", [])
+            rows = df[df["symbol"].isin(favs)].sort_values("volume", ascending=False)
+            if rows.empty:
+                rows = df[df["symbol"] == current]
+                st.caption("ยังไม่มีรายการโปรด — แสดงตลาดที่เลือกอยู่")
+        elif mode == "volume": rows = df.sort_values("volume", ascending=False)
+        elif mode == "top_gain": rows = df.sort_values("pct_change", ascending=False)
+        else: rows = df.sort_values("pct_change", ascending=True)
+        for _, row in rows.iterrows():
+            sym = str(row.get("symbol", ""))
+            if not sym: continue
+            try:
+                price = float(row.get("price_usd", 0) or 0) * float(usdthb or 1)
+                pct = float(row.get("pct_change", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            price_txt = f"฿{price:,.2f}" if price >= 1 else f"฿{price:,.5f}"
+            selected = sym == current
+            color = "#0ecb81" if pct >= 0 else "#f6465d"
+            label = f"{'● ' if selected else ''}{sym}/THB  ·  {COIN_NAMES.get(sym, sym)}   |   {price_txt}   |   {'+' if pct >= 0 else ''}{pct:.2f}%"
+            left, star = st.columns([8, 1], gap="small")
+            with left:
+                if st.button(label, key=f"mobile_mkt_pick_{mode}_{sym}", use_container_width=True,
+                             type="primary" if selected else "secondary"):
+                    _select_asset(sym)
+                    st.session_state["mobile_market_selected"] = sym
+                    st.rerun()
+            with star:
+                is_fav = sym in st.session_state.get("favorite_tickers", [])
+                if st.button("★" if is_fav else "☆", key=f"mobile_mkt_fav_{mode}_{sym}"):
+                    _toggle_fav(sym)
+                    st.rerun()
+
+    chart_asset = str(st.session_state.get("mobile_market_selected", current))
+    if chart_asset not in SUPPORTED_ASSETS:
+        chart_asset = current
+    st.markdown('<div class="mobile-section-heading">📊 กราฟตลาด</div>', unsafe_allow_html=True)
+    chart_view = st.radio(
+        "มุมมองกราฟ", ["📈 TradingView", "📚 3D Order Book"],
+        horizontal=True, key="mobile_market_chart_view", label_visibility="collapsed",
+    )
+    if chart_view == "📈 TradingView":
+        symbol = TV_LOCAL_SYMBOL.get(chart_asset, f"BITKUB:{chart_asset}THB")
+        render_tradingview(symbol, f"tv_mobile_{chart_asset}", 390, studies=["MAExp@tv-basicstudies"])
+    else:
+        try:
+            render_orderbook_3d(symbol=f"{chart_asset.lower()}_thb", title=f"3D Order Book — {chart_asset}/THB", limit=20)
+        except Exception as exc:
+            st.warning(f"ไม่สามารถแสดง 3D Order Book ได้: {exc}")
+    st.caption("ข้อมูลกราฟและราคาอาจมีความล่าช้าตามผู้ให้บริการข้อมูล")
 
 
 def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
@@ -8874,15 +8958,23 @@ def _main_body() -> None:
         # สำคัญ: mobile_nav เป็น widget key แล้ว Streamlit จะ sync ค่าให้เอง
         # ห้ามเขียน st.session_state["mobile_nav"] ซ้ำหลังสร้าง widget
 
+        mobile_usdthb = 1.0
+        try:
+            if isinstance(data, pd.DataFrame) and not data.empty and "USDTHB" in data.columns:
+                mobile_usdthb = float(data["USDTHB"].iloc[-1])
+        except (TypeError, ValueError, IndexError):
+            pass
         if mobile_nav == MOBILE_NAV[0]:
             render_mobile_home(cfg, data)
         elif mobile_nav == MOBILE_NAV[1]:
-            render_mobile_trade(cfg, data)
+            render_mobile_market(cfg, market_df, mobile_usdthb)
         elif mobile_nav == MOBILE_NAV[2]:
-            render_mobile_asset(cfg, data)
+            render_mobile_trade(cfg, data)
         elif mobile_nav == MOBILE_NAV[3]:
-            render_mobile_backtest(cfg, data)
+            render_mobile_asset(cfg, data)
         elif mobile_nav == MOBILE_NAV[4]:
+            render_mobile_backtest(cfg, data)
+        elif mobile_nav == MOBILE_NAV[5]:
             render_mobile_settings()
 
     with st.container(key="desktop_route"):
