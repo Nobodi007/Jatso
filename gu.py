@@ -7624,7 +7624,7 @@ MOBILE_CSS = r'''<style>
   .st-key-desktop_chrome { display:none !important; }
   .st-key-desktop_navigation { display:none !important; }
   .st-key-desktop_route { display:none !important; }
-  .st-key-mobile_shell { display:block !important; margin-left:130px !important; width:calc(100% - 130px) !important; box-sizing:border-box !important; }
+  .st-key-mobile_shell { display:block !important; }
   .st-key-mobile_nav { position:fixed !important; z-index:999999 !important; left:0 !important; right:0 !important; bottom:0 !important; width:100vw !important; margin:0 !important; padding:7px 6px calc(7px + env(safe-area-inset-bottom)) !important; background:rgba(24,26,32,.98) !important; border-top:1px solid #2b3139 !important; box-sizing:border-box !important; }
   .st-key-mobile_nav [role="radiogroup"] { width:100% !important; display:grid !important; grid-template-columns:repeat(5,minmax(0,1fr)) !important; gap:2px !important; }
   .st-key-mobile_nav [role="radiogroup"] > label { min-width:0 !important; height:42px !important; margin:0 !important; padding:4px 2px !important; display:flex !important; align-items:center !important; justify-content:center !important; border:0 !important; border-radius:10px !important; text-align:center !important; }
@@ -7732,194 +7732,6 @@ MOBILE_CSS = r'''<style>
   .st-key-desktop_navigation { display:block !important; }
 }
 </style>'''
-
-# ---- ปุ่มสามเหลี่ยมเล็ก แทนแถบเมนู mobile nav แนวนอนที่ overflow ----
-MOBILE_NAV_TRIGGER_CSS = r"""<style>
-@media (max-width: 768px) {
-  /* Mobile left navigation rail — ไม่ใช้ bottom bar / popover แล้ว */
-  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) {
-    position: fixed !important;
-    left: 0 !important;
-    top: 0 !important;
-    bottom: 0 !important;
-    z-index: 999999 !important;
-    width: 130px !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    background: #171a1f !important;
-    border-right: 1px solid #242a30 !important;
-    box-sizing: border-box !important;
-    overflow: hidden !important;
-  }
-
-  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-toggle {
-    height: 64px !important;
-    padding: 0 0 0 16px !important;
-    display: flex !important;
-    align-items: center !important;
-  }
-
-  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-toggle button {
-    width: 38px !important;
-    height: 38px !important;
-    min-height: 38px !important;
-    padding: 0 !important;
-    border: 0 !important;
-    border-radius: 9px !important;
-    background: transparent !important;
-    color: #eaecef !important;
-    box-shadow: none !important;
-    font-size: 0 !important;
-  }
-
-  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-toggle button:hover {
-    background: rgba(255,255,255,.06) !important;
-  }
-
-  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-toggle button p {
-    font-size: 0 !important;
-    margin: 0 !important;
-    width: 20px !important;
-    height: 14px !important;
-    border-top: 2px solid #eaecef !important;
-    border-bottom: 2px solid #eaecef !important;
-    position: relative !important;
-  }
-
-  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-toggle button p::after {
-    content: "" !important;
-    position: absolute !important;
-    left: 0 !important;
-    right: 0 !important;
-    top: 5px !important;
-    border-top: 2px solid #eaecef !important;
-  }
-
-  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-list {
-    padding: 4px 0 !important;
-  }
-
-  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-list [data-testid="stRadio"] > label {
-    display: none !important;
-  }
-
-  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-list [role="radiogroup"] {
-    display: flex !important;
-    flex-direction: column !important;
-    gap: 4px !important;
-    width: 100% !important;
-  }
-
-  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-list [role="radiogroup"] > label {
-    width: 100% !important;
-    min-width: 0 !important;
-    height: 48px !important;
-    margin: 0 !important;
-    padding: 0 12px !important;
-    display: flex !important;
-    align-items: center !important;
-    border: 0 !important;
-    border-radius: 0 !important;
-    background: transparent !important;
-    color: #a7b0bb !important;
-    box-sizing: border-box !important;
-    cursor: pointer !important;
-  }
-
-  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-list [role="radiogroup"] > label:hover {
-    background: rgba(255,255,255,.045) !important;
-    color: #f5f7fa !important;
-  }
-
-  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-list [role="radiogroup"] > label[data-checked="true"] {
-    background: #087f5b !important;
-    color: #ffffff !important;
-  }
-
-  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-list [role="radiogroup"] > label > div:first-child {
-    display: none !important;
-  }
-
-  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-list [role="radiogroup"] > label p {
-    margin: 0 !important;
-    color: inherit !important;
-    font-size: 12px !important;
-    line-height: 1.2 !important;
-    font-weight: 650 !important;
-    white-space: nowrap !important;
-  }
-
-  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) .mobile-nav-list [role="radiogroup"] > label p::first-letter {
-    font-size: 16px !important;
-  }
-
-  /* ย่อแถบจริง: เหลือเฉพาะ icon และคืนพื้นที่ให้ content */
-  .st-key-mobile_nav_trigger_collapsed {
-    width: 56px !important;
-  }
-  .st-key-mobile_nav_trigger_collapsed .mobile-nav-toggle {
-    padding-left: 9px !important;
-  }
-  .st-key-mobile_nav_trigger_collapsed .mobile-nav-list [role="radiogroup"] > label {
-    justify-content: center !important;
-    padding: 0 !important;
-  }
-  .st-key-mobile_nav_trigger_collapsed .mobile-nav-list [role="radiogroup"] > label p {
-    font-size: 0 !important;
-    width: 22px !important;
-    height: 22px !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-  }
-  body:has(.st-key-mobile_nav_trigger_collapsed) .st-key-mobile_shell {
-    margin-left: 56px !important;
-    width: calc(100% - 56px) !important;
-  }
-
-  /* เมื่อย่อแถบ: เหลือเฉพาะ icon เพื่อให้พื้นที่ content กลับมา */
-  /* ไม่ให้ old bottom navigation กลับมา */
-  .st-key-mobile_nav {
-    display: none !important;
-  }
-}
-
-@media (min-width: 769px) {
-  :is(.st-key-mobile_nav_trigger, .st-key-mobile_nav_trigger_collapsed) {
-    display: none !important;
-  }
-}
-</style>"""
-
-
-def render_mobile_nav_trigger() -> str:
-    """Mobile left rail navigation — สลับหน้าได้ตลอด และย่อ/ขยายแถบได้"""
-    current = st.session_state.get("mobile_nav", MOBILE_NAV[0])
-    collapsed = bool(st.session_state.get("mobile_nav_collapsed", False))
-
-    # ต้องใช้ container เดียวกับ CSS rail เพื่อให้ปุ่มและ radio อยู่ในแถบเดียวกัน
-    rail_key = "mobile_nav_trigger_collapsed" if collapsed else "mobile_nav_trigger"
-    with st.container(key=rail_key):
-        with st.container(key="mobile_nav_toggle"):
-            if st.button(
-                "☰",
-                key="mobile_nav_toggle_btn",
-                help="ย่อ/ขยายเมนู",
-                use_container_width=False,
-            ):
-                st.session_state["mobile_nav_collapsed"] = not collapsed
-                st.rerun()
-
-        with st.container(key="mobile_nav_list"):
-            current = st.radio(
-                "Mobile navigation",
-                MOBILE_NAV,
-                index=MOBILE_NAV.index(current),
-                key="mobile_nav",
-                label_visibility="collapsed",
-            )
-
-    return current
 
 def _mobile_money(v: float, signed: bool=False) -> str:
     v=float(v or 0); sign='+' if signed and v>=0 else ('-' if signed else ''); a=abs(v)
@@ -8269,239 +8081,29 @@ def render_mobile_asset(cfg: dict[str, Any], data: pd.DataFrame) -> None:
 
 
 def render_mobile_backtest(cfg: dict[str, Any], data: pd.DataFrame) -> None:
-    """
-    Mobile Backtest
-    ใช้ Backtest Engine หลักของระบบโดยตรง
-    ไม่สร้าง calculation logic ชุดใหม่
-    """
-    st.markdown(
-        '<div class="mobile-page-title">Backtest</div>'
-        '<div class="mobile-page-sub">ลงทุนย้อนหลัง</div>',
-        unsafe_allow_html=True,
-    )
-    st.info(
-        "Mobile UI เชื่อมกับ Backtest engine เดิมของระบบ "
-        "โดยใช้ calculation logic ชุดเดียวกับหน้า Backtest หลัก"
-    )
+    st.markdown('<div class="mobile-page-title">Backtest</div><div class="mobile-page-sub">ลงทุนย้อนหลัง</div>', unsafe_allow_html=True)
+    st.info("Mobile UI เชื่อมกับ Backtest engine เดิมของระบบ โดยไม่สร้าง logic คำนวณชุดใหม่")
 
     if data is None or data.empty:
         st.warning("ยังไม่มีข้อมูลราคาสำหรับช่วงวันที่เลือก")
         return
 
     try:
-        bt = _backtest_frame(cfg, data)
-        if bt is None or bt.empty:
-            st.warning("Backtest ไม่มีผลลัพธ์สำหรับข้อมูลช่วงวันที่เลือก")
-            return
-
-        m = _backtest_metrics(bt)
-
-        st.markdown("### ผลการ Backtest")
-
-        c1, c2 = st.columns(2)
-        with c1:
-            st.metric("Net P&L", fmt_baht(m["net_pnl"], True))
-        with c2:
-            st.metric("Max Drawdown", fmt_baht(m["max_drawdown"], True))
-
-        c3, c4 = st.columns(2)
-        with c3:
-            st.metric("Win Rate", f'{m["win_rate"]:.2f}%')
-        with c4:
-            st.metric("Sharpe", f'{m["sharpe"]:.2f}')
-
-        c5, c6 = st.columns(2)
-        with c5:
-            st.metric("Sortino", f'{m["sortino"]:.2f}')
-        with c6:
-            st.metric("Traded Days", f'{m["traded_days"]:,}')
-
-        c7, c8 = st.columns(2)
-        with c7:
-            st.metric("FX Limit Hit", f'{m["fx_hit_days"]:,} วัน')
-        with c8:
-            st.metric("Revenue", fmt_baht(m["revenue"], True))
-
-        st.metric("Cost", fmt_baht(m["cost"], True))
-
-        st.markdown("### ช่วงข้อมูล")
-        try:
-            first_date = bt.index.min()
-            last_date = bt.index.max()
-            if pd.notna(first_date) and pd.notna(last_date):
-                st.caption(
-                    f"ช่วง Backtest: "
-                    f"{pd.Timestamp(first_date).strftime('%Y-%m-%d')} "
-                    f"→ {pd.Timestamp(last_date).strftime('%Y-%m-%d')}"
-                )
-        except Exception:
-            pass
-
-        if "Global_USD" in bt.columns:
-            price = pd.to_numeric(bt["Global_USD"], errors="coerce").dropna()
-            if not price.empty:
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.metric("ราคาเริ่มต้น", f"{float(price.iloc[0]):,.4f}")
-                with c2:
-                    st.metric("ราคาล่าสุด", f"{float(price.iloc[-1]):,.4f}")
-
-        if "Actual_Cum_PnL" in bt.columns:
-            pnl = pd.to_numeric(bt["Actual_Cum_PnL"], errors="coerce").dropna()
-            if not pnl.empty:
-                st.markdown("### Cumulative P&L")
-                st.line_chart(pnl, height=240)
-
-        if "Actual_Daily_PnL" in bt.columns:
-            daily_pnl = pd.to_numeric(
-                bt["Actual_Daily_PnL"], errors="coerce"
-            ).dropna()
-            if not daily_pnl.empty:
-                st.markdown("### Daily P&L")
-                st.line_chart(daily_pnl, height=200)
-
-        st.markdown("### Trading Status")
-        status_rows = []
-
-        if "Trade_Allowed" in bt.columns:
-            allowed_days = int(
-                pd.to_numeric(bt["Trade_Allowed"], errors="coerce")
-                .fillna(0).sum()
-            )
-            blocked_days = len(bt) - allowed_days
-            status_rows.extend([
-                {"รายการ": "Trade Allowed", "จำนวนวัน": allowed_days},
-                {"รายการ": "Trade Blocked", "จำนวนวัน": blocked_days},
-            ])
-
-        if "FX_Limit_Hit" in bt.columns:
-            fx_hit = int(
-                pd.to_numeric(bt["FX_Limit_Hit"], errors="coerce")
-                .fillna(0).sum()
-            )
-            status_rows.append(
-                {"รายการ": "FX Limit Hit", "จำนวนวัน": fx_hit}
-            )
-
-        if status_rows:
-            st.dataframe(
-                pd.DataFrame(status_rows),
-                use_container_width=True,
-                hide_index=True,
-            )
-
-        st.markdown("### Latest Snapshot")
-        latest = bt.iloc[-1]
-        snapshot = {}
-
-        snapshot_columns = [
-            ("Global_USD", "Global Price"),
-            ("USDTHB", "USD/THB"),
-            ("Local_THB", "Local THB"),
-            ("Gross_Notional_THB", "Gross Notional"),
-            ("Spread_Revenue_THB", "Spread Revenue"),
-            ("FX_Basis_PnL_THB", "FX Basis P&L"),
-            ("Hedge_Fee_Cost_THB", "Hedge Fee"),
-            ("Slippage_Cost_THB", "Slippage"),
-            ("Revenue_THB", "Revenue"),
-            ("Cost_THB", "Cost"),
-            ("Daily_PnL_THB", "Daily P&L"),
-            ("Actual_Cum_PnL", "Cumulative P&L"),
-            ("Current_FX_Usage", "Current FX Usage"),
-            ("Trade_Allowed", "Trade Allowed"),
-            ("FX_Limit_Hit", "FX Limit Hit"),
-        ]
-
-        for column, label in snapshot_columns:
-            if column not in bt.columns:
-                continue
-
-            value = latest[column]
-            if pd.isna(value):
-                continue
-
-            if column in {
-                "Global_USD",
-                "USDTHB",
-                "Local_THB",
-                "Current_FX_Usage",
-            }:
-                try:
-                    value_text = f"{float(value):,.4f}"
-                except Exception:
-                    value_text = str(value)
-            elif column in {
-                "Gross_Notional_THB",
-                "Spread_Revenue_THB",
-                "FX_Basis_PnL_THB",
-                "Hedge_Fee_Cost_THB",
-                "Slippage_Cost_THB",
-                "Revenue_THB",
-                "Cost_THB",
-                "Daily_PnL_THB",
-                "Actual_Cum_PnL",
-            }:
-                try:
-                    value_text = f"{float(value):,.2f} THB"
-                except Exception:
-                    value_text = str(value)
-            else:
-                value_text = str(value)
-
-            snapshot[label] = value_text
-
-        if snapshot:
-            snapshot_df = pd.DataFrame(
-                list(snapshot.items()),
-                columns=["รายการ", "ค่า"],
-            )
-            st.dataframe(
-                snapshot_df,
-                use_container_width=True,
-                hide_index=True,
-            )
-
-        with st.expander("📊 ดูข้อมูล Backtest รายวัน", expanded=False):
-            display_columns = [
-                "Global_USD",
-                "USDTHB",
-                "Local_THB",
-                "Gross_Notional_THB",
-                "Spread_Revenue_THB",
-                "FX_Basis_PnL_THB",
-                "Hedge_Fee_Cost_THB",
-                "Slippage_Cost_THB",
-                "Revenue_THB",
-                "Cost_THB",
-                "Daily_PnL_THB",
-                "Trade_Allowed",
-                "FX_Limit_Hit",
-                "Actual_Daily_PnL",
-                "Actual_Cum_PnL",
-            ]
-
-            available_columns = [
-                col for col in display_columns if col in bt.columns
-            ]
-
-            if available_columns:
-                mobile_table = bt[available_columns].copy()
-                for col in mobile_table.columns:
-                    if pd.api.types.is_numeric_dtype(mobile_table[col]):
-                        mobile_table[col] = mobile_table[col].round(4)
-
-                st.dataframe(
-                    mobile_table,
-                    use_container_width=True,
-                    height=420,
-                )
-            else:
-                st.info("ไม่พบคอลัมน์รายละเอียดสำหรับแสดงผล")
-
-    except KeyError as e:
-        st.error(f"Backtest engine ไม่พบคอลัมน์ที่จำเป็น: {e}")
+        close = pd.to_numeric(data["Close"], errors="coerce").dropna()
+        if len(close) >= 2:
+            ret = (float(close.iloc[-1]) / float(close.iloc[0]) - 1.0) * 100.0
+            high = close.cummax()
+            dd = ((close / high) - 1.0).min() * 100.0
+            c1, c2 = st.columns(2)
+            with c1:
+                st.metric("Period Return", f"{ret:+.2f}%")
+            with c2:
+                st.metric("Max Drawdown", f"{dd:.2f}%")
+            st.line_chart(close, height=220)
+        else:
+            st.warning("ข้อมูลย้อนหลังไม่เพียงพอ")
     except Exception as e:
-        st.error(f"คำนวณ Backtest ไม่สำเร็จ: {e}")
+        st.warning(f"คำนวณ preview ไม่สำเร็จ: {e}")
 
 
 def render_mobile_settings() -> None:
@@ -8516,7 +8118,6 @@ def render_mobile_settings() -> None:
 def _main_body() -> None:
     st.markdown(THEME_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
-    st.markdown(MOBILE_NAV_TRIGGER_CSS, unsafe_allow_html=True)
 
     if is_guest_mode():
         st.session_state.setdefault("favorite_tickers", [])
@@ -8732,7 +8333,11 @@ def _main_body() -> None:
     # Mobile UI อยู่ใน shell แยก เพื่อไม่ให้ถูก render บน Desktop
     # แต่ยังคงสร้าง widget ได้ปกติบน Mobile viewport
     with st.container(key="mobile_shell"):
-        mobile_nav = render_mobile_nav_trigger()
+        mobile_selected = st.session_state.get("mobile_nav", MOBILE_NAV[0])
+        mobile_nav = st.radio("Mobile navigation", MOBILE_NAV, index=MOBILE_NAV.index(mobile_selected),
+                              horizontal=True, key="mobile_nav", label_visibility="collapsed")
+        # สำคัญ: mobile_nav เป็น widget key แล้ว Streamlit จะ sync ค่าให้เอง
+        # ห้ามเขียน st.session_state["mobile_nav"] ซ้ำหลังสร้าง widget
 
         if mobile_nav == MOBILE_NAV[0]:
             render_mobile_home(cfg, data)
