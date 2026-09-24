@@ -1235,9 +1235,9 @@ NAV_LABELS = [
     "📊 5-Year Backtest Simulator",
     "🧮 Liquidity & Capital Planner",
     "🛒 Exchange UI Simulator",
-    "📰 ข่าวคริปโท",
-    "💼 กระเป๋าเงิน (Wallet)",
-    "🎯 ลองลงทุนย้อนหลัง",
+    "📰 News",
+    "💼 Wallet",
+    "🎯 Investment Backtest",
 ]
 NAV_EXCHANGE = NAV_LABELS[2]
 NAV_NEWS = NAV_LABELS[3]
