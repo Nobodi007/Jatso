@@ -7733,6 +7733,90 @@ MOBILE_CSS = r'''<style>
 }
 </style>'''
 
+# ---- ปุ่มสามเหลี่ยมเล็ก แทนแถบเมนู mobile nav แนวนอนที่ overflow ----
+MOBILE_NAV_TRIGGER_CSS = r"""<style>
+@media (max-width: 768px) {
+  .st-key-mobile_nav_trigger {
+    position: fixed !important;
+    left: 12px !important;
+    bottom: calc(12px + env(safe-area-inset-bottom)) !important;
+    z-index: 999995 !important;
+    width: 42px !important;
+  }
+  .st-key-mobile_nav_trigger button {
+    width: 42px !important;
+    height: 42px !important;
+    padding: 0 !important;
+    border-radius: 50% !important;
+    background: #181a20 !important;
+    border: 1px solid #2b3139 !important;
+    box-shadow: 0 6px 18px rgba(0,0,0,.35) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
+  .st-key-mobile_nav_trigger button p {
+    width: 0 !important;
+    height: 0 !important;
+    border-left: 7px solid transparent !important;
+    border-right: 7px solid transparent !important;
+    border-bottom: 11px solid #0ecb81 !important;
+    font-size: 0 !important;
+    margin: 0 !important;
+  }
+  .st-key-mobile_nav_trigger button:hover p {
+    border-bottom-color: #12e08f !important;
+  }
+  div[data-testid="stPopoverBody"] {
+    width: min(230px, 68vw) !important;
+    background: #181a20 !important;
+    border: 1px solid #2b3139 !important;
+    border-radius: 14px !important;
+  }
+  .st-key-mobile_nav_trigger [role="radiogroup"] {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 4px !important;
+  }
+  .st-key-mobile_nav_trigger label[data-baseweb="radio"] {
+    padding: 6px 8px !important;
+    border-radius: 8px !important;
+  }
+  .st-key-mobile_nav_trigger label[data-baseweb="radio"]:has(input:checked) {
+    background: rgba(14,203,129,.12) !important;
+  }
+  .st-key-mobile_nav_trigger label[data-baseweb="radio"] p {
+    border: 0 !important;
+    width: auto !important;
+    height: auto !important;
+    font-size: .85rem !important;
+    font-weight: 600 !important;
+    color: #b8bac2 !important;
+    margin: 0 !important;
+  }
+  .st-key-mobile_nav_trigger label[data-baseweb="radio"]:has(input:checked) p {
+    color: #0ecb81 !important;
+  }
+  .st-key-mobile_nav { display: none !important; }
+}
+</style>"""
+
+
+
+def render_mobile_nav_trigger() -> str:
+    """ปุ่มสามเหลี่ยมเล็กลอย กดแล้วเปิดเมนู mobile nav แบบ popover"""
+    current = st.session_state.get("mobile_nav", MOBILE_NAV[0])
+    with st.container(key="mobile_nav_trigger"):
+        with st.popover("▾"):
+            current = st.radio(
+                "Mobile navigation",
+                MOBILE_NAV,
+                index=MOBILE_NAV.index(current),
+                key="mobile_nav",
+                label_visibility="collapsed",
+            )
+    return current
+
 def _mobile_money(v: float, signed: bool=False) -> str:
     v=float(v or 0); sign='+' if signed and v>=0 else ('-' if signed else ''); a=abs(v)
     if a>=1_000_000_000: return f'{sign}฿{a/1_000_000_000:.2f}B'
@@ -8118,6 +8202,7 @@ def render_mobile_settings() -> None:
 def _main_body() -> None:
     st.markdown(THEME_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
+    st.markdown(MOBILE_NAV_TRIGGER_CSS, unsafe_allow_html=True)
 
     if is_guest_mode():
         st.session_state.setdefault("favorite_tickers", [])
@@ -8333,11 +8418,7 @@ def _main_body() -> None:
     # Mobile UI อยู่ใน shell แยก เพื่อไม่ให้ถูก render บน Desktop
     # แต่ยังคงสร้าง widget ได้ปกติบน Mobile viewport
     with st.container(key="mobile_shell"):
-        mobile_selected = st.session_state.get("mobile_nav", MOBILE_NAV[0])
-        mobile_nav = st.radio("Mobile navigation", MOBILE_NAV, index=MOBILE_NAV.index(mobile_selected),
-                              horizontal=True, key="mobile_nav", label_visibility="collapsed")
-        # สำคัญ: mobile_nav เป็น widget key แล้ว Streamlit จะ sync ค่าให้เอง
-        # ห้ามเขียน st.session_state["mobile_nav"] ซ้ำหลังสร้าง widget
+        mobile_nav = render_mobile_nav_trigger()
 
         if mobile_nav == MOBILE_NAV[0]:
             render_mobile_home(cfg, data)
