@@ -7712,6 +7712,19 @@ def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
 
 
 
+def _apply_mobile_pct(pct_key: str, target_key: str, base: float, kind: str) -> None:
+    """Apply 25/50/75/100% from the mobile trade pills."""
+    sel = st.session_state.get(pct_key)
+    if not sel:
+        return
+    p = int(str(sel).rstrip("%")) / 100.0
+    if kind == "buy":
+        st.session_state[target_key] = round(float(base) * p, 2)
+    else:
+        st.session_state[target_key] = math.floor(float(base) * p * 1e8) / 1e8
+    st.session_state[pct_key] = None
+
+
 def render_mobile_trade(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     'Mobile trading ticket using the same order engine/state as Desktop.'
     asset = str(cfg.get("asset", "BTC"))
@@ -7745,6 +7758,11 @@ def render_mobile_trade(cfg: dict[str, Any], data: pd.DataFrame) -> None:
 
     st.markdown(f'<div class="mobile-page-title">Trade</div><div class="mobile-page-sub">{asset}/THB · Order Simulator</div>', unsafe_allow_html=True)
     st.markdown(f'''<div class="mobile-trade-quote"><div class="mobile-trade-quote-top"><div><div class="mobile-kicker">ราคาตลาดอ้างอิง</div><div class="mobile-trade-symbol">{asset}/THB</div></div><div class="mobile-live-dot">● LIVE</div></div><div class="mobile-trade-price">฿{mid_now:,.2f}</div><div class="mobile-trade-spread">ซื้อ ฿{quote_buy:,.2f} · ขาย ฿{quote_sell:,.2f}</div></div>''', unsafe_allow_html=True)
+    # TradingView กราฟจริงของตลาด
+    tv_symbol = TV_GLOBAL_SYMBOL.get(asset, f"BINANCE:{asset}USDT")
+    st.markdown('<div class="mobile-section-title">กราฟตลาด</div>', unsafe_allow_html=True)
+    render_tradingview(tv_symbol, f"tv_mobile_trade_{asset}", height=330, interval="60")
+
 
     side = st.radio("ฝั่งคำสั่ง", ["BUY", "SELL"], horizontal=True, key="mobile_order_side", label_visibility="collapsed")
     order_type = st.radio("ประเภทออเดอร์", ["Limit", "Market"], horizontal=True, key="mobile_order_type", label_visibility="collapsed")
@@ -7752,13 +7770,9 @@ def render_mobile_trade(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     st.markdown(f'''<div class="mobile-trade-balance"><div><span>เงินบาทคงเหลือ</span><b>฿{cash:,.2f}</b></div><div><span>{asset} คงเหลือ</span><b>{coin_bal:,.8f} {asset}</b></div><div><span>ค่าธรรมเนียม</span><b>{fee * 100:.2f}%</b></div></div>''', unsafe_allow_html=True)
 
     if side == "BUY":
-        buy_amt = st.number_input("จำนวนเงินที่ต้องจ่าย (THB)", min_value=0.0, value=float(st.session_state.get("mobile_buy_amount", 0.0) or 0.0), step=1000.0, format="%.2f", key="mobile_buy_amount")
-        pcts = st.radio("สัดส่วนเงินบาท", ["25%", "50%", "75%", "100%"], horizontal=True, index=None, key="mobile_buy_pct", label_visibility="collapsed")
-        if pcts:
-            pct = int(pcts[:-1]) / 100.0
-            st.session_state["mobile_buy_amount"] = math.floor(cash * pct * 100) / 100
-            st.session_state["mobile_buy_pct"] = None
-            st.rerun(scope="app")
+        st.session_state.setdefault("mobile_buy_amount", 0.0)
+        buy_amt = st.number_input("จำนวนเงินที่ต้องจ่าย (THB)", min_value=0.0, step=1000.0, format="%.2f", key="mobile_buy_amount")
+        st.pills("สัดส่วนเงินบาท", ["25%", "50%", "75%", "100%"], key="mobile_buy_pct", label_visibility="collapsed", on_change=_apply_mobile_pct, args=("mobile_buy_pct", "mobile_buy_amount", cash, "buy"))
         buy_px = quote_buy
         if is_limit:
             buy_px = st.number_input(f"ราคา Limit ต่อ {asset} (THB)", min_value=0.0, value=float(round(quote_buy, 4)), format="%.4f", key=f"mobile_buy_px_{asset}")
@@ -7771,13 +7785,9 @@ def render_mobile_trade(cfg: dict[str, Any], data: pd.DataFrame) -> None:
             if is_limit: _place_limit("buy", float(buy_amt), 0.0, float(buy_px))
             else: _submit_order(sim, "buy", float(buy_amt), data, current_date_val, ctx)
     else:
-        sell_qty = st.number_input(f"จำนวนที่ต้องขาย ({asset})", min_value=0.0, value=float(st.session_state.get("mobile_sell_qty", 0.0) or 0.0), step=0.000001, format="%.8f", key="mobile_sell_qty")
-        pcts = st.radio(f"สัดส่วน {asset}", ["25%", "50%", "75%", "100%"], horizontal=True, index=None, key="mobile_sell_pct", label_visibility="collapsed")
-        if pcts:
-            pct = int(pcts[:-1]) / 100.0
-            st.session_state["mobile_sell_qty"] = math.floor(coin_bal * pct * 1e8) / 1e8
-            st.session_state["mobile_sell_pct"] = None
-            st.rerun(scope="app")
+        st.session_state.setdefault("mobile_sell_qty", 0.0)
+        sell_qty = st.number_input(f"จำนวนที่ต้องขาย ({asset})", min_value=0.0, step=0.000001, format="%.8f", key="mobile_sell_qty")
+        st.pills(f"สัดส่วน {asset}", ["25%", "50%", "75%", "100%"], key="mobile_sell_pct", label_visibility="collapsed", on_change=_apply_mobile_pct, args=("mobile_sell_pct", "mobile_sell_qty", coin_bal, "sell"))
         sell_px = quote_sell
         if is_limit:
             sell_px = st.number_input(f"ราคา Limit ต่อ {asset} (THB)", min_value=0.0, value=float(round(quote_sell, 4)), format="%.4f", key=f"mobile_sell_px_{asset}")
