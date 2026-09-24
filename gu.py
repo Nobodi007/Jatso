@@ -7803,6 +7803,58 @@ MOBILE_CSS = r'''<style>
   .mobile-trade-history { display:flex; justify-content:space-between; gap:10px; background:#181a20; border:1px solid #2b3139; border-radius:11px; padding:10px 11px; margin-bottom:7px; color:#EAECEF; font-size:11px; }
   .mobile-trade-history span { color:#848e9c; font-variant-numeric:tabular-nums; }
   .mobile-green { color:#0ecb81 !important; } .mobile-red { color:#f6465d !important; }
+
+  /* ===== Mobile typography system: consistent scale, spacing and wrapping ===== */
+  .st-key-mobile_shell,
+  .st-key-mobile_shell * {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans Thai", Tahoma, sans-serif;
+    letter-spacing: 0 !important;
+  }
+  .st-key-mobile_shell p,
+  .st-key-mobile_shell li,
+  .st-key-mobile_shell [data-testid="stMarkdownContainer"] {
+    font-size: 13px;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+  }
+  .st-key-mobile_shell .mobile-page-title {
+    font-size: 22px !important; line-height: 1.25 !important;
+    font-weight: 800 !important; margin: 3px 0 5px !important;
+  }
+  .st-key-mobile_shell .mobile-page-sub {
+    font-size: 12px !important; line-height: 1.5 !important;
+    margin: 0 0 16px !important;
+  }
+  .st-key-mobile_shell .mobile-section-title {
+    font-size: 16px !important; line-height: 1.35 !important;
+    margin: 18px 0 10px !important;
+  }
+  .st-key-mobile_shell .mobile-kicker,
+  .st-key-mobile_shell .mobile-mini-label { font-size: 11px !important; line-height: 1.45 !important; }
+  .st-key-mobile_shell .mobile-big { font-size: clamp(22px, 6vw, 27px) !important; line-height: 1.2 !important; }
+  .st-key-mobile_shell .mobile-mini-value { font-size: 16px !important; line-height: 1.3 !important; }
+  .st-key-mobile_shell [data-testid="stWidgetLabel"] p,
+  .st-key-mobile_shell label p { font-size: 13px !important; line-height: 1.4 !important; font-weight: 600 !important; }
+  .st-key-mobile_shell input,
+  .st-key-mobile_shell textarea,
+  .st-key-mobile_shell [data-baseweb="select"] { font-size: 14px !important; }
+  .st-key-mobile_shell button { font-size: 13px !important; line-height: 1.35 !important; font-weight: 650 !important; }
+  .st-key-mobile_shell [data-testid="stCaptionContainer"] p,
+  .st-key-mobile_shell [data-testid="stCaption"] { font-size: 11px !important; line-height: 1.45 !important; }
+  .st-key-mobile_shell .mobile-card,
+  .st-key-mobile_shell .mobile-asset-card,
+  .st-key-mobile_shell .mobile-mini { min-width: 0; }
+  .st-key-mobile_shell .mobile-asset-row { font-size: 11px !important; line-height: 1.45 !important; gap: 8px; }
+  .st-key-mobile_shell .mobile-asset-row b { font-size: 12px !important; }
+  .st-key-mobile_shell .mobile-asset-name { font-size: 11px !important; }
+  .st-key-mobile_shell .mobile-trade-market-stat { font-size: 11px !important; line-height: 1.4 !important; }
+  .st-key-mobile_shell .mobile-trade-market-stat b { font-size: 11px !important; }
+  .st-key-mobile_shell .mobile-trade-market-sub,
+  .st-key-mobile_shell .mobile-trade-market-level { font-size: 11px !important; line-height: 1.45 !important; }
+  .st-key-mobile_shell .mobile-trade-market-price { font-size: clamp(23px, 6vw, 28px) !important; line-height: 1.2 !important; }
+  .st-key-mobile_shell .mobile-trade-summary > div,
+  .st-key-mobile_shell .mobile-trade-history { font-size: 12px !important; line-height: 1.45 !important; }
+  .st-key-mobile_shell .mobile-trade-summary b { font-size: 12px !important; }
 }
 @media (min-width:769px) {
   .st-key-mobile_shell { display:none !important; }
@@ -8256,6 +8308,25 @@ MOBILE_BT_CSS = r'''<style>
                border-radius:6px; padding:10px 12px; color:#b7bdc6; font-size:12px;
                line-height:1.55; margin-bottom:10px; }
 .mbt-up { color:#0ecb81 !important; } .mbt-dn { color:#f6465d !important; }
+
+@media (max-width: 768px) {
+  .mobile-bt-label { font-size:13px !important; line-height:1.4 !important; margin:16px 0 8px !important; }
+  .mobile-bt-helper { font-size:12px !important; line-height:1.55 !important; padding:11px 13px !important; }
+  .st-key-mobile_bt_period label p,
+  .st-key-mobile_bt_strategy label p,
+  .st-key-mobile_bt_freq label p { font-size:13px !important; line-height:1.35 !important; }
+  .st-key-mobile_bt_period label,
+  .st-key-mobile_bt_freq label { padding:9px 14px !important; }
+  .st-key-mobile_bt_strategy label { padding:12px 14px !important; }
+  .st-key-mobile_bt_amount input { font-size:16px !important; min-height:44px !important; }
+  .st-key-mobile_bt_run button { font-size:15px !important; line-height:1.35 !important; }
+  .mbt-hero .k { font-size:12px !important; line-height:1.45 !important; }
+  .mbt-hero .v { font-size:clamp(24px, 7vw, 30px) !important; line-height:1.2 !important; overflow-wrap:anywhere; }
+  .mbt-hero .s { font-size:12px !important; line-height:1.45 !important; }
+  .mbt-cell .k { font-size:11px !important; line-height:1.4 !important; }
+  .mbt-cell .v { font-size:15px !important; line-height:1.35 !important; overflow-wrap:anywhere; }
+  .mbt-verdict { font-size:13px !important; line-height:1.6 !important; }
+}
 </style>'''
 
 # ---------------------------- ENGINE -------------------------------------
