@@ -7652,6 +7652,17 @@ MOBILE_CSS = r'''<style>
   .mobile-mini { background:#181a20; border:1px solid #2b3139; border-radius:14px; padding:12px; min-height:76px; }
   .mobile-mini-label { color:#848e9c; font-size:10px; margin-bottom:7px; }
   .mobile-mini-value { color:#EAECEF; font-size:16px; font-weight:800; font-variant-numeric:tabular-nums; }
+  .mobile-trade-market { background:#202421; border-bottom:1px solid #2b3139; padding:10px 4px 11px; margin:-4px -4px 10px; }
+  .mobile-trade-market-left { display:flex; align-items:center; gap:9px; min-width:0; }
+  .mobile-trade-market-logo { flex:0 0 auto; }
+  .mobile-trade-market-name { color:#F5F7FA; font-size:19px; font-weight:850; line-height:1.1; white-space:nowrap; }
+  .mobile-trade-market-sub { color:#848e9c; font-size:9px; margin-top:3px; }
+  .mobile-trade-market-price { color:#00c853; font-size:28px; font-weight:850; line-height:1.05; font-variant-numeric:tabular-nums; margin-top:9px; }
+  .mobile-trade-market-change { color:#00c853; font-size:12px; margin-top:5px; font-variant-numeric:tabular-nums; }
+  .mobile-trade-market-level { color:#00c853; font-size:11px; font-weight:700; margin-top:7px; }
+  .mobile-trade-market-stats { display:grid; grid-template-columns:1fr; gap:5px; padding-left:4px; }
+  .mobile-trade-market-stat { display:flex; justify-content:space-between; align-items:center; gap:10px; color:#a7b0bb; font-size:10px; line-height:1.2; }
+  .mobile-trade-market-stat b { color:#F5F7FA; font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
   .mobile-trade-quote { background:linear-gradient(145deg,#181a20,#20242b); border:1px solid #2b3139; border-radius:17px; padding:15px; margin-bottom:10px; }
   .mobile-trade-quote-top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
   .mobile-trade-symbol { color:#EAECEF; font-size:20px; font-weight:800; }
@@ -7740,22 +7751,61 @@ def _apply_mobile_pct(pct_key: str, target_key: str, base: float, kind: str) -> 
 
 
 def render_mobile_trade(cfg: dict[str, Any], data: pd.DataFrame) -> None:
-    'Mobile trading ticket using the same order engine/state as Desktop.'
-    asset = str(cfg.get("asset", "BTC"))
+    'Mobile trading ticket using the same order engine/state as Desktop, with a mobile market selector.'
+    base_asset = str(cfg.get("asset", "BTC"))
+    if base_asset not in SUPPORTED_ASSETS:
+        base_asset = "BTC"
+
+    if st.session_state.get("mobile_trade_asset") not in SUPPORTED_ASSETS:
+        st.session_state["mobile_trade_asset"] = base_asset
+
+    selected_asset = st.selectbox(
+        "เลือกตลาด",
+        SUPPORTED_ASSETS,
+        key="mobile_trade_asset",
+        format_func=lambda sym: f"{sym}/THB",
+        label_visibility="collapsed",
+    )
+    asset = str(selected_asset)
+
+    if asset != base_asset:
+        mobile_data, mobile_err = fetch_price_data(
+            asset,
+            cfg["start_date"],
+            cfg["end_date"],
+            use_fx_proxy=cfg["use_fx_proxy"],
+        )
+        if mobile_data is None or mobile_data.empty:
+            st.error(f"โหลดข้อมูล {asset} ไม่สำเร็จ: {mobile_err or 'ไม่มีข้อมูล'}")
+            return
+        data = mobile_data
+
     if data is None or data.empty:
         st.warning("ยังไม่มีข้อมูลราคาสำหรับการส่งคำสั่ง")
         return
-    built = build_dealer_ctx(cfg, data)
+
+    built_cfg = dict(cfg)
+    built_cfg["asset"] = asset
+    built = build_dealer_ctx(built_cfg, data)
     if built is None:
         st.error(f"ข้อมูลย้อนหลังน้อยกว่า {MIN_RISK_SAMPLE_DAYS} วัน — กรุณาเลือกช่วงเวลาให้ยาวขึ้น")
         return
+
     ctx, target_stock_thb = built
     current_date_val = pd.to_datetime(data.index[-1])
-    spot_usd = float(data.loc[current_date_val, "Global_USD"])
-    usdthb = float(data.loc[current_date_val, "USDTHB"])
+    last_row = data.loc[current_date_val]
+    spot_usd = float(last_row["Global_USD"])
+    usdthb = float(last_row["USDTHB"])
     mid_now = spot_usd * usdthb * (1 + float(cfg.get("local_premium", 0.0)))
     quote_buy = mid_now * (1 + float(cfg.get("dealer_spread", 0.0)))
     quote_sell = mid_now * (1 - float(cfg.get("dealer_spread", 0.0)))
+
+    prev_usd = float(data["Global_USD"].iloc[-2]) if len(data) >= 2 else spot_usd
+    change_24h = ((spot_usd - prev_usd) / prev_usd * 100.0) if prev_usd else 0.0
+    high_24h = float(last_row.get("Day_High", spot_usd)) * usdthb
+    low_24h = float(last_row.get("Day_Low", spot_usd)) * usdthb
+    volume_coin = float(last_row.get("Volume_USD", 0.0) or 0.0)
+    volume_thb = volume_coin * spot_usd * usdthb
 
     sim = st.session_state.get("sim")
     if not isinstance(sim, dict):
@@ -7770,66 +7820,135 @@ def render_mobile_trade(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     fee = float(LOCAL_TRADING_FEE_PCT)
     trade_ok = can_trade()
 
-    st.markdown(f'<div class="mobile-page-title">Trade</div><div class="mobile-page-sub">{asset}/THB · Order Simulator</div>', unsafe_allow_html=True)
-    st.markdown(f'''<div class="mobile-trade-quote"><div class="mobile-trade-quote-top"><div><div class="mobile-kicker">ราคาตลาดอ้างอิง</div><div class="mobile-trade-symbol">{asset}/THB</div></div><div class="mobile-live-dot">● LIVE</div></div><div class="mobile-trade-price">฿{mid_now:,.2f}</div><div class="mobile-trade-spread">ซื้อ ฿{quote_buy:,.2f} · ขาย ฿{quote_sell:,.2f}</div></div>''', unsafe_allow_html=True)
-    # TradingView กราฟจริงของตลาด
+    icon = coin_icon_html(asset, 34)
+    change_cls = "mobile-green" if change_24h >= 0 else "mobile-red"
+    change_sign = "+" if change_24h >= 0 else ""
+
+    st.markdown(
+        f'''
+        <div class="mobile-trade-market">
+          <div class="mobile-grid" style="grid-template-columns:minmax(0,1.02fr) minmax(0,1fr);gap:16px;margin:0;">
+            <div>
+              <div class="mobile-trade-market-left">
+                <div class="mobile-trade-market-logo">{icon}</div>
+                <div>
+                  <div class="mobile-trade-market-name">{asset}/THB</div>
+                  <div class="mobile-trade-market-sub">{COIN_NAMES.get(asset, asset)} · Bitkub</div>
+                </div>
+              </div>
+              <div class="mobile-trade-market-price">฿{mid_now:,.2f}</div>
+              <div class="mobile-trade-market-change {change_cls}">เปลี่ยน 24H&nbsp;&nbsp;{change_sign}{change_24h:.2f}%</div>
+              <div class="mobile-trade-market-level">Bid ฿{quote_sell:,.2f} &nbsp;·&nbsp; Ask ฿{quote_buy:,.2f}</div>
+            </div>
+            <div class="mobile-trade-market-stats">
+              <div class="mobile-trade-market-stat"><span>สูงสุด 24H (THB)</span><b>{high_24h:,.2f}</b></div>
+              <div class="mobile-trade-market-stat"><span>ต่ำสุด 24H (THB)</span><b>{low_24h:,.2f}</b></div>
+              <div class="mobile-trade-market-stat"><span>ปริมาณ 24H ({asset})</span><b>{volume_coin:,.8f}</b></div>
+              <div class="mobile-trade-market-stat"><span>ปริมาณ 24H (THB)</span><b>{volume_thb/1_000_000:,.2f}M</b></div>
+            </div>
+          </div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
     tv_symbol = TV_LOCAL_SYMBOL.get(asset, f"BITKUB:{asset}THB")
     st.markdown('<div class="mobile-section-title">กราฟตลาด · Bitkub</div>', unsafe_allow_html=True)
     render_tradingview(tv_symbol, f"tv_mobile_trade_{asset}", height=330, interval="60")
 
-
     side = st.radio("ฝั่งคำสั่ง", ["BUY", "SELL"], horizontal=True, key="mobile_order_side", label_visibility="collapsed")
     order_type = st.radio("ประเภทออเดอร์", ["Limit", "Market"], horizontal=True, key="mobile_order_type", label_visibility="collapsed")
     is_limit = order_type == "Limit"
-    st.markdown(f'''<div class="mobile-trade-balance"><div><span>เงินบาทคงเหลือ</span><b>฿{cash:,.2f}</b></div><div><span>{asset} คงเหลือ</span><b>{coin_bal:,.8f} {asset}</b></div><div><span>ค่าธรรมเนียม</span><b>{fee * 100:.2f}%</b></div></div>''', unsafe_allow_html=True)
+    st.markdown(
+        f'''<div class="mobile-trade-balance"><div><span>เงินบาทคงเหลือ</span><b>฿{cash:,.2f}</b></div><div><span>{asset} คงเหลือ</span><b>{coin_bal:,.8f} {asset}</b></div><div><span>ค่าธรรมเนียม</span><b>{fee * 100:.2f}%</b></div></div>''',
+        unsafe_allow_html=True,
+    )
 
     if side == "BUY":
         st.session_state.setdefault("mobile_buy_amount", 0.0)
         buy_amt = st.number_input("จำนวนเงินที่ต้องจ่าย (THB)", min_value=0.0, step=1000.0, format="%.2f", key="mobile_buy_amount")
-        st.pills("สัดส่วนเงินบาท", ["25%", "50%", "75%", "100%"], key="mobile_buy_pct", label_visibility="collapsed", on_change=_apply_mobile_pct, args=("mobile_buy_pct", "mobile_buy_amount", cash, "buy"))
+        st.pills(
+            "สัดส่วนเงินบาท",
+            ["25%", "50%", "75%", "100%"],
+            key="mobile_buy_pct",
+            label_visibility="collapsed",
+            on_change=_apply_mobile_pct,
+            args=("mobile_buy_pct", "mobile_buy_amount", cash, "buy"),
+        )
         buy_px = quote_buy
         if is_limit:
-            buy_px = st.number_input(f"ราคา Limit ต่อ {asset} (THB)", min_value=0.0, value=float(round(quote_buy, 4)), format="%.4f", key=f"mobile_buy_px_{asset}")
+            buy_px = st.number_input(
+                f"ราคา Limit ต่อ {asset} (THB)",
+                min_value=0.0,
+                value=float(round(quote_buy, 4)),
+                format="%.4f",
+                key=f"mobile_buy_px_{asset}",
+            )
         est_coins = buy_amt * (1 - fee) / buy_px if buy_px > 0 else 0.0
         over_cash = buy_amt > cash + 1e-9
-        st.markdown(f'''<div class="mobile-trade-summary"><div><span>ราคาต่อ {asset}</span><b>฿{buy_px:,.2f}</b></div><div><span>คาดว่าจะได้รับ</span><b>≈ {est_coins:,.8f} {asset}</b></div></div>''', unsafe_allow_html=True)
-        if over_cash: st.warning("ยอดเงินบาทในกระเป๋าไม่พอ")
-        clicked = st.button(f"ซื้อ {asset}", key="mobile_real_buy", type="primary", use_container_width=True, disabled=(buy_amt <= 0 or over_cash or not trade_ok or (is_limit and buy_px <= 0)))
+        st.markdown(
+            f'''<div class="mobile-trade-summary"><div><span>ราคาต่อ {asset}</span><b>฿{buy_px:,.2f}</b></div><div><span>คาดว่าจะได้รับ</span><b>≈ {est_coins:,.8f} {asset}</b></div></div>''',
+            unsafe_allow_html=True,
+        )
+        if over_cash:
+            st.warning("ยอดเงินบาทในกระเป๋าไม่พอ")
+        clicked = st.button(
+            f"ซื้อ {asset}",
+            key="mobile_real_buy",
+            type="primary",
+            use_container_width=True,
+            disabled=(buy_amt <= 0 or over_cash or not trade_ok or (is_limit and buy_px <= 0)),
+        )
         if clicked:
-            if is_limit: _place_limit("buy", float(buy_amt), 0.0, float(buy_px))
-            else: _submit_order(sim, "buy", float(buy_amt), data, current_date_val, ctx)
+            if is_limit:
+                _place_limit("buy", float(buy_amt), 0.0, float(buy_px))
+            else:
+                _submit_order(sim, "buy", float(buy_amt), data, current_date_val, ctx)
     else:
         st.session_state.setdefault("mobile_sell_qty", 0.0)
-        sell_qty = st.number_input(f"จำนวนที่ต้องขาย ({asset})", min_value=0.0, step=0.000001, format="%.8f", key="mobile_sell_qty")
-        st.pills(f"สัดส่วน {asset}", ["25%", "50%", "75%", "100%"], key="mobile_sell_pct", label_visibility="collapsed", on_change=_apply_mobile_pct, args=("mobile_sell_pct", "mobile_sell_qty", coin_bal, "sell"))
+        sell_qty = st.number_input(
+            f"จำนวนที่ต้องขาย ({asset})",
+            min_value=0.0,
+            step=0.000001,
+            format="%.8f",
+            key="mobile_sell_qty",
+        )
+        st.pills(
+            f"สัดส่วน {asset}",
+            ["25%", "50%", "75%", "100%"],
+            key="mobile_sell_pct",
+            label_visibility="collapsed",
+            on_change=_apply_mobile_pct,
+            args=("mobile_sell_pct", "mobile_sell_qty", coin_bal, "sell"),
+        )
         sell_px = quote_sell
         if is_limit:
-            sell_px = st.number_input(f"ราคา Limit ต่อ {asset} (THB)", min_value=0.0, value=float(round(quote_sell, 4)), format="%.4f", key=f"mobile_sell_px_{asset}")
+            sell_px = st.number_input(
+                f"ราคา Limit ต่อ {asset} (THB)",
+                min_value=0.0,
+                value=float(round(quote_sell, 4)),
+                format="%.4f",
+                key=f"mobile_sell_px_{asset}",
+            )
         net_thb = sell_qty * sell_px * (1 - fee)
         over_coin = sell_qty > coin_bal + 1e-9
-        st.markdown(f'''<div class="mobile-trade-summary"><div><span>ราคาต่อ {asset}</span><b>฿{sell_px:,.2f}</b></div><div><span>เงินบาทที่จะได้รับ</span><b>≈ ฿{net_thb:,.2f}</b></div></div>''', unsafe_allow_html=True)
-        if over_coin: st.warning(f"{asset} ในกระเป๋าไม่พอ")
-        clicked = st.button(f"ขาย {asset}", key="mobile_real_sell", use_container_width=True, disabled=(sell_qty <= 0 or over_coin or not trade_ok or (is_limit and sell_px <= 0)))
+        st.markdown(
+            f'''<div class="mobile-trade-summary"><div><span>ราคาต่อ {asset}</span><b>฿{sell_px:,.2f}</b></div><div><span>เงินบาทที่จะได้รับ</span><b>≈ ฿{net_thb:,.2f}</b></div></div>''',
+            unsafe_allow_html=True,
+        )
+        if over_coin:
+            st.warning(f"{asset} ในกระเป๋าไม่พอ")
+        clicked = st.button(
+            f"ขาย {asset}",
+            key="mobile_real_sell",
+            use_container_width=True,
+            disabled=(sell_qty <= 0 or over_coin or not trade_ok or (is_limit and sell_px <= 0)),
+        )
         if clicked:
-            if is_limit: _place_limit("sell", 0.0, float(sell_qty), float(sell_px))
-            else: _submit_order(sim, "sell", float(sell_qty * quote_sell), data, current_date_val, ctx)
-
-    if not trade_ok: st.caption("🔒 บัญชี Viewer ไม่สามารถส่งคำสั่งซื้อขายได้ — ติดต่อ Admin เพื่อขอสิทธิ์ Trader")
-    open_orders = sim.get("open_orders", [])
-    if open_orders:
-        st.markdown('<div class="mobile-section-title">ออเดอร์ที่รอจับคู่</div>', unsafe_allow_html=True)
-        for o in open_orders:
-            text = (f"BUY · ฿{float(o.get('px', 0)):,.2f} · ฿{float(o.get('amount_thb', 0)):,.2f}" if o.get("side") == "buy" else f"SELL · ฿{float(o.get('px', 0)):,.2f} · {float(o.get('qty', 0)):,.8f} {asset}")
-            c1, c2 = st.columns([5, 1]); c1.caption(text); c2.button("ยกเลิก", key=f"mobile_cancel_{o['id']}", on_click=_cancel_limit, args=(o["id"],))
-    orders = sim.get("orders", [])
-    st.markdown('<div class="mobile-section-title">ประวัติคำสั่งล่าสุด</div>', unsafe_allow_html=True)
-    if orders:
-        for o in reversed(orders[-5:]):
-            side_txt = str(o.get("side", o.get("ฝั่ง", "Order"))).upper(); amount = o.get("amount_thb", o.get("จำนวนเงิน", 0))
-            try: amount_txt = f"{float(amount):,.2f} THB"
-            except Exception: amount_txt = str(amount)
-            st.markdown(f'<div class="mobile-trade-history"><div><b>{side_txt}</b> · {asset}</div><span>{amount_txt}</span></div>', unsafe_allow_html=True)
-    else: st.caption("ยังไม่มีคำสั่งซื้อขาย")
+            if is_limit:
+                _place_limit("sell", 0.0, float(sell_qty), float(sell_px))
+            else:
+                _submit_order(sim, "sell", float(sell_qty * quote_sell), data, current_date_val, ctx)
 
 
 def render_mobile_asset(cfg: dict[str, Any], data: pd.DataFrame) -> None:
