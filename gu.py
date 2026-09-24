@@ -7619,14 +7619,12 @@ def render_customer_leaderboard(sim: dict[str, Any], cfg: dict[str, Any]) -> Non
 MOBILE_NAV = ["⌂  Home", "⇄  Trade", "▣  Asset", "◫  Backtest", "⚙  Settings"]
 
 MOBILE_NAV_CSS = r'''<style>
-/* Mobile nav: standalone so it is not dependent on the main responsive CSS block */
+/* ---------- Mobile bottom nav ---------- */
 .st-key-mobile_nav {
     position: fixed !important;
-    z-index: 999999 !important;
-    left: 0 !important;
-    right: 0 !important;
-    bottom: 0 !important;
+    left: 0 !important; right: 0 !important; bottom: 0 !important;
     width: 100vw !important;
+    z-index: 999999 !important;
     margin: 0 !important;
     padding: 7px 6px calc(7px + env(safe-area-inset-bottom)) !important;
     background: rgba(24,26,32,.98) !important;
@@ -7634,56 +7632,59 @@ MOBILE_NAV_CSS = r'''<style>
     box-sizing: border-box !important;
 }
 
-.st-key-mobile_nav [role="radiogroup"] > label > div:not(:last-child),
-.st-key-mobile_nav [role="radiogroup"] > label svg,
-.st-key-mobile_nav [role="radiogroup"] > label img {
-    display: none !important;
-}
-
 .st-key-mobile_nav [role="radiogroup"] {
+    display: flex !important;
+    flex-direction: row !important;
     width: 100% !important;
-    display: grid !important;
-    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
     gap: 2px !important;
 }
 
-.st-key-mobile_nav [role="radiogroup"] > label {
+/* ทุกแท็บ */
+.st-key-mobile_nav label {
     position: relative !important;
     flex: 1 1 0 !important;
     min-width: 0 !important;
     height: 42px !important;
     margin: 0 !important;
-    padding: 4px 2px !important;
+    padding: 4px 14px 4px 4px !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
-    border: 0 !important;
     border-radius: 10px !important;
     background: transparent !important;
-    text-align: center !important;
+    cursor: pointer !important;
 }
 
-.st-key-mobile_nav [role="radiogroup"] > label p {
+/* ซ่อนวงกลม radio ทุกแบบ (div ตัวแรก, svg, input) */
+.st-key-mobile_nav label > div:first-child,
+.st-key-mobile_nav label svg,
+.st-key-mobile_nav label input {
+    display: none !important;
+}
+
+.st-key-mobile_nav label p,
+.st-key-mobile_nav label span {
     color: #848e9c !important;
     font-size: 10px !important;
     font-weight: 600 !important;
-    line-height: 1.15 !important;
     margin: 0 !important;
     white-space: nowrap !important;
 }
 
-.st-key-mobile_nav [role="radiogroup"] > label:has(input:checked),
-.st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"] {
+/* แท็บที่เลือก = พื้นเขียว */
+.st-key-mobile_nav label:has(input:checked),
+.st-key-mobile_nav label[data-checked="true"] {
     background: #087a3f !important;
 }
-
-.st-key-mobile_nav [role="radiogroup"] > label:has(input:checked) p,
-.st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"] p {
+.st-key-mobile_nav label:has(input:checked) p,
+.st-key-mobile_nav label:has(input:checked) span,
+.st-key-mobile_nav label[data-checked="true"] p {
     color: #ffffff !important;
 }
 
-.st-key-mobile_nav [role="radiogroup"] > label:has(input:checked)::after,
-.st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"]::after {
+/* สามเหลี่ยมเล็กในแท็บที่เลือก (มุมขวา) */
+.st-key-mobile_nav label:has(input:checked)::after,
+.st-key-mobile_nav label[data-checked="true"]::after {
     content: "" !important;
     position: absolute !important;
     right: 5px !important;
@@ -7691,10 +7692,15 @@ MOBILE_NAV_CSS = r'''<style>
     transform: translateY(-50%) !important;
     width: 0 !important;
     height: 0 !important;
-    border-top: 3px solid transparent !important;
-    border-bottom: 3px solid transparent !important;
-    border-left: 5px solid #ffffff !important;
+    border-top: 4px solid transparent !important;
+    border-bottom: 4px solid transparent !important;
+    border-left: 6px solid #ffffff !important;
     pointer-events: none !important;
+}
+
+/* บน desktop ซ่อน nav ล่าง */
+@media (min-width: 769px) {
+    .st-key-mobile_nav { display: none !important; }
 }
 </style>'''
 
@@ -7705,39 +7711,6 @@ MOBILE_CSS = r'''<style>
   .st-key-desktop_navigation { display:none !important; }
   .st-key-desktop_route { display:none !important; }
   .st-key-mobile_shell { display:block !important; }
-  .st-key-mobile_nav { position:fixed !important; z-index:999999 !important; left:0 !important; right:0 !important; bottom:0 !important; width:100vw !important; margin:0 !important; padding:7px 6px calc(7px + env(safe-area-inset-bottom)) !important; background:rgba(24,26,32,.98) !important; border-top:1px solid #2b3139 !important; box-sizing:border-box !important; }
-  .st-key-mobile_nav [role="radiogroup"] { width:100% !important; display:grid !important; grid-template-columns:repeat(5,minmax(0,1fr)) !important; gap:2px !important; }
-  .st-key-mobile_nav [role="radiogroup"] > label { min-width:0 !important; height:42px !important; margin:0 !important; padding:4px 2px !important; display:flex !important; align-items:center !important; justify-content:center !important; border:0 !important; border-radius:10px !important; text-align:center !important; }
-  /* ซ่อนไอคอนเดิมที่ Streamlit ใส่มาใน radio ทุกตัว */
-  .st-key-mobile_nav [role="radiogroup"] > label > div:not(:last-child),
-  .st-key-mobile_nav [role="radiogroup"] > label svg,
-  .st-key-mobile_nav [role="radiogroup"] > label img {
-    display:none !important;
-  }
-  .st-key-mobile_nav [role="radiogroup"] > label p { color:#848e9c !important; font-size:9px !important; line-height:1.15 !important; font-weight:600 !important; margin:0 !important; }
-  .st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"],
-  .st-key-mobile_nav [role="radiogroup"] > label:has(input:checked) {
-    position:relative !important;
-    background:#087a3f !important;
-  }
-  .st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"] p,
-  .st-key-mobile_nav [role="radiogroup"] > label:has(input:checked) p { color:#ffffff !important; }
-  /* สามเหลี่ยมเล็กในพื้นที่เมนูที่เลือก */
-  .st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"]::after,
-  .st-key-mobile_nav [role="radiogroup"] > label:has(input:checked)::after {
-    content:"" !important;
-    position:absolute !important;
-    right:5px !important;
-    top:50% !important;
-    transform:translateY(-50%) !important;
-    width:0 !important;
-    height:0 !important;
-    border-top:3px solid transparent !important;
-    border-bottom:3px solid transparent !important;
-    border-left:5px solid #ffffff !important;
-    pointer-events:none !important;
-  }
-  }
   .mobile-page-title { color:#EAECEF; font-size:22px; font-weight:800; margin:2px 0; }
   .mobile-page-sub { color:#848e9c; font-size:11px; margin-bottom:12px; }
   .mobile-card { background:#181a20; border:1px solid #2b3139; border-radius:16px; padding:14px; margin-bottom:10px; }
