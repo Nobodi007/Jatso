@@ -585,73 +585,57 @@ def render_simple_backtest(fetch_fn: Optional[FetchFn] = None, assets: Optional[
     asset = c1.selectbox("เหรียญ", assets, key="sb_asset")
     today = date.today()
 
-    # รีเซ็ตค่า date picker ที่ค้างจากเวอร์ชันเก่าเพียง 1 ครั้งหลังอัปเดตโค้ด
-    # เพื่อกัน Streamlit session เดิมดึงวันที่เก่า (เช่น 25 ก.ย. 2564) กลับมา
-    _SB_DATE_UI_VERSION = "2026-09-25-v4-ymd"
+    # ---------- ช่วงเวลาย้อนหลัง ----------
+    # ใช้รูปแบบเดียวกับแท็บ 5-Year Backtest Simulator:
+    # เลือกช่วงเวลาด่วนก่อน แล้วค่อยเปิด "กำหนดเอง" หากต้องการระบุวันเอง
+    _SB_DATE_UI_VERSION = "2026-09-25-v5-backtest-preset"
     if st.session_state.get("sb_date_ui_version") != _SB_DATE_UI_VERSION:
-        for _k in ("sb_start", "sb_end", "sb_start_v2", "sb_end_v2", "sb_start_v3", "sb_end_v3"):
+        for _k in (
+            "sb_start", "sb_end", "sb_start_v2", "sb_end_v2",
+            "sb_start_v3", "sb_end_v3", "sb_start_v4", "sb_end_v4",
+            "sb_start_year", "sb_start_month", "sb_start_day",
+            "sb_end_year", "sb_end_month", "sb_end_day",
+            "sb_start_date", "sb_end_date", "sb_preset",
+        ):
             st.session_state.pop(_k, None)
         st.session_state["sb_date_ui_version"] = _SB_DATE_UI_VERSION
 
-    default_start = today - timedelta(days=3 * 365)
-    default_end = today
-
-    # ใช้ dropdown แยก ปี / เดือน / วัน แทน date_input
-    # เพื่อให้เลือกวันย้อนหลังหลายปีได้ง่าย โดยปีที่แสดงเป็น พ.ศ.
-    _TH_MONTHS = [
-        "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
-        "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม",
-    ]
-
-    def _select_date_ymd(container, label, default_value, key_prefix, min_date, max_date):
-        container.markdown(f"**{label}**")
-        y_col, m_col, d_col = container.columns([1, 1.5, 1])
-
-        years = list(range(min_date.year, max_date.year + 1))
-        default_year = min(max(default_value.year, min_date.year), max_date.year)
-        y_key, m_key, d_key = f"{key_prefix}_year", f"{key_prefix}_month", f"{key_prefix}_day"
-
-        year = y_col.selectbox(
-            "ปี", years, index=years.index(default_year),
-            format_func=lambda y: f"พ.ศ. {y + 543}", key=y_key, label_visibility="collapsed",
-        )
-
-        month_min = min_date.month if year == min_date.year else 1
-        month_max = max_date.month if year == max_date.year else 12
-        month_options = list(range(month_min, month_max + 1))
-        old_month = int(st.session_state.get(m_key, default_value.month))
-        month = min(max(old_month, month_min), month_max)
-        if st.session_state.get(m_key) != month:
-            st.session_state[m_key] = month
-        month = m_col.selectbox(
-            "เดือน", month_options, index=month_options.index(month),
-            format_func=lambda m: _TH_MONTHS[m - 1], key=m_key, label_visibility="collapsed",
-        )
-
-        import calendar
-        last_day = calendar.monthrange(year, month)[1]
-        day_min = min_date.day if year == min_date.year and month == min_date.month else 1
-        day_max = max_date.day if year == max_date.year and month == max_date.month else last_day
-        day_options = list(range(day_min, day_max + 1))
-        old_day = int(st.session_state.get(d_key, default_value.day))
-        day = min(max(old_day, day_min), day_max)
-        if st.session_state.get(d_key) != day:
-            st.session_state[d_key] = day
-        day = d_col.selectbox(
-            "วัน", day_options, index=day_options.index(day),
-            key=d_key, label_visibility="collapsed",
-        )
-
-        return date(year, month, day)
-
-    start = _select_date_ymd(
-        c2, "เริ่มลงทุนเมื่อ", default_start, "sb_start_v4",
-        date(2015, 1, 1), today - timedelta(days=30),
+    preset_days = {
+        "1 เดือน": 30,
+        "3 เดือน": 90,
+        "6 เดือน": 180,
+        "1 ปี": 365,
+        "3 ปี": 365 * 3,
+        "5 ปี": 365 * 5,
+    }
+    preset = st.radio(
+        "เลือกช่วงเวลาด่วน",
+        ["กำหนดเอง", "1 เดือน", "3 เดือน", "6 เดือน", "1 ปี", "3 ปี", "5 ปี"],
+        index=6, horizontal=True, key="sb_preset",
     )
-    end = _select_date_ymd(
-        c3, "ถึงวันที่", default_end, "sb_end_v4",
-        start + timedelta(days=30), today,
-    )
+
+    if preset != "กำหนดเอง":
+        start = today - timedelta(days=preset_days[preset])
+        end = today
+    else:
+        min_day = date(2015, 1, 1)
+        default_start = today - timedelta(days=365 * 5)
+        default_end = today
+        ca, cb = st.columns(2)
+        with ca:
+            start = st.date_input(
+                "เริ่มต้น", value=default_start, min_value=min_day,
+                max_value=today, key="sb_start_date",
+            )
+        with cb:
+            end = st.date_input(
+                "สิ้นสุด", value=default_end, min_value=min_day,
+                max_value=today, key="sb_end_date",
+            )
+
+    if start >= end:
+        st.error("❌ วันเริ่มต้นต้องมาก่อนวันสิ้นสุด")
+        return
 
     keys = list(STRATEGIES)
     strategy = st.radio("เลือกวิธีลงทุน", keys, format_func=lambda k: STRATEGIES[k]["label"],
