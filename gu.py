@@ -5019,7 +5019,7 @@ def _news_time_ago(unix_ts: int) -> str:
 
 
 def render_news_section(cfg: dict) -> None:
-    st.markdown("### 📰 ข่าวคริปโท")
+    st.markdown("### 📰 News")
 
     news_items = fetch_crypto_news()
 
