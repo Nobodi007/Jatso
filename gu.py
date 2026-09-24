@@ -7665,11 +7665,48 @@ MOBILE_CSS = r'''<style>
   .mobile-trade-market-stat span { min-width:0; overflow-wrap:anywhere; }
   .mobile-trade-market-stat b { color:#F5F7FA; font-size:10px; font-variant-numeric:tabular-nums; white-space:nowrap; max-width:100%; }
   .mobile-trade-side-row { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:12px 0 10px; }
-  .st-key-mobile_side_buy button, .st-key-mobile_side_sell button { min-height:46px !important; border-radius:12px !important; font-weight:850 !important; font-size:14px !important; }
-  .st-key-mobile_side_buy button { background:#00c853 !important; color:#fff !important; border:1px solid #00c853 !important; }
-  .st-key-mobile_side_buy button:hover { background:#00b84a !important; border-color:#00b84a !important; }
-  .st-key-mobile_side_sell button { background:#f6465d !important; color:#fff !important; border:1px solid #f6465d !important; }
-  .st-key-mobile_side_sell button:hover { background:#df3d51 !important; border-color:#df3d51 !important; }
+
+  /* Force the Streamlit columns containing BUY / SELL to stay side-by-side.
+     The markdown wrapper above cannot wrap later Streamlit elements, so target
+     the actual horizontal block by the keyed buttons inside it. */
+  div[data-testid="stHorizontalBlock"]:has(.st-key-mobile_side_buy):has(.st-key-mobile_side_sell) {
+    display:grid !important;
+    grid-template-columns:minmax(0,1fr) minmax(0,1fr) !important;
+    gap:8px !important;
+    width:100% !important;
+    margin:12px 0 10px !important;
+  }
+  div[data-testid="stHorizontalBlock"]:has(.st-key-mobile_side_buy):has(.st-key-mobile_side_sell) > div {
+    min-width:0 !important;
+    width:100% !important;
+    flex:unset !important;
+  }
+  .st-key-mobile_side_buy, .st-key-mobile_side_sell { width:100% !important; }
+  .st-key-mobile_side_buy button, .st-key-mobile_side_sell button {
+    width:100% !important;
+    min-height:48px !important;
+    border-radius:12px !important;
+    font-weight:850 !important;
+    font-size:14px !important;
+    color:#fff !important;
+  }
+  /* Dark green BUY + bright red SELL (not overly dark). */
+  .st-key-mobile_side_buy button {
+    background:#087f5b !important;
+    border:1px solid #087f5b !important;
+  }
+  .st-key-mobile_side_buy button:hover {
+    background:#096b4d !important;
+    border-color:#096b4d !important;
+  }
+  .st-key-mobile_side_sell button {
+    background:#ff4757 !important;
+    border:1px solid #ff4757 !important;
+  }
+  .st-key-mobile_side_sell button:hover {
+    background:#e83e4d !important;
+    border-color:#e83e4d !important;
+  }
   .mobile-trade-quote { background:linear-gradient(145deg,#181a20,#20242b); border:1px solid #2b3139; border-radius:17px; padding:15px; margin-bottom:10px; }
   .mobile-trade-quote-top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
   .mobile-trade-symbol { color:#EAECEF; font-size:20px; font-weight:800; }
