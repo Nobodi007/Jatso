@@ -5640,10 +5640,40 @@ def check_open_orders(sim, quote_buy, quote_sell, data, order_date, ctx) -> None
         # hit แต่ยอดไม่พอ = ยกเลิกทิ้ง
     sim["open_orders"] = remaining
 
+SIM_ARCHETYPES = {
+    "noise":     dict(w=0.55),               # สุ่มล้วน
+    "informed":  dict(w=0.10, acc=0.70),     # รู้ทิศราคา 3 วันข้างหน้า 70% (toxic ตัวจริง)
+    "momentum":  dict(w=0.20),               # ตามเทรนด์ย้อนหลัง 3 วัน
+    "dca_buyer": dict(w=0.15),               # ซื้ออย่างเดียว ~90%
+}
+
+def make_sim_customers(rng, n: int) -> list[dict[str, Any]]:
+    names = list(SIM_ARCHETYPES)
+    w = np.array([SIM_ARCHETYPES[k]["w"] for k in names], dtype=float)
+    w /= w.sum()
+    return [dict(id=f"C{i + 1:03d}",
+                 archetype=names[int(rng.choice(len(names), p=w))],
+                 size_mult=float(np.exp(rng.normal(0.0, 0.8))))
+            for i in range(int(n))]
+
+def cust_pick_side(cust, df: pd.DataFrame, d, rng, p_buy: float, look: int = 3) -> str:
+    a = cust["archetype"]
+    px = df["Global_USD"].to_numpy(dtype=float)
+    i = int(df.index.get_indexer([d])[0])
+    if a == "informed" and i >= 0 and i + look < len(px):
+        up = px[i + look] > px[i]
+        correct = rng.random() < SIM_ARCHETYPES["informed"]["acc"]
+        buy = up if correct else (not up)
+        return "buy" if buy else "sell"
+    if a == "momentum" and i >= look:
+        return "buy" if px[i] > px[i - look] else "sell"
+    if a == "dca_buyer":
+        return "buy" if rng.random() < 0.9 else "sell"
+    return "buy" if rng.random() < p_buy else "sell"
+
+
 def run_random_batch(sim, cfg, ctx, target_stock_thb, coins, n_orders, seed,
-                     amt_min, amt_max):
-    """สุ่มออเดอร์ข้ามหลายเหรียญ: สุ่มเหรียญ + วันที่ + ฝั่ง + ยอดเงิน (THB)
-    คืนค่า (steps ของออเดอร์สุดท้าย, จำนวนออเดอร์ต่อเหรียญ, เหรียญที่โหลดราคาไม่ได้)"""
+                     amt_min, amt_max, n_customers: int = 15):
     rng = np.random.default_rng(int(seed))
     lo = float(max(amt_min, MIN_TRADE_THB))
     hi = float(max(amt_max, lo))
@@ -5660,26 +5690,24 @@ def run_random_batch(sim, cfg, ctx, target_stock_thb, coins, n_orders, seed,
     if not frames:
         return [], {}, skipped
 
-    # 1) วางแผนออเดอร์ทั้งหมดก่อน แล้วเรียงตามวันที่
+    customers = make_sim_customers(rng, n_customers)
     names = list(frames)
     plan = []
     for _ in range(int(n_orders)):
+        cust = customers[int(rng.integers(len(customers)))]
         c = names[int(rng.integers(len(names)))]
         idx = frames[c].index
         d = idx[int(rng.integers(len(idx)))]
-        # สุ่มแบบ log-uniform ระหว่าง min-max จะได้มีทั้งออเดอร์เล็กและใหญ่
-        amt = round(float(np.exp(rng.uniform(np.log(lo), np.log(hi)))), 2)
-        amt = max(amt, MIN_TRADE_THB)
-        side = "buy" if rng.random() < p_buy else "sell"
-        plan.append((d, c, side, amt))
+        amt = float(np.exp(rng.uniform(np.log(lo), np.log(hi))))
+        amt = round(float(np.clip(amt * cust["size_mult"], lo, hi)), 2)
+        side = cust_pick_side(cust, frames[c], d, rng, p_buy)
+        plan.append((d, c, side, amt, cust))
     plan.sort(key=lambda x: x[0])
 
-    # 2) เตรียม ctx และ inventory ต่อเหรียญ
     coin_ctx = {}
     for c, df_c in frames.items():
         rp = risk_profile(df_c["Global_USD"])
-        h_c = (crypto_haircut(rp["es99"], cfg["settlement_days"])
-               if rp else ctx["h_crypto"])
+        h_c = (crypto_haircut(rp["es99"], cfg["settlement_days"]) if rp else ctx["h_crypto"])
         h_x = (cfg["cex_counterparty_haircut"]
                if cfg["cex_margin_asset"].startswith("Stablecoin") else h_c)
         over = dict(asset=c, wd_fee_per_coin=WITHDRAWAL_FEE_TABLE.get(c, 0.0),
@@ -5692,23 +5720,21 @@ def run_random_batch(sim, cfg, ctx, target_stock_thb, coins, n_orders, seed,
             px = float(last["Global_USD"] * last["USDTHB"])
             sim["inv_coins"][c] = target_stock_thb / px if px > 0 else 0.0
 
-    # 3) ยิงออเดอร์ (ไม่แตะกระเป๋าของผู้ใช้)
     saved_asset, saved_target = sim["asset"], sim["target_thb"]
     counts, last_steps = {}, []
     try:
-        for d, c, side, amt in plan:
+        for d, c, side, amt, cust in plan:
             sim["asset"] = c
-            sim["target_thb"] = target_stock_thb   # เหรียญละ 1 กอง target เท่ากัน
-            last_steps, _rec = execute_order(
-                sim, side, amt, d, frames[c].loc[d], coin_ctx[c],
-                affect_wallet=False)
+            sim["target_thb"] = target_stock_thb
+            last_steps, rec = execute_order(
+                sim, side, amt, d, frames[c].loc[d], coin_ctx[c], affect_wallet=False)
+            if rec is not None:
+                rec["Customer"] = cust["id"]
+                rec["Segment"] = cust["archetype"]
             counts[c] = counts.get(c, 0) + 1
     finally:
         sim["asset"], sim["target_thb"] = saved_asset, saved_target
     return last_steps, counts, skipped
-
-
-QUOTE_REFRESH_SEC = 15   # ปรับตรงนี้ได้ เช่น 10 / 30
 
 def _frozen_mid(asset: str, mid_now: float) -> float:
     """คืนราคากลางที่ตรึงไว้ จะอัปเดตเมื่อครบ QUOTE_REFRESH_SEC วินาที หรือเปลี่ยนเหรียญ"""
@@ -6252,6 +6278,8 @@ def render_backoffice(sim, cfg, ctx, target_stock_thb, price_thb) -> None:
     f = go.Figure(go.Bar(x=m.index, y=m.values, marker_color="#3B82F6"))
     f.add_hline(y=fx_lim, line=dict(color="#f6465d", dash="dash"), annotation_text="FX Limit/เดือน")
     st.plotly_chart(_bo_fig(f, 280, "การใช้ FX รายเดือนเทียบ Limit (USD)"), **WIDE)
+
+    render_customer_leaderboard(sim, cfg)
 
     with st.expander("ดาวน์โหลดสมุดออเดอร์ (CSV)"):
         st.download_button("⬇️ Ledger CSV", to_csv_bytes(df), "xspring_ledger.csv", "text/csv", **WIDE)
@@ -7274,6 +7302,285 @@ def render_alert_banner(alerts: list[dict[str, str]]) -> None:
                     warn=(a["level"] == "warning"))
 
 
+
+
+# =========================================================================
+# CUSTOMER P&L / LEADERBOARD — หา toxic flow ด้วย markout
+# =========================================================================
+# แนวคิด: markout = ราคา mid หลัง h วัน เทียบ mid ตอนเทรด (มุมมองลูกค้า)
+#   ลูกค้าซื้อ  -> ราคาขึ้น = ลูกค้าถูก (dealer เสียเปรียบ)
+#   ลูกค้าขาย   -> ราคาลง   = ลูกค้าถูก
+# ถ้า markout เฉลี่ยของลูกค้า > spread ที่เราเก็บ = ลูกค้ารายนี้ "กินเรา" อยู่
+# หมายเหตุ: ใช้ราคาปิดรายวันเป็น mid → เป็นการประมาณ ไม่ใช่ tick-level markout
+
+CUST_MARKOUT_HORIZONS = (1, 3, 7)
+CUST_SIZE_TIERS = [
+    (0.0, 50_000.0, "Retail (<50K)"),
+    (50_000.0, 500_000.0, "Mid (50K–500K)"),
+    (500_000.0, float("inf"), "Whale (≥500K)"),
+]
+CUST_TIER_COLOR = {
+    "☠️ Toxic": "#f6465d", "⚠️ Watch": "#fcd535", "💚 Profitable": "#0ecb81",
+    "⚪ Neutral": "#848e9c", "⏳ ข้อมูลน้อย": "#3B82F6",
+}
+
+
+def customer_id_of(rec: Mapping[str, Any]) -> str:
+    """หา ID ลูกค้าจากแถว ledger — ถ้าไม่มี field ระบุ จะ fallback ตาม Source"""
+    for k in ("Customer", "customer_id", "Telegram ID", "Telegram User",
+              "chat_id", "user_id"):
+        v = rec.get(k)
+        if v is not None and str(v).strip() and str(v).lower() != "nan":
+            return str(v).strip()
+    if str(rec.get("Source", "")).lower() == "telegram":
+        return "Telegram (ไม่ระบุ ID)"
+    return "Web (ผู้ใช้หลัก)"
+
+
+def _size_tier(avg_order: float) -> str:
+    for lo, hi, label in CUST_SIZE_TIERS:
+        if lo <= avg_order < hi:
+            return label
+    return CUST_SIZE_TIERS[-1][2]
+
+
+def customer_order_frame(orders: list, frames: Mapping[str, pd.DataFrame],
+                         horizons=CUST_MARKOUT_HORIZONS) -> pd.DataFrame:
+    """แปลง sim['orders'] เป็นตารางรายออเดอร์ + markout (bps, มุมมองลูกค้า)"""
+    rows = []
+    for r in orders:
+        if not isinstance(r, dict):
+            continue
+        try:
+            amt = float(r.get("มูลค่า (บาท)") or 0.0)
+            pnl = float(r.get("กำไรออเดอร์") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        rows.append(dict(
+            customer=customer_id_of(r),
+            segment_sim=r.get("Segment"),
+            source=str(r.get("Source") or "Web"),
+            asset=str(r.get("เหรียญ") or ""),
+            date=pd.to_datetime(r.get("วันที่"), errors="coerce"),
+            side=1 if r.get("ฝั่ง") == "ซื้อ" else -1,
+            amount=amt, pnl=pnl,
+            rejected=str(r.get("ผลด่าน", "")).startswith("Reject"),
+        ))
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    df = df.dropna(subset=["date"]).reset_index(drop=True)
+    for h in horizons:
+        df[f"mo_{h}d"] = np.nan
+
+    for asset, idx in df.groupby("asset").groups.items():
+        f = frames.get(asset)
+        if f is None or f.empty:
+            continue
+        mid = (f["Global_USD"] * f["USDTHB"]).sort_index()
+        mid = mid[~mid.index.duplicated(keep="last")]
+        last = mid.index.max().to_datetime64()
+        d0 = pd.DatetimeIndex(df.loc[idx, "date"])
+        p0 = mid.reindex(d0, method="ffill").to_numpy(dtype=float)
+        side = df.loc[idx, "side"].to_numpy(dtype=float)
+        for h in horizons:
+            tgt = d0 + pd.Timedelta(days=int(h))
+            ph = mid.reindex(tgt, method="ffill").to_numpy(dtype=float)
+            ph = np.where(tgt.to_numpy() <= last, ph, np.nan)   # ยังไม่ถึงวัน = ไม่มีข้อมูล
+            with np.errstate(divide="ignore", invalid="ignore"):
+                df.loc[idx, f"mo_{h}d"] = side * (ph / p0 - 1.0) * 1e4
+    return df
+
+
+def customer_leaderboard(odf: pd.DataFrame, base_spread_bps: float, horizon: int = 3,
+                         min_orders: int = 5, cap_mult: float = 3.0,
+                         vip_discount_bps: float = 0.0) -> pd.DataFrame:
+    if odf.empty:
+        return pd.DataFrame()
+    col = f"mo_{horizon}d"
+    ok = odf[~odf["rejected"]]
+    rej = odf[odf["rejected"]].groupby("customer").size()
+    rows = []
+    for cid, g in ok.groupby("customer"):
+        vol = float(g["amount"].sum())
+        m = g[col].dropna()
+        n = int(len(m))
+        mean = float(m.mean()) if n else np.nan
+        sd = float(m.std(ddof=1)) if n >= 2 else 0.0
+        t = (mean / (sd / math.sqrt(n))) if (n >= 2 and sd > 0) else 0.0
+        prob_informed = 0.5 * (1 + math.erf(t / math.sqrt(2)))   # ~ โอกาสที่ markout>0 เป็นของจริง
+        hit = float((m > 0).mean() * 100) if n else np.nan
+        pnl = float(g["pnl"].sum())
+        avg_order = vol / len(g) if len(g) else 0.0
+
+        if n < min_orders:
+            tier = "⏳ ข้อมูลน้อย"
+        elif t >= 2.0 and mean > 0.5 * base_spread_bps:
+            tier = "☠️ Toxic"
+        elif t >= 1.3 and mean > 0:
+            tier = "⚠️ Watch"
+        elif pnl > 0:
+            tier = "💚 Profitable"
+        else:
+            tier = "⚪ Neutral"
+
+        sugg = base_spread_bps
+        if tier in ("☠️ Toxic", "⚠️ Watch"):
+            shrink = min(1.0, max(0.0, (t - 1.0) / 2.0))   # ยิ่งมั่นใจ ยิ่งบวกเต็ม
+            sugg = min(base_spread_bps + shrink * max(mean, 0.0),
+                       base_spread_bps * cap_mult)
+        elif tier == "💚 Profitable":
+            sugg = max(0.0, base_spread_bps - vip_discount_bps)
+
+        rows.append({
+            "ลูกค้า": cid,
+            "กลุ่มตามขนาด": _size_tier(avg_order),
+            "ช่องทาง": g["source"].iloc[0],
+            "Segment (โมเดลจำลอง)": (g["segment_sim"].dropna().iloc[0]
+                                     if g["segment_sim"].notna().any() else ""),
+            "ออเดอร์": int(len(g)),
+            "ถูกปฏิเสธ": int(rej.get(cid, 0)),
+            "Volume (THB)": vol,
+            "Dealer P&L (THB)": pnl,
+            "P&L (bps)": pnl / vol * 1e4 if vol > 0 else 0.0,
+            f"Markout {horizon}D (bps)": mean,
+            "Hit Rate (%)": hit,
+            "t-stat": t,
+            "P(informed)": prob_informed,
+            "n (markout)": n,
+            "Edge หลัง Markout (bps)": base_spread_bps - mean if n else np.nan,
+            "สถานะ": tier,
+            "Spread ปัจจุบัน (bps)": base_spread_bps,
+            "Spread แนะนำ (bps)": sugg,
+        })
+    return pd.DataFrame(rows).sort_values("Dealer P&L (THB)", ascending=False).reset_index(drop=True)
+
+
+def customer_segment_summary(lb: pd.DataFrame, horizon: int, by: str) -> pd.DataFrame:
+    mo_col = f"Markout {horizon}D (bps)"
+    rows = []
+    for key, g in lb.groupby(by):
+        w = g["n (markout)"].clip(lower=0)
+        mo = float((g[mo_col].fillna(0) * w).sum() / w.sum()) if w.sum() > 0 else np.nan
+        vol = float(g["Volume (THB)"].sum())
+        rows.append({
+            by: key, "ลูกค้า": int(len(g)), "Volume (THB)": vol,
+            "Dealer P&L (THB)": float(g["Dealer P&L (THB)"].sum()),
+            "P&L (bps)": float(g["Dealer P&L (THB)"].sum() / vol * 1e4) if vol > 0 else 0.0,
+            f"Markout {horizon}D (bps)": mo,
+            "Toxic/Watch": int(g["สถานะ"].isin(["☠️ Toxic", "⚠️ Watch"]).sum()),
+        })
+    return pd.DataFrame(rows).sort_values("Dealer P&L (THB)", ascending=False)
+
+
+def render_customer_leaderboard(sim: dict[str, Any], cfg: dict[str, Any]) -> None:
+    section("🏆 Customer P&L / Leaderboard")
+    orders = sim.get("orders", [])
+    if not orders:
+        st.info("ยังไม่มีออเดอร์ให้วิเคราะห์ — กดสุ่มออเดอร์ก่อน")
+        return
+    st.caption(
+        "Markout = การเคลื่อนของราคา mid หลังลูกค้าเทรด (มุมมองลูกค้า) · ถ้าเฉลี่ยสูงกว่า spread ที่เก็บ "
+        "แปลว่าลูกค้าเทรดถูกทางบ่อยจน dealer ขาดทุนเชิงข้อมูล (toxic flow) · "
+        "ใช้ราคาปิดรายวัน จึงเป็นค่าประมาณ และออเดอร์ท้ายช่วงข้อมูลจะยังไม่มี markout"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    horizon = c1.selectbox("Markout horizon (วัน)", list(CUST_MARKOUT_HORIZONS),
+                           index=1, key="cl_h")
+    min_orders = c2.number_input("ออเดอร์ขั้นต่ำก่อนตัดสิน", value=5, min_value=2,
+                                 step=1, key="cl_min")
+    cap_mult = c3.number_input("เพดาน spread แนะนำ (เท่าของ base)", value=3.0,
+                               min_value=1.0, step=0.5, key="cl_cap")
+    vip_disc = c4.number_input("ส่วนลดลูกค้า Profitable (bps)", value=0.0,
+                               min_value=0.0, step=1.0, key="cl_vip")
+
+    assets = sorted({str(o.get("เหรียญ")) for o in orders if isinstance(o, dict) and o.get("เหรียญ")})
+    frames = {}
+    with st.spinner("กำลังโหลดราคาสำหรับคำนวณ markout…"):
+        for a in assets:
+            d, _e = fetch_price_data(a, cfg["start_date"], cfg["end_date"],
+                                     use_fx_proxy=cfg["use_fx_proxy"])
+            if not d.empty:
+                frames[a] = d
+
+    odf = customer_order_frame(orders, frames)
+    if odf.empty:
+        st.info("ไม่มีออเดอร์ที่ใช้วิเคราะห์ได้")
+        return
+    base_bps = float(cfg["dealer_spread"]) * 1e4
+    lb = customer_leaderboard(odf, base_bps, int(horizon), int(min_orders),
+                              float(cap_mult), float(vip_disc))
+    if lb.empty:
+        st.info("ไม่มีข้อมูลเพียงพอ")
+        return
+
+    tox = lb[lb["สถานะ"] == "☠️ Toxic"]
+    tot_vol = float(lb["Volume (THB)"].sum())
+    k = st.columns(4)
+    metric_card(k[0], "ลูกค้าทั้งหมด", f"{len(lb)}", None, f"{len(odf)} ออเดอร์")
+    metric_card(k[1], "Dealer P&L รวม", fmt_baht(lb["Dealer P&L (THB)"].sum(), True),
+                float(lb["Dealer P&L (THB)"].sum()))
+    metric_card(k[2], "☠️ Toxic", f"{len(tox)} ราย", -1 if len(tox) else 0,
+                f"{tox['Volume (THB)'].sum() / tot_vol * 100:.1f}% ของ volume" if tot_vol > 0 else "")
+    metric_card(k[3], "P&L จากกลุ่ม Toxic", fmt_baht(tox["Dealer P&L (THB)"].sum(), True),
+                float(tox["Dealer P&L (THB)"].sum()) if len(tox) else 0)
+
+    t_lb, t_seg, t_plot = st.tabs(["👤 รายลูกค้า", "👥 รายกลุ่ม", "🎯 Scatter"])
+    mo_col = f"Markout {horizon}D (bps)"
+
+    with t_lb:
+        view = st.radio("มุมมอง", ["ทำกำไรให้เรามากสุด", "Toxic / ขาดทุนมากสุด"],
+                        horizontal=True, key="cl_view")
+        shown = (lb.sort_values("Dealer P&L (THB)", ascending=False)
+                 if view.startswith("ทำกำไร")
+                 else lb.sort_values([mo_col], ascending=False, na_position="last"))
+        show_cols = ["ลูกค้า", "Segment (โมเดลจำลอง)", "กลุ่มตามขนาด", "ออเดอร์", "Volume (THB)",
+                     "Dealer P&L (THB)", "P&L (bps)", mo_col, "Hit Rate (%)", "t-stat",
+                     "P(informed)", "สถานะ", "Spread ปัจจุบัน (bps)", "Spread แนะนำ (bps)"]
+        if not lb["Segment (โมเดลจำลอง)"].astype(bool).any():
+            show_cols.remove("Segment (โมเดลจำลอง)")
+        st.dataframe(shown[show_cols].round(2), height=min(460, 40 + 35 * len(shown)), **WIDE)
+        st.caption("Spread แนะนำเป็นเพียงข้อเสนอเชิงสถิติ (base + markout × ความมั่นใจ, ไม่เกินเพดาน) "
+                   "— ต้องให้คนตัดสินใจก่อนใช้จริง และระวัง false positive เมื่อมีลูกค้าจำนวนมาก")
+        st.download_button("⬇️ Leaderboard CSV", to_csv_bytes(lb),
+                           "xspring_customer_leaderboard.csv", "text/csv", **WIDE)
+
+    with t_seg:
+        by = st.radio("จัดกลุ่มตาม", ["กลุ่มตามขนาด", "ช่องทาง", "Segment (โมเดลจำลอง)"],
+                      horizontal=True, key="cl_by")
+        lb_g = lb.copy()
+        lb_g[by] = lb_g[by].replace("", "ไม่ระบุ")
+        seg = customer_segment_summary(lb_g, int(horizon), by)
+        st.dataframe(seg.round(2), **WIDE)
+        fig = go.Figure(go.Bar(x=seg[by], y=seg["Dealer P&L (THB)"],
+                               marker_color=["#0ecb81" if v >= 0 else "#f6465d"
+                                             for v in seg["Dealer P&L (THB)"]]))
+        fig.update_layout(template="plotly_dark", height=280, margin=dict(t=30, b=20),
+                          title=dict(text="Dealer P&L แยกตามกลุ่มลูกค้า (THB)", font=dict(size=13)),
+                          paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+        st.plotly_chart(fig, **WIDE)
+
+    with t_plot:
+        fig = go.Figure()
+        for tier, color in CUST_TIER_COLOR.items():
+            s = lb[(lb["สถานะ"] == tier) & lb[mo_col].notna()]
+            if s.empty:
+                continue
+            fig.add_trace(go.Scatter(
+                x=s[mo_col], y=s["Dealer P&L (THB)"], mode="markers", name=tier,
+                text=s["ลูกค้า"],
+                marker=dict(color=color, opacity=0.85,
+                            size=np.clip(np.sqrt(s["Volume (THB)"]) / 60, 8, 42)),
+                hovertemplate="%{text}<br>Markout %{x:.1f} bps<br>P&L %{y:,.0f} THB<extra></extra>"))
+        fig.add_vline(x=base_bps, line=dict(color="#fcd535", dash="dash"),
+                      annotation_text="Spread ที่เก็บ")
+        fig.add_hline(y=0, line=dict(color="#848e9c", dash="dot"))
+        fig.update_layout(template="plotly_dark", height=440, margin=dict(t=30, b=20),
+                          xaxis_title=f"Markout {horizon}D เฉลี่ย (bps) → ขวา = ลูกค้าถูกทางบ่อย",
+                          yaxis_title="Dealer P&L (THB)",
+                          paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+        st.plotly_chart(fig, **WIDE)
 def _main_body() -> None:
     st.markdown(THEME_CSS, unsafe_allow_html=True)
 
