@@ -6265,19 +6265,15 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                     render_market_column_view(m_df, mode, asset, usdthb_current)
 
     with col_center:
-        local_sym = TV_LOCAL_SYMBOL.get(asset, f"BITKUB:{asset}THB")
-        render_tradingview(local_sym, f"tv_center_{asset}", 460,
-                           studies=["MAExp@tv-basicstudies"])
-
-        with st.container(border=True):
-            _order_panel_live(cfg, sim, asset, mid_now, data, current_date_val, ctx)
-
-        st.markdown("---")
+        # 3D Order Book แทนพื้นที่กราฟ TradingView ที่ว่างอยู่
         render_orderbook_3d(
             symbol=f"{asset.lower()}_thb",
             title=f"3D Order Book — {asset}/THB",
             limit=25,
         )
+
+        with st.container(border=True):
+            _order_panel_live(cfg, sim, asset, mid_now, data, current_date_val, ctx)
 
         with st.expander("🎲 เครื่องมือจำลอง — สุ่มออเดอร์ / รีเซ็ต", expanded=False):
             st.caption("สุ่มออเดอร์ = ลูกค้าคนอื่นในตลาด ไม่แตะกระเป๋าของคุณ · "
