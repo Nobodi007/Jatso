@@ -183,6 +183,7 @@ def render_orderbook_3d(symbol="btc_thb", title="3D Order Book", limit=25):
     st.plotly_chart(
         fig,
         use_container_width=True,
+        key=f"orderbook_3d_{symbol}",
         config={"displaylogo": False, "scrollZoom": True, "responsive": True},
     )
 
