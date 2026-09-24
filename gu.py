@@ -6617,22 +6617,37 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                     render_market_column_view(m_df, mode, asset, usdthb_current)
 
     with col_center:
-        local_sym = TV_LOCAL_SYMBOL.get(asset, f"BITKUB:{asset}THB")
-        render_tradingview(local_sym, f"tv_center_{asset}", 460,
-                           studies=["MAExp@tv-basicstudies"])
+        # สลับ TradingView / 3D Order Book ในพื้นที่เดียวกัน
+        # เมื่อเปิดเว็บ/เริ่ม session ใหม่ ค่าเริ่มต้นจะเป็น TradingView เสมอ
+        chart_view = st.radio(
+            "มุมมอง",
+            ["📈 TradingView", "📊 3D Order Book"],
+            index=0,
+            horizontal=True,
+            key="exchange_chart_view",
+            label_visibility="collapsed",
+        )
+
+        if chart_view == "📈 TradingView":
+            local_sym = TV_LOCAL_SYMBOL.get(asset, f"BITKUB:{asset}THB")
+            render_tradingview(
+                local_sym,
+                f"tv_center_{asset}",
+                460,
+                studies=["MAExp@tv-basicstudies"],
+            )
+        else:
+            try:
+                render_orderbook_3d(
+                    symbol=f"{asset.lower()}_thb",
+                    title=f"3D Order Book — {asset}/THB",
+                    limit=20,
+                )
+            except Exception as exc:
+                st.warning(f"3D Order Book ใช้งานไม่ได้: {exc}")
 
         with st.container(border=True):
             _order_panel_live(cfg, sim, asset, mid_now, data, current_date_val, ctx)
-
-        # Bitkub 3D Order Book — lightweight version (2 Mesh3d traces + 10-min cache)
-        try:
-            render_orderbook_3d(
-                symbol=f"{asset.lower()}_thb",
-                title=f"3D Order Book — {asset}/THB",
-                limit=20,
-            )
-        except Exception as exc:
-            st.warning(f"3D Order Book ใช้งานไม่ได้: {exc}")
 
         with st.expander("🎲 เครื่องมือจำลอง — สุ่มออเดอร์ / รีเซ็ต", expanded=False):
             st.caption("สุ่มออเดอร์ = ลูกค้าคนอื่นในตลาด ไม่แตะกระเป๋าของคุณ · "
