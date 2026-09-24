@@ -1,11 +1,20 @@
 """
 XSpring Dealer Suite - 3D Order Book
 -------------------------------------
-ดึง Order Book จาก Bitkub Public REST API v3
-และแสดงเป็น 3D Market Depth ใน Streamlit
+3D Market Depth แบบ "กำแพง/แท่ง" สำหรับ Streamlit + Plotly
 
-อัปเดตข้อมูลทุก 10 นาที (600 วินาที)
-ไม่มี API Key เพราะใช้ public market endpoint
+แหล่งข้อมูล:
+    Bitkub Public API v3 /market/depth
+
+พฤติกรรม:
+    - BTC/THB เป็นค่าเริ่มต้น
+    - cache 10 นาที
+    - Bid = ฝั่งซื้อ
+    - Ask = ฝั่งขาย
+    - แต่ละระดับราคาถูกวาดเป็นแท่ง 3D
+    - หมุน / ซูม / เลื่อนกราฟได้ด้วยเมาส์
+    - แสดง Best Bid / Best Ask / Spread
+    - แสดงตาราง Order Book ด้านล่าง
 """
 
 from __future__ import annotations
@@ -23,38 +32,29 @@ BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def fetch_orderbook(symbol: str = "btc_thb", limit: int = 30) -> dict:
-    """
-    ดึง order book จาก Bitkub และ cache 10 นาที
-
-    response:
-      {
-        "asks": [[price, amount], ...],
-        "bids": [[price, amount], ...]
-      }
-    """
+def fetch_orderbook(symbol: str = "btc_thb", limit: int = 25) -> dict:
+    """ดึง snapshot Order Book และ cache ไว้ 10 นาที"""
     response = requests.get(
         BITKUB_DEPTH_URL,
-        params={"sym": symbol.lower(), "lmt": int(limit)},
+        params={
+            "sym": symbol.lower(),
+            "lmt": int(limit),
+        },
         timeout=20,
     )
     response.raise_for_status()
 
     data = response.json()
 
-    # Bitkub API v3 อาจตอบ error object
-    if isinstance(data, dict) and data.get("error", 0) not in (0, None):
+    if not isinstance(data, dict):
+        raise RuntimeError("Bitkub API ส่งข้อมูลที่ไม่ใช่ JSON object")
+
+    if data.get("error", 0) not in (0, None):
         raise RuntimeError(f"Bitkub API error: {data}")
 
-    if not isinstance(data, dict):
-        raise RuntimeError("รูปแบบข้อมูล Order Book จาก Bitkub ไม่ถูกต้อง")
-
-    asks = data.get("asks") or []
-    bids = data.get("bids") or []
-
     def clean(rows):
-        out = []
-        for row in rows:
+        result = []
+        for row in rows or []:
             if not isinstance(row, (list, tuple)) or len(row) < 2:
                 continue
             try:
@@ -64,156 +64,212 @@ def fetch_orderbook(symbol: str = "btc_thb", limit: int = 30) -> dict:
                 continue
 
             if price > 0 and amount > 0:
-                out.append((price, amount))
-        return out
+                result.append((price, amount))
+
+        return result
 
     return {
-        "asks": clean(asks),
-        "bids": clean(bids),
+        "asks": clean(data.get("asks")),
+        "bids": clean(data.get("bids")),
         "fetched_at": datetime.now(BANGKOK_TZ),
     }
 
 
+def _cube_mesh(
+    x_center: float,
+    y_center: float,
+    width: float,
+    depth: float,
+    height: float,
+    color: str,
+    name: str,
+    hover_text: str,
+):
+    """
+    สร้างแท่งสี่เหลี่ยม 3D หนึ่งแท่งด้วย Mesh3d
+
+    Plotly ไม่มี primitive "3D bar" โดยตรง จึงใช้ Mesh3d
+    สร้างทรงลูกบาศก์/ปริซึม ซึ่งเหมาะกับ depth visualization
+    """
+    x0 = x_center - width / 2
+    x1 = x_center + width / 2
+    y0 = y_center - depth / 2
+    y1 = y_center + depth / 2
+    z0 = 0.0
+    z1 = height
+
+    # 8 vertices
+    x = [x0, x1, x1, x0, x0, x1, x1, x0]
+    y = [y0, y0, y1, y1, y0, y0, y1, y1]
+    z = [z0, z0, z0, z0, z1, z1, z1, z1]
+
+    # 12 triangles = 6 faces
+    i = [0, 0, 0, 1, 1, 2, 4, 4, 5, 6, 3, 3]
+    j = [1, 2, 3, 2, 5, 3, 5, 6, 6, 7, 7, 4]
+    k = [2, 3, 1, 5, 6, 7, 6, 7, 4, 4, 4, 0]
+
+    return go.Mesh3d(
+        x=x,
+        y=y,
+        z=z,
+        i=i,
+        j=j,
+        k=k,
+        color=color,
+        opacity=0.82,
+        flatshading=True,
+        hovertext=hover_text,
+        hoverinfo="text",
+        name=name,
+        showlegend=False,
+    )
+
+
 def _make_3d_orderbook(asks, bids, symbol="BTC/THB"):
     """
-    สร้าง 3D Market Depth:
-      X = ราคา
-      Y = ระดับ Order
-      Z = ปริมาณเหรียญ
+    สร้าง 3D Order Book แบบแท่ง
 
-    ไม่ทำข้อมูลเวลาเทียม เพราะ endpoint นี้ให้ snapshot ปัจจุบัน
+    X = ราคา
+    Y = ลำดับ depth
+    Z = ปริมาณ
     """
-    # เรียงราคา: bid จากต่ำ -> สูง, ask จากต่ำ -> สูง
-    bids = sorted(bids, key=lambda x: x[0])
-    asks = sorted(asks, key=lambda x: x[0])
 
-    # ใช้ระดับ order เป็นแกน Y
-    max_levels = max(len(bids), len(asks), 1)
+    # ให้ราคาต่ำ -> สูง
+    bids = sorted(bids, key=lambda row: row[0])
+    asks = sorted(asks, key=lambda row: row[0])
 
-    bid_x = [p for p, _ in bids]
-    bid_z = [q for _, q in bids]
-    ask_x = [p for p, _ in asks]
-    ask_z = [q for _, q in asks]
+    if not bids and not asks:
+        return go.Figure()
 
-    # ทำให้เป็นเส้น 3D ที่อ่านง่าย:
-    # Y = ระดับราคา/ลำดับ depth
-    bid_y = list(range(len(bids)))
-    ask_y = list(range(len(asks)))
+    all_amounts = [amount for _, amount in bids + asks]
+    max_amount = max(all_amounts, default=1.0)
 
-    fig = go.Figure()
+    # จำกัดความสูงเพื่อให้กราฟไม่เสียรูปจาก order เดียวที่ใหญ่มาก
+    z_cap = max_amount
+    if z_cap <= 0:
+        z_cap = 1.0
 
-    if bids:
-        fig.add_trace(
-            go.Scatter3d(
-                x=bid_x,
-                y=bid_y,
-                z=bid_z,
-                mode="lines+markers",
+    all_prices = [price for price, _ in bids + asks]
+    min_price = min(all_prices)
+    max_price = max(all_prices)
+
+    price_span = max(max_price - min_price, 1.0)
+    bar_width = price_span / max(len(all_prices), 10) * 0.72
+
+    # แยกฝั่งให้เห็นเป็นกำแพงคนละด้าน
+    traces = []
+
+    # Bid: สีเขียว
+    for idx, (price, amount) in enumerate(bids):
+        height = min(amount, z_cap)
+
+        hover = (
+            "<b>🟢 BID — ซื้อ</b><br>"
+            f"ราคา: {price:,.2f} THB<br>"
+            f"ปริมาณ: {amount:,.8f} BTC<br>"
+            f"Depth: {idx + 1}"
+        )
+
+        traces.append(
+            _cube_mesh(
+                x_center=price,
+                y_center=-(idx + 1),
+                width=bar_width,
+                depth=0.72,
+                height=height,
+                color="#00d68f",
                 name="Bid (ซื้อ)",
-                line=dict(width=7),
-                marker=dict(size=5),
-                hovertemplate=(
-                    "<b>Bid</b><br>"
-                    "ราคา: %{x:,.2f} THB<br>"
-                    "Depth: %{y}<br>"
-                    "จำนวน: %{z:,.8f}<extra></extra>"
-                ),
+                hover_text=hover,
             )
         )
 
-        # เส้นฐานเพื่อให้เห็นรูปทรงของ depth
-        fig.add_trace(
-            go.Scatter3d(
-                x=bid_x,
-                y=bid_y,
-                z=[0] * len(bids),
-                mode="lines",
-                name="Bid base",
-                showlegend=False,
-                line=dict(width=2),
-                hoverinfo="skip",
-            )
+    # Ask: สีแดง
+    for idx, (price, amount) in enumerate(asks):
+        height = min(amount, z_cap)
+
+        hover = (
+            "<b>🔴 ASK — ขาย</b><br>"
+            f"ราคา: {price:,.2f} THB<br>"
+            f"ปริมาณ: {amount:,.8f} BTC<br>"
+            f"Depth: {idx + 1}"
         )
 
-    if asks:
-        fig.add_trace(
-            go.Scatter3d(
-                x=ask_x,
-                y=ask_y,
-                z=ask_z,
-                mode="lines+markers",
+        traces.append(
+            _cube_mesh(
+                x_center=price,
+                y_center=idx + 1,
+                width=bar_width,
+                depth=0.72,
+                height=height,
+                color="#ff3b5c",
                 name="Ask (ขาย)",
-                line=dict(width=7),
-                marker=dict(size=5),
-                hovertemplate=(
-                    "<b>Ask</b><br>"
-                    "ราคา: %{x:,.2f} THB<br>"
-                    "Depth: %{y}<br>"
-                    "จำนวน: %{z:,.8f}<extra></extra>"
-                ),
+                hover_text=hover,
             )
         )
 
-        fig.add_trace(
-            go.Scatter3d(
-                x=ask_x,
-                y=ask_y,
-                z=[0] * len(asks),
-                mode="lines",
-                name="Ask base",
-                showlegend=False,
-                line=dict(width=2),
-                hoverinfo="skip",
-            )
-        )
+    # Best Bid / Best Ask / Mid Price
+    best_bid = max((p for p, _ in bids), default=None)
+    best_ask = min((p for p, _ in asks), default=None)
 
-    # จุดกลางตลาด
-    if bids and asks:
-        best_bid = max(p for p, _ in bids)
-        best_ask = min(p for p, _ in asks)
+    if best_bid is not None and best_ask is not None:
         mid = (best_bid + best_ask) / 2
 
-        fig.add_trace(
+        traces.append(
             go.Scatter3d(
-                x=[mid],
-                y=[0],
-                z=[0],
-                mode="markers+text",
-                name="Mid Price",
-                marker=dict(size=9, symbol="diamond"),
-                text=[f"{mid:,.2f} THB"],
+                x=[mid, mid],
+                y=[-1.5, 1.5],
+                z=[0, 0],
+                mode="lines+text",
+                line=dict(width=8, color="#ffffff"),
+                text=["", f"Mid {mid:,.2f} THB"],
                 textposition="top center",
-                hovertemplate="Mid: %{x:,.2f} THB<extra></extra>",
+                name="Mid Price",
+                hovertemplate=f"Mid Price: {mid:,.2f} THB<extra></extra>",
             )
         )
 
+    fig = go.Figure(data=traces)
+
     fig.update_layout(
-        title=f"3D Order Book — {symbol}",
-        height=650,
+        title=dict(
+            text=f"3D Order Book — {symbol}",
+            x=0.02,
+        ),
+        height=680,
         margin=dict(l=0, r=0, t=55, b=0),
         template="plotly_dark",
+        paper_bgcolor="#07111f",
+        plot_bgcolor="#07111f",
         scene=dict(
             xaxis=dict(
                 title="ราคา (THB)",
                 tickformat=",",
+                showbackground=True,
+                backgroundcolor="#07111f",
+                gridcolor="#253247",
+                zerolinecolor="#53657d",
             ),
             yaxis=dict(
-                title="Depth Level",
+                title="Depth",
+                showbackground=True,
+                backgroundcolor="#07111f",
+                gridcolor="#253247",
+                zerolinecolor="#53657d",
             ),
             zaxis=dict(
-                title="ปริมาณ",
+                title="ปริมาณ (BTC)",
+                showbackground=True,
+                backgroundcolor="#07111f",
+                gridcolor="#253247",
+                zerolinecolor="#53657d",
             ),
+            aspectmode="manual",
+            aspectratio=dict(x=2.2, y=1.15, z=1.0),
             camera=dict(
-                eye=dict(x=1.65, y=1.55, z=1.25),
+                eye=dict(x=1.65, y=1.55, z=1.15),
             ),
         ),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.01,
-            xanchor="left",
-            x=0,
-        ),
+        showlegend=False,
     )
 
     return fig
@@ -221,21 +277,16 @@ def _make_3d_orderbook(asks, bids, symbol="BTC/THB"):
 
 def render_orderbook_3d(
     symbol: str = "btc_thb",
-    title: str = "Order Book",
-    limit: int = 30,
+    title: str = "3D Order Book",
+    limit: int = 25,
 ):
-    """
-    เรียกใช้จากหน้า Streamlit ได้โดยตรง
-
-    ตัวอย่าง:
-        from orderbook_3d import render_orderbook_3d
-        render_orderbook_3d("btc_thb")
-    """
+    """เรียกใช้ในหน้า Streamlit"""
     symbol = symbol.lower()
 
     st.subheader(title)
     st.caption(
-        "3D Market Depth จาก Bitkub • อัปเดตข้อมูลสูงสุดทุก 10 นาที"
+        "3D Market Depth • Bitkub • snapshot ล่าสุด • "
+        "ระบบ cache ข้อมูล 10 นาที"
     )
 
     try:
@@ -252,7 +303,6 @@ def render_orderbook_3d(
         st.warning("ยังไม่มีข้อมูล Order Book")
         return
 
-    # Metrics
     best_bid = max((p for p, _ in bids), default=0.0)
     best_ask = min((p for p, _ in asks), default=0.0)
 
@@ -260,13 +310,13 @@ def render_orderbook_3d(
 
     with c1:
         st.metric(
-            "Best Bid",
+            "🟢 Best Bid",
             f"{best_bid:,.2f} THB" if best_bid else "-",
         )
 
     with c2:
         st.metric(
-            "Best Ask",
+            "🔴 Best Ask",
             f"{best_ask:,.2f} THB" if best_ask else "-",
         )
 
@@ -277,8 +327,21 @@ def render_orderbook_3d(
         else:
             st.metric("Spread", "-")
 
-    fig = _make_3d_orderbook(asks, bids, symbol.upper().replace("_", "/"))
-    st.plotly_chart(fig, use_container_width=True)
+    fig = _make_3d_orderbook(
+        asks,
+        bids,
+        symbol.upper().replace("_", "/"),
+    )
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        config={
+            "displaylogo": False,
+            "scrollZoom": True,
+            "responsive": True,
+        },
+    )
 
     st.caption(
         "ข้อมูล snapshot ล่าสุด: "
@@ -286,14 +349,20 @@ def render_orderbook_3d(
         + " (เวลาไทย) • cache 10 นาที"
     )
 
-    # ตารางรายละเอียด
     left, right = st.columns(2)
 
     with left:
-        st.markdown("### Bid (ซื้อ)")
+        st.markdown("### 🟢 Bid — ซื้อ")
         bid_rows = [
-            {"ราคา (THB)": p, "ปริมาณ": q}
-            for p, q in sorted(bids, key=lambda x: x[0], reverse=True)
+            {
+                "ราคา (THB)": price,
+                "ปริมาณ (BTC)": amount,
+            }
+            for price, amount in sorted(
+                bids,
+                key=lambda row: row[0],
+                reverse=True,
+            )
         ]
         st.dataframe(
             bid_rows,
@@ -302,10 +371,16 @@ def render_orderbook_3d(
         )
 
     with right:
-        st.markdown("### Ask (ขาย)")
+        st.markdown("### 🔴 Ask — ขาย")
         ask_rows = [
-            {"ราคา (THB)": p, "ปริมาณ": q}
-            for p, q in sorted(asks, key=lambda x: x[0])
+            {
+                "ราคา (THB)": price,
+                "ปริมาณ (BTC)": amount,
+            }
+            for price, amount in sorted(
+                asks,
+                key=lambda row: row[0],
+            )
         ]
         st.dataframe(
             ask_rows,
