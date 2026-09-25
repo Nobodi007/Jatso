@@ -7792,6 +7792,29 @@ MOBILE_NAV_CSS = r'''<style>
 </style>'''
 
 
+MOBILE_NEWS_TAB_CSS = r'''<style>
+/* ---------- Mobile top section tabs: Market / News ---------- */
+.st-key-mobile_section_tab { margin: 2px 0 10px !important; }
+.st-key-mobile_section_tab [role="radiogroup"] { display:flex !important; gap:6px !important; width:100% !important; overflow-x:auto !important; scrollbar-width:none !important; }
+.st-key-mobile_section_tab [role="radiogroup"]::-webkit-scrollbar{display:none!important;}
+.st-key-mobile_section_tab label { flex:0 0 auto !important; min-width:118px !important; height:34px !important; padding:5px 14px !important; margin:0 !important; border:1px solid #2b3139 !important; border-radius:10px !important; background:#181a20 !important; color:#848e9c !important; display:flex !important; align-items:center !important; justify-content:center !important; }
+.st-key-mobile_section_tab label > div:first-child,.st-key-mobile_section_tab label svg,.st-key-mobile_section_tab label input { display:none !important; }
+.st-key-mobile_section_tab label p,.st-key-mobile_section_tab label span { margin:0 !important; color:#848e9c !important; font-size:12px !important; font-weight:700 !important; white-space:nowrap !important; }
+.st-key-mobile_section_tab label:has(input:checked),.st-key-mobile_section_tab label[data-checked="true"] { background:#087a3f !important; border-color:#087a3f !important; }
+.st-key-mobile_section_tab label:has(input:checked) p,.st-key-mobile_section_tab label:has(input:checked) span,.st-key-mobile_section_tab label[data-checked="true"] p { color:#fff !important; }
+.mobile-news-full-title{color:#EAECEF;font-size:22px;font-weight:800;margin:4px 0 2px;}
+.mobile-news-full-sub{color:#848e9c;font-size:11px;margin-bottom:10px;}
+.mobile-news-card{display:flex;gap:10px;padding:10px 0;border-bottom:1px solid #2b3139;}
+.mobile-news-card:last-child{border-bottom:0;}
+.mobile-news-thumb{width:92px;height:62px;flex:0 0 92px;border-radius:9px;object-fit:cover;background:#161a20;}
+.mobile-news-body{min-width:0;}
+.mobile-news-title{display:block;color:#EAECEF !important;text-decoration:none !important;font-size:13px;font-weight:750;line-height:1.35;margin-bottom:5px;}
+.mobile-news-meta{color:#848e9c;font-size:10px;line-height:1.35;}
+.mobile-news-tags{color:#0ecb81;font-size:9px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+@media (max-width:430px){.st-key-mobile_section_tab label{min-width:108px !important;padding:5px 10px !important;}.mobile-news-thumb{width:82px;height:58px;flex-basis:82px;}.mobile-news-title{font-size:12px;}}
+</style>'''
+
+
 MOBILE_MARKET_NEWS_CSS = r'''<style>
 .mobile-market-topgrid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(280px,1fr);gap:16px;align-items:start;margin-bottom:10px;}
 .mobile-market-news{background:#181a20;border:1px solid #2b3139;border-radius:14px;padding:12px 13px;min-height:178px;overflow:hidden;}
@@ -8120,65 +8143,41 @@ MOBILE_COIN_LOGOS = {
 }
 
 
-def render_mobile_market(cfg: dict[str, Any], market_df: pd.DataFrame, usdthb: float) -> None:
-    """Mobile market: chart/orderbook first, then exchange-style watchlist with real coin logos."""
-    # Market header + compact live news panel ใช้พื้นที่ว่างด้านบนให้เป็นประโยชน์
-    # โดย reuse news engine เดิมของแอป ไม่สร้าง API/news engine ซ้ำ
-    st.markdown('<div class="mobile-market-topgrid">', unsafe_allow_html=True)
-    head_col, news_col = st.columns([1.65, 1.0], gap="medium")
-    with head_col:
-        st.markdown(
-            '<div class="mobile-page-title">🌐 ภาพรวมตลาด (Market)</div>'
-            '<div class="mobile-page-sub">ราคา THB · ตลาดคริปโต · อัปเดตตามข้อมูลตลาด</div>',
-            unsafe_allow_html=True,
-        )
-    with news_col:
-        st.markdown('<div class="mobile-market-news">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="mobile-market-news-head">'
-            '<span class="mobile-market-news-title">📰 ข่าวตลาด</span>'
-            '<span class="mobile-market-news-refresh">Live · 10 นาที</span>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-        try:
-            news_items = fetch_crypto_news(limit=4)
-        except Exception:
-            news_items = []
-        if news_items:
-            for news in news_items[:4]:
-                title = _html.escape(str(news.get("title", "ข่าวตลาด")))
-                url = str(news.get("url", ""))
-                source = _html.escape(str(news.get("source", "Unknown")))
-                ago = _html.escape(_news_time_ago(int(news.get("published_ts", 0) or 0)))
-                img = str(news.get("image_url", "") or NEWS_PLACEHOLDER_URL)
-                if not img.startswith(("http://", "https://")):
-                    img = NEWS_PLACEHOLDER_URL
-                img = _html.escape(img, quote=True)
-                if url.startswith(("http://", "https://")):
-                    safe_url = _html.escape(url, quote=True)
-                    title_html = f'<a class="mobile-market-news-link" href="{safe_url}" target="_blank" rel="noopener noreferrer">{title}</a>'
-                else:
-                    title_html = f'<div class="mobile-market-news-link">{title}</div>'
-                st.markdown(
-                    f'<div class="mobile-market-news-item">'
-                    f'<img class="mobile-market-news-thumb" src="{img}" alt="news">'
-                    f'<div class="mobile-market-news-body">{title_html}'
-                    f'<div class="mobile-market-news-meta">{source} · {ago}</div></div></div>',
-                    unsafe_allow_html=True,
-                )
+
+def render_mobile_news_full(cfg: dict[str, Any]) -> None:
+    """Mobile News tab using the same news engine/content as the desktop website."""
+    st.markdown('<div class="mobile-news-full-title">📰 ข่าวตลาด</div>', unsafe_allow_html=True)
+    st.markdown('<div class="mobile-news-full-sub">ข่าวคริปโตจากแหล่งเดียวกับหน้าเว็บ · อัปเดตอัตโนมัติ</div>', unsafe_allow_html=True)
+    c1, c2 = st.columns([7, 2])
+    with c1:
+        st.caption("ข่าวล่าสุด")
+    with c2:
+        if st.button("🔄 รีเฟรช", key="mobile_news_refresh", use_container_width=True):
+            fetch_crypto_news.clear(); fetch_crypto_news_rss.clear(); st.rerun()
+    news_items = fetch_crypto_news(limit=30)
+    if not news_items:
+        st.warning("ยังดึงข่าวจากแหล่งข่าวไม่สำเร็จ หรือยังไม่มีข่าวที่ตรงกับเหรียญในระบบ")
+        return
+    st.caption(f"พบข่าวที่เกี่ยวข้อง {len(news_items)} ข่าว")
+    for news in news_items:
+        title = news.get("title") or "(ไม่มีหัวข้อข่าว)"
+        url = news.get("url") or ""
+        img = news.get("image_url") or NEWS_PLACEHOLDER_URL
+        source = news.get("source") or "Unknown"
+        ago = _news_time_ago(int(news.get("published_ts") or 0))
+        tags = " · ".join(news.get("tags") or [])
+        safe_title = _html.escape(str(title))
+        if url:
+            title_html = f'<a class="mobile-news-title" href="{_html.escape(str(url), quote=True)}" target="_blank" rel="noopener">{safe_title}</a>'
         else:
-            st.markdown('<div class="mobile-market-news-empty">ยังโหลดข่าวไม่ได้<br>ระบบจะลองใหม่อัตโนมัติ</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+            title_html = f'<div class="mobile-news-title">{safe_title}</div>'
+        st.markdown(f'<div class="mobile-news-card"><img class="mobile-news-thumb" src="{_html.escape(str(img), quote=True)}"><div class="mobile-news-body">{title_html}<div class="mobile-news-meta">{_html.escape(str(source))} · {_html.escape(str(ago))}</div><div class="mobile-news-tags">{_html.escape(tags)}</div></div></div>', unsafe_allow_html=True)
 
-    current = str(cfg.get("asset", "BTC"))
-    if current not in SUPPORTED_ASSETS:
-        current = "BTC"
-    chart_asset = str(st.session_state.get("mobile_market_selected", current))
-    if chart_asset not in SUPPORTED_ASSETS:
-        chart_asset = current
 
+def render_mobile_market(cfg: dict[str, Any], market_df: pd.DataFrame, usdthb: float) -> None:
+    # Market page — ข่าวแยกเป็นแท็บด้านบน
+    st.markdown('<div class="mobile-page-title">🌐 ภาพรวมตลาด (Market)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="mobile-page-sub">ราคา THB · ตลาดคริปโต · อัปเดตตามข้อมูลตลาด</div>', unsafe_allow_html=True)
     st.markdown('<div class="mobile-section-heading">📊 Market chart</div>', unsafe_allow_html=True)
     chart_view = st.radio(
         "มุมมองกราฟ", ["📈 TradingView", "📊 3D Order Book"],
@@ -9015,6 +9014,7 @@ def _main_body() -> None:
     st.markdown(THEME_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_NAV_CSS, unsafe_allow_html=True)
+    st.markdown(MOBILE_NEWS_TAB_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_MARKET_NEWS_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_BT_CSS, unsafe_allow_html=True)
 
@@ -9123,11 +9123,10 @@ def _main_body() -> None:
     if "main_nav" not in st.session_state:
         st.session_state["main_nav"] = NAV_LABELS[0]
 
-    # แถบเมนูหลักยังคงแสดงแท็บเดิมทั้งหมด ยกเว้นข่าวที่ย้ายไปเป็นปุ่มเล็กด้านบน
-    # ใช้ key แยกจาก main_nav เพื่อให้ radio ไม่หายไปเมื่ออยู่หน้า News
-    nav_labels_main = [label for label in NAV_LABELS if label != NAV_NEWS]
+    # News เป็นแท็บหลักจริง ไม่ได้ฝังอยู่เฉพาะหน้า Market
+    nav_labels_main = list(NAV_LABELS)
     current_nav = st.session_state.get("main_nav", nav_labels_main[0])
-    if current_nav not in nav_labels_main and current_nav != NAV_NEWS:
+    if current_nav not in nav_labels_main:
         current_nav = nav_labels_main[0]
         st.session_state["main_nav"] = current_nav
 
@@ -9230,30 +9229,17 @@ def _main_body() -> None:
         </style>
         """, unsafe_allow_html=True)
 
-        if current_nav == NAV_NEWS:
-            selected_nav = st.radio(
-                "เมนูหลัก",
-                nav_labels_main,
-                horizontal=True,
-                index=None,
-                key="main_nav_tabs_news",
-                label_visibility="collapsed",
-            )
-            nav = selected_nav if selected_nav else NAV_NEWS
-            if selected_nav:
-                st.session_state["main_nav"] = selected_nav
-        else:
-            default_idx = nav_labels_main.index(current_nav)
-            selected_nav = st.radio(
-                "เมนูหลัก",
-                nav_labels_main,
-                horizontal=True,
-                index=default_idx,
-                key="main_nav_tabs",
-                label_visibility="collapsed",
-            )
-            nav = selected_nav
-            st.session_state["main_nav"] = selected_nav
+        default_idx = nav_labels_main.index(current_nav)
+        selected_nav = st.radio(
+            "เมนูหลัก",
+            nav_labels_main,
+            horizontal=True,
+            index=default_idx,
+            key="main_nav_tabs",
+            label_visibility="collapsed",
+        )
+        nav = selected_nav
+        st.session_state["main_nav"] = selected_nav
 
     # Mobile UI อยู่ใน shell แยก เพื่อไม่ให้ถูก render บน Desktop
     # แต่ยังคงสร้าง widget ได้ปกติบน Mobile viewport
@@ -9277,6 +9263,23 @@ def _main_body() -> None:
         # สำคัญ: mobile_nav เป็น widget key แล้ว Streamlit จะ sync ค่าให้เอง
         # ห้ามเขียน st.session_state["mobile_nav"] ซ้ำหลังสร้าง widget
 
+        # แท็บบน: Market / News — แสดงเฉพาะเมื่ออยู่หมวด Market
+        # News เป็นหน้าหลักแยก ไม่ใช่กล่องข่าวที่ฝังอยู่ใน Market
+        mobile_section = "🌐 Market"
+        if mobile_nav == MOBILE_NAV[1]:
+            if "mobile_section_tab" not in st.session_state:
+                st.session_state["mobile_section_tab"] = "🌐 Market"
+            mobile_section = st.radio(
+                "Market section",
+                ["🌐 Market", "📰 News"],
+                index=0 if st.session_state["mobile_section_tab"] == "🌐 Market" else 1,
+                horizontal=True,
+                key="mobile_section_tab",
+                label_visibility="collapsed",
+            )
+        else:
+            st.session_state["mobile_section_tab"] = "🌐 Market"
+
         mobile_usdthb = 1.0
         try:
             if isinstance(data, pd.DataFrame) and not data.empty and "USDTHB" in data.columns:
@@ -9286,7 +9289,10 @@ def _main_body() -> None:
         if mobile_nav == MOBILE_NAV[0]:
             render_mobile_home(cfg, data)
         elif mobile_nav == MOBILE_NAV[1]:
-            render_mobile_market(cfg, market_df, mobile_usdthb)
+            if mobile_section == "📰 News":
+                render_mobile_news_full(cfg)
+            else:
+                render_mobile_market(cfg, market_df, mobile_usdthb)
         elif mobile_nav == MOBILE_NAV[2]:
             render_mobile_trade(cfg, data)
         elif mobile_nav == MOBILE_NAV[3]:
