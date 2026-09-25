@@ -8176,102 +8176,132 @@ def render_correlation_center(cfg: dict[str, Any], data: pd.DataFrame, market_df
     st.caption("Correlation +1 หมายถึงผลตอบแทนเคลื่อนไหวไปในทิศทางเดียวกันมากกว่า ส่วนค่าติดลบหมายถึงมีแนวโน้มเคลื่อนไหวสวนทางกันในช่วงข้อมูลที่เลือก")
 
 def render_fee_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
-    """Fee analytics derived from the same portfolio ledger used by Wallet."""
-    sim = st.session_state.get("sim", {})
-    ensure_portfolio_ledger(sim)
-    ledger = sim.get("portfolio_ledger", {}) if isinstance(sim, dict) else {}
-    txs = ledger.get("transactions", []) if isinstance(ledger, dict) else []
-    txs = [t for t in txs if isinstance(t, dict)]
+    """Fee analytics from BOTH persisted state and current session order history.
+
+    Important: Fee Analytics must not depend only on the current browser
+    session. The app persists sim_state in Supabase when configured, while a
+    Streamlit session can contain newer in-memory orders. We therefore read
+    both sources and de-duplicate them for display.
+    """
+    session_sim = st.session_state.get("sim", {})
+    saved_sim = load_sim_state()
+
+    candidates: list[dict[str, Any]] = []
+    if isinstance(saved_sim, dict):
+        candidates.append(saved_sim)
+    if isinstance(session_sim, dict) and session_sim is not saved_sim:
+        candidates.append(session_sim)
+    if not candidates:
+        candidates = [{}]
 
     rows = []
     ledger_signatures = set()
+    order_signatures = set()
+
+    def _num(v: Any, default: float = 0.0) -> float:
+        try:
+            if isinstance(v, str):
+                v = v.replace(",", "").replace("฿", "").strip()
+            return float(v or default)
+        except (TypeError, ValueError):
+            return default
 
     def _sig(typ: str, asset: str, gross: float, fee: float, qty: float = 0.0) -> tuple:
-        return (
-            str(typ).upper(), str(asset).upper(),
-            round(float(gross), 8), round(float(fee), 8), round(float(qty), 12),
-        )
+        return (str(typ).upper(), str(asset).upper(), round(gross, 8),
+                round(fee, 8), round(qty, 12))
 
-    for t in txs:
-        try:
-            fee = float(t.get("fee_thb", 0.0) or 0.0)
-            gross = float(t.get("gross_thb", 0.0) or 0.0)
-            qty = float(t.get("qty", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            continue
+    def _add_row(t: dict[str, Any], source: str) -> None:
+        typ = str(t.get("type", "OTHER") or "OTHER").upper()
+        fee = _num(t.get("fee_thb", t.get("ค่าธรรมเนียม", 0.0)))
+        gross = _num(t.get("gross_thb", t.get("มูลค่า (บาท)", t.get("amount_thb", 0.0))))
+        qty = _num(t.get("qty", t.get("เหรียญที่ส่งมอบ", 0.0)))
         if fee <= 0:
-            continue
-        ts = str(t.get("timestamp", "") or "")
+            return
+        ts = str(t.get("timestamp", t.get("วันที่", "")) or "")
         try:
             dt = pd.to_datetime(ts)
         except Exception:
             dt = pd.NaT
-        typ = str(t.get("type", "OTHER") or "OTHER").upper()
         if typ in ("BUY", "SELL"):
             category = "Trading"
         elif typ in ("WITHDRAW", "WITHDRAWAL"):
             category = "Withdrawal"
-        elif typ in ("DEPOSIT",):
+        elif typ == "DEPOSIT":
             category = "Deposit"
         else:
             category = "Other"
-        ledger_signatures.add(_sig(typ, str(t.get("asset", "THB") or "THB"), gross, fee, qty))
+        asset = str(t.get("asset", t.get("เหรียญ", "THB")) or "THB").upper()
+        sig = _sig(typ, asset, gross, fee, qty)
+        if sig in ledger_signatures:
+            return
+        ledger_signatures.add(sig)
         rows.append({
             "timestamp": dt,
             "date": ts[:10] if ts else "",
             "month": dt.strftime("%Y-%m") if not pd.isna(dt) else (ts[:7] if ts else "Unknown"),
-            "type": typ,
-            "category": category,
-            "asset": str(t.get("asset", "THB") or "THB").upper(),
-            "fee": fee,
-            "gross": gross,
-            "id": str(t.get("id", "") or ""),
-            "source": "Portfolio Ledger",
+            "type": typ, "category": category, "asset": asset,
+            "fee": fee, "gross": gross, "id": str(t.get("id", "") or ""),
+            "source": source,
         })
 
-    # Older order records may pre-date the Portfolio Ledger. Reconcile them
-    # for analytics so existing BUY/SELL history is not shown as zero fees.
-    # This is read-only: it does not mutate Wallet balances or create trades.
-    legacy_orders = sim.get("orders", []) if isinstance(sim, dict) else []
-    if isinstance(legacy_orders, list):
+    # 1) Portfolio Ledger from both persisted and current state.
+    for sim_src in candidates:
+        ensure_portfolio_ledger(sim_src)
+        ledger = sim_src.get("portfolio_ledger", []) if isinstance(sim_src, dict) else []
+        if isinstance(ledger, list):
+            for t in ledger:
+                if isinstance(t, dict):
+                    _add_row(t, "Portfolio Ledger")
+
+    # 2) Original Order Ledger, including orders created after the portfolio
+    # ledger was initialized. This is the important reconciliation path.
+    # We use the stored fee when available; otherwise the app's actual 0.25%
+    # trading fee rate is applied to the recorded gross order value.
+    for sim_src in candidates:
+        legacy_orders = sim_src.get("orders", []) if isinstance(sim_src, dict) else []
+        if not isinstance(legacy_orders, list):
+            continue
         for i, rec in enumerate(legacy_orders):
             if not isinstance(rec, dict):
                 continue
-            side_raw = str(rec.get("ฝั่ง", "") or "").strip()
-            typ = "BUY" if side_raw == "ซื้อ" else ("SELL" if side_raw == "ขาย" else "")
+            side_raw = str(rec.get("ฝั่ง", rec.get("side", "")) or "").strip().lower()
+            typ = "BUY" if side_raw in ("ซื้อ", "buy") else ("SELL" if side_raw in ("ขาย", "sell") else "")
             if not typ:
                 continue
-            try:
-                gross = float(rec.get("มูลค่า (บาท)", 0.0) or 0.0)
-                qty_abs = float(rec.get("เหรียญที่ส่งมอบ", 0.0) or 0.0)
-            except (TypeError, ValueError):
-                continue
+            gross = _num(rec.get("มูลค่า (บาท)", rec.get("gross_thb", 0.0)))
             if gross <= 0:
                 continue
-            # Legacy order records were created under the same configured
-            # trading-fee rate used by execute_order.
-            fee = gross * float(LOCAL_TRADING_FEE_PCT)
-            asset = str(rec.get("เหรียญ") or sim.get("asset") or "BTC").upper()
-            qty = qty_abs if typ == "BUY" else -qty_abs
-            sig = _sig(typ, asset, gross, fee, qty)
-            if sig in ledger_signatures:
+            qty = _num(rec.get("เหรียญที่ส่งมอบ", rec.get("qty", 0.0)))
+            stored_fee = _num(rec.get("ค่าธรรมเนียม", rec.get("fee_thb", 0.0)))
+            fee = stored_fee if stored_fee > 0 else gross * float(LOCAL_TRADING_FEE_PCT)
+            asset = str(rec.get("เหรียญ", rec.get("asset", "BTC")) or "BTC").upper()
+            # If this order is already represented in Portfolio Ledger, do not
+            # count it a second time. SELL quantities are negative in the ledger.
+            ledger_qty = qty if typ == "BUY" else -qty
+            if _sig(typ, asset, gross, fee, ledger_qty) in ledger_signatures:
                 continue
-            ts = str(rec.get("วันที่", "") or "")
+            order_id = str(rec.get("Order ID", rec.get("order_id", "")) or "").strip()
+            ts = str(rec.get("วันที่", rec.get("timestamp", "")) or "")
+            time_text = str(rec.get("เวลา", "") or "")
+            # Prefer a stable order id; fall back to the complete legacy row signature.
+            key = ("ID", order_id) if order_id else (
+                "ROW", typ, asset, round(gross, 8), round(qty, 12), ts[:19], time_text
+            )
+            if key in order_signatures:
+                continue
+            order_signatures.add(key)
             try:
-                dt = pd.to_datetime(ts)
+                dt = pd.to_datetime(f"{ts} {time_text}".strip())
             except Exception:
                 dt = pd.NaT
             rows.append({
                 "timestamp": dt,
                 "date": ts[:10] if ts else "",
                 "month": dt.strftime("%Y-%m") if not pd.isna(dt) else (ts[:7] if ts else "Unknown"),
-                "type": typ,
-                "category": "Trading",
-                "asset": asset,
-                "fee": fee,
-                "gross": gross,
-                "id": f"ORDER-{i+1}",
-                "source": "Order Ledger (legacy)",
+                "type": typ, "category": "Trading", "asset": asset,
+                "fee": fee, "gross": gross,
+                "id": order_id or f"ORDER-{i+1}",
+                "source": "Order Ledger",
             })
 
     df = pd.DataFrame(rows)
