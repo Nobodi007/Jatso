@@ -1026,6 +1026,10 @@ def execute_order(
         "รายได้": revenue,
         "ต้นทุน": cost,
         "กำไรออเดอร์": net,
+        # Persist the actual trading fee on every order so Fee Analytics can
+        # read both new and legacy orders without relying on recalculation.
+        "ค่าธรรมเนียม": trading_fee,
+        "fee_thb": trading_fee,
         "สต็อกคงเหลือ": sim["inv_coins"][current_asset],
         "FX ใช้สะสม (USD)": month_used + hedge_usd if side == "buy" else month_used,
         "CEX Liquidity ใช้สะสม (บาท)": sim["cex_used_thb"],
@@ -7118,7 +7122,12 @@ def _do_deposit() -> None:
     if not isinstance(sim, dict):
         sim = {"customer_thb": 1_000_000.0, "customer_coins": {}}
         st.session_state["sim"] = sim
+    ensure_portfolio_ledger(sim)
     sim["customer_thb"] = float(sim.get("customer_thb", 1_000_000.0)) + amt
+    record_portfolio_tx(
+        sim, "DEPOSIT", "THB", gross_thb=amt, fee_thb=0.0,
+        cash_delta_thb=amt, note="ฝากเงินบาท",
+    )
     st.session_state["dep_amt"] = "0"
     st.session_state["dep_error"] = None
     st.session_state["dep_done"] = amt
@@ -8171,46 +8180,138 @@ def render_correlation_center(cfg: dict[str, Any], data: pd.DataFrame, market_df
     st.caption("Correlation +1 หมายถึงผลตอบแทนเคลื่อนไหวไปในทิศทางเดียวกันมากกว่า ส่วนค่าติดลบหมายถึงมีแนวโน้มเคลื่อนไหวสวนทางกันในช่วงข้อมูลที่เลือก")
 
 def render_fee_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
-    """Fee analytics derived from the same portfolio ledger used by Wallet."""
-    sim = st.session_state.get("sim", {})
-    ensure_portfolio_ledger(sim)
-    ledger = sim.get("portfolio_ledger", {}) if isinstance(sim, dict) else {}
-    txs = ledger.get("transactions", []) if isinstance(ledger, dict) else []
-    txs = [t for t in txs if isinstance(t, dict)]
+    """Fee analytics from BOTH persisted state and current session order history.
+
+    Important: Fee Analytics must not depend only on the current browser
+    session. The app persists sim_state in Supabase when configured, while a
+    Streamlit session can contain newer in-memory orders. We therefore read
+    both sources and de-duplicate them for display.
+    """
+    session_sim = st.session_state.get("sim", {})
+    saved_sim = load_sim_state()
+
+    candidates: list[dict[str, Any]] = []
+    if isinstance(saved_sim, dict):
+        candidates.append(saved_sim)
+    if isinstance(session_sim, dict) and session_sim is not saved_sim:
+        candidates.append(session_sim)
+    if not candidates:
+        candidates = [{}]
 
     rows = []
-    for t in txs:
+    ledger_signatures = set()
+    order_signatures = set()
+
+    def _num(v: Any, default: float = 0.0) -> float:
         try:
-            fee = float(t.get("fee_thb", 0.0) or 0.0)
+            if isinstance(v, str):
+                v = v.replace(",", "").replace("฿", "").strip()
+            return float(v or default)
         except (TypeError, ValueError):
-            fee = 0.0
+            return default
+
+    def _sig(typ: str, asset: str, gross: float, fee: float, qty: float = 0.0) -> tuple:
+        return (str(typ).upper(), str(asset).upper(), round(gross, 8),
+                round(fee, 8), round(qty, 12))
+
+    def _add_row(t: dict[str, Any], source: str) -> None:
+        typ = str(t.get("type", "OTHER") or "OTHER").upper()
+        fee = _num(t.get("fee_thb", t.get("ค่าธรรมเนียม", 0.0)))
+        gross = _num(t.get("gross_thb", t.get("มูลค่า (บาท)", t.get("amount_thb", 0.0))))
+        qty = _num(t.get("qty", t.get("เหรียญที่ส่งมอบ", 0.0)))
         if fee <= 0:
-            continue
-        ts = str(t.get("timestamp", "") or "")
+            return
+        ts = str(t.get("timestamp", t.get("วันที่", "")) or "")
         try:
             dt = pd.to_datetime(ts)
         except Exception:
             dt = pd.NaT
-        typ = str(t.get("type", "OTHER") or "OTHER").upper()
         if typ in ("BUY", "SELL"):
             category = "Trading"
         elif typ in ("WITHDRAW", "WITHDRAWAL"):
             category = "Withdrawal"
-        elif typ in ("DEPOSIT",):
+        elif typ == "DEPOSIT":
             category = "Deposit"
         else:
             category = "Other"
+        asset = str(t.get("asset", t.get("เหรียญ", "THB")) or "THB").upper()
+        sig = _sig(typ, asset, gross, fee, qty)
+        if sig in ledger_signatures:
+            return
+        ledger_signatures.add(sig)
         rows.append({
             "timestamp": dt,
             "date": ts[:10] if ts else "",
             "month": dt.strftime("%Y-%m") if not pd.isna(dt) else (ts[:7] if ts else "Unknown"),
-            "type": typ,
-            "category": category,
-            "asset": str(t.get("asset", "THB") or "THB").upper(),
-            "fee": fee,
-            "gross": float(t.get("gross_thb", 0.0) or 0.0),
-            "id": str(t.get("id", "") or ""),
+            "type": typ, "category": category, "asset": asset,
+            "fee": fee, "gross": gross, "id": str(t.get("id", "") or ""),
+            "source": source,
         })
+
+    # 1) Portfolio Ledger from both persisted and current state.
+    for sim_src in candidates:
+        ensure_portfolio_ledger(sim_src)
+        ledger = sim_src.get("portfolio_ledger", []) if isinstance(sim_src, dict) else []
+        if isinstance(ledger, list):
+            for t in ledger:
+                if isinstance(t, dict):
+                    _add_row(t, "Portfolio Ledger")
+
+    # 2) Original Order Ledger, including orders created after the portfolio
+    # ledger was initialized. Also accept older aliases used by prior builds.
+    # We use the stored fee when available; otherwise the app's actual 0.25%
+    # trading fee rate is applied to the recorded gross order value.
+    for sim_src in candidates:
+        if not isinstance(sim_src, dict):
+            continue
+        legacy_sources = []
+        for key in ("orders", "trade_history", "transaction_history"):
+            value = sim_src.get(key, [])
+            if isinstance(value, list):
+                legacy_sources.append((key, value))
+        for source_key, legacy_orders in legacy_sources:
+            for i, rec in enumerate(legacy_orders):
+                if not isinstance(rec, dict):
+                    continue
+                side_raw = str(rec.get("ฝั่ง", rec.get("side", "")) or "").strip().lower()
+                typ = "BUY" if side_raw in ("ซื้อ", "buy") else ("SELL" if side_raw in ("ขาย", "sell") else "")
+                if not typ:
+                    continue
+                gross = _num(rec.get("มูลค่า (บาท)", rec.get("gross_thb", 0.0)))
+                if gross <= 0:
+                    continue
+                qty = _num(rec.get("เหรียญที่ส่งมอบ", rec.get("qty", 0.0)))
+                stored_fee = _num(rec.get("ค่าธรรมเนียม", rec.get("fee_thb", 0.0)))
+                fee = stored_fee if stored_fee > 0 else gross * float(LOCAL_TRADING_FEE_PCT)
+                asset = str(rec.get("เหรียญ", rec.get("asset", "BTC")) or "BTC").upper()
+                # If this order is already represented in Portfolio Ledger, do not
+                # count it a second time. SELL quantities are negative in the ledger.
+                ledger_qty = qty if typ == "BUY" else -qty
+                if _sig(typ, asset, gross, fee, ledger_qty) in ledger_signatures:
+                    continue
+                order_id = str(rec.get("Order ID", rec.get("order_id", "")) or "").strip()
+                ts = str(rec.get("วันที่", rec.get("timestamp", "")) or "")
+                time_text = str(rec.get("เวลา", "") or "")
+                # Prefer a stable order id; fall back to the complete legacy row signature.
+                key = ("ID", order_id) if order_id else (
+                    "ROW", typ, asset, round(gross, 8), round(qty, 12), ts[:19], time_text
+                )
+                if key in order_signatures:
+                    continue
+                order_signatures.add(key)
+                try:
+                    dt = pd.to_datetime(f"{ts} {time_text}".strip())
+                except Exception:
+                    dt = pd.NaT
+                rows.append({
+                    "timestamp": dt,
+                    "date": ts[:10] if ts else "",
+                    "month": dt.strftime("%Y-%m") if not pd.isna(dt) else (ts[:7] if ts else "Unknown"),
+                    "type": typ, "category": "Trading", "asset": asset,
+                    "fee": fee, "gross": gross,
+                    "id": order_id or f"ORDER-{i+1}",
+                    "source": f"{source_key}",
+                })
 
     df = pd.DataFrame(rows)
     total_fees = float(df["fee"].sum()) if not df.empty else 0.0
@@ -8282,7 +8383,7 @@ def render_fee_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.
 
     st.markdown('<div class="fee-card"><h3 style="margin:0 0 12px;color:#eaecef">🧾 Recent Fee Transactions</h3>', unsafe_allow_html=True)
     recent = df.sort_values(["timestamp", "id"], ascending=False).head(30)
-    html = ['<div class="fee-table-wrap"><table class="fee-table"><thead><tr><th>Date</th><th>Type</th><th>Asset</th><th>Gross</th><th>Fee</th></tr></thead><tbody>']
+    html = ['<div class="fee-table-wrap"><table class="fee-table"><thead><tr><th>Date</th><th>Type</th><th>Asset</th><th>Gross</th><th>Fee</th><th>Source</th></tr></thead><tbody>']
     for _, r in recent.iterrows():
         dt = r["timestamp"]
         date_text = dt.strftime("%d/%m/%Y %H:%M") if not pd.isna(dt) else str(r["date"])
@@ -8290,15 +8391,15 @@ def render_fee_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.
             f'<tr><td>{_html.escape(date_text)}</td>'
             f'<td><span class="fee-pill">{_html.escape(str(r["type"]))}</span></td>'
             f'<td><strong>{_html.escape(str(r["asset"]))}</strong></td>'
-            f'<td>฿{float(r["gross"]):,.2f}</td><td>฿{float(r["fee"]):,.2f}</td></tr>'
+            f'<td>฿{float(r["gross"]):,.2f}</td><td>฿{float(r["fee"]):,.2f}</td>'
+            f'<td><span class="fee-pill">{_html.escape(str(r.get("source", "Portfolio Ledger")))}</span></td></tr>'
         )
     html.append('</tbody></table></div>')
     st.markdown("".join(html), unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown(
-        '<div class="fee-note">ℹ️ ค่าธรรมเนียมคำนวณจากรายการใน Portfolio Ledger ปัจจุบัน '
-        'จึงสะท้อนข้อมูลที่ระบบมีอยู่จริง และไม่สร้างธุรกรรมหรือแก้ยอด Wallet</div>',
+        '<div class="fee-note">ℹ️ ค่าธรรมเนียมหลักอ่านจาก Portfolio Ledger และจะดึง Order Ledger เดิมมาแสดงเฉพาะรายการที่ยังไม่ถูกบันทึกใน Portfolio Ledger เพื่อไม่ให้ประวัติเดิมแสดงเป็น ฿0.00 โดยไม่สร้างธุรกรรมหรือแก้ยอด Wallet</div>',
         unsafe_allow_html=True,
     )
 
