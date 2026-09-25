@@ -7188,11 +7188,101 @@ def deposit_dialog() -> None:
 
 # ---- 5.5 TAB 4 — WALLET ------------------------------------------------
 
+def _portfolio_pnl_class(value: float) -> str:
+    return "up" if value >= 0 else "down"
+
+
+def _portfolio_asset_card(row: dict[str, Any], key_suffix: str = "") -> None:
+    """Wallet-style holding row. Clicking the asset name opens Exchange on that pair."""
+    sym = str(row.get("asset", "")).upper()
+    qty = float(row.get("qty", 0.0) or 0.0)
+    avg = float(row.get("avg_cost", 0.0) or 0.0)
+    px = float(row.get("price", 0.0) or 0.0)
+    value = float(row.get("market_value", 0.0) or 0.0)
+    pnl = float(row.get("unrealized_pnl", 0.0) or 0.0)
+    pnl_pct = float(row.get("pnl_pct", 0.0) or 0.0)
+    alloc = float(row.get("allocation_pct", 0.0) or 0.0)
+    pnl_cls = _portfolio_pnl_class(pnl)
+    logo = coin_icon_html(sym, 42)
+    name = _html.escape(COIN_NAMES.get(sym, sym))
+
+    with st.container(key=f"portfolio_asset_card_{sym}_{key_suffix}"):
+        st.markdown(
+            '<div class="portfolio-wallet-row">'
+            '<div class="portfolio-wallet-main">'
+            f'<div class="portfolio-wallet-logo">{logo}</div>'
+            '<div class="portfolio-wallet-name-wrap">'
+            f'<div class="portfolio-wallet-symbol">{_html.escape(sym)}</div>'
+            f'<div class="portfolio-wallet-name">{name}</div>'
+            f'<div class="portfolio-wallet-qty">{qty:,.8f} {sym}</div>'
+            '</div></div>'
+            '<div class="portfolio-wallet-stat">'
+            '<span>มูลค่า</span>'
+            f'<b>฿{value:,.2f}</b>'
+            '</div>'
+            '<div class="portfolio-wallet-stat portfolio-hide-mobile">'
+            '<span>ต้นทุนเฉลี่ย</span>'
+            f'<b>฿{avg:,.2f}</b>'
+            '</div>'
+            '<div class="portfolio-wallet-stat portfolio-hide-mobile">'
+            '<span>ราคาปัจจุบัน</span>'
+            f'<b>฿{px:,.2f}</b>'
+            '</div>'
+            '<div class="portfolio-wallet-stat">'
+            '<span>Unrealized P&L</span>'
+            f'<b class="{pnl_cls}">฿{pnl:+,.2f}</b>'
+            f'<small class="{pnl_cls}">{pnl_pct:+.2f}%</small>'
+            '</div>'
+            '<div class="portfolio-wallet-stat portfolio-hide-mobile">'
+            '<span>Allocation</span>'
+            f'<b>{alloc:.2f}%</b>'
+            '</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        if st.button(
+            f"{sym} · {name}   ↗ Exchange",
+            key=f"portfolio_coin_btn_{sym}_{key_suffix}",
+            use_container_width=True,
+        ):
+            _go_to_exchange(sym)
+            st.rerun()
+
+
+def _portfolio_cash_card(cash_thb: float, total_value: float) -> None:
+    alloc = cash_thb / total_value * 100.0 if total_value > 0 else 0.0
+    with st.container(key="portfolio_cash_card"):
+        st.markdown(
+            '<div class="portfolio-wallet-row portfolio-cash-row">'
+            '<div class="portfolio-wallet-main">'
+            f'<div class="portfolio-wallet-logo">{coin_icon_html("THB", 42)}</div>'
+            '<div class="portfolio-wallet-name-wrap">'
+            '<div class="portfolio-wallet-symbol">THB</div>'
+            '<div class="portfolio-wallet-name">Thai Baht</div>'
+            '<div class="portfolio-wallet-qty">เงินสดใน Wallet</div>'
+            '</div></div>'
+            '<div class="portfolio-wallet-stat">'
+            '<span>มูลค่า</span>'
+            f'<b>฿{cash_thb:,.2f}</b>'
+            '</div>'
+            '<div class="portfolio-wallet-stat portfolio-hide-mobile">'
+            '<span>Allocation</span>'
+            f'<b>{alloc:.2f}%</b>'
+            '</div>'
+            '<div class="portfolio-wallet-stat portfolio-hide-mobile">'
+            '<span>สถานะ</span><b class="up">พร้อมใช้งาน</b>'
+            '</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+
 def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
     if data.empty:
         st.error("⚠️ ไม่สามารถโหลดข้อมูลได้")
         return
 
+    # Wallet/Portfolio UI — data and ledger logic are unchanged.
     sim = st.session_state.get("sim", {})
     ensure_portfolio_ledger(sim)
     current_date_val = pd.to_datetime(data.index[-1])
@@ -7208,66 +7298,88 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         price_thb_map[asset] = float(data.loc[current_date_val, "Global_USD"]) * usdthb_current
 
     snap = portfolio_snapshot(sim, price_thb_map)
+
     st.markdown(
-        '<div style="margin-bottom:10px;"><h2 style="margin:0;color:#EAECEF;font-size:1.8rem;">'
-        'Portfolio & Wallet</h2><div style="color:#848e9c;font-size:.85rem;margin-top:4px;">'
-        'ติดตามต้นทุนจริง · P&L · Allocation · ธุรกรรม · เงินฝาก/ถอน · ค่าธรรมเนียม</div></div>',
+        "<div class=\"portfolio-wallet-hero\">"
+        "<div><div class=\"portfolio-eyebrow\">WALLET</div>"
+        "<h2>Portfolio & Wallet</h2>"
+        "<p>สินทรัพย์ของคุณ · ต้นทุน · P&amp;L · Allocation</p></div>"
+        "<div class=\"portfolio-hero-value\"><span>มูลค่าพอร์ตรวม</span>"
+        f"<strong>{fmt_baht(snap['total_value_thb'])}</strong></div></div>",
         unsafe_allow_html=True,
     )
 
-    m1, m2, m3, m4, m5 = st.columns(5)
-    metric_card(m1, "มูลค่าพอร์ต", fmt_baht(snap["total_value_thb"]))
+    m1, m2, m3, m4 = st.columns(4)
+    metric_card(m1, "เงินสด THB", fmt_baht(snap["cash_thb"]))
     metric_card(m2, "ต้นทุนคงเหลือ", fmt_baht(snap["invested_cost_thb"]))
     metric_card(m3, "Unrealized P&L", fmt_baht(snap["unrealized_pnl_thb"], True))
     metric_card(m4, "Realized P&L", fmt_baht(snap["realized_pnl_thb"], True))
-    metric_card(m5, "P&L รวม", f'{fmt_baht(snap["total_pnl_thb"], True)} · {snap["pnl_pct"]:+.2f}%')
+
+    st.markdown(
+        f'<div class="portfolio-summary-strip">'
+        f'<span>ค่าธรรมเนียมสะสม <b>฿{snap["fees_thb"]:,.2f}</b></span>'
+        f'<span>รายการทั้งหมด <b>{len(snap["transactions"]):,}</b></span>'
+        f'<span>P&L รวม <b class="{_portfolio_pnl_class(snap["total_pnl_thb"])}">'
+        f'฿{snap["total_pnl_thb"]:+,.2f} · {snap["pnl_pct"]:+.2f}%</b></span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
     t_port, t_watch, t_tx = st.tabs(["📊 Portfolio", "⭐ Watchlist", "🧾 Transaction History"])
 
     with t_port:
-        c1, c2, c3 = st.columns(3)
-        c1.metric("เงินสด THB", f"฿{snap['cash_thb']:,.2f}")
-        c2.metric("ค่าธรรมเนียมสะสม", f"฿{snap['fees_thb']:,.2f}")
-        c3.metric("จำนวนรายการ", f"{len(snap['transactions']):,}")
-
-        rows = []
-        for r in snap["rows"]:
-            rows.append({
-                "สินทรัพย์": r["asset"],
-                "Holdings": r["qty"],
-                "Average cost": f"฿{r['avg_cost']:,.2f}",
-                "ราคาปัจจุบัน": f"฿{r['price']:,.2f}",
-                "มูลค่าตลาด": f"฿{r['market_value']:,.2f}",
-                "ต้นทุน": f"฿{r['cost_basis']:,.2f}",
-                "Unrealized P&L": f"฿{r['unrealized_pnl']:+,.2f}",
-                "P/L %": f"{r['pnl_pct']:+.2f}%",
-                "Allocation %": f"{r['allocation_pct']:.2f}%",
-            })
-        if rows:
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.markdown(
+            '<div class="portfolio-section-title">สินทรัพย์ใน Wallet</div>'
+            '<div class="portfolio-section-subtitle">กดที่เหรียญเพื่อเปิด Exchange ของเหรียญนั้นทันที</div>',
+            unsafe_allow_html=True,
+        )
+        if snap["rows"]:
+            for r in snap["rows"]:
+                _portfolio_asset_card(r)
         else:
             st.info("ยังไม่มี Holdings — ซื้อสินทรัพย์หรือฝากเงินเพื่อเริ่มสร้าง Portfolio")
 
-        st.markdown("#### Allocation")
-        alloc_rows = [{"สินทรัพย์": "THB", "มูลค่า": snap["cash_thb"],
-                       "Allocation %": snap["cash_thb"] / snap["total_value_thb"] * 100
-                       if snap["total_value_thb"] > 0 else 0}]
-        alloc_rows += [{"สินทรัพย์": r["asset"], "มูลค่า": r["market_value"],
-                        "Allocation %": r["allocation_pct"]} for r in snap["rows"]]
-        if alloc_rows:
-            adf = pd.DataFrame(alloc_rows)
-            adf["มูลค่า"] = adf["มูลค่า"].map(lambda x: f"฿{x:,.2f}")
-            adf["Allocation %"] = adf["Allocation %"].map(lambda x: f"{x:.2f}%")
-            st.dataframe(adf, use_container_width=True, hide_index=True)
+        _portfolio_cash_card(snap["cash_thb"], snap["total_value_thb"])
 
-        d1, d2, d3 = st.columns(3)
-        if "THB" in price_thb_map and can_trade():
-            if d1.button("💰 ฝากเงิน", use_container_width=True, key="portfolio_deposit"):
+        st.markdown('<div class="portfolio-allocation-title">Allocation</div>', unsafe_allow_html=True)
+        alloc_items = [{
+            "asset": "THB",
+            "value": snap["cash_thb"],
+            "allocation": snap["cash_thb"] / snap["total_value_thb"] * 100.0 if snap["total_value_thb"] > 0 else 0.0,
+        }]
+        alloc_items += [{
+            "asset": r["asset"], "value": r["market_value"], "allocation": r["allocation_pct"]
+        } for r in snap["rows"]]
+        for a in alloc_items:
+            sym = a["asset"]
+            pct = float(a["allocation"])
+            value = float(a["value"])
+            with st.container(key=f"portfolio_alloc_{sym}"):
+                st.markdown(
+                    '<div class="portfolio-allocation-row">'
+                    f'<div class="portfolio-allocation-name">{coin_icon_html(sym, 28)}<b>{_html.escape(sym)}</b>'
+                    f'<span>{_html.escape(COIN_NAMES.get(sym, sym))}</span></div>'
+                    '<div class="portfolio-allocation-bar-wrap">'
+                    f'<div class="portfolio-allocation-bar"><span style="width:{min(max(pct, 0.0), 100.0):.2f}%;"></span></div>'
+                    '</div>'
+                    f'<div class="portfolio-allocation-value">฿{value:,.2f}</div>'
+                    f'<div class="portfolio-allocation-pct">{pct:.2f}%</div>'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+
+        st.markdown('<div class="portfolio-actions-title">Wallet</div>', unsafe_allow_html=True)
+        d1, d2 = st.columns(2)
+        if can_trade():
+            if d1.button("💰 ฝากเงินบาท", use_container_width=True, key="portfolio_deposit"):
                 _open_deposit()
                 st.rerun()
-            if d2.button("↗️ ถอนเงิน", use_container_width=True, key="portfolio_withdraw"):
+            if d2.button("↗️ ถอนเงินบาท", use_container_width=True, key="portfolio_withdraw"):
                 _open_withdraw()
                 st.rerun()
+        else:
+            d1.info("🔒 Viewer ไม่สามารถฝาก/ถอนเงินได้")
+
         if st.session_state.pop("open_deposit", False):
             deposit_dialog()
         if st.session_state.pop("open_withdraw", False):
@@ -7295,7 +7407,6 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
             sim["watchlist"] = selected
             save_favorites(selected)
         if selected:
-            wrows = []
             pct_lookup = {}
             if market_df is not None and not market_df.empty:
                 for _, r in market_df.iterrows():
@@ -7303,14 +7414,21 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
             for sym in selected:
                 px = float(price_thb_map.get(sym, 0.0))
                 held = next((r for r in snap["rows"] if r["asset"] == sym), None)
-                wrows.append({
-                    "สินทรัพย์": sym,
-                    "ราคาปัจจุบัน": f"฿{px:,.2f}",
-                    "24h %": f"{pct_lookup.get(sym, 0.0):+.2f}%",
-                    "Holdings": held["qty"] if held else 0.0,
-                    "Portfolio Allocation": f'{held["allocation_pct"]:.2f}%' if held else "0.00%",
-                })
-            st.dataframe(pd.DataFrame(wrows), use_container_width=True, hide_index=True)
+                qty_txt = f'{held["qty"]:,.8f}' if held else "0"
+                with st.container(key=f"portfolio_watch_{sym}"):
+                    st.markdown(
+                        '<div class="portfolio-watch-row">'
+                        f'<div class="portfolio-watch-main">{coin_icon_html(sym, 36)}'
+                        f'<div><b>{_html.escape(sym)}</b><span>{_html.escape(COIN_NAMES.get(sym, sym))}</span></div></div>'
+                        f'<div><span>ราคาปัจจุบัน</span><b>฿{px:,.2f}</b></div>'
+                        f'<div><span>24H</span><b class="{_portfolio_pnl_class(pct_lookup.get(sym, 0.0))}">{pct_lookup.get(sym, 0.0):+.2f}%</b></div>'
+                        f'<div><span>ถืออยู่</span><b>{qty_txt}</b></div>'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if st.button(f"เปิด {sym}/THB ใน Exchange ↗", key=f"watch_exchange_{sym}", use_container_width=True):
+                        _go_to_exchange(sym)
+                        st.rerun()
         else:
             st.info("เลือกเหรียญที่ต้องการติดตามจากรายการด้านบน")
 
@@ -7328,13 +7446,10 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
             st.dataframe(txdf[display_cols], use_container_width=True, hide_index=True)
         else:
             st.info("ยังไม่มี Transaction History")
-
         st.caption(
             "Average cost ใช้วิธีต้นทุนเฉลี่ยถ่วงน้ำหนัก · Unrealized P&L คำนวณจากราคาปัจจุบัน · "
             "Realized P&L เกิดเมื่อขาย โดยหักค่าธรรมเนียมแล้ว"
         )
-
-
 # ---------------- ฟังก์ชัน AI ----------------
 
 AI_SYSTEM = (
@@ -9637,6 +9752,90 @@ MOBILE_HOME_CSS = r'''<style>
 
 
 
+PORTFOLIO_WALLET_CSS = """
+<style>
+.portfolio-wallet-hero {
+    display:flex; justify-content:space-between; align-items:flex-end; gap:18px;
+    padding:18px 20px; margin:4px 0 14px;
+    background:linear-gradient(135deg,#181a20 0%,#111318 100%);
+    border:1px solid #2b3139; border-radius:16px;
+}
+.portfolio-eyebrow { color:#848e9c; font-size:.72rem; font-weight:800; letter-spacing:.12em; }
+.portfolio-wallet-hero h2 { margin:2px 0 2px; color:#EAECEF; font-size:1.55rem; }
+.portfolio-wallet-hero p { margin:0; color:#848e9c; font-size:.78rem; }
+.portfolio-hero-value { text-align:right; }
+.portfolio-hero-value span { display:block; color:#848e9c; font-size:.72rem; }
+.portfolio-hero-value strong { display:block; color:#EAECEF; font-size:1.45rem; margin-top:2px; font-variant-numeric:tabular-nums; }
+.portfolio-summary-strip { display:flex; gap:10px; flex-wrap:wrap; margin:10px 0 16px; }
+.portfolio-summary-strip span { padding:8px 12px; border:1px solid #2b3139; border-radius:999px; background:#111318; color:#848e9c; font-size:.75rem; }
+.portfolio-summary-strip b { color:#EAECEF; margin-left:4px; font-variant-numeric:tabular-nums; }
+.portfolio-summary-strip b.up { color:#0ecb81; }
+.portfolio-summary-strip b.down { color:#f6465d; }
+.portfolio-section-title { color:#EAECEF; font-size:1.02rem; font-weight:800; margin:2px 0 2px; }
+.portfolio-section-subtitle { color:#848e9c; font-size:.75rem; margin-bottom:10px; }
+[class*="st-key-portfolio_asset_card_"] { position:relative; overflow:hidden; margin:0 0 8px; border:1px solid #2b3139; border-radius:14px; background:#181a20; }
+[class*="st-key-portfolio_asset_card_"]:hover { border-color:#3d4652; }
+[class*="st-key-portfolio_asset_card_"] .portfolio-wallet-row { display:grid; grid-template-columns:minmax(230px,2.2fr) repeat(5,minmax(105px,1fr)); align-items:center; gap:10px; padding:13px 14px 5px; }
+.portfolio-wallet-main { display:flex; align-items:center; gap:11px; min-width:0; }
+.portfolio-wallet-logo { flex:0 0 auto; display:flex; align-items:center; }
+.portfolio-wallet-name-wrap { min-width:0; }
+.portfolio-wallet-symbol { color:#EAECEF; font-size:.94rem; font-weight:800; }
+.portfolio-wallet-name { color:#848e9c; font-size:.72rem; margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.portfolio-wallet-qty { color:#b7bdc8; font-size:.72rem; margin-top:3px; font-variant-numeric:tabular-nums; }
+.portfolio-wallet-stat { min-width:0; }
+.portfolio-wallet-stat span { display:block; color:#848e9c; font-size:.68rem; margin-bottom:3px; }
+.portfolio-wallet-stat b { display:block; color:#EAECEF; font-size:.83rem; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.portfolio-wallet-stat small { display:block; font-size:.7rem; margin-top:2px; }
+.portfolio-wallet-stat .up, .portfolio-wallet-stat small.up { color:#0ecb81; }
+.portfolio-wallet-stat .down, .portfolio-wallet-stat small.down { color:#f6465d; }
+[class*="st-key-portfolio_asset_card_"] [class*="st-key-portfolio_coin_btn_"] button { width:calc(100% - 28px) !important; margin:0 14px 12px !important; min-height:28px !important; padding:4px 10px !important; border:1px solid transparent !important; border-radius:8px !important; background:transparent !important; color:#848e9c !important; font-size:.69rem !important; text-align:left !important; justify-content:flex-start !important; box-shadow:none !important; }
+[class*="st-key-portfolio_asset_card_"] [class*="st-key-portfolio_coin_btn_"] button:hover { border-color:#2b3139 !important; background:#20242b !important; color:#0ecb81 !important; }
+.portfolio-cash-row { padding:13px 14px !important; }
+.portfolio-allocation-title, .portfolio-actions-title { color:#EAECEF; font-weight:800; font-size:.98rem; margin:18px 0 8px; }
+[class*="st-key-portfolio_alloc_"] { margin-bottom:6px; }
+.portfolio-allocation-row { display:grid; grid-template-columns:1.7fr 3fr 1.2fr .75fr; gap:12px; align-items:center; padding:9px 12px; border:1px solid #2b3139; border-radius:10px; background:#111318; }
+.portfolio-allocation-name { display:flex; align-items:center; gap:8px; min-width:0; }
+.portfolio-allocation-name b { color:#EAECEF; font-size:.82rem; }
+.portfolio-allocation-name span { color:#848e9c; font-size:.7rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.portfolio-allocation-bar-wrap { min-width:0; }
+.portfolio-allocation-bar { height:6px; border-radius:99px; background:#2b3139; overflow:hidden; }
+.portfolio-allocation-bar span { display:block; height:100%; border-radius:99px; background:#0ecb81; }
+.portfolio-allocation-value, .portfolio-allocation-pct { color:#EAECEF; font-size:.76rem; text-align:right; font-variant-numeric:tabular-nums; }
+.portfolio-watch-row { display:grid; grid-template-columns:2fr 1.2fr .8fr 1fr; gap:12px; align-items:center; padding:11px 13px; margin-bottom:7px; border:1px solid #2b3139; border-radius:12px; background:#181a20; }
+.portfolio-watch-main { display:flex; align-items:center; gap:10px; }
+.portfolio-watch-main b { display:block; color:#EAECEF; font-size:.86rem; }
+.portfolio-watch-main span { display:block; color:#848e9c; font-size:.7rem; margin-top:1px; }
+.portfolio-watch-row > div:not(.portfolio-watch-main) span { display:block; color:#848e9c; font-size:.68rem; }
+.portfolio-watch-row > div:not(.portfolio-watch-main) b { display:block; color:#EAECEF; font-size:.8rem; margin-top:2px; }
+.portfolio-watch-row b.up { color:#0ecb81 !important; }
+.portfolio-watch-row b.down { color:#f6465d !important; }
+@media (max-width: 900px) {
+    .portfolio-wallet-hero { align-items:flex-start; flex-direction:column; }
+    .portfolio-hero-value { text-align:left; }
+    [class*="st-key-portfolio_asset_card_"] .portfolio-wallet-row { grid-template-columns:minmax(180px,2fr) repeat(2,minmax(95px,1fr)); }
+    .portfolio-hide-mobile { display:none !important; }
+    .portfolio-allocation-row { grid-template-columns:1.6fr 2fr .95fr; }
+    .portfolio-allocation-pct { display:none; }
+    .portfolio-watch-row { grid-template-columns:1.7fr 1.1fr .8fr; }
+    .portfolio-watch-row > div:last-child { display:none; }
+}
+@media (max-width: 560px) {
+    .portfolio-wallet-hero { padding:14px; }
+    .portfolio-wallet-hero h2 { font-size:1.25rem; }
+    .portfolio-hero-value strong { font-size:1.15rem; }
+    .portfolio-summary-strip span { width:100%; border-radius:9px; }
+    [class*="st-key-portfolio_asset_card_"] .portfolio-wallet-row { grid-template-columns:1fr 1fr; gap:9px; }
+    [class*="st-key-portfolio_asset_card_"] .portfolio-wallet-main { grid-column:1 / -1; }
+    [class*="st-key-portfolio_asset_card_"] .portfolio-wallet-stat:nth-child(3) { display:none; }
+    .portfolio-watch-row { grid-template-columns:1fr 1fr; }
+    .portfolio-watch-main { grid-column:1 / -1; }
+    .portfolio-allocation-row { grid-template-columns:1.6fr 1fr; }
+    .portfolio-allocation-bar-wrap { display:none; }
+}
+</style>
+"""
+
+
 DASHBOARD_CSS = """
 <style>
     .dash-hero {
@@ -9887,6 +10086,7 @@ def render_dashboard(cfg: dict[str, Any], data: pd.DataFrame,
 
 def _main_body() -> None:
     st.markdown(THEME_CSS, unsafe_allow_html=True)
+    st.markdown(PORTFOLIO_WALLET_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_NAV_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_MARKET_NEWS_CSS, unsafe_allow_html=True)
