@@ -8424,7 +8424,8 @@ def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
                         if logo else f'<div class="mobile-home-asset-logo-fallback">{sym[:1]}</div>')
             st.markdown(
                 f'<div class="mobile-home-asset-row">{logo_html}'
-                f'<div class="mobile-home-asset-main"><div class="mobile-home-asset-sym">{sym}</div></div>'
+                f'<div class="mobile-home-asset-main"><div class="mobile-home-asset-sym">{sym}</div>'
+                f'<div class="mobile-home-asset-name">{COIN_NAMES.get(sym, sym)} · {h["qty"]:,.6f} {sym}</div></div>'
                 f'<div class="mobile-home-asset-right">'
                 f'<div class="mobile-home-asset-val">฿{h["value"]:,.0f}</div>'
                 f'<div class="mobile-home-asset-pct {pct_cls}">{pct_txt}</div></div></div>',
@@ -8439,14 +8440,15 @@ def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     )
 
     # ---- เมนูด่วน ----
-    st.markdown('<div class="mobile-home-section-label">เมนูด่วน</div>', unsafe_allow_html=True)
-    qa1, qa2, qa3 = st.columns(3, gap="small")
+    st.markdown('<div class="mobile-home-section-label mobile-home-qa-title">เมนูด่วน</div>', unsafe_allow_html=True)
+    qa1, qa2 = st.columns(2, gap="small")
     with qa1:
         st.button("📊 Backtest", key="mobile_home_qa_bt", use_container_width=True,
                   on_click=_mobile_home_goto, args=(MOBILE_NAV[4],))
     with qa2:
         st.button("💱 Trade", key="mobile_home_qa_trade", use_container_width=True,
                   on_click=_mobile_home_goto, args=(MOBILE_NAV[2],))
+    qa3, _qa_spacer = st.columns(2, gap="small")
     with qa3:
         st.button("💼 Asset", key="mobile_home_qa_asset", use_container_width=True,
                   on_click=_mobile_home_goto, args=(MOBILE_NAV[3],))
@@ -9132,43 +9134,49 @@ def render_mobile_settings() -> None:
 
 
 MOBILE_HOME_CSS = r'''<style>
-.mobile-home-greet { color:#848e9c; font-size:13px; font-weight:600; margin:4px 0 2px; }
-.mobile-home-port-label { color:#848e9c; font-size:11px; margin-top:6px; }
-.mobile-home-port-value { color:#EAECEF; font-size:32px; font-weight:850; line-height:1.15;
+.mobile-home-greet { color:#848e9c; font-size:13px; font-weight:600; margin:2px 0 3px; }
+.mobile-home-port-label { color:#848e9c; font-size:12px; margin-top:5px; }
+ .mobile-home-port-value { color:#EAECEF; font-size:30px; font-weight:850; line-height:1.12;
   margin:2px 0 4px; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
-.mobile-home-port-change { font-size:13px; font-weight:700; margin-bottom:14px; }
+.mobile-home-port-change { font-size:12px; font-weight:700; margin-bottom:12px; }
 
-.mobile-home-chart-card { background:#181a20; border:1px solid #2b3139; border-radius:16px;
-  padding:12px 10px 4px; margin-bottom:16px; }
-.mobile-home-chart-title { color:#EAECEF; font-size:13px; font-weight:750; margin-bottom:4px; padding-left:4px; }
+.mobile-home-chart-card { background:#181a20; border:1px solid #2b3139; border-radius:14px;
+  padding:10px 8px 3px; margin:0 0 14px; overflow:hidden; }
+.mobile-home-chart-title { color:#EAECEF; font-size:14px; font-weight:800; margin:0 0 4px; padding-left:4px; }
 .mobile-home-chart-empty { color:#848e9c; font-size:12px; text-align:center; padding:34px 10px; }
 
-.mobile-home-section-label { color:#EAECEF; font-size:14px; font-weight:800; margin:16px 0 8px; }
+.mobile-home-section-label { color:#EAECEF; font-size:15px; font-weight:800; margin:18px 0 9px; padding-left:10px; border-left:3px solid #0ecb81; line-height:1.2; }
+.mobile-home-qa-title { margin-top:20px; }
 
 .mobile-home-asset-row { display:flex; align-items:center; gap:10px; background:#181a20;
-  border:1px solid #2b3139; border-radius:13px; padding:10px 12px; margin-bottom:8px; }
+  border:1px solid #2b3139; border-radius:12px; padding:10px 12px; margin-bottom:7px; min-height:52px; box-sizing:border-box; }
 .mobile-home-asset-logo, .mobile-home-asset-logo-fallback { width:30px; height:30px; border-radius:50%; flex:0 0 30px; }
 .mobile-home-asset-logo { object-fit:contain; background:#20252d; }
 .mobile-home-asset-logo-fallback { display:flex; align-items:center; justify-content:center;
   background:#303640; color:#EAECEF; font-size:14px; font-weight:700; }
 .mobile-home-asset-main { flex:1; min-width:0; }
-.mobile-home-asset-sym { color:#EAECEF; font-size:13px; font-weight:750; }
+.mobile-home-asset-sym { color:#EAECEF; font-size:14px; font-weight:800; line-height:1.2; }
+.mobile-home-asset-name { color:#848e9c; font-size:11px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .mobile-home-asset-right { text-align:right; }
 .mobile-home-asset-val { color:#EAECEF; font-size:13px; font-weight:750; font-variant-numeric:tabular-nums; }
 .mobile-home-asset-pct { font-size:11px; font-weight:700; margin-top:2px; }
 
 .mobile-home-cash-row { display:flex; justify-content:space-between; align-items:center;
-  background:#181a20; border:1px solid #2b3139; border-radius:13px; padding:11px 14px;
-  margin:2px 0 16px; color:#848e9c; font-size:13px; font-weight:650; }
+  background:#181a20; border:1px solid #2b3139; border-radius:12px; padding:11px 14px;
+  margin:4px 0 18px; color:#848e9c; font-size:13px; font-weight:650; min-height:46px; box-sizing:border-box; }
 .mobile-home-cash-row b { color:#EAECEF; font-size:14px; font-variant-numeric:tabular-nums; }
 
 .st-key-mobile_home_qa_bt button, .st-key-mobile_home_qa_trade button, .st-key-mobile_home_qa_asset button {
-  border-radius:12px !important; background:#181a20 !important; border:1px solid #2b3139 !important;
-  color:#EAECEF !important; font-weight:700 !important; font-size:12px !important; min-height:46px !important;
+  width:100% !important; border-radius:12px !important; background:#181a20 !important; border:1px solid #2b3139 !important;
+  color:#EAECEF !important; font-weight:700 !important; font-size:12px !important; min-height:48px !important;
+  margin:0 !important; padding:0 8px !important; box-shadow:none !important;
 }
 .st-key-mobile_home_qa_bt button:hover, .st-key-mobile_home_qa_trade button:hover,
 .st-key-mobile_home_qa_asset button:hover {
   border-color:#0ecb81 !important; color:#0ecb81 !important;
+}
+@media (max-width: 900px) {
+  .block-container { padding-top:1.25rem !important; padding-bottom:6.5rem !important; }
 }
 </style>'''
 
