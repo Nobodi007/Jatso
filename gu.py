@@ -6134,6 +6134,147 @@ def record_portfolio_tx(
     return rec
 
 
+def sync_telegram_orders_to_portfolio_ledger(sim: dict[str, Any]) -> int:
+    """นำ Filled Telegram trades เข้า customer portfolio ledger แบบ idempotent.
+
+    Telegram bot เป็นผู้แก้ customer wallet + orders ใน Supabase อยู่แล้ว
+    ส่วนฟังก์ชันนี้เติมเฉพาะ portfolio ledger เพื่อให้ Holdings / P&L /
+    Transaction History เห็นรายการเดียวกัน โดยไม่หักเงินหรือเหรียญซ้ำ
+    และไม่แตะ dealer-side Exchange ledger.
+    """
+    if not isinstance(sim, dict):
+        return 0
+
+    ensure_portfolio_ledger(sim)
+    orders = sim.get("orders", [])
+    if not isinstance(orders, list):
+        return 0
+
+    ledger = sim.setdefault("portfolio_ledger", [])
+    existing_ids = {
+        str(tx.get("external_order_id"))
+        for tx in ledger
+        if isinstance(tx, dict) and tx.get("external_order_id")
+    }
+
+    # Process chronologically so SELL realized P&L uses the correct
+    # weighted-average cost after earlier Telegram BUYs.
+    tg_orders = []
+    for idx, rec in enumerate(orders):
+        if not isinstance(rec, dict):
+            continue
+        if str(rec.get("Source", "")).strip().lower() != "telegram":
+            continue
+        if str(rec.get("สถานะ", "Filled")).strip().lower() not in {"filled", "fill", "completed"}:
+            continue
+        order_id = str(rec.get("Order ID") or "").strip()
+        if not order_id or order_id in existing_ids:
+            continue
+        tg_orders.append((idx, rec, order_id))
+
+    if not tg_orders:
+        return 0
+
+    def _order_key(item):
+        _, rec, _ = item
+        try:
+            ts = pd.to_datetime(
+                f"{rec.get('วันที่','')} {rec.get('เวลา','')}",
+                errors="coerce", utc=True,
+            )
+            if pd.isna(ts):
+                ts = pd.Timestamp("1970-01-01", tz="UTC")
+        except Exception:
+            ts = pd.Timestamp("1970-01-01", tz="UTC")
+        return ts
+
+    tg_orders.sort(key=_order_key)
+    added = 0
+
+    for _, rec, order_id in tg_orders:
+        asset = str(rec.get("เหรียญ") or "").upper()
+        if not asset:
+            continue
+        try:
+            qty = abs(float(rec.get("เหรียญที่ส่งมอบ", 0.0) or 0.0))
+            price = float(rec.get("ราคาที่ลูกค้าได้", 0.0) or 0.0)
+            gross_or_settlement = float(rec.get("มูลค่า (บาท)", 0.0) or 0.0)
+            fee = float(rec.get("ค่าธรรมเนียม", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if qty <= 0 or price <= 0 or gross_or_settlement <= 0:
+            continue
+
+        side = "BUY" if str(rec.get("ฝั่ง", "")).strip() == "ซื้อ" else "SELL"
+
+        # If the portfolio ledger was first created after this Telegram trade,
+        # ensure_portfolio_ledger may already have migrated the order as MIG-*
+        # without preserving its external Order ID. Reuse that row instead of
+        # booking the same customer trade a second time.
+        signed_qty = qty if side == "BUY" else -qty
+        legacy_match = None
+        for tx0 in ledger:
+            if not isinstance(tx0, dict):
+                continue
+            if tx0.get("external_order_id"):
+                continue
+            if "ย้ายข้อมูลจาก Order Ledger เดิม" not in str(tx0.get("note", "")):
+                continue
+            try:
+                same = (
+                    str(tx0.get("type", "")).upper() == side
+                    and str(tx0.get("asset", "")).upper() == asset
+                    and abs(float(tx0.get("qty", 0.0) or 0.0) - signed_qty) <= 1e-10
+                    and abs(float(tx0.get("price_thb", 0.0) or 0.0) - price) <= 1e-6
+                    and abs(float(tx0.get("gross_thb", 0.0) or 0.0) - gross_or_settlement) <= 0.01
+                )
+            except (TypeError, ValueError):
+                same = False
+            if same:
+                legacy_match = tx0
+                break
+        if legacy_match is not None:
+            legacy_match["external_order_id"] = order_id
+            legacy_match["source"] = "Telegram"
+            legacy_match["exchange"] = str(rec.get("Exchange") or "Bitkub")
+            legacy_match["order_type"] = str(rec.get("ประเภท") or "MARKET").upper()
+            existing_ids.add(order_id)
+            continue
+
+        if side == "BUY":
+            # Telegram BUY deducts exactly the requested THB amount from cash;
+            # the fee is taken from delivered coin quantity.
+            tx = record_portfolio_tx(
+                sim, "BUY", asset, qty=qty, price_thb=price,
+                gross_thb=gross_or_settlement, fee_thb=fee,
+                cash_delta_thb=-gross_or_settlement,
+                note=f"Telegram BUY — Order ID {order_id}",
+            )
+        else:
+            # Telegram SELL records net THB received after fee. Use the
+            # portfolio's current weighted-average cost for realized P&L.
+            snap = portfolio_snapshot(sim, {asset: price})
+            old_row = next((r for r in snap.get("rows", []) if r.get("asset") == asset), None)
+            avg_cost = float(old_row.get("avg_cost", 0.0) or 0.0) if old_row else 0.0
+            realized = gross_or_settlement - (qty * avg_cost)
+            tx = record_portfolio_tx(
+                sim, "SELL", asset, qty=-qty, price_thb=price,
+                gross_thb=gross_or_settlement, fee_thb=fee,
+                cash_delta_thb=gross_or_settlement,
+                realized_pnl_thb=realized,
+                note=f"Telegram SELL — Order ID {order_id}",
+            )
+
+        tx["external_order_id"] = order_id
+        tx["source"] = "Telegram"
+        tx["exchange"] = str(rec.get("Exchange") or "Bitkub")
+        tx["order_type"] = str(rec.get("ประเภท") or "MARKET").upper()
+        existing_ids.add(order_id)
+        added += 1
+
+    return added
+
+
 def portfolio_snapshot(sim: dict[str, Any], price_thb_map: Mapping[str, float]) -> dict[str, Any]:
     ensure_portfolio_ledger(sim)
     txs = sim.get("portfolio_ledger", [])
@@ -7204,6 +7345,12 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         target_stock_thb,
         price_lookup=price_lookup,
     )
+
+    # Telegram /confirm already settles the customer wallet.
+    # Reconcile only the portfolio ledger here so Holdings / P&L /
+    # Transaction History use the same filled Telegram trades without
+    # applying the cash/coin movement a second time.
+    sync_telegram_orders_to_portfolio_ledger(sim)
 
     mid_now = spot_usd_current * usdthb_current * (1 + cfg["local_premium"])
     
