@@ -7791,6 +7791,26 @@ MOBILE_NAV_CSS = r'''<style>
 }
 </style>'''
 
+
+MOBILE_MARKET_NEWS_CSS = r'''<style>
+.mobile-market-topgrid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(280px,1fr);gap:16px;align-items:start;margin-bottom:10px;}
+.mobile-market-news{background:#181a20;border:1px solid #2b3139;border-radius:14px;padding:12px 13px;min-height:178px;overflow:hidden;}
+.mobile-market-news-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px;}
+.mobile-market-news-title{color:#EAECEF;font-size:14px;font-weight:800;}
+.mobile-market-news-refresh{color:#848e9c;font-size:10px;}
+.mobile-market-news-item{display:flex;gap:9px;padding:8px 0;border-bottom:1px solid #252a31;min-width:0;}
+.mobile-market-news-item:last-child{border-bottom:0;padding-bottom:0;}
+.mobile-market-news-thumb{width:54px;height:42px;flex:0 0 54px;border-radius:7px;object-fit:cover;background:#0f1115;}
+.mobile-market-news-body{min-width:0;}
+.mobile-market-news-link{display:block;color:#EAECEF !important;text-decoration:none !important;font-size:11px;font-weight:700;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.mobile-market-news-meta{color:#848e9c;font-size:9px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mobile-market-news-empty{color:#848e9c;font-size:11px;line-height:1.5;padding:18px 4px;text-align:center;}
+@media (max-width: 760px){
+  .mobile-market-topgrid{grid-template-columns:1fr;gap:10px;}
+  .mobile-market-news{min-height:0;}
+}
+</style>'''
+
 MOBILE_CSS = r'''<style>
 @media (max-width: 768px) {
   .block-container { padding: .65rem .75rem 5.8rem .75rem !important; max-width:100% !important; }
@@ -8102,11 +8122,55 @@ MOBILE_COIN_LOGOS = {
 
 def render_mobile_market(cfg: dict[str, Any], market_df: pd.DataFrame, usdthb: float) -> None:
     """Mobile market: chart/orderbook first, then exchange-style watchlist with real coin logos."""
-    st.markdown(
-        '<div class="mobile-page-title">🌐 ภาพรวมตลาด (Market)</div>'
-        '<div class="mobile-page-sub">ราคา THB · ตลาดคริปโต · อัปเดตตามข้อมูลตลาด</div>',
-        unsafe_allow_html=True,
-    )
+    # Market header + compact live news panel ใช้พื้นที่ว่างด้านบนให้เป็นประโยชน์
+    # โดย reuse news engine เดิมของแอป ไม่สร้าง API/news engine ซ้ำ
+    st.markdown('<div class="mobile-market-topgrid">', unsafe_allow_html=True)
+    head_col, news_col = st.columns([1.65, 1.0], gap="medium")
+    with head_col:
+        st.markdown(
+            '<div class="mobile-page-title">🌐 ภาพรวมตลาด (Market)</div>'
+            '<div class="mobile-page-sub">ราคา THB · ตลาดคริปโต · อัปเดตตามข้อมูลตลาด</div>',
+            unsafe_allow_html=True,
+        )
+    with news_col:
+        st.markdown('<div class="mobile-market-news">', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="mobile-market-news-head">'
+            '<span class="mobile-market-news-title">📰 ข่าวตลาด</span>'
+            '<span class="mobile-market-news-refresh">Live · 10 นาที</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        try:
+            news_items = fetch_crypto_news(limit=4)
+        except Exception:
+            news_items = []
+        if news_items:
+            for news in news_items[:4]:
+                title = _html.escape(str(news.get("title", "ข่าวตลาด")))
+                url = str(news.get("url", ""))
+                source = _html.escape(str(news.get("source", "Unknown")))
+                ago = _html.escape(_news_time_ago(int(news.get("published_ts", 0) or 0)))
+                img = str(news.get("image_url", "") or NEWS_PLACEHOLDER_URL)
+                if not img.startswith(("http://", "https://")):
+                    img = NEWS_PLACEHOLDER_URL
+                img = _html.escape(img, quote=True)
+                if url.startswith(("http://", "https://")):
+                    safe_url = _html.escape(url, quote=True)
+                    title_html = f'<a class="mobile-market-news-link" href="{safe_url}" target="_blank" rel="noopener noreferrer">{title}</a>'
+                else:
+                    title_html = f'<div class="mobile-market-news-link">{title}</div>'
+                st.markdown(
+                    f'<div class="mobile-market-news-item">'
+                    f'<img class="mobile-market-news-thumb" src="{img}" alt="news">'
+                    f'<div class="mobile-market-news-body">{title_html}'
+                    f'<div class="mobile-market-news-meta">{source} · {ago}</div></div></div>',
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown('<div class="mobile-market-news-empty">ยังโหลดข่าวไม่ได้<br>ระบบจะลองใหม่อัตโนมัติ</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
     current = str(cfg.get("asset", "BTC"))
     if current not in SUPPORTED_ASSETS:
@@ -8951,6 +9015,7 @@ def _main_body() -> None:
     st.markdown(THEME_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_NAV_CSS, unsafe_allow_html=True)
+    st.markdown(MOBILE_MARKET_NEWS_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_BT_CSS, unsafe_allow_html=True)
 
     if is_guest_mode():
