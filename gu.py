@@ -8769,13 +8769,31 @@ MOBILE_BT_CSS = r'''<style>
     font-weight:900 !important;
     line-height:1.4 !important;
     display:block !important;
-    margin:14px 2px 8px !important;
+    clear:both !important;
+    margin:22px 2px 10px !important;
+    padding-top:14px !important;
+    border-top:1px solid #22262d !important;
     opacity:1 !important;
+}
+/* label แรกไม่ต้องมีเส้นคั่นด้านบน */
+.mobile-bt-label:first-of-type {
+    border-top:none !important;
+    padding-top:0 !important;
+    margin-top:4px !important;
 }
 .mobile-bt-helper {
     color:#848e9c; font-size:11px; line-height:1.5;
     background:#111318; border:1px solid #252a31; border-radius:12px;
-    padding:10px 12px; margin:10px 0 14px;
+    padding:10px 12px; margin:6px 0 16px;
+}
+
+/* กัน widget ก่อนหน้าไม่ให้เบียด label ถัดไป */
+.st-key-mobile_bt_asset,
+.st-key-mobile_bt_period,
+.st-key-mobile_bt_strategy,
+.st-key-mobile_bt_freq,
+.st-key-mobile_bt_amount {
+    margin-bottom:4px !important;
 }
 
 /* ===== chip radio (ช่วงเวลา / กลยุทธ์ / ความถี่ DCA) ===== */
@@ -8865,7 +8883,17 @@ MOBILE_BT_CSS = r'''<style>
 .mbt-up { color:#0ecb81 !important; } .mbt-dn { color:#f6465d !important; }
 
 @media (max-width: 768px) {
-  .mobile-bt-label { font-size:13px !important; line-height:1.4 !important; margin:16px 0 8px !important; }
+  .mobile-bt-label {
+    font-size:13px !important;
+    line-height:1.4 !important;
+    margin:22px 0 10px !important;
+    padding-top:14px !important;
+}
+.mobile-bt-label:first-of-type {
+    margin-top:4px !important;
+    padding-top:0 !important;
+    border-top:none !important;
+}
   .mobile-bt-helper { font-size:12px !important; line-height:1.55 !important; padding:11px 13px !important; }
   .st-key-mobile_bt_period label p,
   .st-key-mobile_bt_strategy label p,
