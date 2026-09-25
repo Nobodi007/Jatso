@@ -131,6 +131,9 @@ def set_bot_commands() -> None:
         {"command": "set", "description": "แก้พารามิเตอร์เว็บ เช่น /set capital 100000000"},
         {"command": "price", "description": "เช็คราคา เช่น /price BTC"},
         {"command": "prices", "description": "ดูราคาหลายเหรียญ"},
+        {"command": "alert", "description": "ตั้งแจ้งเตือนราคา เช่น /alert BTC above 3000000"},
+        {"command": "alerts", "description": "ดูรายการแจ้งเตือนราคา"},
+        {"command": "delalert", "description": "ลบแจ้งเตือน เช่น /delalert A1B2C3"},
         {"command": "news", "description": "ข่าวคริปโทล่าสุด 1 ข่าว"},
         {"command": "buy", "description": "ซื้อใน Exchange Simulator"},
         {"command": "sell", "description": "ขายใน Exchange Simulator"},
@@ -1325,6 +1328,233 @@ NEWS_FEEDS = [
     ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
     ("Cointelegraph", "https://cointelegraph.com/rss"),
 ]
+# Telegram Price Alerts
+# =========================================================
+
+def _price_alerts_for_email(email: str, sim: Optional[dict] = None) -> tuple[dict, list[dict]]:
+    if sim is None:
+        sim = _sim_state(email)
+    alerts = sim.setdefault("price_alerts", [])
+    if not isinstance(alerts, list):
+        alerts = []
+        sim["price_alerts"] = alerts
+    return sim, alerts
+
+
+def _format_thb_price(price: float) -> str:
+    return f"฿{float(price):,.2f}"
+
+
+def cmd_price_alert(chat_id: int, arg: str) -> str:
+    email, err = _linked_email_or_message(chat_id)
+    if err:
+        return err
+
+    parts = arg.strip().split()
+    if len(parts) < 3:
+        return (
+            "ใช้แบบนี้:\n"
+            "/alert BTC above 3000000\n"
+            "/alert XRP below 50\n\n"
+            "เงื่อนไข: above / below\n"
+            "ราคาอ้างอิงเป็น Bitkub THB"
+        )
+
+    asset = parts[0].upper()
+    condition = parts[1].lower()
+    if condition in {">", ">=", "สูงกว่า", "เหนือ"}:
+        condition = "above"
+    elif condition in {"<", "<=", "ต่ำกว่า", "ใต้"}:
+        condition = "below"
+    if condition not in {"above", "below"}:
+        return "❌ เงื่อนไขต้องเป็น above หรือ below เช่น /alert BTC above 3000000"
+
+    try:
+        target = float(parts[2].replace(",", ""))
+    except (TypeError, ValueError):
+        return "❌ ราคาไม่ถูกต้อง เช่น /alert BTC above 3000000"
+    if target <= 0:
+        return "❌ ราคาเป้าหมายต้องมากกว่า 0"
+    if asset not in SUPPORTED_TRADE_ASSETS:
+        return f"❌ ไม่รองรับ {asset} ใน Exchange Simulator"
+
+    # Verify the market is reachable and capture the current price.
+    try:
+        ticker = _bitkub_ticker(asset)
+        current = float(ticker["last"])
+    except Exception as exc:
+        print(f"[alert] ticker error: {exc}")
+        return f"❌ ดึงราคา {asset}/THB ไม่ได้ตอนนี้"
+
+    sim, alerts = _price_alerts_for_email(email)
+    active = [a for a in alerts if a.get("active", True)]
+    if len(active) >= 20:
+        return "❌ ตั้งแจ้งเตือนได้สูงสุด 20 รายการที่ยังทำงานอยู่"
+
+    alert_id = uuid.uuid4().hex[:6].upper()
+    alert = {
+        "id": alert_id,
+        "chat_id": int(chat_id),
+        "asset": asset,
+        "condition": condition,
+        "target": float(target),
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "last_price": current,
+        "active": True,
+        "triggered_at": None,
+    }
+    alerts.append(alert)
+    sim["price_alerts"] = alerts[-100:]
+    _save_sim_state(email, sim)
+
+    cond_text = "แตะ/สูงกว่า" if condition == "above" else "แตะ/ต่ำกว่า"
+    return (
+        f"🔔 ตั้งแจ้งเตือนราคาแล้ว\n"
+        f"ID: {alert_id}\n"
+        f"{asset}/THB: {cond_text} {_format_thb_price(target)}\n"
+        f"ราคาปัจจุบัน: {_format_thb_price(current)}\n"
+        "ระบบจะตรวจราคาอัตโนมัติและส่ง Telegram เมื่อถึงเงื่อนไข"
+    )
+
+
+def cmd_price_alerts(chat_id: int) -> str:
+    email, err = _linked_email_or_message(chat_id)
+    if err:
+        return err
+    try:
+        sim, alerts = _price_alerts_for_email(email)
+        mine = [a for a in alerts if int(a.get("chat_id") or 0) == int(chat_id)]
+        if not mine:
+            return "🔔 ยังไม่มี Price Alert\nใช้ /alert BTC above 3000000 เพื่อสร้างรายการแรก"
+        lines = ["🔔 Price Alerts", ""]
+        for a in reversed(mine[-20:]):
+            status = "🟢 ACTIVE" if a.get("active", True) else "⚪ TRIGGERED"
+            op = ">=" if a.get("condition") == "above" else "<="
+            lines.append(
+                f"{a.get('id','-')} | {status}\n"
+                f"{a.get('asset','-')}/THB {op} {_format_thb_price(float(a.get('target') or 0))}"
+            )
+        return "\n".join(lines)
+    except Exception as exc:
+        print(f"[alerts] list error: {exc}")
+        return "❌ อ่านรายการ Price Alert ไม่สำเร็จ"
+
+
+def cmd_delete_price_alert(chat_id: int, arg: str) -> str:
+    email, err = _linked_email_or_message(chat_id)
+    if err:
+        return err
+    alert_id = arg.strip().upper()
+    if not alert_id:
+        return "ใช้แบบนี้: /delalert A1B2C3"
+    try:
+        sim, alerts = _price_alerts_for_email(email)
+        found = False
+        for a in alerts:
+            if str(a.get("id", "")).upper() == alert_id and int(a.get("chat_id") or 0) == int(chat_id):
+                a["active"] = False
+                a["deleted_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                found = True
+                break
+        if not found:
+            return f"❌ ไม่พบ Alert ID {alert_id}"
+        sim["price_alerts"] = alerts
+        _save_sim_state(email, sim)
+        return f"✅ ลบ Price Alert {alert_id} แล้ว"
+    except Exception as exc:
+        print(f"[delalert] error: {exc}")
+        return "❌ ลบ Price Alert ไม่สำเร็จ"
+
+
+def check_price_alerts() -> None:
+    """Poll active alerts and send one notification when a threshold is crossed.
+
+    Alerts are stored inside each linked user's existing sim_state. This does not
+    create or modify portfolio balances/orders. After triggering, an alert becomes
+    inactive so a 30-second polling loop cannot spam the chat.
+    """
+    if sb is None:
+        return
+    try:
+        res = sb.table("sim_state").select("actor,data").limit(500).execute()
+        rows = res.data or []
+    except Exception as exc:
+        print(f"[alert] load sim_state error: {exc}")
+        return
+
+    for row in rows:
+        email = str(row.get("actor") or "").strip()
+        sim = row.get("data")
+        if not email or not isinstance(sim, dict):
+            continue
+        alerts = sim.get("price_alerts")
+        if not isinstance(alerts, list):
+            continue
+
+        changed = False
+        for alert in alerts:
+            if not alert.get("active", True):
+                continue
+            chat_id = alert.get("chat_id")
+            asset = str(alert.get("asset") or "").upper()
+            condition = str(alert.get("condition") or "").lower()
+            try:
+                target = float(alert.get("target"))
+                previous = float(alert.get("last_price")) if alert.get("last_price") is not None else None
+                if not chat_id or not asset or condition not in {"above", "below"} or target <= 0:
+                    alert["active"] = False
+                    changed = True
+                    continue
+                ticker = _bitkub_ticker(asset)
+                current = float(ticker["last"])
+            except Exception as exc:
+                print(f"[alert] {asset} ticker error: {exc}")
+                continue
+
+            crossed = False
+            if condition == "above":
+                crossed = current >= target and (previous is None or previous < target)
+            else:
+                crossed = current <= target and (previous is None or previous > target)
+
+            alert["last_price"] = current
+            changed = True
+
+            if crossed:
+                direction = "ขึ้นถึง" if condition == "above" else "ลงถึง"
+                msg = (
+                    "🚨 PRICE ALERT\n"
+                    f"{asset}/THB {direction} {_format_thb_price(target)}\n"
+                    f"ราคาปัจจุบัน: {_format_thb_price(current)}\n"
+                    f"Alert ID: {alert.get('id','-')}\n"
+                    "สถานะ: Triggered (หยุดแจ้งซ้ำแล้ว)"
+                )
+                try:
+                    send_message(int(chat_id), msg)
+                    alert["active"] = False
+                    alert["triggered_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                    changed = True
+                except Exception as exc:
+                    print(f"[alert] send error for {chat_id}: {exc}")
+
+        if changed:
+            try:
+                sim["price_alerts"] = alerts[-100:]
+                _save_sim_state(email, sim)
+            except Exception as exc:
+                print(f"[alert] save error for {email}: {exc}")
+
+
+# =========================================================
+# News + Exchange Simulator via Telegram
+# =========================================================
+
+PENDING_ORDERS: dict[int, dict] = {}
+NEWS_FEEDS = [
+    ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
+    ("Cointelegraph", "https://cointelegraph.com/rss"),
+]
+
 SUPPORTED_TRADE_ASSETS = {"BTC", "ETH", "SOL", "DOGE", "ADA", "HBAR", "LINK", "XLM", "XRP", "USDT", "USDC"}
 LOCAL_TRADE_FEE = 0.0025
 MIN_TRADE_THB = 50.0
@@ -2133,6 +2363,10 @@ HELP_TEXT = (
     "📈 Market\n"
     "/price BTC — เช็คราคาเหรียญ\n"
     "/prices — ดู BTC/ETH/SOL หรือระบุเหรียญเอง\n"
+    "/alert BTC above 3000000 — แจ้งเมื่อราคาถึงเป้าหมาย\n"
+    "/alert XRP below 50 — แจ้งเมื่อราคาลงถึงเป้าหมาย\n"
+    "/alerts — ดู Price Alert ที่ตั้งไว้\n"
+    "/delalert A1B2C3 — ลบ Price Alert\n"
     "/news — ข่าวคริปโทล่าสุด 1 ข่าว (เช่น /news BTC)\n\n"
     "🛒 Exchange Simulator\n"
     "/buy BTC 500000 — ซื้อ BTC ด้วย THB\n"
@@ -2214,6 +2448,15 @@ def handle_command(chat_id: int, text: str) -> str:
     if cmd == "/prices":
         return cmd_prices(arg)
 
+    if cmd == "/alert":
+        return cmd_price_alert(chat_id, arg)
+
+    if cmd == "/alerts":
+        return cmd_price_alerts(chat_id)
+
+    if cmd == "/delalert":
+        return cmd_delete_price_alert(chat_id, arg)
+
     if cmd == "/news":
         return cmd_news(arg)
 
@@ -2254,6 +2497,9 @@ def main_loop() -> None:
     while True:
         try:
             updates = get_updates(offset)
+
+            # ตรวจ Price Alerts ทุก polling cycle โดยไม่ขึ้นกับว่ามีข้อความใหม่หรือไม่
+            check_price_alerts()
 
             for upd in updates:
                 offset = upd["update_id"] + 1
