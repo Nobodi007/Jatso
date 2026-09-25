@@ -7865,6 +7865,85 @@ MOBILE_CSS = r'''<style>
   .st-key-mobile_shell .mobile-trade-history { font-size: 12px !important; line-height: 1.45 !important; }
   .st-key-mobile_shell .mobile-trade-summary b { font-size: 12px !important; }
 }
+
+/* ── Mobile market watchlist — compact exchange-style layout ───────────── */
+.st-key-mobile_shell .mobile-market-header {
+  margin-top: 4px;
+  padding: 0 2px 8px;
+}
+.st-key-mobile_shell .mobile-market-title {
+  color:#EAECEF; font-size:20px; font-weight:800; line-height:1.2;
+  margin: 0 0 8px;
+}
+.st-key-mobile_shell .mobile-market-tabs {
+  display:flex; align-items:center; gap:18px; color:#848e9c;
+  font-size:13px; font-weight:700; border-bottom:1px solid #252a31;
+  padding-bottom:8px;
+}
+.st-key-mobile_shell .mobile-market-tab {
+  position:relative; padding:0 2px; white-space:nowrap;
+}
+.st-key-mobile_shell .mobile-market-tab.active { color:#EAECEF; }
+.st-key-mobile_shell .mobile-market-tab.active:after {
+  content:""; position:absolute; left:0; right:0; bottom:-9px; height:3px;
+  background:#16c784; border-radius:3px 3px 0 0;
+}
+.st-key-mobile_shell .mobile-market-columns {
+  display:grid; grid-template-columns:minmax(0,1.65fr) .9fr .72fr;
+  gap:8px; color:#848e9c; font-size:11px; line-height:1.3;
+  padding:12px 2px 7px 53px;
+}
+.st-key-mobile_shell .mobile-market-columns span:nth-child(2) { text-align:left; }
+.st-key-mobile_shell .mobile-market-columns span:last-child { text-align:right; }
+.st-key-mobile_shell .mobile-market-list { margin:0; padding:0; }
+.st-key-mobile_shell .mobile-market-row {
+  display:grid; grid-template-columns:36px minmax(0,1.65fr) .9fr .72fr;
+  align-items:center; gap:8px; min-height:62px;
+  border-bottom:1px solid #20252c; padding:5px 2px;
+}
+.st-key-mobile_shell .mobile-market-row.selected { background:rgba(22,199,132,.16); border-radius:2px; }
+.st-key-mobile_shell .mobile-market-star {
+  font-size:20px; text-align:center; line-height:1; color:#F0B90B;
+}
+.st-key-mobile_shell .mobile-market-star.muted { color:#5b6573; }
+.st-key-mobile_shell .mobile-market-coin { display:flex; align-items:center; min-width:0; gap:8px; }
+.st-key-mobile_shell .mobile-market-icon {
+  width:36px; height:36px; min-width:36px; border-radius:50%; display:flex;
+  align-items:center; justify-content:center; font-size:19px; background:#303640;
+}
+.st-key-mobile_shell .mobile-market-main { min-width:0; }
+.st-key-mobile_shell .mobile-market-symbol {
+  color:#EAECEF; font-size:14px; font-weight:800; line-height:1.15;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.st-key-mobile_shell .mobile-market-name {
+  color:#848e9c; font-size:10px; line-height:1.25; margin-top:3px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.st-key-mobile_shell .mobile-market-vol { color:#848e9c; font-size:10px; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.st-key-mobile_shell .mobile-market-price { color:#EAECEF; font-size:13px; font-weight:800; text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.st-key-mobile_shell .mobile-market-pct { font-size:12px; font-weight:800; text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; margin-top:4px; }
+.st-key-mobile_shell .mobile-market-pct.up { color:#16c784; }
+.st-key-mobile_shell .mobile-market-pct.down { color:#F6465D; }
+.st-key-mobile_shell .mobile-market-action { min-width:0; }
+.st-key-mobile_shell .mobile-market-action button {
+  min-height:56px !important; height:56px !important; padding:0 !important;
+  border:0 !important; background:transparent !important; box-shadow:none !important;
+  color:transparent !important; width:100% !important;
+}
+.st-key-mobile_shell .mobile-market-action button:hover { background:transparent !important; }
+.st-key-mobile_shell .mobile-market-action button p { color:transparent !important; font-size:1px !important; }
+@media (max-width: 480px) {
+  .st-key-mobile_shell .mobile-market-title { font-size:19px; }
+  .st-key-mobile_shell .mobile-market-tabs { gap:14px; font-size:12px; }
+  .st-key-mobile_shell .mobile-market-columns { grid-template-columns:minmax(0,1.55fr) .85fr .7fr; padding-left:48px; }
+  .st-key-mobile_shell .mobile-market-row { grid-template-columns:32px minmax(0,1.55fr) .85fr .7fr; gap:6px; min-height:58px; }
+  .st-key-mobile_shell .mobile-market-icon { width:32px; height:32px; min-width:32px; font-size:17px; }
+  .st-key-mobile_shell .mobile-market-symbol { font-size:13px; }
+  .st-key-mobile_shell .mobile-market-price { font-size:12px; }
+  .st-key-mobile_shell .mobile-market-pct { font-size:11px; }
+}
+
 @media (min-width:769px) {
   .st-key-mobile_shell { display:none !important; }
   .st-key-mobile_nav { display:none !important; }
@@ -7900,124 +7979,114 @@ def _mobile_compact_number(v: float, decimals: int = 2) -> str:
 
 
 def render_mobile_market(cfg: dict[str, Any], market_df: pd.DataFrame, usdthb: float) -> None:
-    """Mobile-first market screen: chart/order-book first, ticker list below."""
+    """Mobile market screen: chart first, then a compact exchange-style watchlist."""
     st.markdown(
-        '<div class="mobile-page-title">🌐 Market</div>'
-        '<div class="mobile-page-sub">ตลาดสินทรัพย์ · ราคา THB · กราฟเรียลไทม์จาก TradingView</div>',
+        '<div class="mobile-page-title">🌐 ภาพรวมตลาด (Market)</div>'
+        '<div class="mobile-page-sub">ราคา THB · ตลาดคริปโต · อัปเดตตามข้อมูลตลาด</div>',
         unsafe_allow_html=True,
     )
 
     current = str(cfg.get("asset", "BTC"))
     if current not in SUPPORTED_ASSETS:
         current = "BTC"
-
-    # Keep the selected market persistent so the chart stays on the same asset
-    # when the user scrolls between the chart and the ticker list.
     chart_asset = str(st.session_state.get("mobile_market_selected", current))
     if chart_asset not in SUPPORTED_ASSETS:
         chart_asset = current
 
-    # ── Chart / Order Book FIRST ───────────────────────────────────────────
-    st.markdown('<div class="mobile-section-heading">📊 กราฟตลาด</div>', unsafe_allow_html=True)
+    st.markdown('<div class="mobile-section-heading">📊 Market chart</div>', unsafe_allow_html=True)
     chart_view = st.radio(
-        "มุมมองกราฟ",
-        ["📈 TradingView", "📚 3D Order Book"],
-        horizontal=True,
-        key="mobile_market_chart_view",
-        label_visibility="collapsed",
+        "มุมมองกราฟ", ["📈 TradingView", "📊 3D Order Book"],
+        horizontal=True, key="mobile_market_chart_view", label_visibility="collapsed",
     )
-
     if chart_view == "📈 TradingView":
         symbol = TV_LOCAL_SYMBOL.get(chart_asset, f"BITKUB:{chart_asset}THB")
-        render_tradingview(
-            symbol,
-            f"tv_mobile_{chart_asset}",
-            390,
-            studies=["MAExp@tv-basicstudies"],
-        )
+        render_tradingview(symbol, f"tv_mobile_{chart_asset}", 390, studies=["MAExp@tv-basicstudies"])
     else:
         try:
-            render_orderbook_3d(
-                symbol=f"{chart_asset.lower()}_thb",
-                title=f"3D Order Book — {chart_asset}/THB",
-                limit=20,
-            )
+            render_orderbook_3d(symbol=f"{chart_asset.lower()}_thb", title=f"3D Order Book — {chart_asset}/THB", limit=20)
         except Exception as exc:
             st.warning(f"ไม่สามารถแสดง 3D Order Book ได้: {exc}")
-
     st.caption("ข้อมูลกราฟและราคาอาจมีความล่าช้าตามผู้ให้บริการข้อมูล")
 
-    # ── Watchlist / Market list SECOND ─────────────────────────────────────
-    st.markdown('<div class="mobile-section-heading">📈 สินทรัพย์ที่ติดตาม</div>', unsafe_allow_html=True)
-    view_mode = st.radio(
-        "จัดเรียงตลาด",
-        ["⭐ รายการโปรด", "ปริมาณ", "▲ เพิ่มขึ้น", "▼ ลดลง"],
-        horizontal=True,
-        key="mobile_market_mode",
-        label_visibility="collapsed",
+    # ── Exchange-style watchlist ───────────────────────────────────────────
+    modes = [
+        ("favorite", "⭐ รายการโปรด"),
+        ("volume", "ปริมาณ"),
+        ("top_gain", "▲ เพิ่มขึ้น"),
+        ("top_loss", "▼ ลดลง"),
+    ]
+    mode = st.session_state.get("mobile_market_mode2", "favorite")
+    if mode not in {m[0] for m in modes}:
+        mode = "favorite"
+    cols = st.columns(4, gap="small")
+    for col, (key, label) in zip(cols, modes):
+        with col:
+            if st.button(label, key=f"mobile_market_tab_{key}", use_container_width=True,
+                         type="primary" if mode == key else "secondary"):
+                st.session_state["mobile_market_mode2"] = key
+                st.rerun()
+
+    st.markdown(
+        '<div class="mobile-market-header">'
+        '<div class="mobile-market-title">📈 สินทรัพย์ที่ติดตาม</div>'
+        '<div class="mobile-market-columns">'
+        '<span>สินทรัพย์ ·<br>ปริมาณ 24 ชม.</span><span>ราคา (THB)</span><span>%</span>'
+        '</div></div>',
+        unsafe_allow_html=True,
     )
-    mode_map = {
-        "⭐ รายการโปรด": "favorite",
-        "ปริมาณ": "volume",
-        "▲ เพิ่มขึ้น": "top_gain",
-        "▼ ลดลง": "top_loss",
-    }
-    mode = mode_map.get(view_mode, "favorite")
 
     df = market_df if isinstance(market_df, pd.DataFrame) else pd.DataFrame()
     if df.empty:
         st.info("ยังไม่มีข้อมูลตลาดในขณะนี้")
-    else:
-        if mode == "favorite":
-            favs = st.session_state.get("favorite_tickers", [])
-            rows = df[df["symbol"].isin(favs)].sort_values("volume", ascending=False)
-            if rows.empty:
-                rows = df[df["symbol"] == chart_asset]
-                st.caption("ยังไม่มีรายการโปรด — แสดงตลาดที่เลือกอยู่")
-        elif mode == "volume":
+        return
+
+    if mode == "favorite":
+        favs = st.session_state.get("favorite_tickers", [])
+        rows = df[df["symbol"].isin(favs)].sort_values("volume", ascending=False)
+        if rows.empty:
             rows = df.sort_values("volume", ascending=False)
-        elif mode == "top_gain":
-            rows = df.sort_values("pct_change", ascending=False)
-        else:
-            rows = df.sort_values("pct_change", ascending=True)
+    elif mode == "volume":
+        rows = df.sort_values("volume", ascending=False)
+    elif mode == "top_gain":
+        rows = df.sort_values("pct_change", ascending=False)
+    else:
+        rows = df.sort_values("pct_change", ascending=True)
 
-        for _, row in rows.iterrows():
-            sym = str(row.get("symbol", ""))
-            if not sym:
-                continue
-            try:
-                price = float(row.get("price_usd", 0) or 0) * float(usdthb or 1)
-                pct = float(row.get("pct_change", 0) or 0)
-            except (TypeError, ValueError):
-                continue
+    icon_map = {"BTC":"₿", "ETH":"◆", "USDT":"₮", "USDC":"$", "BNB":"◆", "SOL":"S", "XRP":"X", "ADA":"₳", "DOGE":"Ð", "TON":"T", "TRX":"T", "DOT":"●"}
 
-            price_txt = f"฿{price:,.2f}" if price >= 1 else f"฿{price:,.5f}"
-            selected = sym == chart_asset
-            label = (
-                f"{'● ' if selected else ''}{sym}/THB  ·  "
-                f"{COIN_NAMES.get(sym, sym)}   |   {price_txt}   |   "
-                f"{'+' if pct >= 0 else ''}{pct:.2f}%"
-            )
+    for _, row in rows.iterrows():
+        sym = str(row.get("symbol", ""))
+        if not sym:
+            continue
+        try:
+            price = float(row.get("price_usd", 0) or 0) * float(usdthb or 1)
+            pct = float(row.get("pct_change", 0) or 0)
+            volume = float(row.get("volume", 0) or 0)
+        except (TypeError, ValueError):
+            continue
 
-            left, star = st.columns([8, 1], gap="small")
-            with left:
-                if st.button(
-                    label,
-                    key=f"mobile_mkt_pick_{mode}_{sym}",
-                    use_container_width=True,
-                    type="primary" if selected else "secondary",
-                ):
-                    _select_asset(sym)
-                    st.session_state["mobile_market_selected"] = sym
-                    st.rerun()
-            with star:
-                is_fav = sym in st.session_state.get("favorite_tickers", [])
-                if st.button(
-                    "★" if is_fav else "☆",
-                    key=f"mobile_mkt_fav_{mode}_{sym}",
-                ):
-                    _toggle_fav(sym)
-                    st.rerun()
+        name = COIN_NAMES.get(sym, sym)
+        price_txt = f"฿{price:,.2f}" if price >= 1 else f"฿{price:,.5f}"
+        vol_txt = _mobile_compact_number(volume)
+        is_fav = sym in st.session_state.get("favorite_tickers", [])
+        selected = sym == chart_asset
+        pct_txt = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+        icon = icon_map.get(sym, "●")
+
+        # The visible row is a single Streamlit button so it is genuinely tappable.
+        # The star remains a separate compact button on the left.
+        star_col, row_col = st.columns([0.42, 8.8], gap="small")
+        with star_col:
+            if st.button("★" if is_fav else "☆", key=f"mobile_mkt_fav_{mode}_{sym}", use_container_width=True):
+                _toggle_fav(sym)
+                st.rerun()
+        with row_col:
+            label = f"{icon}  {sym}/THB  ·  {name}    |    {price_txt}    |    {pct_txt}\n     Vol ฿{vol_txt}"
+            if st.button(label, key=f"mobile_mkt_pick_{mode}_{sym}", use_container_width=True,
+                         type="primary" if selected else "secondary"):
+                _select_asset(sym)
+                st.session_state["mobile_market_selected"] = sym
+                st.rerun()
 
 def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     sim=st.session_state.get('sim',{}) or {}; asset=cfg.get('asset','BTC')
