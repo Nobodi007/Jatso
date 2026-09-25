@@ -1602,6 +1602,7 @@ NAV_LABELS = [
     "📈 Performance Analytics",
     "📦 Portfolio Reports",
     "🔎 Portfolio Search & Filter",
+    "🔔 Notification Center",
 ]
 NAV_DASHBOARD = NAV_LABELS[0]
 NAV_EXCHANGE = NAV_LABELS[3]
@@ -1619,6 +1620,7 @@ NAV_REBALANCE = NAV_LABELS[14]
 NAV_PERFORMANCE = NAV_LABELS[15]
 NAV_REPORTS = NAV_LABELS[16]
 NAV_SEARCH = NAV_LABELS[17]
+NAV_NOTIFICATIONS = NAV_LABELS[18]
 
 def _go_to_exchange(sym: str) -> None:
     st.session_state["bt_asset"] = sym
@@ -11613,6 +11615,191 @@ def _smart_alerts_build(sim: dict[str, Any], snap: dict[str, Any],
 
 
 
+
+def _notification_center_items(sim: dict[str, Any], market_df: Optional[pd.DataFrame] = None) -> list[dict[str, Any]]:
+    """สร้าง Notification Center จากข้อมูลเดิมของพอร์ต โดยไม่สร้างธุรกรรมใหม่."""
+    items: list[dict[str, Any]] = []
+    ledger = sim.get("portfolio_ledger", []) if isinstance(sim, dict) else []
+    if not isinstance(ledger, list):
+        ledger = []
+
+    def _dt(v: Any) -> pd.Timestamp:
+        try:
+            x = pd.to_datetime(v, errors="coerce", utc=True)
+            return x if not pd.isna(x) else pd.Timestamp("1970-01-01", tz="UTC")
+        except Exception:
+            return pd.Timestamp("1970-01-01", tz="UTC")
+
+    def _add(nid: str, category: str, icon: str, title: str, text: str,
+             ts: Any = None, level: str = "info") -> None:
+        items.append({
+            "id": str(nid), "category": category, "icon": icon,
+            "title": title, "text": text, "timestamp": _dt(ts), "level": level,
+        })
+
+    # Transaction notifications: read directly from the existing portfolio ledger.
+    for tx in ledger:
+        if not isinstance(tx, dict):
+            continue
+        typ = str(tx.get("type", "")).upper()
+        asset = str(tx.get("asset", "")).upper()
+        gross = float(tx.get("gross_thb", 0.0) or 0.0)
+        fee = float(tx.get("fee_thb", 0.0) or 0.0)
+        ts = tx.get("timestamp") or tx.get("date")
+        ext = str(tx.get("external_order_id") or tx.get("id") or f"{typ}-{asset}-{ts}")
+        if typ == "BUY":
+            _add(f"tx:{ext}", "transaction", "🔵", "ซื้อสำเร็จ",
+                 f"BUY {asset} ฿{gross:,.2f}" + (f" • Fee ฿{fee:,.2f}" if fee else ""), ts)
+        elif typ == "SELL":
+            _add(f"tx:{ext}", "transaction", "🔵", "ขายสำเร็จ",
+                 f"SELL {asset} ฿{gross:,.2f}" + (f" • Fee ฿{fee:,.2f}" if fee else ""), ts)
+        elif typ in {"DEPOSIT", "DEPOSIT_THB"}:
+            _add(f"tx:{ext}", "system", "🟢", "Deposit สำเร็จ",
+                 f"ฝากเงิน ฿{gross:,.2f}", ts)
+        elif typ in {"WITHDRAW", "WITHDRAWAL", "WITHDRAW_THB"}:
+            _add(f"tx:{ext}", "system", "🟢", "Withdrawal สำเร็จ",
+                 f"ถอนเงิน ฿{abs(gross):,.2f}", ts)
+        elif typ == "FEE":
+            _add(f"tx:{ext}", "transaction", "🔵", "มีค่าธรรมเนียม",
+                 f"Fee ฿{fee or abs(gross):,.2f}", ts)
+
+    # Portfolio notification: compare the two latest stored snapshots.
+    snaps = sim.get("portfolio_snapshots", [])
+    if isinstance(snaps, list):
+        valid = [x for x in snaps if isinstance(x, dict)]
+        valid.sort(key=lambda x: _dt(x.get("date") or x.get("timestamp")))
+        if len(valid) >= 2:
+            prev, cur = valid[-2], valid[-1]
+            pv = float(prev.get("total_value_thb", 0) or 0)
+            cv = float(cur.get("total_value_thb", 0) or 0)
+            if pv > 0:
+                chg = (cv / pv - 1.0) * 100.0
+                if chg <= -3.0:
+                    _add("portfolio:drop:" + str(cur.get("date")), "portfolio", "🟡",
+                         "Portfolio ลดลง", f"มูลค่าพอร์ตลดลง {abs(chg):.2f}% จาก Snapshot ก่อนหน้า",
+                         cur.get("date"), "warning")
+                elif chg >= 3.0:
+                    _add("portfolio:up:" + str(cur.get("date")), "portfolio", "🟢",
+                         "Portfolio เพิ่มขึ้น", f"มูลค่าพอร์ตเพิ่มขึ้น {chg:.2f}% จาก Snapshot ก่อนหน้า",
+                         cur.get("date"), "info")
+
+    # Price notifications: surface existing alert definitions if the app has them.
+    price_alerts = sim.get("price_alerts", sim.get("price_alert_settings", []))
+    if isinstance(price_alerts, list):
+        for i, a in enumerate(price_alerts):
+            if not isinstance(a, dict):
+                continue
+            asset = str(a.get("asset") or a.get("symbol") or "").upper()
+            if not asset:
+                continue
+            status = str(a.get("status") or a.get("state") or "active").lower()
+            if status not in {"active", "enabled", "pending", ""}:
+                continue
+            direction = str(a.get("direction") or a.get("condition") or "").lower()
+            target = a.get("target") or a.get("price") or a.get("threshold")
+            if target is None:
+                continue
+            op = "<=" if "below" in direction or "ต่ำ" in direction else ">="
+            try:
+                target_txt = f"฿{float(target):,.2f}"
+            except (TypeError, ValueError):
+                target_txt = str(target)
+            _add(f"price:{a.get('id', i)}", "price", "🔴", "Price Alert",
+                 f"{asset} {op} {target_txt}", a.get("updated_at") or a.get("created_at"), "warning")
+
+    # Security notifications: only show if an existing login history is present.
+    history = sim.get("login_history", [])
+    if isinstance(history, list) and history:
+        latest = history[-1] if isinstance(history[-1], dict) else {}
+        ts = latest.get("timestamp") or latest.get("time") or latest.get("date")
+        device = latest.get("device") or latest.get("user_agent") or "อุปกรณ์ใหม่"
+        _add(f"security:{ts}:{device}", "security", "🟣", "การเข้าสู่ระบบล่าสุด",
+             f"{device}", ts, "info")
+
+    return sorted(items, key=lambda x: x["timestamp"], reverse=True)
+
+
+def render_notification_center(cfg: dict[str, Any], data: pd.DataFrame,
+                               market_df: pd.DataFrame) -> None:
+    """ศูนย์แจ้งเตือนลูกค้า: Web inbox + channel/category preferences."""
+    sim = st.session_state.get("sim", {}) or {}
+    ensure_portfolio_ledger(sim)
+    prefs = sim.setdefault("notification_preferences", {
+        "channels": {"web": True, "telegram": True, "email": False},
+        "categories": {"price": True, "portfolio": True, "transaction": True, "security": True, "system": True},
+    })
+    channels = prefs.setdefault("channels", {})
+    categories = prefs.setdefault("categories", {})
+    for k, v in {"web": True, "telegram": True, "email": False}.items():
+        channels.setdefault(k, v)
+    for k in ("price", "portfolio", "transaction", "security", "system"):
+        categories.setdefault(k, True)
+
+    st.markdown("""
+    <style>
+    .nc-hero{padding:26px 28px;border:1px solid #2b3139;border-radius:18px;background:linear-gradient(135deg,#11151b,#171b22);margin-bottom:18px}
+    .nc-kicker{font-size:.72rem;letter-spacing:.18em;color:#8b95a5;font-weight:800;text-transform:uppercase}
+    .nc-title{font-size:2rem;font-weight:850;color:#f2f4f7;margin-top:8px}
+    .nc-sub{color:#8f98a6;margin-top:8px}
+    .nc-card{padding:15px 17px;border:1px solid #2b3139;border-radius:14px;background:#15181e;margin:8px 0}
+    .nc-card.warn{border-color:rgba(240,185,11,.4)}
+    .nc-card.info{border-color:rgba(33,150,243,.28)}
+    .nc-card.ok{border-color:rgba(14,203,129,.30)}
+    .nc-row{display:flex;gap:12px;align-items:flex-start}
+    .nc-icon{font-size:1.25rem}.nc-cat{font-size:.68rem;color:#7d8795;text-transform:uppercase;letter-spacing:.08em}
+    .nc-head{font-weight:800;color:#eef1f4;margin-top:2px}.nc-text{color:#b9c0ca;font-size:.88rem;margin-top:3px}.nc-time{color:#697381;font-size:.72rem;margin-top:5px}
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown('<div class="nc-hero"><div class="nc-kicker">CUSTOMER EXPERIENCE</div><div class="nc-title">🔔 Notification Center</div><div class="nc-sub">รวม Price, Portfolio, Transaction, Security และ System notification จากข้อมูลเดิมของบัญชี</div></div>', unsafe_allow_html=True)
+
+    with st.expander("⚙️ Notification Preferences", expanded=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**ช่องทาง**")
+            channels["web"] = st.checkbox("🌐 Web", value=bool(channels.get("web", True)), key="nc_web")
+            channels["telegram"] = st.checkbox("📱 Telegram", value=bool(channels.get("telegram", True)), key="nc_telegram")
+            channels["email"] = st.checkbox("✉️ Email", value=bool(channels.get("email", False)), key="nc_email")
+        with c2:
+            st.markdown("**ประเภทการแจ้งเตือน**")
+            categories["price"] = st.checkbox("🔴 Price Alert", value=bool(categories.get("price", True)), key="nc_price")
+            categories["portfolio"] = st.checkbox("🟡 Portfolio", value=bool(categories.get("portfolio", True)), key="nc_portfolio")
+            categories["transaction"] = st.checkbox("🔵 Transaction", value=bool(categories.get("transaction", True)), key="nc_transaction")
+            categories["security"] = st.checkbox("🟣 Security", value=bool(categories.get("security", True)), key="nc_security")
+            categories["system"] = st.checkbox("🟢 System", value=bool(categories.get("system", True)), key="nc_system")
+        if st.button("💾 บันทึกการตั้งค่า", key="nc_save", use_container_width=True):
+            save_sim_state(sim)
+            st.success("บันทึกการตั้งค่า Notification แล้ว")
+            st.rerun()
+
+    items = _notification_center_items(sim, market_df)
+    visible = [x for x in items if bool(categories.get(x["category"], True))]
+    unread = len(visible)
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: metric_card("Notifications", f"{unread:,}", "แสดงจากข้อมูลปัจจุบัน")
+    with c2: metric_card("Web", "ON" if channels.get("web") else "OFF", "Inbox")
+    with c3: metric_card("Telegram", "ON" if channels.get("telegram") else "OFF", "Channel preference")
+    with c4: metric_card("Email", "ON" if channels.get("email") else "OFF", "Channel preference")
+
+    st.markdown("### 🔔 Notifications")
+    if not visible:
+        st.info("ยังไม่มี Notification ตามประเภทที่เปิดไว้")
+    else:
+        for item in visible[:100]:
+            ts = item["timestamp"].tz_convert(None) if getattr(item["timestamp"], "tzinfo", None) else item["timestamp"]
+            ts_txt = ts.strftime("%d/%m/%Y %H:%M") if not pd.isna(ts) else ""
+            st.markdown(
+                f'<div class="nc-card {item["level"]}"><div class="nc-row">'
+                f'<div class="nc-icon">{item["icon"]}</div><div><div class="nc-cat">{_html.escape(item["category"])}</div>'
+                f'<div class="nc-head">{_html.escape(item["title"])}</div>'
+                f'<div class="nc-text">{_html.escape(item["text"])}</div>'
+                f'<div class="nc-time">{_html.escape(ts_txt)}</div></div></div></div>',
+                unsafe_allow_html=True,
+            )
+
+    st.caption("Web notification แสดงจาก Ledger / Snapshot เดิมเท่านั้น การเปิด Telegram หรือ Email เป็นการตั้ง preference ของช่องทาง; การส่งออกจริงจะใช้ตัวเชื่อมของช่องทางนั้น")
+
+
 def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
     """Portfolio performance analytics derived from stored portfolio snapshots."""
     sim = st.session_state.get("sim", {})
@@ -12546,6 +12733,8 @@ def _main_body() -> None:
             render_portfolio_reports(cfg, data, market_df)
         elif nav == NAV_SEARCH:
             render_portfolio_search_filter(cfg, data, market_df)
+        elif nav == NAV_NOTIFICATIONS:
+            render_notification_center(cfg, data, market_df)
         elif nav == NAV_SIMPLE:
             from simple_backtest import render_simple_backtest
             render_simple_backtest(
