@@ -1232,15 +1232,18 @@ def coin_icon_html(sym: str, size: int = 28) -> str:
 
 
 NAV_LABELS = [
+    "🏠 Dashboard",
     "📊 5-Year Backtest Simulator",
     "🧮 Liquidity & Capital Planner",
     "🛒 Exchange UI Simulator",
+    "📰 News",
     "💼 Wallet",
     "🎯 Investment Backtest",
 ]
-NAV_EXCHANGE = NAV_LABELS[2]
-NAV_NEWS = "📰 News"
-NAV_SIMPLE = NAV_LABELS[4]
+NAV_DASHBOARD = NAV_LABELS[0]
+NAV_EXCHANGE = NAV_LABELS[3]
+NAV_NEWS = NAV_LABELS[4]
+NAV_SIMPLE = NAV_LABELS[6]
 
 def _go_to_exchange(sym: str) -> None:
     st.session_state["bt_asset"] = sym
@@ -7615,7 +7618,248 @@ def render_customer_leaderboard(sim: dict[str, Any], cfg: dict[str, Any]) -> Non
 # MOBILE UI — responsive shell, reusing existing engine/state
 # =========================================================================
 
-MOBILE_NAV = ["⌂  Home", "⇄  Trade", "▣  Asset", "◫  Backtest", "⚙  Settings"]
+MOBILE_NAV = ["🏠 Home", "🌐 Market", "💱 Trade", "💼 Asset", "📊 Backtest", "⚙️ Settings"]
+
+GLOBAL_NEWS_FLOAT_CSS = r'''<style>
+/* Global News launcher: stays in the same top-right empty area on every tab */
+.st-key-global_news_float {
+    display: none !important;
+    position: fixed !important;
+    top: 132px !important;
+    right: 22px !important;
+    width: 150px !important;
+    min-width: 150px !important;
+    z-index: 1000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+.st-key-global_news_float [data-testid="stButton"] > button {
+    width: 100% !important;
+    min-height: 48px !important;
+    border: 1px solid rgba(252,213,53,.35) !important;
+    border-radius: 12px !important;
+    background: linear-gradient(135deg, rgba(24,26,32,.98), rgba(18,20,25,.98)) !important;
+    color: #EAECEF !important;
+    box-shadow: 0 12px 30px rgba(0,0,0,.28) !important;
+    text-align: left !important;
+    padding: 8px 12px !important;
+    font-size: 16px !important;
+    font-weight: 800 !important;
+}
+.st-key-global_news_float [data-testid="stButton"] > button:hover {
+    border-color: #fcd535 !important;
+    background: linear-gradient(135deg, rgba(30,32,38,.99), rgba(20,22,28,.99)) !important;
+}
+@media (max-width: 900px) {
+    .st-key-global_news_float {
+        display: block !important;
+        top: 76px !important;
+        right: 12px !important;
+        width: 120px !important;
+        min-width: 120px !important;
+    }
+    .st-key-global_news_float [data-testid="stButton"] > button {
+        min-height: 42px !important;
+        padding: 7px 10px !important;
+        border-radius: 12px !important;
+        font-size: 14px !important;
+    }
+}
+</style>'''
+
+MOBILE_NAV_CSS = r'''<style>
+/* ---------- Mobile bottom nav ---------- */
+.st-key-mobile_nav {
+    position: fixed !important;
+    left: 0 !important; right: 0 !important; bottom: 0 !important;
+    width: 100vw !important;
+    z-index: 999999 !important;
+    margin: 0 !important;
+    padding: 7px 6px calc(7px + env(safe-area-inset-bottom)) !important;
+    background: rgba(24,26,32,.98) !important;
+    border-top: 1px solid #2b3139 !important;
+    box-sizing: border-box !important;
+}
+
+.st-key-mobile_nav [role="radiogroup"] {
+    display: flex !important;
+    flex-direction: row !important;
+    width: 100% !important;
+    gap: 2px !important;
+}
+
+/* ทุกแท็บ */
+.st-key-mobile_nav label {
+    position: relative !important;
+    flex: 1 1 0 !important;
+    min-width: 0 !important;
+    height: 42px !important;
+    margin: 0 !important;
+    padding: 4px 14px 4px 4px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    border-radius: 10px !important;
+    background: transparent !important;
+    cursor: pointer !important;
+}
+
+/* ซ่อนวงกลม radio ทุกแบบ (div ตัวแรก, svg, input) */
+.st-key-mobile_nav label > div:first-child,
+.st-key-mobile_nav label svg,
+.st-key-mobile_nav label input {
+    display: none !important;
+}
+
+.st-key-mobile_nav label p,
+.st-key-mobile_nav label span {
+    color: #848e9c !important;
+    font-size: 10px !important;
+    font-weight: 600 !important;
+    margin: 0 !important;
+    white-space: nowrap !important;
+}
+
+/* แท็บที่เลือก = พื้นเขียว */
+.st-key-mobile_nav label:has(input:checked),
+.st-key-mobile_nav label[data-checked="true"] {
+    background: #087a3f !important;
+}
+.st-key-mobile_nav label:has(input:checked) p,
+.st-key-mobile_nav label:has(input:checked) span,
+.st-key-mobile_nav label[data-checked="true"] p {
+    color: #ffffff !important;
+}
+
+/* สามเหลี่ยมเล็กในแท็บที่เลือก (มุมขวา) */
+.st-key-mobile_nav label:has(input:checked)::after,
+.st-key-mobile_nav label[data-checked="true"]::after {
+    content: "" !important;
+    position: absolute !important;
+    right: 5px !important;
+    top: 50% !important;
+    transform: translateY(-50%) !important;
+    width: 0 !important;
+    height: 0 !important;
+    border-top: 4px solid transparent !important;
+    border-bottom: 4px solid transparent !important;
+    border-left: 6px solid #ffffff !important;
+    pointer-events: none !important;
+}
+
+/* บน desktop ซ่อน nav ล่าง */
+@media (min-width: 769px) {
+    .st-key-mobile_nav { display: none !important; }
+}
+
+/* Mobile Market layout */
+.st-key-mobile_shell .mobile-section-heading { color:#EAECEF; font-size:1rem; font-weight:750; margin:18px 0 9px; }
+.st-key-mobile_shell [key^="mobile_mkt_pick_"] { text-align:left !important; font-size:12px !important; line-height:1.35 !important; padding:9px 10px !important; border-radius:10px !important; white-space:normal !important; }
+
+/* ============================================================
+   MOBILE MARKET — STAR ONLY (NO BUTTON FRAME)
+   Keep the favorite control as a clean star, not a boxed button.
+   This selector is intentionally scoped to mobile_mkt_fav_* only
+   so Trade / Backtest / Settings buttons keep their normal UI.
+   ============================================================ */
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_"] {
+  width:36px !important;
+  min-width:36px !important;
+  max-width:36px !important;
+  height:36px !important;
+  min-height:36px !important;
+  margin:0 !important;
+  padding:0 !important;
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  background:transparent !important;
+  border:0 !important;
+  box-shadow:none !important;
+}
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_"] button {
+  width:32px !important;
+  min-width:32px !important;
+  max-width:32px !important;
+  height:32px !important;
+  min-height:32px !important;
+  margin:0 !important;
+  padding:0 !important;
+  border:0 !important;
+  border-width:0 !important;
+  border-style:none !important;
+  border-color:transparent !important;
+  border-radius:0 !important;
+  outline:none !important;
+  box-shadow:none !important;
+  background:transparent !important;
+  color:#EAECEF !important;
+  font-size:22px !important;
+  line-height:1 !important;
+  font-weight:400 !important;
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+}
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_active_"] button {
+  color:#FFD43B !important;
+  -webkit-text-fill-color:#FFD43B !important;
+}
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_active_"] button p {
+  color:#FFD43B !important;
+  -webkit-text-fill-color:#FFD43B !important;
+}
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_inactive_"] button {
+  color:#EAECEF !important;
+  -webkit-text-fill-color:#EAECEF !important;
+}
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_inactive_"] button p {
+  color:#EAECEF !important;
+  -webkit-text-fill-color:#EAECEF !important;
+}
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_"] button:hover,
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_"] button:focus,
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_"] button:active {
+  border:0 !important;
+  border-width:0 !important;
+  outline:none !important;
+  box-shadow:none !important;
+  background:transparent !important;
+  color:#FFD43B !important;
+}
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_"] button p {
+  margin:0 !important;
+  padding:0 !important;
+  color:inherit !important;
+  font-size:22px !important;
+  line-height:1 !important;
+}
+@media (max-width: 700px) {
+  .st-key-mobile_shell [data-testid="stRadio"] div[role="radiogroup"] { flex-wrap:wrap !important; gap:5px !important; }
+  .st-key-mobile_shell [data-testid="stRadio"] label { font-size:11px !important; }
+}
+</style>'''
+
+
+MOBILE_MARKET_NEWS_CSS = r'''<style>
+.mobile-market-topgrid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(280px,1fr);gap:16px;align-items:start;margin-bottom:10px;}
+.mobile-market-news{background:#181a20;border:1px solid #2b3139;border-radius:14px;padding:12px 13px;min-height:178px;overflow:hidden;}
+.mobile-market-news-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px;}
+.mobile-market-news-title{color:#EAECEF;font-size:14px;font-weight:800;}
+.mobile-market-news-refresh{color:#848e9c;font-size:10px;}
+.mobile-market-news-item{display:flex;gap:9px;padding:8px 0;border-bottom:1px solid #252a31;min-width:0;}
+.mobile-market-news-item:last-child{border-bottom:0;padding-bottom:0;}
+.mobile-market-news-thumb{width:54px;height:42px;flex:0 0 54px;border-radius:7px;object-fit:cover;background:#0f1115;}
+.mobile-market-news-body{min-width:0;}
+.mobile-market-news-link{display:block;color:#EAECEF !important;text-decoration:none !important;font-size:11px;font-weight:700;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.mobile-market-news-meta{color:#848e9c;font-size:9px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mobile-market-news-empty{color:#848e9c;font-size:11px;line-height:1.5;padding:18px 4px;text-align:center;}
+@media (max-width: 760px){
+  .mobile-market-topgrid{grid-template-columns:1fr;gap:10px;}
+  .mobile-market-news{min-height:0;}
+}
+</style>'''
 
 MOBILE_CSS = r'''<style>
 @media (max-width: 768px) {
@@ -7624,13 +7868,6 @@ MOBILE_CSS = r'''<style>
   .st-key-desktop_navigation { display:none !important; }
   .st-key-desktop_route { display:none !important; }
   .st-key-mobile_shell { display:block !important; }
-  .st-key-mobile_nav { position:fixed !important; z-index:999999 !important; left:0 !important; right:0 !important; bottom:0 !important; width:100vw !important; margin:0 !important; padding:7px 6px calc(7px + env(safe-area-inset-bottom)) !important; background:rgba(24,26,32,.98) !important; border-top:1px solid #2b3139 !important; box-sizing:border-box !important; }
-  .st-key-mobile_nav [role="radiogroup"] { width:100% !important; display:grid !important; grid-template-columns:repeat(5,minmax(0,1fr)) !important; gap:2px !important; }
-  .st-key-mobile_nav [role="radiogroup"] > label { min-width:0 !important; height:42px !important; margin:0 !important; padding:4px 2px !important; display:flex !important; align-items:center !important; justify-content:center !important; border:0 !important; border-radius:10px !important; text-align:center !important; }
-  .st-key-mobile_nav [role="radiogroup"] > label > div:first-child { display:none !important; }
-  .st-key-mobile_nav [role="radiogroup"] > label p { color:#848e9c !important; font-size:9px !important; line-height:1.15 !important; font-weight:600 !important; margin:0 !important; }
-  .st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"] { background:rgba(14,203,129,.12) !important; }
-  .st-key-mobile_nav [role="radiogroup"] > label[data-checked="true"] p { color:#0ecb81 !important; }
   .mobile-page-title { color:#EAECEF; font-size:22px; font-weight:800; margin:2px 0; }
   .mobile-page-sub { color:#848e9c; font-size:11px; margin-bottom:12px; }
   .mobile-card { background:#181a20; border:1px solid #2b3139; border-radius:16px; padding:14px; margin-bottom:10px; }
@@ -7723,7 +7960,164 @@ MOBILE_CSS = r'''<style>
   .mobile-trade-history { display:flex; justify-content:space-between; gap:10px; background:#181a20; border:1px solid #2b3139; border-radius:11px; padding:10px 11px; margin-bottom:7px; color:#EAECEF; font-size:11px; }
   .mobile-trade-history span { color:#848e9c; font-variant-numeric:tabular-nums; }
   .mobile-green { color:#0ecb81 !important; } .mobile-red { color:#f6465d !important; }
+
+  /* ===== Mobile typography system: consistent scale, spacing and wrapping ===== */
+  .st-key-mobile_shell,
+  .st-key-mobile_shell * {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans Thai", Tahoma, sans-serif;
+    letter-spacing: 0 !important;
+  }
+  .st-key-mobile_shell p,
+  .st-key-mobile_shell li,
+  .st-key-mobile_shell [data-testid="stMarkdownContainer"] {
+    font-size: 13px;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+  }
+  .st-key-mobile_shell .mobile-page-title {
+    font-size: 22px !important; line-height: 1.25 !important;
+    font-weight: 800 !important; margin: 3px 0 5px !important;
+  }
+  .st-key-mobile_shell .mobile-page-sub {
+    font-size: 12px !important; line-height: 1.5 !important;
+    margin: 0 0 16px !important;
+  }
+  .st-key-mobile_shell .mobile-section-title {
+    font-size: 16px !important; line-height: 1.35 !important;
+    margin: 18px 0 10px !important;
+  }
+  .st-key-mobile_shell .mobile-kicker,
+  .st-key-mobile_shell .mobile-mini-label { font-size: 11px !important; line-height: 1.45 !important; }
+  .st-key-mobile_shell .mobile-big { font-size: clamp(22px, 6vw, 27px) !important; line-height: 1.2 !important; }
+  .st-key-mobile_shell .mobile-mini-value { font-size: 16px !important; line-height: 1.3 !important; }
+  .st-key-mobile_shell [data-testid="stWidgetLabel"] p,
+  .st-key-mobile_shell label p { font-size: 13px !important; line-height: 1.4 !important; font-weight: 600 !important; }
+  .st-key-mobile_shell input,
+  .st-key-mobile_shell textarea,
+  .st-key-mobile_shell [data-baseweb="select"] { font-size: 14px !important; }
+  .st-key-mobile_shell button { font-size: 13px !important; line-height: 1.35 !important; font-weight: 650 !important; }
+  .st-key-mobile_shell [data-testid="stCaptionContainer"] p,
+  .st-key-mobile_shell [data-testid="stCaption"] { font-size: 11px !important; line-height: 1.45 !important; }
+  .st-key-mobile_shell .mobile-card,
+  .st-key-mobile_shell .mobile-asset-card,
+  .st-key-mobile_shell .mobile-mini { min-width: 0; }
+  .st-key-mobile_shell .mobile-asset-row { font-size: 11px !important; line-height: 1.45 !important; gap: 8px; }
+  .st-key-mobile_shell .mobile-asset-row b { font-size: 12px !important; }
+  .st-key-mobile_shell .mobile-asset-name { font-size: 11px !important; }
+  .st-key-mobile_shell .mobile-trade-market-stat { font-size: 11px !important; line-height: 1.4 !important; }
+  .st-key-mobile_shell .mobile-trade-market-stat b { font-size: 11px !important; }
+  .st-key-mobile_shell .mobile-trade-market-sub,
+  .st-key-mobile_shell .mobile-trade-market-level { font-size: 11px !important; line-height: 1.45 !important; }
+  .st-key-mobile_shell .mobile-trade-market-price { font-size: clamp(23px, 6vw, 28px) !important; line-height: 1.2 !important; }
+  .st-key-mobile_shell .mobile-trade-summary > div,
+  .st-key-mobile_shell .mobile-trade-history { font-size: 12px !important; line-height: 1.45 !important; }
+  .st-key-mobile_shell .mobile-trade-summary b { font-size: 12px !important; }
 }
+
+/* ── Mobile market watchlist — compact exchange-style layout ───────────── */
+.st-key-mobile_shell .mobile-market-header {
+  margin-top: 4px;
+  padding: 0 2px 8px;
+}
+.st-key-mobile_shell .mobile-market-title {
+  color:#EAECEF; font-size:20px; font-weight:800; line-height:1.2;
+  margin: 0 0 8px;
+}
+.st-key-mobile_shell .mobile-market-tabs {
+  display:flex; align-items:center; gap:18px; color:#848e9c;
+  font-size:13px; font-weight:700; border-bottom:1px solid #252a31;
+  padding-bottom:8px;
+}
+.st-key-mobile_shell .mobile-market-tab {
+  position:relative; padding:0 2px; white-space:nowrap;
+}
+.st-key-mobile_shell .mobile-market-tab.active { color:#EAECEF; }
+.st-key-mobile_shell .mobile-market-tab.active:after {
+  content:""; position:absolute; left:0; right:0; bottom:-9px; height:3px;
+  background:#16c784; border-radius:3px 3px 0 0;
+}
+.st-key-mobile_shell .mobile-market-columns {
+  display:grid; grid-template-columns:minmax(0,1.65fr) .9fr .72fr;
+  gap:8px; color:#848e9c; font-size:11px; line-height:1.3;
+  padding:12px 2px 7px 53px;
+}
+.st-key-mobile_shell .mobile-market-columns span:nth-child(2) { text-align:left; }
+.st-key-mobile_shell .mobile-market-columns span:last-child { text-align:right; }
+.st-key-mobile_shell .mobile-market-list { margin:0; padding:0; }
+.st-key-mobile_shell .mobile-market-row {
+  display:grid; grid-template-columns:36px minmax(0,1.65fr) .9fr .72fr;
+  align-items:center; gap:8px; min-height:62px;
+  border-bottom:1px solid #20252c; padding:5px 2px;
+}
+.st-key-mobile_shell .mobile-market-row.selected { background:rgba(22,199,132,.16); border-radius:2px; }
+.st-key-mobile_shell .mobile-market-star {
+  font-size:20px; text-align:center; line-height:1; color:#F0B90B;
+}
+.st-key-mobile_shell .mobile-market-star.muted { color:#5b6573; }
+.st-key-mobile_shell .mobile-market-coin { display:flex; align-items:center; min-width:0; gap:8px; }
+.st-key-mobile_shell .mobile-market-icon {
+  width:36px; height:36px; min-width:36px; border-radius:50%; display:flex;
+  align-items:center; justify-content:center; font-size:19px; background:#303640;
+}
+.st-key-mobile_shell .mobile-market-coin-logo-wrap {
+  display:flex; align-items:center; min-width:0; gap:9px; min-height:54px;
+}
+.st-key-mobile_shell .mobile-market-icon-img {
+  width:36px; height:36px; min-width:36px; border-radius:50%; object-fit:contain;
+  display:block; background:#20252d;
+}
+.st-key-mobile_shell .mobile-market-coin-logo-wrap .mobile-market-main { min-width:0; }
+.st-key-mobile_shell [class*="st-key-mobile_market_coin_"] { position:relative; min-height:54px; }
+.st-key-mobile_shell [class*="st-key-mobile_mkt_pick_"] {
+  position:absolute !important; inset:0 !important; z-index:5;
+}
+.st-key-mobile_shell [class*="st-key-mobile_mkt_pick_"] button {
+  min-height:54px !important; height:54px !important; width:100% !important;
+  padding:0 !important; border:0 !important; border-radius:0 !important;
+  background:transparent !important; box-shadow:none !important; color:transparent !important;
+}
+.st-key-mobile_shell [class*="st-key-mobile_mkt_pick_"] button p {
+  color:transparent !important; font-size:1px !important;
+}
+.st-key-mobile_shell [class*="st-key-mobile_mkt_pick_"] button:hover,
+.st-key-mobile_shell [class*="st-key-mobile_mkt_pick_"] button:focus {
+  background:rgba(255,255,255,.025) !important;
+}
+.st-key-mobile_shell .mobile-market-main { min-width:0; }
+.st-key-mobile_shell .mobile-market-symbol {
+  color:#EAECEF; font-size:14px; font-weight:800; line-height:1.15;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.st-key-mobile_shell .mobile-market-name {
+  color:#848e9c; font-size:10px; line-height:1.25; margin-top:3px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.st-key-mobile_shell .mobile-market-vol { color:#848e9c; font-size:10px; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.st-key-mobile_shell .mobile-market-price { color:#EAECEF; font-size:13px; font-weight:800; text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.st-key-mobile_shell .mobile-market-pct { font-size:12px; font-weight:800; text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; margin-top:4px; }
+.st-key-mobile_shell .mobile-market-pct.up { color:#16c784; }
+.st-key-mobile_shell .mobile-market-pct.down { color:#F6465D; }
+.st-key-mobile_shell .mobile-market-action { min-width:0; }
+.st-key-mobile_shell .mobile-market-action button {
+  min-height:56px !important; height:56px !important; padding:0 !important;
+  border:0 !important; background:transparent !important; box-shadow:none !important;
+  color:transparent !important; width:100% !important;
+}
+.st-key-mobile_shell .mobile-market-action button:hover { background:transparent !important; }
+.st-key-mobile_shell .mobile-market-action button p { color:transparent !important; font-size:1px !important; }
+@media (max-width: 480px) {
+  .st-key-mobile_shell .mobile-market-title { font-size:19px; }
+  .st-key-mobile_shell .mobile-market-tabs { gap:14px; font-size:12px; }
+  .st-key-mobile_shell .mobile-market-columns { grid-template-columns:minmax(0,1.55fr) .85fr .7fr; padding-left:48px; }
+  .st-key-mobile_shell .mobile-market-row { grid-template-columns:32px minmax(0,1.55fr) .85fr .7fr; gap:6px; min-height:58px; }
+  .st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_"] { align-self:center !important; }
+  .st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_"] button { align-self:center !important; }
+  .st-key-mobile_shell .mobile-market-icon { width:32px; height:32px; min-width:32px; font-size:17px; }
+  .st-key-mobile_shell .mobile-market-symbol { font-size:13px; }
+  .st-key-mobile_shell .mobile-market-price { font-size:12px; }
+  .st-key-mobile_shell .mobile-market-pct { font-size:11px; }
+}
+
 @media (min-width:769px) {
   .st-key-mobile_shell { display:none !important; }
   .st-key-mobile_nav { display:none !important; }
@@ -7757,45 +8151,305 @@ def _mobile_compact_number(v: float, decimals: int = 2) -> str:
     return f"{n:,.{decimals}f}"
 
 
-def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
-    sim=st.session_state.get('sim',{}) or {}; asset=cfg.get('asset','BTC')
-    cap=float(cfg.get('total_capital_thb',0) or 0); cex=float(cfg.get('cex_margin_thb',0) or 0); liab=float(cfg.get('liab_thb',0) or 0)
-    target=float(sim.get('target_thb',0) or 0); fx=float(sim.get('fx_used_usd',0) or 0); fxlim=float(cfg.get('fx_limit_max',0) or 0)
-    pnl=0.0
-    for o in sim.get('orders',[]) if isinstance(sim,dict) else []:
-        try: pnl += float(o.get('dealer_pnl',o.get('Dealer P&L',0)) or 0)
-        except Exception: pass
-    ncbuf=0.0
-    try:
-        if not data.empty:
-            built=build_dealer_ctx(cfg,data)
-            if built:
-                ctx,t=built; nc=nc_snapshot(t,ctx['capital'],ctx['cex_margin'],ctx['liab'],ctx['h_crypto'],ctx['h_cex'],ctx['fixed_min_nc'],ctx['trading_risk_rate'],ctx['daily_volume_thb'],ctx['custody_rate']); ncbuf=float(nc.get('buffer',0) or 0)
-    except Exception: pass
-    st.markdown('<div class="mobile-page-title">Dashboard</div><div class="mobile-page-sub">ภาพรวม Dealer · Live configuration</div>',unsafe_allow_html=True)
-    st.markdown(f'''<div class="mobile-card"><div class="mobile-kicker">Total Capital</div><div class="mobile-big">{_mobile_money(cap)}</div><div class="mobile-kicker" style="margin-top:7px">{asset} · Inventory target {_mobile_money(target)}</div></div><div class="mobile-grid"><div class="mobile-mini"><div class="mobile-mini-label">P&L จาก Ledger</div><div class="mobile-mini-value {'mobile-green' if pnl>=0 else 'mobile-red'}">{_mobile_money(pnl,True)}</div></div><div class="mobile-mini"><div class="mobile-mini-label">NC Buffer</div><div class="mobile-mini-value {'mobile-green' if ncbuf>=0 else 'mobile-red'}">{_mobile_money(ncbuf,True)}</div></div><div class="mobile-mini"><div class="mobile-mini-label">CEX Margin</div><div class="mobile-mini-value">{_mobile_money(cex)}</div></div><div class="mobile-mini"><div class="mobile-mini-label">FX Used</div><div class="mobile-mini-value">${fx:,.0f} / ${fxlim:,.0f}</div></div></div><div class="mobile-card"><div class="mobile-kicker">Customer Liabilities</div><div class="mobile-big">{_mobile_money(liab)}</div></div>''',unsafe_allow_html=True)
-    st.markdown('### 📌 สถานะล่าสุด')
-    orders=sim.get('orders',[]) if isinstance(sim,dict) else []
-    if orders:
-        for o in reversed(orders[-3:]):
-            sym=str(o.get('เหรียญ',o.get('asset',asset))); side=str(o.get('side',o.get('ฝั่ง','Order'))); amount=o.get('amount_thb',o.get('จำนวนเงิน',''))
-            st.markdown(f'<div class="mobile-card"><b style="color:#EAECEF">{sym}</b> · {side}<span style="float:right;color:#848e9c">{amount}</span></div>',unsafe_allow_html=True)
-    else: st.caption('ยังไม่มีออเดอร์ล่าสุด')
+
+MOBILE_COIN_LOGOS = {
+    "BTC": "https://coin-images.coingecko.com/coins/images/1/large/bitcoin.png",
+    "ETH": "https://coin-images.coingecko.com/coins/images/279/large/ethereum.png",
+    "USDT": "https://coin-images.coingecko.com/coins/images/325/large/Tether.png",
+    "USDC": "https://coin-images.coingecko.com/coins/images/6319/large/USD_Coin_icon.png",
+    "BNB": "https://coin-images.coingecko.com/coins/images/825/large/bnb-icon2_2x.png",
+    "SOL": "https://coin-images.coingecko.com/coins/images/4128/large/solana.png",
+    "XRP": "https://coin-images.coingecko.com/coins/images/44/large/xrp-symbol-white-128.png",
+    "ADA": "https://coin-images.coingecko.com/coins/images/975/large/cardano.png",
+    "DOGE": "https://coin-images.coingecko.com/coins/images/5/large/dogecoin.png",
+    "TON": "https://coin-images.coingecko.com/coins/images/17980/large/ton_symbol.png",
+    "TRX": "https://coin-images.coingecko.com/coins/images/1094/large/tron-logo.png",
+    "DOT": "https://coin-images.coingecko.com/coins/images/12171/large/polkadot.png",
+    "LINK": "https://coin-images.coingecko.com/coins/images/877/large/chainlink-new-logo.png",
+    "XLM": "https://coin-images.coingecko.com/coins/images/100/large/stellar.png",
+}
 
 
+def render_mobile_market(cfg: dict[str, Any], market_df: pd.DataFrame, usdthb: float) -> None:
+    """Mobile market: chart/orderbook first, then exchange-style watchlist with real coin logos."""
+    # Market header remains clean; News is a global launcher available on every tab.
+    st.markdown(
+        '<div class="mobile-page-title">🌐 ภาพรวมตลาด (Market)</div>'
+        '<div class="mobile-page-sub">ราคา THB · ตลาดคริปโต · อัปเดตตามข้อมูลตลาด</div>',
+        unsafe_allow_html=True,
+    )
 
-def _apply_mobile_pct(pct_key: str, target_key: str, base: float, kind: str) -> None:
-    """Apply 25/50/75/100% from the mobile trade pills."""
-    sel = st.session_state.get(pct_key)
-    if not sel:
-        return
-    p = int(str(sel).rstrip("%")) / 100.0
-    if kind == "buy":
-        st.session_state[target_key] = round(float(base) * p, 2)
+    current = str(cfg.get("asset", "BTC"))
+    if current not in SUPPORTED_ASSETS:
+        current = "BTC"
+    chart_asset = str(st.session_state.get("mobile_market_selected", current))
+    if chart_asset not in SUPPORTED_ASSETS:
+        chart_asset = current
+
+    st.markdown('<div class="mobile-section-heading">📊 Market chart</div>', unsafe_allow_html=True)
+    chart_view = st.radio(
+        "มุมมองกราฟ", ["📈 TradingView", "📊 3D Order Book"],
+        horizontal=True, key="mobile_market_chart_view", label_visibility="collapsed",
+    )
+    if chart_view == "📈 TradingView":
+        symbol = TV_LOCAL_SYMBOL.get(chart_asset, f"BITKUB:{chart_asset}THB")
+        render_tradingview(symbol, f"tv_mobile_{chart_asset}", 390, studies=["MAExp@tv-basicstudies"])
     else:
-        st.session_state[target_key] = math.floor(float(base) * p * 1e8) / 1e8
-    st.session_state[pct_key] = None
+        try:
+            render_orderbook_3d(symbol=f"{chart_asset.lower()}_thb", title=f"3D Order Book — {chart_asset}/THB", limit=20)
+        except Exception as exc:
+            st.warning(f"ไม่สามารถแสดง 3D Order Book ได้: {exc}")
+    st.caption("ข้อมูลกราฟและราคาอาจมีความล่าช้าตามผู้ให้บริการข้อมูล")
 
+    modes = [
+        ("favorite", "⭐ รายการโปรด"),
+        ("volume", "ปริมาณ"),
+        ("top_gain", "▲ เพิ่มขึ้น"),
+        ("top_loss", "▼ ลดลง"),
+    ]
+    mode = st.session_state.get("mobile_market_mode2", "favorite")
+    if mode not in {m[0] for m in modes}:
+        mode = "favorite"
+
+    st.markdown(
+        '<div class="mobile-market-header">'
+        '<div class="mobile-market-title">📈 สินทรัพย์ที่ติดตาม</div>'
+        '<div class="mobile-market-columns">'
+        '<span>สินทรัพย์ ·<br>ปริมาณ 24 ชม.</span><span>ราคา (THB)</span><span>%</span>'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    tab_cols = st.columns(4, gap="small")
+    for col, (key, label) in zip(tab_cols, modes):
+        with col:
+            if st.button(label, key=f"mobile_market_tab_{key}", use_container_width=True,
+                         type="primary" if mode == key else "secondary"):
+                st.session_state["mobile_market_mode2"] = key
+                st.rerun()
+
+    df = market_df if isinstance(market_df, pd.DataFrame) else pd.DataFrame()
+    if df.empty:
+        st.info("ยังไม่มีข้อมูลตลาดในขณะนี้")
+        return
+
+    if mode == "favorite":
+        favs = st.session_state.get("favorite_tickers", [])
+        rows = df[df["symbol"].isin(favs)].sort_values("volume", ascending=False)
+        if rows.empty:
+            rows = df.sort_values("volume", ascending=False)
+    elif mode == "volume":
+        rows = df.sort_values("volume", ascending=False)
+    elif mode == "top_gain":
+        rows = df.sort_values("pct_change", ascending=False)
+    else:
+        rows = df.sort_values("pct_change", ascending=True)
+
+    for _, row in rows.iterrows():
+        sym = str(row.get("symbol", "")).upper()
+        if not sym:
+            continue
+        try:
+            price = float(row.get("price_usd", 0) or 0) * float(usdthb or 1)
+            pct = float(row.get("pct_change", 0) or 0)
+            volume = float(row.get("volume", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+
+        name = COIN_NAMES.get(sym, sym)
+        price_txt = f"฿{price:,.2f}" if price >= 1 else f"฿{price:,.5f}"
+        vol_txt = _mobile_compact_number(volume)
+        is_fav = sym in st.session_state.get("favorite_tickers", [])
+        selected = sym == chart_asset
+        pct_txt = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+        logo = MOBILE_COIN_LOGOS.get(sym, "")
+
+        row_wrap = st.container(key=f"mobile_market_row_{mode}_{sym}")
+        with row_wrap:
+            star_col, coin_col, quote_col = st.columns([0.48, 2.15, 1.15], gap="small")
+            with star_col:
+                if st.button("★" if is_fav else "☆", key=f"mobile_mkt_fav_{'active' if is_fav else 'inactive'}_{mode}_{sym}", use_container_width=True):
+                    _toggle_fav(sym)
+                    st.rerun()
+            with coin_col:
+                with st.container(key=f"mobile_market_coin_{mode}_{sym}"):
+                    logo_html = (
+                        f'<img class="mobile-market-icon-img" src="{logo}" alt="{sym} logo">'
+                        if logo else f'<div class="mobile-market-icon">{sym[:1]}</div>'
+                    )
+                    st.markdown(
+                        f'<div class="mobile-market-coin-logo-wrap">{logo_html}'
+                        f'<div class="mobile-market-main">'
+                        f'<div class="mobile-market-symbol">{sym}/THB</div>'
+                        f'<div class="mobile-market-name">{name}</div>'
+                        f'<div class="mobile-market-vol">Vol ฿{vol_txt}</div>'
+                        f'</div></div>',
+                        unsafe_allow_html=True,
+                    )
+                    if st.button("เลือก", key=f"mobile_mkt_pick_{mode}_{sym}", use_container_width=True,
+                                 type="primary" if selected else "secondary"):
+                        _select_asset(sym)
+                        st.session_state["mobile_market_selected"] = sym
+                        st.rerun()
+            with quote_col:
+                st.markdown(
+                    f'<div class="mobile-market-quote"><div class="mobile-market-price">{price_txt}</div>'
+                    f'<div class="mobile-market-pct {"up" if pct >= 0 else "down"}">{pct_txt}</div></div>',
+                    unsafe_allow_html=True,
+                )
+
+def _mobile_home_goto(tab_label: str) -> None:
+    st.session_state["mobile_nav"] = tab_label
+
+
+def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
+    sim = st.session_state.get("sim", {}) or {}
+    asset = str(cfg.get("asset", "BTC"))
+    cust_thb = float(sim.get("customer_thb", 1_000_000.0) or 0.0)
+    cust_coins = sim.get("customer_coins", {}) or {}
+    orders = sim.get("orders", []) if isinstance(sim, dict) else []
+
+    usdthb_now = 1.0
+    try:
+        if isinstance(data, pd.DataFrame) and not data.empty and "USDTHB" in data.columns:
+            usdthb_now = float(data["USDTHB"].iloc[-1])
+    except (TypeError, ValueError, IndexError):
+        pass
+
+    try:
+        market_df = fetch_market_overview(SUPPORTED_ASSETS)
+    except Exception:
+        market_df = pd.DataFrame()
+
+    price_thb_map: dict[str, float] = {}
+    pct_map: dict[str, float] = {}
+    if isinstance(market_df, pd.DataFrame) and not market_df.empty:
+        for _, row in market_df.iterrows():
+            sym = str(row.get("symbol", "")).upper()
+            if not sym:
+                continue
+            price_thb_map[sym] = float(row.get("price_usd", 0) or 0) * usdthb_now
+            pct_map[sym] = float(row.get("pct_change", 0) or 0)
+    if isinstance(data, pd.DataFrame) and not data.empty and "Global_USD" in data.columns:
+        price_thb_map[asset] = float(data["Global_USD"].iloc[-1]) * usdthb_now
+
+    holdings = []
+    coins_value = 0.0
+    for sym, qty in cust_coins.items():
+        qty = float(qty or 0.0)
+        if qty <= 0:
+            continue
+        px = price_thb_map.get(sym, 0.0)
+        val = qty * px
+        coins_value += val
+        holdings.append({"sym": sym, "qty": qty, "value": val, "pct": pct_map.get(sym)})
+    holdings.sort(key=lambda h: h["value"], reverse=True)
+
+    total_value = cust_thb + coins_value
+    initial_capital = 1_000_000.0  # ทุนเริ่มต้นของกระเป๋าจำลอง
+    change_thb = total_value - initial_capital
+    change_pct = (change_thb / initial_capital * 100) if initial_capital else 0.0
+
+    hour = pd.Timestamp.now(tz="Asia/Bangkok").hour
+    greeting = "สวัสดีตอนเช้า" if hour < 12 else ("สวัสดีตอนบ่าย" if hour < 18 else "สวัสดีตอนเย็น")
+
+    change_cls = "mobile-green" if change_thb >= 0 else "mobile-red"
+    change_sign = "+" if change_thb >= 0 else ""
+
+    st.markdown(
+        f'<div class="mobile-home-greet">{greeting} 👋</div>'
+        f'<div class="mobile-home-port-label">มูลค่าพอร์ตทั้งหมด</div>'
+        f'<div class="mobile-home-port-value">฿{total_value:,.0f}</div>'
+        f'<div class="mobile-home-port-change {change_cls}">{change_sign}{change_pct:.2f}% '
+        f'({_mobile_money(change_thb, True)}) เทียบทุนเริ่มต้น</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ---- กราฟ Portfolio Performance (สร้างจากกำไรสะสมของออเดอร์จริง) ----
+    st.markdown('<div class="mobile-home-chart-card">'
+                '<div class="mobile-home-chart-title">📈 Portfolio Performance</div>',
+                unsafe_allow_html=True)
+    if orders:
+        try:
+            odf = pd.DataFrame(orders)
+            odf["วันที่"] = pd.to_datetime(odf.get("วันที่"), errors="coerce")
+            odf = odf.dropna(subset=["วันที่"]).sort_values("วันที่")
+            odf["กำไรออเดอร์"] = pd.to_numeric(odf.get("กำไรออเดอร์", 0), errors="coerce").fillna(0.0)
+            # Aggregate orders by day. The source ledger stores dates without time, so
+            # plotting every order separately can collapse the x-axis to microseconds.
+            daily = (odf.groupby("วันที่", as_index=False)["กำไรออเดอร์"].sum()
+                     .sort_values("วันที่"))
+            daily["equity"] = initial_capital + daily["กำไรออเดอร์"].cumsum()
+            # Add a starting point so the portfolio line has a visible baseline.
+            start_date = daily["วันที่"].iloc[0] - pd.Timedelta(days=1)
+            plot_df = pd.concat([
+                pd.DataFrame({"วันที่": [start_date], "equity": [initial_capital]}),
+                daily[["วันที่", "equity"]],
+            ], ignore_index=True)
+            marker_mode = "lines+markers" if len(plot_df) <= 8 else "lines"
+            ymin, ymax = float(plot_df["equity"].min()), float(plot_df["equity"].max())
+            span = max(ymax - ymin, initial_capital * 0.005, 1.0)
+            pad = span * 0.18
+            fig = go.Figure(go.Scatter(
+                x=plot_df["วันที่"], y=plot_df["equity"], mode=marker_mode,
+                line=dict(color="#0ecb81", width=2.2),
+                marker=dict(size=6),
+                fill="tozeroy", fillcolor="rgba(14,203,129,0.12)",
+            ))
+            fig.update_layout(
+                template="plotly_dark", height=170, margin=dict(t=4, b=4, l=4, r=4),
+                showlegend=False, xaxis=dict(visible=False),
+                yaxis=dict(visible=False, range=[ymin - pad, ymax + pad]),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        except Exception:
+            st.markdown('<div class="mobile-home-chart-empty">ไม่สามารถแสดงกราฟได้ในขณะนี้</div>',
+                        unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="mobile-home-chart-empty">ยังไม่มีประวัติการเทรด — '
+                    'เริ่มซื้อขายที่แท็บ Trade เพื่อดูกราฟผลงาน</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ---- รายการสินทรัพย์ ----
+    st.markdown('<div class="mobile-home-section-label">สินทรัพย์</div>', unsafe_allow_html=True)
+    if holdings:
+        for h in holdings[:6]:
+            sym = h["sym"]
+            pct = h["pct"]
+            pct_txt = f'{"+" if (pct or 0) >= 0 else ""}{pct:.2f}%' if pct is not None else "—"
+            pct_cls = "mobile-green" if (pct or 0) >= 0 else "mobile-red"
+            logo = MOBILE_COIN_LOGOS.get(sym, "")
+            logo_html = (f'<img class="mobile-home-asset-logo" src="{logo}" alt="{sym}">'
+                        if logo else f'<div class="mobile-home-asset-logo-fallback">{sym[:1]}</div>')
+            st.markdown(
+                f'<div class="mobile-home-asset-row">{logo_html}'
+                f'<div class="mobile-home-asset-main"><div class="mobile-home-asset-sym">{sym}</div></div>'
+                f'<div class="mobile-home-asset-right">'
+                f'<div class="mobile-home-asset-val">฿{h["value"]:,.0f}</div>'
+                f'<div class="mobile-home-asset-pct {pct_cls}">{pct_txt}</div></div></div>',
+                unsafe_allow_html=True,
+            )
+    else:
+        st.caption("ยังไม่มีสินทรัพย์คริปโตในพอร์ต")
+
+    st.markdown(
+        f'<div class="mobile-home-cash-row"><span>Cash (THB)</span><b>฿{cust_thb:,.0f}</b></div>',
+        unsafe_allow_html=True,
+    )
+
+    # ---- เมนูด่วน ----
+    st.markdown('<div class="mobile-home-section-label">เมนูด่วน</div>', unsafe_allow_html=True)
+    qa1, qa2, qa3 = st.columns(3, gap="small")
+    with qa1:
+        st.button("📊 Backtest", key="mobile_home_qa_bt", use_container_width=True,
+                  on_click=_mobile_home_goto, args=(MOBILE_NAV[4],))
+    with qa2:
+        st.button("💱 Trade", key="mobile_home_qa_trade", use_container_width=True,
+                  on_click=_mobile_home_goto, args=(MOBILE_NAV[2],))
+    with qa3:
+        st.button("💼 Asset", key="mobile_home_qa_asset", use_container_width=True,
+                  on_click=_mobile_home_goto, args=(MOBILE_NAV[3],))
 
 def render_mobile_trade(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     'Mobile trading ticket using the same order engine/state as Desktop, with a mobile market selector.'
@@ -8079,30 +8733,393 @@ def render_mobile_asset(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     st.caption(f"อัปเดตล่าสุด · {pd.Timestamp.now(tz='Asia/Bangkok').strftime('%H:%M:%S')}")
 
 
+# ต้องมีอยู่แล้วในไฟล์หลัก: np, pd, go, st, WIDE, SUPPORTED_ASSETS,
+# LOCAL_TRADING_FEE_PCT, fetch_price_data, _mobile_money
+# =========================================================================
+
+MOBILE_BT_CSS = r'''<style>
+.mobile-bt-label { color:#EAECEF; font-size:12px; font-weight:700; margin:14px 0 8px; }
+.mobile-bt-helper {
+    color:#848e9c; font-size:11px; line-height:1.5;
+    background:#111318; border:1px solid #252a31; border-radius:12px;
+    padding:10px 12px; margin:10px 0 14px;
+}
+
+/* ===== chip radio (ช่วงเวลา / กลยุทธ์ / ความถี่ DCA) ===== */
+.st-key-mobile_bt_period [role="radiogroup"],
+.st-key-mobile_bt_strategy [role="radiogroup"],
+.st-key-mobile_bt_freq [role="radiogroup"] {
+    display:flex !important; flex-wrap:wrap !important; gap:8px !important;
+}
+.st-key-mobile_bt_period label,
+.st-key-mobile_bt_strategy label,
+.st-key-mobile_bt_freq label {
+    position:relative !important; margin:0 !important;
+    background:#181a20 !important; border:1px solid #2b3139 !important;
+    border-radius:999px !important; padding:7px 14px !important;
+    cursor:pointer !important;
+}
+/* ซ่อนวงกลม radio เดิมทุกแบบ */
+.st-key-mobile_bt_period label > div:first-child,
+.st-key-mobile_bt_strategy label > div:first-child,
+.st-key-mobile_bt_freq label > div:first-child,
+.st-key-mobile_bt_period label svg,
+.st-key-mobile_bt_strategy label svg,
+.st-key-mobile_bt_freq label svg,
+.st-key-mobile_bt_period label input,
+.st-key-mobile_bt_strategy label input,
+.st-key-mobile_bt_freq label input { display:none !important; }
+
+.st-key-mobile_bt_period label p,
+.st-key-mobile_bt_strategy label p,
+.st-key-mobile_bt_freq label p {
+    color:#848e9c !important; font-size:12px !important;
+    font-weight:600 !important; margin:0 !important; white-space:nowrap !important;
+}
+/* ที่เลือก = พื้นเขียว + สามเหลี่ยมเล็ก */
+.st-key-mobile_bt_period label:has(input:checked),
+.st-key-mobile_bt_strategy label:has(input:checked),
+.st-key-mobile_bt_freq label:has(input:checked) {
+    background:#087a3f !important; border-color:#087a3f !important;
+    padding-right:26px !important;
+}
+.st-key-mobile_bt_period label:has(input:checked) p,
+.st-key-mobile_bt_strategy label:has(input:checked) p,
+.st-key-mobile_bt_freq label:has(input:checked) p { color:#fff !important; }
+.st-key-mobile_bt_period label:has(input:checked)::after,
+.st-key-mobile_bt_strategy label:has(input:checked)::after,
+.st-key-mobile_bt_freq label:has(input:checked)::after {
+    content:"" !important; position:absolute !important;
+    right:10px !important; top:50% !important; transform:translateY(-50%) !important;
+    width:0 !important; height:0 !important;
+    border-top:4px solid transparent !important;
+    border-bottom:4px solid transparent !important;
+    border-left:6px solid #fff !important;
+    pointer-events:none !important;
+}
+/* กลยุทธ์ = การ์ดเต็มแถว */
+.st-key-mobile_bt_strategy [role="radiogroup"] { flex-direction:column !important; }
+.st-key-mobile_bt_strategy label {
+    width:100% !important; border-radius:14px !important; padding:12px 14px !important;
+}
+.st-key-mobile_bt_strategy label:has(input:checked) { padding-right:30px !important; }
+
+/* input / select */
+.st-key-mobile_bt_amount input { background:#181a20 !important; border-radius:12px !important; }
+
+/* ปุ่มรัน */
+.st-key-mobile_bt_run button {
+    width:100% !important; min-height:50px !important; border-radius:14px !important;
+    background:#087a3f !important; border:none !important;
+    color:#fff !important; font-weight:800 !important; font-size:15px !important;
+    margin-top:12px !important;
+}
+.st-key-mobile_bt_run button:hover { background:#096b4d !important; }
+
+/* การ์ดผลลัพธ์ */
+.mbt-hero { background:linear-gradient(145deg,#181a20,#20242b); border:1px solid #2b3139;
+            border-radius:17px; padding:15px; margin:14px 0 10px; }
+.mbt-hero .k { color:#848e9c; font-size:11px; }
+.mbt-hero .v { font-size:28px; font-weight:850; margin-top:4px; font-variant-numeric:tabular-nums; }
+.mbt-hero .s { color:#848e9c; font-size:11px; margin-top:4px; }
+.mbt-grid { display:grid; grid-template-columns:1fr 1fr; gap:9px; margin-bottom:10px; }
+.mbt-cell { background:#181a20; border:1px solid #2b3139; border-radius:14px; padding:12px; }
+.mbt-cell .k { color:#848e9c; font-size:10px; margin-bottom:6px; }
+.mbt-cell .v { color:#EAECEF; font-size:15px; font-weight:800; font-variant-numeric:tabular-nums; }
+.mbt-verdict { background:rgba(14,203,129,.08); border-left:3px solid #0ecb81;
+               border-radius:6px; padding:10px 12px; color:#b7bdc6; font-size:12px;
+               line-height:1.55; margin-bottom:10px; }
+.mbt-up { color:#0ecb81 !important; } .mbt-dn { color:#f6465d !important; }
+
+@media (max-width: 768px) {
+  .mobile-bt-label { font-size:13px !important; line-height:1.4 !important; margin:16px 0 8px !important; }
+  .mobile-bt-helper { font-size:12px !important; line-height:1.55 !important; padding:11px 13px !important; }
+  .st-key-mobile_bt_period label p,
+  .st-key-mobile_bt_strategy label p,
+  .st-key-mobile_bt_freq label p { font-size:13px !important; line-height:1.35 !important; }
+  .st-key-mobile_bt_period label,
+  .st-key-mobile_bt_freq label { padding:9px 14px !important; }
+  .st-key-mobile_bt_strategy label { padding:12px 14px !important; }
+  .st-key-mobile_bt_amount input { font-size:16px !important; min-height:44px !important; }
+  .st-key-mobile_bt_run button { font-size:15px !important; line-height:1.35 !important; }
+  .mbt-hero .k { font-size:12px !important; line-height:1.45 !important; }
+  .mbt-hero .v { font-size:clamp(24px, 7vw, 30px) !important; line-height:1.2 !important; overflow-wrap:anywhere; }
+  .mbt-hero .s { font-size:12px !important; line-height:1.45 !important; }
+  .mbt-cell .k { font-size:11px !important; line-height:1.4 !important; }
+  .mbt-cell .v { font-size:15px !important; line-height:1.35 !important; overflow-wrap:anywhere; }
+  .mbt-verdict { font-size:13px !important; line-height:1.6 !important; }
+}
+</style>'''
+
+# ---------------------------- ENGINE -------------------------------------
+
+MBT_SAVINGS_APY = 0.015          # ดอกเบี้ยออมทรัพย์สมมติ 1.5%/ปี
+MBT_TREND_WINDOW = 50            # เส้นค่าเฉลี่ย 50 วัน
+MBT_DIP_LEVELS = (0.10, 0.20, 0.30, 0.40, 0.50)
+
+MBT_STRATEGIES = {
+    "💰 ซื้อทีเดียวแล้วถือ": ("lump", "ซื้อทั้งก้อนวันแรก แล้วไม่ทำอะไรเลย"),
+    "🗓️ ทยอยซื้อสม่ำเสมอ (DCA)": ("dca", "แบ่งเงินเป็นงวดเท่า ๆ กันตามความถี่ที่เลือก"),
+    "📉 ซื้อเพิ่มตอนราคาตก": ("dip", "ซื้อ 50% วันแรก ที่เหลือแบ่งซื้อเมื่อราคาตกจากจุดสูงสุด 10/20/30/40/50%"),
+    "📈 ตามเทรนด์ (เส้นค่าเฉลี่ย)": ("trend", "ถือเมื่อราคาอยู่เหนือเส้นค่าเฉลี่ย 50 วัน ขายเป็นเงินสดเมื่อหลุดเส้น"),
+}
+
+
+def _mbt_dca_positions(idx: pd.DatetimeIndex, freq: str) -> list[int]:
+    pos, last, seen = [], None, set()
+    for i, d in enumerate(idx):
+        if freq == "รายสัปดาห์":
+            if last is None or (d - last).days >= 7:
+                pos.append(i)
+                last = d
+        else:  # รายเดือน
+            key = (d.year, d.month)
+            if key not in seen:
+                seen.add(key)
+                pos.append(i)
+    return pos
+
+
+def mobile_bt_simulate(df: pd.DataFrame, kind: str, amount: float,
+                       premium: float, spread: float, freq: str = "รายเดือน") -> dict:
+    """คืน equity รายวัน (THB) ด้วยราคา quote เดียวกับหน้า Exchange (premium + spread + fee)"""
+    fee = float(LOCAL_TRADING_FEE_PCT)
+    mid = (df["Global_USD"] * df["USDTHB"] * (1 + premium)).astype(float)
+    buy_px = (mid * (1 + spread)).to_numpy()
+    sell_px = (mid * (1 - spread)).to_numpy()
+    mid_np = mid.to_numpy()
+    n = len(df)
+    st_ = {"cash": float(amount), "coins": 0.0, "trades": 0}
+
+    def buy(i: int, thb: float) -> None:
+        thb = min(float(thb), st_["cash"])
+        if thb <= 0 or buy_px[i] <= 0:
+            return
+        st_["coins"] += thb * (1 - fee) / buy_px[i]
+        st_["cash"] -= thb
+        st_["trades"] += 1
+
+    def sell_all(i: int) -> None:
+        if st_["coins"] <= 0:
+            return
+        st_["cash"] += st_["coins"] * sell_px[i] * (1 - fee)
+        st_["coins"] = 0.0
+        st_["trades"] += 1
+
+    equity = np.zeros(n)
+
+    if kind == "lump":
+        buy(0, amount)
+        for i in range(n):
+            equity[i] = st_["cash"] + st_["coins"] * sell_px[i] * (1 - fee)
+
+    elif kind == "dca":
+        pos = set(_mbt_dca_positions(df.index, freq))
+        per = amount / max(len(pos), 1)
+        for i in range(n):
+            if i in pos:
+                buy(i, per)
+            equity[i] = st_["cash"] + st_["coins"] * sell_px[i] * (1 - fee)
+
+    elif kind == "dip":
+        buy(0, amount * 0.5)
+        tranche = amount * 0.10
+        done, peak = set(), mid_np[0]
+        for i in range(n):
+            peak = max(peak, mid_np[i])
+            dd = 1 - mid_np[i] / peak if peak > 0 else 0.0
+            for lvl in MBT_DIP_LEVELS:
+                if lvl not in done and dd >= lvl:
+                    buy(i, tranche)
+                    done.add(lvl)
+            equity[i] = st_["cash"] + st_["coins"] * sell_px[i] * (1 - fee)
+
+    else:  # trend
+        w = min(MBT_TREND_WINDOW, max(5, n // 3))
+        ma = pd.Series(mid_np).rolling(w, min_periods=w).mean()
+        sig = (pd.Series(mid_np) > ma).shift(1).fillna(False).to_numpy()  # ใช้ข้อมูลถึงเมื่อวานเท่านั้น
+        holding = False
+        for i in range(n):
+            if sig[i] and not holding:
+                buy(i, st_["cash"])
+                holding = True
+            elif (not sig[i]) and holding:
+                sell_all(i)
+                holding = False
+            equity[i] = st_["cash"] + st_["coins"] * sell_px[i] * (1 - fee)
+
+    eq = pd.Series(equity, index=df.index)
+    peak_eq = eq.cummax()
+    max_dd = float(((eq / peak_eq) - 1).min() * 100) if len(eq) else 0.0
+    return {"equity": eq, "final": float(eq.iloc[-1]), "trades": int(st_["trades"]),
+            "max_dd": max_dd, "cash_left": float(st_["cash"])}
+
+
+def mobile_bt_compare(df: pd.DataFrame, kind: str, amount: float, premium: float,
+                      spread: float, freq: str) -> dict:
+    strat = mobile_bt_simulate(df, kind, amount, premium, spread, freq)
+    hold = strat if kind == "lump" else mobile_bt_simulate(df, "lump", amount, premium, spread)
+    days = (df.index - df.index[0]).days.to_numpy()
+    savings = pd.Series(amount * (1 + MBT_SAVINGS_APY * days / 365.0), index=df.index)
+    return {"strategy": strat, "hold": hold, "savings": savings, "amount": float(amount)}
+
+
+# ------------------------------- UI --------------------------------------
+
+def _mbt_fmt_pct(v: float) -> str:
+    return f"{v:+.2f}%"
+
+
+def _mbt_render_result(res: dict, meta: dict) -> None:
+    amount = res["amount"]
+    s, h, sv = res["strategy"], res["hold"], res["savings"]
+    profit = s["final"] - amount
+    pct = profit / amount * 100 if amount else 0.0
+    hold_pct = (h["final"] / amount - 1) * 100
+    sav_final = float(sv.iloc[-1])
+    sav_pct = (sav_final / amount - 1) * 100
+    cls = "mbt-up" if profit >= 0 else "mbt-dn"
+
+    st.markdown(
+        f'<div class="mbt-hero"><div class="k">มูลค่าสุดท้าย · {meta["asset"]} · {meta["strategy"]}</div>'
+        f'<div class="v {cls}">฿{s["final"]:,.0f}</div>'
+        f'<div class="s"><b class="{cls}">{_mobile_money(profit, True)} ({_mbt_fmt_pct(pct)})</b>'
+        f' จากเงินลงทุน ฿{amount:,.0f}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    vs_hold = s["final"] - h["final"]
+    vs_sav = s["final"] - sav_final
+    st.markdown(
+        '<div class="mbt-grid">'
+        f'<div class="mbt-cell"><div class="k">ขาดทุนสูงสุดระหว่างทาง</div><div class="v mbt-dn">{s["max_dd"]:.2f}%</div></div>'
+        f'<div class="mbt-cell"><div class="k">จำนวนครั้งที่ซื้อ/ขาย</div><div class="v">{s["trades"]} ครั้ง</div></div>'
+        f'<div class="mbt-cell"><div class="k">เทียบ "ถือเฉยๆ" ({_mbt_fmt_pct(hold_pct)})</div>'
+        f'<div class="v {"mbt-up" if vs_hold >= 0 else "mbt-dn"}">{_mobile_money(vs_hold, True)}</div></div>'
+        f'<div class="mbt-cell"><div class="k">เทียบ "ฝากออมทรัพย์" ({_mbt_fmt_pct(sav_pct)})</div>'
+        f'<div class="v {"mbt-up" if vs_sav >= 0 else "mbt-dn"}">{_mobile_money(vs_sav, True)}</div></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    if s["cash_left"] > 1:
+        st.caption(f"มีเงินสดที่ยังไม่ได้ลงทุนคงเหลือ ฿{s['cash_left']:,.0f} (นับรวมในมูลค่าสุดท้ายแล้ว)")
+
+    if vs_sav < 0:
+        msg = "กลยุทธ์นี้ได้ผลแย่กว่าฝากออมทรัพย์ในช่วงนี้ ราคาคริปโตผันผวนสูง ผลย้อนหลังอาจเป็นลบได้"
+    elif vs_hold < 0:
+        msg = "ชนะการฝากออมทรัพย์ แต่ยังแพ้การซื้อทีเดียวแล้วถือในช่วงนี้"
+    else:
+        msg = "ชนะทั้งการถือเฉยๆ และการฝากออมทรัพย์ในช่วงนี้"
+    st.markdown(
+        f'<div class="mbt-verdict">{msg}<br><span style="color:#5e6673">'
+        'ผลย้อนหลังไม่ได้รับประกันอนาคต · คิดราคาบาท + Dealer Spread + ค่าธรรมเนียม 0.25% '
+        'ไม่รวมภาษี</span></div>',
+        unsafe_allow_html=True,
+    )
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=s["equity"].index, y=s["equity"], name="กลยุทธ์นี้",
+                             line=dict(color="#0ecb81", width=2.4)))
+    if meta["kind"] != "lump":
+        fig.add_trace(go.Scatter(x=h["equity"].index, y=h["equity"], name="ถือเฉยๆ",
+                                 line=dict(color="#848e9c", width=1.6)))
+    fig.add_trace(go.Scatter(x=sv.index, y=sv, name="ฝากออมทรัพย์",
+                             line=dict(color="#fcd535", width=1.6, dash="dot")))
+    fig.add_hline(y=amount, line=dict(color="#2b3139", dash="dash"))
+    fig.update_layout(
+        template="plotly_dark", height=300, margin=dict(t=10, b=10, l=8, r=8),
+        hovermode="x unified", yaxis_title="THB",
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", y=1.12, yanchor="bottom"),
+    )
+    st.plotly_chart(fig, **WIDE)
+
+
 def render_mobile_backtest(cfg: dict[str, Any], data: pd.DataFrame) -> None:
-    st.markdown('<div class="mobile-page-title">Backtest</div><div class="mobile-page-sub">ลงทุนย้อนหลัง</div>', unsafe_allow_html=True)
-    st.info("Mobile UI เชื่อมกับ Backtest engine เดิมของระบบ โดยไม่สร้าง logic คำนวณชุดใหม่")
+    """Mobile Backtest — เลือกเงื่อนไข -> คำนวณจริง -> เทียบถือเฉยๆ/ออมทรัพย์"""
+    st.markdown(
+        '<div class="mobile-page-title">🎯 ลองลงทุนย้อนหลัง</div>'
+        '<div class="mobile-page-sub">ดูว่าถ้าลงทุนแบบนี้ในอดีต ผลจะเป็นยังไง · '
+        'ราคาเป็นบาท หักค่าธรรมเนียมแล้ว</div>',
+        unsafe_allow_html=True,
+    )
 
-    if data is None or data.empty:
-        st.warning("ยังไม่มีข้อมูลราคาสำหรับช่วงวันที่เลือก")
-        return
+    assets = SUPPORTED_ASSETS or [cfg.get("asset", "BTC")]
+    default_asset = cfg.get("asset", assets[0])
+    if default_asset not in assets:
+        default_asset = assets[0]
 
-    try:
-        close = pd.to_numeric(data["Close"], errors="coerce").dropna()
-        if len(close) >= 2:
-            ret = (float(close.iloc[-1]) / float(close.iloc[0]) - 1.0) * 100.0
-            high = close.cummax()
-            dd = ((close / high) - 1.0).min() * 100.0
-            c1, c2 = st.columns(2)
-            with c1:
-                st.metric("Period Return", f"{ret:+.2f}%")
-            with c2:
-                st.metric("Max Drawdown", f"{dd:.2f}%")
-            st.line_chart(close, height=220)
+    st.markdown('<div class="mobile-bt-label">เหรียญ</div>', unsafe_allow_html=True)
+    asset = st.selectbox("เหรียญ", assets, index=assets.index(default_asset),
+                         key="mobile_bt_asset", label_visibility="collapsed")
+
+    st.markdown('<div class="mobile-bt-label">ช่วงเวลาย้อนหลัง</div>', unsafe_allow_html=True)
+    period_labels = ["กำหนดเอง", "1 เดือน", "3 เดือน", "6 เดือน", "1 ปี", "3 ปี", "5 ปี"]
+    period = st.radio("ช่วงเวลาย้อนหลัง", period_labels, index=4, horizontal=True,
+                      key="mobile_bt_period", label_visibility="collapsed")
+
+    today = pd.Timestamp.now().normalize()
+    period_days = {"1 เดือน": 30, "3 เดือน": 90, "6 เดือน": 180,
+                   "1 ปี": 365, "3 ปี": 365 * 3, "5 ปี": 365 * 5}
+    if period == "กำหนดเอง":
+        c1, c2 = st.columns(2)
+        start_date = c1.date_input("เริ่มต้น", value=(today - pd.Timedelta(days=365)).date(),
+                                   min_value=pd.Timestamp("2015-01-01").date(),
+                                   max_value=today.date(), key="mobile_bt_start")
+        end_date = c2.date_input("สิ้นสุด", value=today.date(),
+                                 min_value=pd.Timestamp("2015-01-01").date(),
+                                 max_value=today.date(), key="mobile_bt_end")
+    else:
+        start_date = (today - pd.Timedelta(days=period_days[period])).date()
+        end_date = today.date()
+
+    st.markdown('<div class="mobile-bt-label">กลยุทธ์ลงทุน</div>', unsafe_allow_html=True)
+    strategy_labels = list(MBT_STRATEGIES.keys())
+    strategy = st.radio("กลยุทธ์ลงทุน", strategy_labels, index=0,
+                        key="mobile_bt_strategy", label_visibility="collapsed")
+    kind, helper = MBT_STRATEGIES[strategy]
+    st.markdown(f'<div class="mobile-bt-helper">{helper}</div>', unsafe_allow_html=True)
+
+    freq = "รายเดือน"
+    if kind == "dca":
+        st.markdown('<div class="mobile-bt-label">ความถี่ในการซื้อ</div>', unsafe_allow_html=True)
+        freq = st.radio("ความถี่", ["รายสัปดาห์", "รายเดือน"], index=1, horizontal=True,
+                        key="mobile_bt_freq", label_visibility="collapsed")
+
+    st.markdown('<div class="mobile-bt-label">เงินลงทุน (บาท)</div>', unsafe_allow_html=True)
+    st.session_state.setdefault("mobile_bt_amount", 100000.0)
+    amount = st.number_input("เงินลงทุน (บาท)", min_value=100.0, step=1000.0,
+                             format="%.0f", key="mobile_bt_amount",
+                             label_visibility="collapsed")
+
+    if st.button("🎯 เริ่มลองลงทุนย้อนหลัง", type="primary",
+                 use_container_width=True, key="mobile_bt_run"):
+        if start_date >= end_date:
+            st.error("วันเริ่มต้นต้องมาก่อนวันสิ้นสุด")
         else:
-            st.warning("ข้อมูลย้อนหลังไม่เพียงพอ")
-    except Exception as e:
-        st.warning(f"คำนวณ preview ไม่สำเร็จ: {e}")
+            with st.spinner("กำลังคำนวณ…"):
+                df, err = fetch_price_data(asset, start_date, end_date,
+                                           use_fx_proxy=cfg.get("use_fx_proxy", False))
+            if df is None or df.empty or len(df) < 10:
+                st.error(f"ข้อมูลไม่พอสำหรับคำนวณ: {err or 'น้อยกว่า 10 วัน'}")
+                st.session_state.pop("mobile_bt_result", None)
+            else:
+                res = mobile_bt_compare(df, kind, float(amount),
+                                        float(cfg.get("local_premium", 0.0)),
+                                        float(cfg.get("dealer_spread", 0.0)), freq)
+                st.session_state["mobile_bt_result"] = {
+                    "res": res,
+                    "meta": {"asset": asset, "strategy": strategy, "kind": kind,
+                             "start": str(df.index.min().date()),
+                             "end": str(df.index.max().date())},
+                }
+
+    saved = st.session_state.get("mobile_bt_result")
+    if saved:
+        m = saved["meta"]
+        st.caption(f"ผลล่าสุด · {m['asset']} · {m['start']} → {m['end']}")
+        _mbt_render_result(saved["res"], m)
 
 
 def render_mobile_settings() -> None:
@@ -8114,9 +9131,313 @@ def render_mobile_settings() -> None:
     st.caption(f"XSpring Dealer Suite · Model v{MODEL_VERSION}")
 
 
+MOBILE_HOME_CSS = r'''<style>
+.mobile-home-greet { color:#848e9c; font-size:13px; font-weight:600; margin:4px 0 2px; }
+.mobile-home-port-label { color:#848e9c; font-size:11px; margin-top:6px; }
+.mobile-home-port-value { color:#EAECEF; font-size:32px; font-weight:850; line-height:1.15;
+  margin:2px 0 4px; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.mobile-home-port-change { font-size:13px; font-weight:700; margin-bottom:14px; }
+
+.mobile-home-chart-card { background:#181a20; border:1px solid #2b3139; border-radius:16px;
+  padding:12px 10px 4px; margin-bottom:16px; }
+.mobile-home-chart-title { color:#EAECEF; font-size:13px; font-weight:750; margin-bottom:4px; padding-left:4px; }
+.mobile-home-chart-empty { color:#848e9c; font-size:12px; text-align:center; padding:34px 10px; }
+
+.mobile-home-section-label { color:#EAECEF; font-size:14px; font-weight:800; margin:16px 0 8px; }
+
+.mobile-home-asset-row { display:flex; align-items:center; gap:10px; background:#181a20;
+  border:1px solid #2b3139; border-radius:13px; padding:10px 12px; margin-bottom:8px; }
+.mobile-home-asset-logo, .mobile-home-asset-logo-fallback { width:30px; height:30px; border-radius:50%; flex:0 0 30px; }
+.mobile-home-asset-logo { object-fit:contain; background:#20252d; }
+.mobile-home-asset-logo-fallback { display:flex; align-items:center; justify-content:center;
+  background:#303640; color:#EAECEF; font-size:14px; font-weight:700; }
+.mobile-home-asset-main { flex:1; min-width:0; }
+.mobile-home-asset-sym { color:#EAECEF; font-size:13px; font-weight:750; }
+.mobile-home-asset-right { text-align:right; }
+.mobile-home-asset-val { color:#EAECEF; font-size:13px; font-weight:750; font-variant-numeric:tabular-nums; }
+.mobile-home-asset-pct { font-size:11px; font-weight:700; margin-top:2px; }
+
+.mobile-home-cash-row { display:flex; justify-content:space-between; align-items:center;
+  background:#181a20; border:1px solid #2b3139; border-radius:13px; padding:11px 14px;
+  margin:2px 0 16px; color:#848e9c; font-size:13px; font-weight:650; }
+.mobile-home-cash-row b { color:#EAECEF; font-size:14px; font-variant-numeric:tabular-nums; }
+
+.st-key-mobile_home_qa_bt button, .st-key-mobile_home_qa_trade button, .st-key-mobile_home_qa_asset button {
+  border-radius:12px !important; background:#181a20 !important; border:1px solid #2b3139 !important;
+  color:#EAECEF !important; font-weight:700 !important; font-size:12px !important; min-height:46px !important;
+}
+.st-key-mobile_home_qa_bt button:hover, .st-key-mobile_home_qa_trade button:hover,
+.st-key-mobile_home_qa_asset button:hover {
+  border-color:#0ecb81 !important; color:#0ecb81 !important;
+}
+</style>'''
+
+
+
+DASHBOARD_CSS = """
+<style>
+    .dash-hero {
+        background: linear-gradient(135deg, #0b0e11 0%, #181a20 55%, #1c2128 100%);
+        border: 1px solid #2b3139; border-radius: 16px;
+        padding: 1.6rem 1.9rem; margin-bottom: 1.2rem;
+    }
+    .dash-hero .greet { color:#848e9c; font-size:.95rem; font-weight:600; margin-bottom:4px; }
+    .dash-hero .label { color:#848e9c; font-size:.8rem; margin-top:8px; }
+    .dash-hero .value {
+        color:#EAECEF; font-size:2.6rem; font-weight:850; line-height:1.15;
+        margin:2px 0 6px; font-variant-numeric:tabular-nums;
+    }
+    .dash-hero .change { font-size:.95rem; font-weight:700; }
+    .dash-hero .change.up { color:#0ecb81; }
+    .dash-hero .change.down { color:#f6465d; }
+
+    .dash-chart-card {
+        background:#181a20; border:1px solid #2b3139; border-radius:14px;
+        padding:14px 16px 6px; margin-bottom:1.2rem;
+    }
+    .dash-chart-title { color:#EAECEF; font-size:.95rem; font-weight:700; margin-bottom:6px; }
+    .dash-chart-empty { color:#848e9c; font-size:.85rem; text-align:center; padding:48px 12px; }
+
+    .dash-asset-row {
+        display:flex; align-items:center; gap:12px;
+        background:#181a20; border:1px solid #2b3139; border-radius:10px;
+        padding:11px 16px; margin-bottom:8px;
+    }
+    .dash-asset-logo, .dash-asset-logo-fallback {
+        width:34px; height:34px; border-radius:50%; flex:0 0 34px;
+    }
+    .dash-asset-logo { object-fit:contain; background:#20252d; }
+    .dash-asset-logo-fallback {
+        display:flex; align-items:center; justify-content:center;
+        background:#303640; color:#EAECEF; font-size:.9rem; font-weight:700;
+    }
+    .dash-asset-main { flex:1; min-width:0; }
+    .dash-asset-sym { color:#EAECEF; font-size:.92rem; font-weight:700; }
+    .dash-asset-name { color:#848e9c; font-size:.72rem; margin-top:1px; }
+    .dash-asset-qty { color:#848e9c; font-size:.75rem; }
+    .dash-asset-right { text-align:right; }
+    .dash-asset-val { color:#EAECEF; font-size:.92rem; font-weight:700; font-variant-numeric:tabular-nums; }
+    .dash-asset-pct { font-size:.78rem; font-weight:700; margin-top:2px; }
+    .dash-asset-pct.up { color:#0ecb81; }
+    .dash-asset-pct.down { color:#f6465d; }
+
+    .dash-cash-row {
+        display:flex; justify-content:space-between; align-items:center;
+        background:#181a20; border:1px solid #2b3139; border-radius:10px;
+        padding:13px 16px; margin-bottom:1.2rem; color:#848e9c; font-size:.85rem; font-weight:600;
+    }
+    .dash-cash-row b { color:#EAECEF; font-size:1rem; font-variant-numeric:tabular-nums; }
+
+    .dash-qa-btn button {
+        width:100% !important; min-height:64px !important; border-radius:12px !important;
+        background:#181a20 !important; border:1px solid #2b3139 !important;
+        color:#EAECEF !important; font-weight:700 !important; font-size:.9rem !important;
+    }
+    .dash-qa-btn button:hover { border-color:#0ecb81 !important; color:#0ecb81 !important; }
+
+    .st-key-dash_qa_bt button, .st-key-dash_qa_planner button,
+    .st-key-dash_qa_trade button, .st-key-dash_qa_wallet button {
+        width:100% !important; min-height:60px !important; border-radius:12px !important;
+        background:#181a20 !important; border:1px solid #2b3139 !important;
+        color:#EAECEF !important; font-weight:700 !important; font-size:.9rem !important;
+    }
+    .st-key-dash_qa_bt button:hover, .st-key-dash_qa_planner button:hover,
+    .st-key-dash_qa_trade button:hover, .st-key-dash_qa_wallet button:hover {
+        border-color:#0ecb81 !important; color:#0ecb81 !important;
+    }
+</style>
+"""
+
+
+def _dash_goto(tab_label: str) -> None:
+    st.session_state["main_nav"] = tab_label
+    st.session_state["main_nav_tabs"] = tab_label
+    st.session_state.pop("main_nav_tabs_news", None)
+
+
+def render_dashboard(cfg: dict[str, Any], data: pd.DataFrame,
+                     market_df: Optional[pd.DataFrame] = None) -> None:
+    st.markdown(DASHBOARD_CSS, unsafe_allow_html=True)
+
+    sim = st.session_state.get("sim", {}) or {}
+    asset = str(cfg.get("asset", "BTC"))
+    cust_thb = float(sim.get("customer_thb", 1_000_000.0) or 0.0)
+    cust_coins = sim.get("customer_coins", {}) or {}
+    orders = sim.get("orders", []) if isinstance(sim, dict) else []
+
+    usdthb_now = 1.0
+    try:
+        if isinstance(data, pd.DataFrame) and not data.empty and "USDTHB" in data.columns:
+            usdthb_now = float(data["USDTHB"].iloc[-1])
+    except (TypeError, ValueError, IndexError):
+        pass
+
+    price_thb_map: dict[str, float] = {}
+    pct_map: dict[str, float] = {}
+    if isinstance(market_df, pd.DataFrame) and not market_df.empty:
+        for _, row in market_df.iterrows():
+            sym = str(row.get("symbol", "")).upper()
+            if not sym:
+                continue
+            price_thb_map[sym] = float(row.get("price_usd", 0) or 0) * usdthb_now
+            pct_map[sym] = float(row.get("pct_change", 0) or 0)
+    if isinstance(data, pd.DataFrame) and not data.empty and "Global_USD" in data.columns:
+        price_thb_map[asset] = float(data["Global_USD"].iloc[-1]) * usdthb_now
+
+    holdings = []
+    coins_value = 0.0
+    for sym, qty in cust_coins.items():
+        qty = float(qty or 0.0)
+        if qty <= 0:
+            continue
+        px = price_thb_map.get(sym, 0.0)
+        val = qty * px
+        coins_value += val
+        holdings.append({"sym": sym, "qty": qty, "value": val, "pct": pct_map.get(sym)})
+    holdings.sort(key=lambda h: h["value"], reverse=True)
+
+    total_value = cust_thb + coins_value
+    initial_capital = 1_000_000.0
+    change_thb = total_value - initial_capital
+    change_pct = (change_thb / initial_capital * 100) if initial_capital else 0.0
+
+    hour = pd.Timestamp.now(tz="Asia/Bangkok").hour
+    greeting = "Good morning" if hour < 12 else ("Good afternoon" if hour < 18 else "Good evening")
+
+    change_cls = "up" if change_thb >= 0 else "down"
+    change_sign = "+" if change_thb >= 0 else ""
+
+    d_name = st.session_state.get("current_role")  # เผื่ออยากดึงชื่อจริง ปรับตามที่มึงเก็บไว้
+
+    st.markdown(
+        f'<div class="dash-hero">'
+        f'<div class="greet">{greeting} 👋</div>'
+        f'<div class="label">Portfolio</div>'
+        f'<div class="value">฿{total_value:,.0f}</div>'
+        f'<div class="change {change_cls}">{change_sign}{change_pct:.2f}% '
+        f'({fmt_baht(change_thb, force_sign=True)}) เทียบทุนเริ่มต้น</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ---- Portfolio Performance chart ----
+    st.markdown('<div class="dash-chart-card">'
+                '<div class="dash-chart-title">📈 Portfolio Performance</div>',
+                unsafe_allow_html=True)
+    if orders:
+        try:
+            odf = pd.DataFrame(orders)
+            odf["วันที่"] = pd.to_datetime(odf.get("วันที่"), errors="coerce")
+            odf = odf.dropna(subset=["วันที่"]).sort_values("วันที่")
+            odf["กำไรออเดอร์"] = pd.to_numeric(odf.get("กำไรออเดอร์", 0), errors="coerce").fillna(0.0)
+            # Aggregate the ledger to daily P&L. Orders currently carry a date (not a
+            # timestamp), so duplicate dates otherwise produce a collapsed microsecond axis.
+            daily = (odf.groupby("วันที่", as_index=False)["กำไรออเดอร์"].sum()
+                     .sort_values("วันที่"))
+            daily["equity"] = initial_capital + daily["กำไรออเดอร์"].cumsum()
+            start_date = daily["วันที่"].iloc[0] - pd.Timedelta(days=1)
+            plot_df = pd.concat([
+                pd.DataFrame({"วันที่": [start_date], "equity": [initial_capital]}),
+                daily[["วันที่", "equity"]],
+            ], ignore_index=True)
+            marker_mode = "lines+markers" if len(plot_df) <= 8 else "lines"
+            ymin, ymax = float(plot_df["equity"].min()), float(plot_df["equity"].max())
+            span = max(ymax - ymin, initial_capital * 0.005, 1.0)
+            pad = span * 0.18
+            fig = go.Figure(go.Scatter(
+                x=plot_df["วันที่"], y=plot_df["equity"], mode=marker_mode,
+                line=dict(color="#0ecb81", width=2.4),
+                marker=dict(size=7),
+                fill="tozeroy", fillcolor="rgba(14,203,129,0.12)",
+            ))
+            fig.update_layout(
+                template="plotly_dark", height=320, margin=dict(t=10, b=10, l=10, r=10),
+                showlegend=False, hovermode="x unified",
+                yaxis_title="THB", yaxis=dict(range=[ymin - pad, ymax + pad]),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig, **WIDE)
+        except Exception:
+            st.markdown('<div class="dash-chart-empty">ไม่สามารถแสดงกราฟได้ในขณะนี้</div>',
+                        unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="dash-chart-empty">ยังไม่มีประวัติการเทรด — '
+                    'เริ่มซื้อขายที่ Exchange UI Simulator เพื่อดูกราฟผลงาน</div>',
+                    unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ---- Layout: Assets (ซ้าย) + Quick Actions (ขวา) ----
+    col_assets, col_side = st.columns([2.4, 1], gap="large")
+
+    with col_assets:
+        section("🪙 สินทรัพย์")
+        if holdings:
+            for h in holdings:
+                sym = h["sym"]
+                pct = h["pct"]
+                pct_txt = f'{"+" if (pct or 0) >= 0 else ""}{pct:.2f}%' if pct is not None else "—"
+                pct_cls = "up" if (pct or 0) >= 0 else "down"
+                logo = get_coin_logo(sym)
+                logo_html = (f'<img class="dash-asset-logo" src="{logo}" alt="{sym}">'
+                            if logo else f'<div class="dash-asset-logo-fallback">{sym[:1]}</div>')
+                st.markdown(
+                    f'<div class="dash-asset-row">{logo_html}'
+                    f'<div class="dash-asset-main">'
+                    f'<div class="dash-asset-sym">{sym}</div>'
+                    f'<div class="dash-asset-name">{COIN_NAMES.get(sym, sym)} · '
+                    f'{h["qty"]:,.6f} {sym}</div></div>'
+                    f'<div class="dash-asset-right">'
+                    f'<div class="dash-asset-val">{fmt_baht(h["value"])}</div>'
+                    f'<div class="dash-asset-pct {pct_cls}">{pct_txt}</div></div></div>',
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.caption("ยังไม่มีสินทรัพย์คริปโตในพอร์ต")
+
+        st.markdown(
+            f'<div class="dash-cash-row"><span>Cash (THB)</span>'
+            f'<b>{fmt_baht(cust_thb)}</b></div>',
+            unsafe_allow_html=True,
+        )
+
+    with col_side:
+        section("⚡ เมนูด่วน")
+        with st.container(key="dash_qa_bt"):
+            if st.button("📊 Backtest", key="dash_go_bt", **WIDE,
+                        on_click=_dash_goto, args=(NAV_LABELS[1],)):
+                pass
+        st.write("")
+        with st.container(key="dash_qa_planner"):
+            if st.button("🧮 Planner", key="dash_go_planner", **WIDE,
+                        on_click=_dash_goto, args=(NAV_LABELS[2],)):
+                pass
+        st.write("")
+        with st.container(key="dash_qa_trade"):
+            if st.button("🛒 Trade", key="dash_go_trade", **WIDE,
+                        on_click=_dash_goto, args=(NAV_EXCHANGE,)):
+                pass
+        st.write("")
+        with st.container(key="dash_qa_wallet"):
+            if st.button("💼 Wallet", key="dash_go_wallet", **WIDE,
+                        on_click=_dash_goto, args=(NAV_LABELS[5],)):
+                pass
+
 def _main_body() -> None:
     st.markdown(THEME_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
+    st.markdown(MOBILE_NAV_CSS, unsafe_allow_html=True)
+    st.markdown(MOBILE_MARKET_NEWS_CSS, unsafe_allow_html=True)
+    st.markdown(GLOBAL_NEWS_FLOAT_CSS, unsafe_allow_html=True)
+    st.markdown(MOBILE_BT_CSS, unsafe_allow_html=True)
+    st.markdown(MOBILE_HOME_CSS, unsafe_allow_html=True)
+
+    # Global News launcher: อยู่ตำแหน่งเดิมตลอด ไม่ว่าผู้ใช้จะอยู่แท็บไหน
+    with st.container(key="global_news_float"):
+        if st.button("📰  News", key="global_news_button", use_container_width=True):
+            st.session_state["main_nav"] = NAV_NEWS
+            st.session_state["mobile_news_return_tab"] = st.session_state.get("mobile_nav", MOBILE_NAV[0])
+            st.session_state["mobile_news_open"] = True
+            st.rerun()
 
     if is_guest_mode():
         st.session_state.setdefault("favorite_tickers", [])
@@ -8221,140 +9542,161 @@ def _main_body() -> None:
     render_alert_banner(compute_active_alerts(cfg, st.session_state.get("sim"), data, market_df))
 
     if "main_nav" not in st.session_state:
-        st.session_state["main_nav"] = NAV_LABELS[0]
+        st.session_state["main_nav"] = NAV_DASHBOARD
 
-    # แถบเมนูหลักยังคงแสดงแท็บเดิมทั้งหมด ยกเว้นข่าวที่ย้ายไปเป็นปุ่มเล็กด้านบน
-    # ใช้ key แยกจาก main_nav เพื่อให้ radio ไม่หายไปเมื่ออยู่หน้า News
-    nav_labels_main = [label for label in NAV_LABELS if label != NAV_NEWS]
-    current_nav = st.session_state.get("main_nav", nav_labels_main[0])
-    if current_nav not in nav_labels_main and current_nav != NAV_NEWS:
-        current_nav = nav_labels_main[0]
+    # ------------------------------------------------------------------
+    # DESKTOP NAV — compact menu / tab launcher
+    # ------------------------------------------------------------------
+    # แทนแถบแท็บยาว ๆ ด้วยปุ่มเล็กเพียงปุ่มเดียว เมื่อกดจึงเปิดรายการ
+    # หน้าทั้งหมดให้เลือก ช่วยลดความรกของ header และยังคงใช้ main_nav เดิม
+    # เพื่อให้ routing / state ของทุกหน้าทำงานเหมือนเดิม
+    nav_labels_all = list(NAV_LABELS)
+    current_nav = st.session_state.get("main_nav", NAV_DASHBOARD)
+    if current_nav not in nav_labels_all:
+        current_nav = NAV_DASHBOARD
         st.session_state["main_nav"] = current_nav
 
+    # Keep the legacy routing variable in sync with the compact navigation.
+    # The desktop route below still uses `nav`, so it must be defined before
+    # the route dispatch.  Previously the compact-nav refactor only created
+    # `current_nav`, which caused NameError: nav on Streamlit Cloud.
+    nav = current_nav
+
     with st.container(key="desktop_navigation"):
-        # Compact top navigation — ไม่ให้แต่ละเมนูยืดเต็มความกว้าง
         st.markdown("""
         <style>
-        div[data-testid="stRadio"] {
-            width: fit-content !important;
-            max-width: 100% !important;
-            margin: 0 !important;
-            padding: 0 !important;
+        .st-key-desktop_navigation {
+            margin: 2px 0 14px 0 !important;
         }
-        div[data-testid="stRadio"] > label {
-            display: none !important;
-        }
-        div[data-testid="stRadio"] div[role="radiogroup"] {
-            display: flex !important;
-            flex-direction: row !important;
-            align-items: center !important;
-            justify-content: flex-start !important;
-            width: fit-content !important;
-            max-width: 100% !important;
-            gap: 5px !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            overflow-x: auto !important;
-            overflow-y: hidden !important;
-            scrollbar-width: none !important;
-        }
-        div[data-testid="stRadio"] div[role="radiogroup"]::-webkit-scrollbar {
-            display: none !important;
-        }
-        div[data-testid="stRadio"] div[role="radiogroup"] > label {
-            flex: 0 0 auto !important;
+        .st-key-desktop_navigation [data-testid="stPopover"] > button {
+            min-height: 38px !important;
             width: auto !important;
-            min-width: 0 !important;
-            max-width: none !important;
-            margin: 0 !important;
-            padding: 4px 7px !important;
-            white-space: nowrap !important;
-            border-radius: 7px !important;
-            background: transparent !important;
+            padding: 6px 14px !important;
+            border: 1px solid #2f3640 !important;
+            border-radius: 10px !important;
+            background: #181a20 !important;
+            color: #EAECEF !important;
+            font-size: 13px !important;
+            font-weight: 700 !important;
+            box-shadow: none !important;
+        }
+        .st-key-desktop_navigation [data-testid="stPopover"] > button:hover {
+            border-color: #0ecb81 !important;
+            background: #20242b !important;
+        }
+        .st-key-desktop_navigation [data-testid="stPopoverBody"] {
+            min-width: 280px !important;
+            max-width: 360px !important;
+            padding: 12px !important;
+            background: #181a20 !important;
+            border: 1px solid #2b3139 !important;
+            border-radius: 14px !important;
+        }
+        .st-key-desktop_navigation [data-testid="stPopoverBody"] [data-testid="stRadio"] label {
+            padding: 9px 10px !important;
+            border-radius: 9px !important;
             color: #b8bac2 !important;
+            font-size: 13px !important;
+        }
+        .st-key-desktop_navigation [data-testid="stPopoverBody"] [data-testid="stRadio"] label:hover {
+            background: rgba(255,255,255,.05) !important;
+            color: #fff !important;
+        }
+        .st-key-desktop_navigation .desktop-current-page {
+            display: inline-flex !important;
+            align-items: center !important;
+            margin-left: 8px !important;
+            color: #848e9c !important;
             font-size: 12px !important;
-            font-weight: 500 !important;
-            line-height: 1.2 !important;
-        }
-        div[data-testid="stRadio"] div[role="radiogroup"] > label:hover {
-            background: rgba(255,255,255,.055) !important;
-            color: #ffffff !important;
-        }
-        div[data-testid="stRadio"] div[role="radiogroup"] > label[data-checked="true"] {
-            background: rgba(255,255,255,.07) !important;
-            color: #ffffff !important;
-            font-weight: 600 !important;
-        }
-        div[data-testid="stRadio"] div[role="radiogroup"] > label > div:first-child {
-            flex: 0 0 auto !important;
-            margin-right: 4px !important;
+            vertical-align: middle !important;
         }
         @media (max-width: 900px) {
-            div[data-testid="stRadio"] div[role="radiogroup"] {
-                width: 100% !important;
-                gap: 2px !important;
-            }
-            div[data-testid="stRadio"] div[role="radiogroup"] > label {
-                padding: 4px 6px !important;
-                font-size: 11px !important;
-            }
+            .st-key-desktop_navigation { display:none !important; }
         }
         </style>
         """, unsafe_allow_html=True)
 
-        if current_nav == NAV_NEWS:
-            # หน้า News: แสดงแท็บอื่นครบ แต่ไม่เลือกแท็บใดไว้
-            # เพื่อให้ผู้ใช้กดกลับไปแท็บไหนก็ได้ รวมถึงแท็บแรก
-            selected_nav = st.radio(
-                "เมนูหลัก",
-                nav_labels_main,
-                horizontal=True,
-                index=None,
-                key="main_nav_tabs_news",
-                label_visibility="collapsed",
+        menu_col, current_col = st.columns([1.15, 5.85], vertical_alignment="center")
+        with menu_col:
+            with st.popover("☰ เมนู", use_container_width=False):
+                st.markdown("### ไปยังหน้า")
+                for _nav_item in nav_labels_all:
+                    _active = _nav_item == current_nav
+                    if st.button(
+                        ("●  " if _active else "○  ") + _nav_item,
+                        key=f"desktop_menu_{nav_labels_all.index(_nav_item)}",
+                        use_container_width=True,
+                        type="primary" if _active else "secondary",
+                    ):
+                        st.session_state["main_nav"] = _nav_item
+                        st.rerun()
+        with current_col:
+            st.markdown(
+                f'<span class="desktop-current-page">กำลังอยู่: <b style="color:#EAECEF;margin-left:4px;">{current_nav}</b></span>',
+                unsafe_allow_html=True,
             )
-            nav = selected_nav if selected_nav else NAV_NEWS
-            if selected_nav:
-                st.session_state["main_nav"] = selected_nav
-        else:
-            default_idx = nav_labels_main.index(current_nav)
-            selected_nav = st.radio(
-                "เมนูหลัก",
-                nav_labels_main,
-                horizontal=True,
-                index=default_idx,
-                key="main_nav_tabs",
-                label_visibility="collapsed",
-            )
-            nav = selected_nav
-            st.session_state["main_nav"] = selected_nav
 
     # Mobile UI อยู่ใน shell แยก เพื่อไม่ให้ถูก render บน Desktop
     # แต่ยังคงสร้าง widget ได้ปกติบน Mobile viewport
     with st.container(key="mobile_shell"):
+        # Normalize any old session value (e.g. "Home", "Trade") after the
+        # navigation labels were changed to emoji labels.  Without this,
+        # MOBILE_NAV.index(old_value) raises ValueError on Streamlit Cloud.
         mobile_selected = st.session_state.get("mobile_nav", MOBILE_NAV[0])
-        mobile_nav = st.radio("Mobile navigation", MOBILE_NAV, index=MOBILE_NAV.index(mobile_selected),
-                              horizontal=True, key="mobile_nav", label_visibility="collapsed")
+        if mobile_selected not in MOBILE_NAV:
+            mobile_selected = MOBILE_NAV[0]
+            st.session_state["mobile_nav"] = mobile_selected
+
+        mobile_nav = st.radio(
+            "Mobile navigation",
+            MOBILE_NAV,
+            index=MOBILE_NAV.index(mobile_selected),
+            horizontal=True,
+            key="mobile_nav",
+            label_visibility="collapsed",
+        )
+        # ถ้าผู้ใช้เลือก bottom-nav ตัวอื่นระหว่างเปิด News ให้กลับไปแท็บนั้น
+        if st.session_state.get("mobile_news_open", False):
+            return_tab = st.session_state.get("mobile_news_return_tab", mobile_nav)
+            if mobile_nav != return_tab:
+                st.session_state["mobile_news_open"] = False
         # สำคัญ: mobile_nav เป็น widget key แล้ว Streamlit จะ sync ค่าให้เอง
         # ห้ามเขียน st.session_state["mobile_nav"] ซ้ำหลังสร้าง widget
 
-        if mobile_nav == MOBILE_NAV[0]:
+        mobile_usdthb = 1.0
+        try:
+            if isinstance(data, pd.DataFrame) and not data.empty and "USDTHB" in data.columns:
+                mobile_usdthb = float(data["USDTHB"].iloc[-1])
+        except (TypeError, ValueError, IndexError):
+            pass
+        if st.session_state.get("mobile_news_open", False):
+            # News is a global page opened from the fixed top-right launcher.
+            # It is independent of the bottom navigation tab.
+            if st.button("← กลับ", key="mobile_news_back"):
+                st.session_state["mobile_news_open"] = False
+                st.rerun()
+            render_news_section(cfg)
+        elif mobile_nav == MOBILE_NAV[0]:
             render_mobile_home(cfg, data)
         elif mobile_nav == MOBILE_NAV[1]:
-            render_mobile_trade(cfg, data)
+            render_mobile_market(cfg, market_df, mobile_usdthb)
         elif mobile_nav == MOBILE_NAV[2]:
-            render_mobile_asset(cfg, data)
+            render_mobile_trade(cfg, data)
         elif mobile_nav == MOBILE_NAV[3]:
-            render_mobile_backtest(cfg, data)
+            render_mobile_asset(cfg, data)
         elif mobile_nav == MOBILE_NAV[4]:
+            render_mobile_backtest(cfg, data)
+        elif mobile_nav == MOBILE_NAV[5]:
             render_mobile_settings()
 
     with st.container(key="desktop_route"):
-        if nav == NAV_LABELS[0]:
-            render_tab1(cfg, data, data_err)
+        if nav == NAV_DASHBOARD:
+            render_dashboard(cfg, data, market_df=market_df)
         elif nav == NAV_LABELS[1]:
-            render_tab2(cfg, data, data_err)
+            render_tab1(cfg, data, data_err)
         elif nav == NAV_LABELS[2]:
+            render_tab2(cfg, data, data_err)
+        elif nav == NAV_LABELS[3]:
             render_tab3(cfg, data, data_err,
                         price_lookup={row["symbol"]: row["price_usd"] for _, row in market_df.iterrows()} if not market_df.empty else {},
                         market_df=market_df)
