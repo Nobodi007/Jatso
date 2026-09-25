@@ -1236,14 +1236,13 @@ NAV_LABELS = [
     "📊 5-Year Backtest Simulator",
     "🧮 Liquidity & Capital Planner",
     "🛒 Exchange UI Simulator",
-    "📰 News",
     "💼 Wallet",
     "🎯 Investment Backtest",
 ]
 NAV_DASHBOARD = NAV_LABELS[0]
 NAV_EXCHANGE = NAV_LABELS[3]
-NAV_NEWS = NAV_LABELS[4]
-NAV_SIMPLE = NAV_LABELS[6]
+NAV_NEWS = "📰 News"
+NAV_SIMPLE = NAV_LABELS[5]
 
 def _go_to_exchange(sym: str) -> None:
     st.session_state["bt_asset"] = sym
