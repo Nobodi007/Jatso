@@ -1703,28 +1703,31 @@ THEME_CSS = """
     
     /* ---------- AI Chat (ปุ่มลอย + ฟองแชท) ---------- */
     .st-key-ai_fab {
-    position: fixed !important;
-    bottom: 78px; left: 24px; right: auto;
-    z-index: 999990; width: auto !important;
-}
+        position: fixed !important;
+        top: auto !important;
+        bottom: 72px !important;
+        left: auto !important;
+        right: 24px !important;
+        inset: auto 24px 72px auto !important;
+        z-index: 2147483000 !important;
+        width: auto !important;
+        margin: 0 !important;
+        transform: none !important;
+    }
+
+    /* ป้องกัน ancestor หลักของ Streamlit ทำให้ position:fixed
+       ถูกตีความเป็น fixed ภายใน transformed containing block */
+    .stApp,
+    .main,
+    [data-testid="stAppViewContainer"],
+    [data-testid="stMain"] {
+        transform: none !important;
+    }
     .st-key-ai_fab button {
         border-radius: 999px !important; padding: 10px 20px !important;
         background: #0ecb81 !important; border: none !important;
         box-shadow: 0 8px 24px rgba(14,203,129,.35) !important;
     }
-   @media (max-width: 768px) {
-    .st-key-ai_fab {
-        bottom: calc(64px + env(safe-area-inset-bottom, 0px)) !important;
-        left: 16px !important;
-        right: auto !important;
-        z-index: 999995 !important;
-    }
-}
-
-/* กันแถบ mobile bottom nav ทับปุ่มแชท ให้ nav อยู่ชั้นต่ำกว่า */
-.st-key-mobile_nav {
-    z-index: 999980 !important;
-}
     .st-key-ai_fab button, .st-key-ai_fab button * {
         color: #0b0e11 !important; font-weight: 700 !important;
     }
@@ -1752,6 +1755,35 @@ THEME_CSS = """
         color: #EAECEF !important; font-size: .82rem !important; font-weight: 500 !important;
     }
     [class*="st-key-ai_sug_"] button:hover { border-color: #0ecb81 !important; }
+
+    /* Mobile: ยึดปุ่ม AI กับ viewport โดยตรง ไม่ให้ layout ของ Streamlit ดึงตำแหน่งไปตาม parent */
+    @media (max-width: 768px) {
+        .st-key-ai_fab {
+            position: fixed !important;
+            top: auto !important;
+            bottom: 90px !important;
+            left: 16px !important;
+            right: auto !important;
+            inset: auto auto 90px 16px !important;
+            z-index: 2147483000 !important;
+            width: auto !important;
+            max-width: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            transform: none !important;
+            filter: none !important;
+            will-change: auto !important;
+        }
+
+        .st-key-ai_fab > div {
+            width: auto !important;
+            margin: 0 !important;
+        }
+
+        .st-key-ai_fab button {
+            margin: 0 !important;
+        }
+    }
 </style>
 """
 
