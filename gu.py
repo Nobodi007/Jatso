@@ -1232,6 +1232,7 @@ def coin_icon_html(sym: str, size: int = 28) -> str:
 
 
 NAV_LABELS = [
+    "🏠 Dashboard",
     "📊 5-Year Backtest Simulator",
     "🧮 Liquidity & Capital Planner",
     "🛒 Exchange UI Simulator",
@@ -1239,9 +1240,10 @@ NAV_LABELS = [
     "💼 Wallet",
     "🎯 Investment Backtest",
 ]
-NAV_EXCHANGE = NAV_LABELS[2]
-NAV_NEWS = NAV_LABELS[3]
-NAV_SIMPLE = NAV_LABELS[5]
+NAV_DASHBOARD = NAV_LABELS[0]
+NAV_EXCHANGE = NAV_LABELS[3]
+NAV_NEWS = NAV_LABELS[4]
+NAV_SIMPLE = NAV_LABELS[6]
 
 def _go_to_exchange(sym: str) -> None:
     st.session_state["bt_asset"] = sym
@@ -8294,45 +8296,142 @@ def render_mobile_market(cfg: dict[str, Any], market_df: pd.DataFrame, usdthb: f
                     unsafe_allow_html=True,
                 )
 
+def _mobile_home_goto(tab_label: str) -> None:
+    st.session_state["mobile_nav"] = tab_label
+
+
 def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
-    sim=st.session_state.get('sim',{}) or {}; asset=cfg.get('asset','BTC')
-    cap=float(cfg.get('total_capital_thb',0) or 0); cex=float(cfg.get('cex_margin_thb',0) or 0); liab=float(cfg.get('liab_thb',0) or 0)
-    target=float(sim.get('target_thb',0) or 0); fx=float(sim.get('fx_used_usd',0) or 0); fxlim=float(cfg.get('fx_limit_max',0) or 0)
-    pnl=0.0
-    for o in sim.get('orders',[]) if isinstance(sim,dict) else []:
-        try: pnl += float(o.get('dealer_pnl',o.get('Dealer P&L',0)) or 0)
-        except Exception: pass
-    ncbuf=0.0
+    sim = st.session_state.get("sim", {}) or {}
+    asset = str(cfg.get("asset", "BTC"))
+    cust_thb = float(sim.get("customer_thb", 1_000_000.0) or 0.0)
+    cust_coins = sim.get("customer_coins", {}) or {}
+    orders = sim.get("orders", []) if isinstance(sim, dict) else []
+
+    usdthb_now = 1.0
     try:
-        if not data.empty:
-            built=build_dealer_ctx(cfg,data)
-            if built:
-                ctx,t=built; nc=nc_snapshot(t,ctx['capital'],ctx['cex_margin'],ctx['liab'],ctx['h_crypto'],ctx['h_cex'],ctx['fixed_min_nc'],ctx['trading_risk_rate'],ctx['daily_volume_thb'],ctx['custody_rate']); ncbuf=float(nc.get('buffer',0) or 0)
-    except Exception: pass
-    st.markdown('<div class="mobile-page-title">Dashboard</div><div class="mobile-page-sub">ภาพรวม Dealer · Live configuration</div>',unsafe_allow_html=True)
-    st.markdown(f'''<div class="mobile-card"><div class="mobile-kicker">Total Capital</div><div class="mobile-big">{_mobile_money(cap)}</div><div class="mobile-kicker" style="margin-top:7px">{asset} · Inventory target {_mobile_money(target)}</div></div><div class="mobile-grid"><div class="mobile-mini"><div class="mobile-mini-label">P&L จาก Ledger</div><div class="mobile-mini-value {'mobile-green' if pnl>=0 else 'mobile-red'}">{_mobile_money(pnl,True)}</div></div><div class="mobile-mini"><div class="mobile-mini-label">NC Buffer</div><div class="mobile-mini-value {'mobile-green' if ncbuf>=0 else 'mobile-red'}">{_mobile_money(ncbuf,True)}</div></div><div class="mobile-mini"><div class="mobile-mini-label">CEX Margin</div><div class="mobile-mini-value">{_mobile_money(cex)}</div></div><div class="mobile-mini"><div class="mobile-mini-label">FX Used</div><div class="mobile-mini-value">${fx:,.0f} / ${fxlim:,.0f}</div></div></div><div class="mobile-card"><div class="mobile-kicker">Customer Liabilities</div><div class="mobile-big">{_mobile_money(liab)}</div></div>''',unsafe_allow_html=True)
-    st.markdown('### 📌 สถานะล่าสุด')
-    orders=sim.get('orders',[]) if isinstance(sim,dict) else []
+        if isinstance(data, pd.DataFrame) and not data.empty and "USDTHB" in data.columns:
+            usdthb_now = float(data["USDTHB"].iloc[-1])
+    except (TypeError, ValueError, IndexError):
+        pass
+
+    try:
+        market_df = fetch_market_overview(SUPPORTED_ASSETS)
+    except Exception:
+        market_df = pd.DataFrame()
+
+    price_thb_map: dict[str, float] = {}
+    pct_map: dict[str, float] = {}
+    if isinstance(market_df, pd.DataFrame) and not market_df.empty:
+        for _, row in market_df.iterrows():
+            sym = str(row.get("symbol", "")).upper()
+            if not sym:
+                continue
+            price_thb_map[sym] = float(row.get("price_usd", 0) or 0) * usdthb_now
+            pct_map[sym] = float(row.get("pct_change", 0) or 0)
+    if isinstance(data, pd.DataFrame) and not data.empty and "Global_USD" in data.columns:
+        price_thb_map[asset] = float(data["Global_USD"].iloc[-1]) * usdthb_now
+
+    holdings = []
+    coins_value = 0.0
+    for sym, qty in cust_coins.items():
+        qty = float(qty or 0.0)
+        if qty <= 0:
+            continue
+        px = price_thb_map.get(sym, 0.0)
+        val = qty * px
+        coins_value += val
+        holdings.append({"sym": sym, "qty": qty, "value": val, "pct": pct_map.get(sym)})
+    holdings.sort(key=lambda h: h["value"], reverse=True)
+
+    total_value = cust_thb + coins_value
+    initial_capital = 1_000_000.0  # ทุนเริ่มต้นของกระเป๋าจำลอง
+    change_thb = total_value - initial_capital
+    change_pct = (change_thb / initial_capital * 100) if initial_capital else 0.0
+
+    hour = pd.Timestamp.now(tz="Asia/Bangkok").hour
+    greeting = "สวัสดีตอนเช้า" if hour < 12 else ("สวัสดีตอนบ่าย" if hour < 18 else "สวัสดีตอนเย็น")
+
+    change_cls = "mobile-green" if change_thb >= 0 else "mobile-red"
+    change_sign = "+" if change_thb >= 0 else ""
+
+    st.markdown(
+        f'<div class="mobile-home-greet">{greeting} 👋</div>'
+        f'<div class="mobile-home-port-label">มูลค่าพอร์ตทั้งหมด</div>'
+        f'<div class="mobile-home-port-value">฿{total_value:,.0f}</div>'
+        f'<div class="mobile-home-port-change {change_cls}">{change_sign}{change_pct:.2f}% '
+        f'({_mobile_money(change_thb, True)}) เทียบทุนเริ่มต้น</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ---- กราฟ Portfolio Performance (สร้างจากกำไรสะสมของออเดอร์จริง) ----
+    st.markdown('<div class="mobile-home-chart-card">'
+                '<div class="mobile-home-chart-title">📈 Portfolio Performance</div>',
+                unsafe_allow_html=True)
     if orders:
-        for o in reversed(orders[-3:]):
-            sym=str(o.get('เหรียญ',o.get('asset',asset))); side=str(o.get('side',o.get('ฝั่ง','Order'))); amount=o.get('amount_thb',o.get('จำนวนเงิน',''))
-            st.markdown(f'<div class="mobile-card"><b style="color:#EAECEF">{sym}</b> · {side}<span style="float:right;color:#848e9c">{amount}</span></div>',unsafe_allow_html=True)
-    else: st.caption('ยังไม่มีออเดอร์ล่าสุด')
-
-
-
-def _apply_mobile_pct(pct_key: str, target_key: str, base: float, kind: str) -> None:
-    """Apply 25/50/75/100% from the mobile trade pills."""
-    sel = st.session_state.get(pct_key)
-    if not sel:
-        return
-    p = int(str(sel).rstrip("%")) / 100.0
-    if kind == "buy":
-        st.session_state[target_key] = round(float(base) * p, 2)
+        try:
+            odf = pd.DataFrame(orders)
+            odf["วันที่"] = pd.to_datetime(odf.get("วันที่"), errors="coerce")
+            odf = odf.dropna(subset=["วันที่"]).sort_values("วันที่")
+            odf["กำไรออเดอร์"] = pd.to_numeric(odf.get("กำไรออเดอร์", 0), errors="coerce").fillna(0.0)
+            odf["equity"] = initial_capital + odf["กำไรออเดอร์"].cumsum()
+            fig = go.Figure(go.Scatter(
+                x=odf["วันที่"], y=odf["equity"], mode="lines",
+                line=dict(color="#0ecb81", width=2.2),
+                fill="tozeroy", fillcolor="rgba(14,203,129,0.12)",
+            ))
+            fig.update_layout(
+                template="plotly_dark", height=170, margin=dict(t=4, b=4, l=4, r=4),
+                showlegend=False, xaxis=dict(visible=False), yaxis=dict(visible=False),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        except Exception:
+            st.markdown('<div class="mobile-home-chart-empty">ไม่สามารถแสดงกราฟได้ในขณะนี้</div>',
+                        unsafe_allow_html=True)
     else:
-        st.session_state[target_key] = math.floor(float(base) * p * 1e8) / 1e8
-    st.session_state[pct_key] = None
+        st.markdown('<div class="mobile-home-chart-empty">ยังไม่มีประวัติการเทรด — '
+                    'เริ่มซื้อขายที่แท็บ Trade เพื่อดูกราฟผลงาน</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
+    # ---- รายการสินทรัพย์ ----
+    st.markdown('<div class="mobile-home-section-label">สินทรัพย์</div>', unsafe_allow_html=True)
+    if holdings:
+        for h in holdings[:6]:
+            sym = h["sym"]
+            pct = h["pct"]
+            pct_txt = f'{"+" if (pct or 0) >= 0 else ""}{pct:.2f}%' if pct is not None else "—"
+            pct_cls = "mobile-green" if (pct or 0) >= 0 else "mobile-red"
+            logo = MOBILE_COIN_LOGOS.get(sym, "")
+            logo_html = (f'<img class="mobile-home-asset-logo" src="{logo}" alt="{sym}">'
+                        if logo else f'<div class="mobile-home-asset-logo-fallback">{sym[:1]}</div>')
+            st.markdown(
+                f'<div class="mobile-home-asset-row">{logo_html}'
+                f'<div class="mobile-home-asset-main"><div class="mobile-home-asset-sym">{sym}</div></div>'
+                f'<div class="mobile-home-asset-right">'
+                f'<div class="mobile-home-asset-val">฿{h["value"]:,.0f}</div>'
+                f'<div class="mobile-home-asset-pct {pct_cls}">{pct_txt}</div></div></div>',
+                unsafe_allow_html=True,
+            )
+    else:
+        st.caption("ยังไม่มีสินทรัพย์คริปโตในพอร์ต")
+
+    st.markdown(
+        f'<div class="mobile-home-cash-row"><span>Cash (THB)</span><b>฿{cust_thb:,.0f}</b></div>',
+        unsafe_allow_html=True,
+    )
+
+    # ---- เมนูด่วน ----
+    st.markdown('<div class="mobile-home-section-label">เมนูด่วน</div>', unsafe_allow_html=True)
+    qa1, qa2, qa3 = st.columns(3, gap="small")
+    with qa1:
+        st.button("📊 Backtest", key="mobile_home_qa_bt", use_container_width=True,
+                  on_click=_mobile_home_goto, args=(MOBILE_NAV[4],))
+    with qa2:
+        st.button("💱 Trade", key="mobile_home_qa_trade", use_container_width=True,
+                  on_click=_mobile_home_goto, args=(MOBILE_NAV[2],))
+    with qa3:
+        st.button("💼 Asset", key="mobile_home_qa_asset", use_container_width=True,
+                  on_click=_mobile_home_goto, args=(MOBILE_NAV[3],))
 
 def render_mobile_trade(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     'Mobile trading ticket using the same order engine/state as Desktop, with a mobile market selector.'
@@ -9014,6 +9113,283 @@ def render_mobile_settings() -> None:
     st.caption(f"XSpring Dealer Suite · Model v{MODEL_VERSION}")
 
 
+MOBILE_HOME_CSS = r'''<style>
+.mobile-home-greet { color:#848e9c; font-size:13px; font-weight:600; margin:4px 0 2px; }
+.mobile-home-port-label { color:#848e9c; font-size:11px; margin-top:6px; }
+.mobile-home-port-value { color:#EAECEF; font-size:32px; font-weight:850; line-height:1.15;
+  margin:2px 0 4px; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.mobile-home-port-change { font-size:13px; font-weight:700; margin-bottom:14px; }
+
+.mobile-home-chart-card { background:#181a20; border:1px solid #2b3139; border-radius:16px;
+  padding:12px 10px 4px; margin-bottom:16px; }
+.mobile-home-chart-title { color:#EAECEF; font-size:13px; font-weight:750; margin-bottom:4px; padding-left:4px; }
+.mobile-home-chart-empty { color:#848e9c; font-size:12px; text-align:center; padding:34px 10px; }
+
+.mobile-home-section-label { color:#EAECEF; font-size:14px; font-weight:800; margin:16px 0 8px; }
+
+.mobile-home-asset-row { display:flex; align-items:center; gap:10px; background:#181a20;
+  border:1px solid #2b3139; border-radius:13px; padding:10px 12px; margin-bottom:8px; }
+.mobile-home-asset-logo, .mobile-home-asset-logo-fallback { width:30px; height:30px; border-radius:50%; flex:0 0 30px; }
+.mobile-home-asset-logo { object-fit:contain; background:#20252d; }
+.mobile-home-asset-logo-fallback { display:flex; align-items:center; justify-content:center;
+  background:#303640; color:#EAECEF; font-size:14px; font-weight:700; }
+.mobile-home-asset-main { flex:1; min-width:0; }
+.mobile-home-asset-sym { color:#EAECEF; font-size:13px; font-weight:750; }
+.mobile-home-asset-right { text-align:right; }
+.mobile-home-asset-val { color:#EAECEF; font-size:13px; font-weight:750; font-variant-numeric:tabular-nums; }
+.mobile-home-asset-pct { font-size:11px; font-weight:700; margin-top:2px; }
+
+.mobile-home-cash-row { display:flex; justify-content:space-between; align-items:center;
+  background:#181a20; border:1px solid #2b3139; border-radius:13px; padding:11px 14px;
+  margin:2px 0 16px; color:#848e9c; font-size:13px; font-weight:650; }
+.mobile-home-cash-row b { color:#EAECEF; font-size:14px; font-variant-numeric:tabular-nums; }
+
+.st-key-mobile_home_qa_bt button, .st-key-mobile_home_qa_trade button, .st-key-mobile_home_qa_asset button {
+  border-radius:12px !important; background:#181a20 !important; border:1px solid #2b3139 !important;
+  color:#EAECEF !important; font-weight:700 !important; font-size:12px !important; min-height:46px !important;
+}
+.st-key-mobile_home_qa_bt button:hover, .st-key-mobile_home_qa_trade button:hover,
+.st-key-mobile_home_qa_asset button:hover {
+  border-color:#0ecb81 !important; color:#0ecb81 !important;
+}
+</style>'''
+
+
+
+DASHBOARD_CSS = """
+<style>
+    .dash-hero {
+        background: linear-gradient(135deg, #0b0e11 0%, #181a20 55%, #1c2128 100%);
+        border: 1px solid #2b3139; border-radius: 16px;
+        padding: 1.6rem 1.9rem; margin-bottom: 1.2rem;
+    }
+    .dash-hero .greet { color:#848e9c; font-size:.95rem; font-weight:600; margin-bottom:4px; }
+    .dash-hero .label { color:#848e9c; font-size:.8rem; margin-top:8px; }
+    .dash-hero .value {
+        color:#EAECEF; font-size:2.6rem; font-weight:850; line-height:1.15;
+        margin:2px 0 6px; font-variant-numeric:tabular-nums;
+    }
+    .dash-hero .change { font-size:.95rem; font-weight:700; }
+    .dash-hero .change.up { color:#0ecb81; }
+    .dash-hero .change.down { color:#f6465d; }
+
+    .dash-chart-card {
+        background:#181a20; border:1px solid #2b3139; border-radius:14px;
+        padding:14px 16px 6px; margin-bottom:1.2rem;
+    }
+    .dash-chart-title { color:#EAECEF; font-size:.95rem; font-weight:700; margin-bottom:6px; }
+    .dash-chart-empty { color:#848e9c; font-size:.85rem; text-align:center; padding:48px 12px; }
+
+    .dash-asset-row {
+        display:flex; align-items:center; gap:12px;
+        background:#181a20; border:1px solid #2b3139; border-radius:10px;
+        padding:11px 16px; margin-bottom:8px;
+    }
+    .dash-asset-logo, .dash-asset-logo-fallback {
+        width:34px; height:34px; border-radius:50%; flex:0 0 34px;
+    }
+    .dash-asset-logo { object-fit:contain; background:#20252d; }
+    .dash-asset-logo-fallback {
+        display:flex; align-items:center; justify-content:center;
+        background:#303640; color:#EAECEF; font-size:.9rem; font-weight:700;
+    }
+    .dash-asset-main { flex:1; min-width:0; }
+    .dash-asset-sym { color:#EAECEF; font-size:.92rem; font-weight:700; }
+    .dash-asset-name { color:#848e9c; font-size:.72rem; margin-top:1px; }
+    .dash-asset-qty { color:#848e9c; font-size:.75rem; }
+    .dash-asset-right { text-align:right; }
+    .dash-asset-val { color:#EAECEF; font-size:.92rem; font-weight:700; font-variant-numeric:tabular-nums; }
+    .dash-asset-pct { font-size:.78rem; font-weight:700; margin-top:2px; }
+    .dash-asset-pct.up { color:#0ecb81; }
+    .dash-asset-pct.down { color:#f6465d; }
+
+    .dash-cash-row {
+        display:flex; justify-content:space-between; align-items:center;
+        background:#181a20; border:1px solid #2b3139; border-radius:10px;
+        padding:13px 16px; margin-bottom:1.2rem; color:#848e9c; font-size:.85rem; font-weight:600;
+    }
+    .dash-cash-row b { color:#EAECEF; font-size:1rem; font-variant-numeric:tabular-nums; }
+
+    .dash-qa-btn button {
+        width:100% !important; min-height:64px !important; border-radius:12px !important;
+        background:#181a20 !important; border:1px solid #2b3139 !important;
+        color:#EAECEF !important; font-weight:700 !important; font-size:.9rem !important;
+    }
+    .dash-qa-btn button:hover { border-color:#0ecb81 !important; color:#0ecb81 !important; }
+
+    .st-key-dash_qa_bt button, .st-key-dash_qa_planner button,
+    .st-key-dash_qa_trade button, .st-key-dash_qa_wallet button {
+        width:100% !important; min-height:60px !important; border-radius:12px !important;
+        background:#181a20 !important; border:1px solid #2b3139 !important;
+        color:#EAECEF !important; font-weight:700 !important; font-size:.9rem !important;
+    }
+    .st-key-dash_qa_bt button:hover, .st-key-dash_qa_planner button:hover,
+    .st-key-dash_qa_trade button:hover, .st-key-dash_qa_wallet button:hover {
+        border-color:#0ecb81 !important; color:#0ecb81 !important;
+    }
+</style>
+"""
+
+
+def _dash_goto(tab_label: str) -> None:
+    st.session_state["main_nav"] = tab_label
+    st.session_state["main_nav_tabs"] = tab_label
+    st.session_state.pop("main_nav_tabs_news", None)
+
+
+def render_dashboard(cfg: dict[str, Any], data: pd.DataFrame,
+                     market_df: Optional[pd.DataFrame] = None) -> None:
+    st.markdown(DASHBOARD_CSS, unsafe_allow_html=True)
+
+    sim = st.session_state.get("sim", {}) or {}
+    asset = str(cfg.get("asset", "BTC"))
+    cust_thb = float(sim.get("customer_thb", 1_000_000.0) or 0.0)
+    cust_coins = sim.get("customer_coins", {}) or {}
+    orders = sim.get("orders", []) if isinstance(sim, dict) else []
+
+    usdthb_now = 1.0
+    try:
+        if isinstance(data, pd.DataFrame) and not data.empty and "USDTHB" in data.columns:
+            usdthb_now = float(data["USDTHB"].iloc[-1])
+    except (TypeError, ValueError, IndexError):
+        pass
+
+    price_thb_map: dict[str, float] = {}
+    pct_map: dict[str, float] = {}
+    if isinstance(market_df, pd.DataFrame) and not market_df.empty:
+        for _, row in market_df.iterrows():
+            sym = str(row.get("symbol", "")).upper()
+            if not sym:
+                continue
+            price_thb_map[sym] = float(row.get("price_usd", 0) or 0) * usdthb_now
+            pct_map[sym] = float(row.get("pct_change", 0) or 0)
+    if isinstance(data, pd.DataFrame) and not data.empty and "Global_USD" in data.columns:
+        price_thb_map[asset] = float(data["Global_USD"].iloc[-1]) * usdthb_now
+
+    holdings = []
+    coins_value = 0.0
+    for sym, qty in cust_coins.items():
+        qty = float(qty or 0.0)
+        if qty <= 0:
+            continue
+        px = price_thb_map.get(sym, 0.0)
+        val = qty * px
+        coins_value += val
+        holdings.append({"sym": sym, "qty": qty, "value": val, "pct": pct_map.get(sym)})
+    holdings.sort(key=lambda h: h["value"], reverse=True)
+
+    total_value = cust_thb + coins_value
+    initial_capital = 1_000_000.0
+    change_thb = total_value - initial_capital
+    change_pct = (change_thb / initial_capital * 100) if initial_capital else 0.0
+
+    hour = pd.Timestamp.now(tz="Asia/Bangkok").hour
+    greeting = "Good morning" if hour < 12 else ("Good afternoon" if hour < 18 else "Good evening")
+
+    change_cls = "up" if change_thb >= 0 else "down"
+    change_sign = "+" if change_thb >= 0 else ""
+
+    d_name = st.session_state.get("current_role")  # เผื่ออยากดึงชื่อจริง ปรับตามที่มึงเก็บไว้
+
+    st.markdown(
+        f'<div class="dash-hero">'
+        f'<div class="greet">{greeting} 👋</div>'
+        f'<div class="label">Portfolio</div>'
+        f'<div class="value">฿{total_value:,.0f}</div>'
+        f'<div class="change {change_cls}">{change_sign}{change_pct:.2f}% '
+        f'({fmt_baht(change_thb, force_sign=True)}) เทียบทุนเริ่มต้น</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ---- Portfolio Performance chart ----
+    st.markdown('<div class="dash-chart-card">'
+                '<div class="dash-chart-title">📈 Portfolio Performance</div>',
+                unsafe_allow_html=True)
+    if orders:
+        try:
+            odf = pd.DataFrame(orders)
+            odf["วันที่"] = pd.to_datetime(odf.get("วันที่"), errors="coerce")
+            odf = odf.dropna(subset=["วันที่"]).sort_values("วันที่")
+            odf["กำไรออเดอร์"] = pd.to_numeric(odf.get("กำไรออเดอร์", 0), errors="coerce").fillna(0.0)
+            odf["equity"] = initial_capital + odf["กำไรออเดอร์"].cumsum()
+            fig = go.Figure(go.Scatter(
+                x=odf["วันที่"], y=odf["equity"], mode="lines",
+                line=dict(color="#0ecb81", width=2.4),
+                fill="tozeroy", fillcolor="rgba(14,203,129,0.12)",
+            ))
+            fig.update_layout(
+                template="plotly_dark", height=320, margin=dict(t=10, b=10, l=10, r=10),
+                showlegend=False, hovermode="x unified",
+                yaxis_title="THB",
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig, **WIDE)
+        except Exception:
+            st.markdown('<div class="dash-chart-empty">ไม่สามารถแสดงกราฟได้ในขณะนี้</div>',
+                        unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="dash-chart-empty">ยังไม่มีประวัติการเทรด — '
+                    'เริ่มซื้อขายที่ Exchange UI Simulator เพื่อดูกราฟผลงาน</div>',
+                    unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ---- Layout: Assets (ซ้าย) + Quick Actions (ขวา) ----
+    col_assets, col_side = st.columns([2.4, 1], gap="large")
+
+    with col_assets:
+        section("🪙 สินทรัพย์")
+        if holdings:
+            for h in holdings:
+                sym = h["sym"]
+                pct = h["pct"]
+                pct_txt = f'{"+" if (pct or 0) >= 0 else ""}{pct:.2f}%' if pct is not None else "—"
+                pct_cls = "up" if (pct or 0) >= 0 else "down"
+                logo = get_coin_logo(sym)
+                logo_html = (f'<img class="dash-asset-logo" src="{logo}" alt="{sym}">'
+                            if logo else f'<div class="dash-asset-logo-fallback">{sym[:1]}</div>')
+                st.markdown(
+                    f'<div class="dash-asset-row">{logo_html}'
+                    f'<div class="dash-asset-main">'
+                    f'<div class="dash-asset-sym">{sym}</div>'
+                    f'<div class="dash-asset-name">{COIN_NAMES.get(sym, sym)} · '
+                    f'{h["qty"]:,.6f} {sym}</div></div>'
+                    f'<div class="dash-asset-right">'
+                    f'<div class="dash-asset-val">{fmt_baht(h["value"])}</div>'
+                    f'<div class="dash-asset-pct {pct_cls}">{pct_txt}</div></div></div>',
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.caption("ยังไม่มีสินทรัพย์คริปโตในพอร์ต")
+
+        st.markdown(
+            f'<div class="dash-cash-row"><span>Cash (THB)</span>'
+            f'<b>{fmt_baht(cust_thb)}</b></div>',
+            unsafe_allow_html=True,
+        )
+
+    with col_side:
+        section("⚡ เมนูด่วน")
+        with st.container(key="dash_qa_bt"):
+            if st.button("📊 Backtest", key="dash_go_bt", **WIDE,
+                        on_click=_dash_goto, args=(NAV_LABELS[1],)):
+                pass
+        st.write("")
+        with st.container(key="dash_qa_planner"):
+            if st.button("🧮 Planner", key="dash_go_planner", **WIDE,
+                        on_click=_dash_goto, args=(NAV_LABELS[2],)):
+                pass
+        st.write("")
+        with st.container(key="dash_qa_trade"):
+            if st.button("🛒 Trade", key="dash_go_trade", **WIDE,
+                        on_click=_dash_goto, args=(NAV_EXCHANGE,)):
+                pass
+        st.write("")
+        with st.container(key="dash_qa_wallet"):
+            if st.button("💼 Wallet", key="dash_go_wallet", **WIDE,
+                        on_click=_dash_goto, args=(NAV_LABELS[5],)):
+                pass
+
 def _main_body() -> None:
     st.markdown(THEME_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
@@ -9021,6 +9397,7 @@ def _main_body() -> None:
     st.markdown(MOBILE_MARKET_NEWS_CSS, unsafe_allow_html=True)
     st.markdown(GLOBAL_NEWS_FLOAT_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_BT_CSS, unsafe_allow_html=True)
+    st.markdown(MOBILE_HOME_CSS, unsafe_allow_html=True)
 
     # Global News launcher: อยู่ตำแหน่งเดิมตลอด ไม่ว่าผู้ใช้จะอยู่แท็บไหน
     with st.container(key="global_news_float"):
@@ -9133,7 +9510,7 @@ def _main_body() -> None:
     render_alert_banner(compute_active_alerts(cfg, st.session_state.get("sim"), data, market_df))
 
     if "main_nav" not in st.session_state:
-        st.session_state["main_nav"] = NAV_LABELS[0]
+        st.session_state["main_nav"] = NAV_DASHBOARD
 
     # แถบเมนูหลักยังคงแสดงแท็บเดิมทั้งหมด ยกเว้นข่าวที่ย้ายไปเป็นปุ่มเล็กด้านบน
     # ใช้ key แยกจาก main_nav เพื่อให้ radio ไม่หายไปเมื่ออยู่หน้า News
@@ -9321,11 +9698,13 @@ def _main_body() -> None:
             render_mobile_settings()
 
     with st.container(key="desktop_route"):
-        if nav == NAV_LABELS[0]:
-            render_tab1(cfg, data, data_err)
+        if nav == NAV_DASHBOARD:
+            render_dashboard(cfg, data, market_df=market_df)
         elif nav == NAV_LABELS[1]:
-            render_tab2(cfg, data, data_err)
+            render_tab1(cfg, data, data_err)
         elif nav == NAV_LABELS[2]:
+            render_tab2(cfg, data, data_err)
+        elif nav == NAV_LABELS[3]:
             render_tab3(cfg, data, data_err,
                         price_lookup={row["symbol"]: row["price_usd"] for _, row in market_df.iterrows()} if not market_df.empty else {},
                         market_df=market_df)
