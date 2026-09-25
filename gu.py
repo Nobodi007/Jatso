@@ -7240,13 +7240,13 @@ def _portfolio_asset_card(row: dict[str, Any], key_suffix: str = "") -> None:
             '</div>',
             unsafe_allow_html=True,
         )
-        if st.button(
+        st.button(
             f"{sym} · {name}   ↗ Exchange",
             key=f"portfolio_coin_btn_{sym}_{key_suffix}",
             use_container_width=True,
-        ):
-            _go_to_exchange(sym)
-            st.rerun()
+            on_click=_go_to_exchange,
+            args=(sym,),
+        )
 
 
 def _portfolio_cash_card(cash_thb: float, total_value: float) -> None:
