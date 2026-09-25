@@ -11476,8 +11476,27 @@ def render_rebalance_simulator(cfg: dict[str, Any], data: pd.DataFrame,
         except (TypeError, ValueError, KeyError):
             pass
 
+    # Rebalance is a sandbox only.  Do not touch the real ledger/wallet here.
+    # If the market-overview request is temporarily empty, keep the simulator
+    # usable by falling back to the latest known execution price in the ledger.
+    # This fixes the misleading "Assets 0" state without changing any other
+    # portfolio/trading calculation.
+    try:
+        ledger = sim.get("portfolio_ledger", []) if isinstance(sim, dict) else []
+        for tx in reversed(ledger if isinstance(ledger, list) else []):
+            if not isinstance(tx, dict):
+                continue
+            sym = str(tx.get("asset", "")).upper().strip()
+            if not sym or sym == "THB" or sym in price_map:
+                continue
+            px = float(tx.get("price_thb", 0) or 0)
+            if px > 0:
+                price_map[sym] = px
+    except (TypeError, ValueError):
+        pass
+
     snap = portfolio_snapshot(sim, price_map)
-    rows = [r for r in snap.get("rows", []) if float(r.get("market_value_thb", 0) or 0) > 0]
+    rows = [r for r in snap.get("rows", []) if float(r.get("qty", 0) or 0) > 0 and float(r.get("market_value", 0) or 0) > 0]
     cash = float(snap.get("cash_thb", 0) or 0)
     total = float(snap.get("total_value_thb", 0) or 0)
 
