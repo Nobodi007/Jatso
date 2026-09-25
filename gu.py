@@ -58,6 +58,15 @@ try:
     import yfinance as yf
     HAS_UI = True
     from orderbook_3d import render_orderbook_3d
+    from portfolio_module import (
+        render_portfolio_panel,
+        render_portfolio_mini_card,
+        compute_portfolio_ledger,
+        portfolio_summary,
+        unified_transaction_history,
+        do_withdraw,
+        log_cash_flow,
+    )
 
 except ImportError:
     go = st = components = yf = None
@@ -504,6 +513,8 @@ def sim_defaults(asset_name: str, start_date_val: Any, spot_usd: float,
         "customer_coins": {},
         "customer_thb": 1000000.0, 
         "open_orders": [],
+        "initial_capital": 1_000_000.0,
+        "cash_ledger": [],
     }
 
 def sim_config_signature(ctx: Mapping[str, Any], target_stock_thb: float,
@@ -547,6 +558,8 @@ def sim_normalize_state(sim: Any, asset: str, start_date_val: Any,
     sim.setdefault("customer_coins", {})
     sim.setdefault("customer_thb", 1000000.0)
     sim.setdefault("open_orders", [])
+    sim.setdefault("initial_capital", 1_000_000.0)
+    sim.setdefault("cash_ledger", [])
 
     sim.setdefault("inv_coins", {})
     if not isinstance(sim["inv_coins"], dict):
@@ -4113,6 +4126,10 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
     st.success(f"✅ โหลดข้อมูล **{asset}** สำเร็จ ({total_days} วัน | เทรดได้จริง {traded_days} วัน)")
 
+    _sim = st.session_state.get("sim")
+    if isinstance(_sim, dict):
+        render_portfolio_mini_card(_sim, {asset: float(bt["Local_THB"].iloc[-1])}, asset)
+
     # ---- ราคาเรียลไทม์ ----
     section(f"📉 ราคาเรียลไทม์ — {asset}")
     render_tv_panel(asset)
@@ -5436,6 +5453,10 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         f"ต้องดองเหรียญ {fmt_baht(required_stock_thb)} เหลือเงินสด {fmt_baht(cash_after_stock_thb)}",
         warn=(nc_buffer_thb < 0.5 * required_nc_total),
     )
+
+    _sim = st.session_state.get("sim")
+    if isinstance(_sim, dict) and not data.empty:
+        render_portfolio_mini_card(_sim, {cfg["asset"]: usdthb_now * data["Global_USD"].iloc[-1]}, cfg["asset"])
 
     # Multi-Asset Portfolio NC Planner: ใช้ตัวเลือกเหรียญ + น้ำหนักด้านบนโดยตรง
     # ไม่มี asset picker ซ้ำ และไม่สร้าง correlation heatmap เพิ่ม
@@ -6833,6 +6854,7 @@ def _do_deposit() -> None:
         sim = {"customer_thb": 1_000_000.0, "customer_coins": {}}
         st.session_state["sim"] = sim
     sim["customer_thb"] = float(sim.get("customer_thb", 1_000_000.0)) + amt
+    log_cash_flow(sim, "deposit", amt)
     st.session_state["dep_amt"] = "0"
     st.session_state["dep_error"] = None
     st.session_state["dep_done"] = amt
@@ -6988,6 +7010,8 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         st.toast(f"ฝากเงิน {dep_toast:,.2f} THB สำเร็จ", icon="✅")
     if st.session_state.pop("open_deposit", False):
         deposit_dialog()
+
+    render_portfolio_panel(sim, price_thb_map, can_trade_fn=can_trade)
 
 # ---------------- ฟังก์ชัน AI ----------------
 
