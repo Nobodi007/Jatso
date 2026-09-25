@@ -1273,6 +1273,7 @@ NAV_LABELS = [
     "🔔 Smart Alerts",
     "⚖️ Rebalance Simulator",
     "📈 Performance Analytics",
+    "💰 Cash Flow Analytics",
 ]
 NAV_DASHBOARD = NAV_LABELS[0]
 NAV_EXCHANGE = NAV_LABELS[3]
@@ -1288,6 +1289,7 @@ NAV_CORRELATION = NAV_LABELS[12]
 NAV_ALERTS = NAV_LABELS[13]
 NAV_REBALANCE = NAV_LABELS[14]
 NAV_PERFORMANCE = NAV_LABELS[15]
+NAV_CASHFLOW = NAV_LABELS[16]
 
 def _go_to_exchange(sym: str) -> None:
     st.session_state["bt_asset"] = sym
@@ -11061,6 +11063,116 @@ def _smart_alerts_build(sim: dict[str, Any], snap: dict[str, Any],
 
 
 
+def render_cash_flow_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
+    """Cash-flow / contribution analytics based on the existing portfolio ledger."""
+    sim = load_sim_state()
+    ensure_portfolio_ledger(sim)
+    ledger = sim.get("portfolio_ledger", []) or []
+    txs = ledger if isinstance(ledger, list) else []
+
+    rows = []
+    for tx in txs:
+        if not isinstance(tx, dict):
+            continue
+        typ = str(tx.get("type", "")).upper()
+        if typ not in {"DEPOSIT", "WITHDRAWAL", "WITHDRAW", "BUY", "SELL"}:
+            continue
+        try:
+            gross = float(tx.get("gross_thb", tx.get("amount_thb", 0.0)) or 0.0)
+            fee = float(tx.get("fee_thb", 0.0) or 0.0)
+            cash_delta = float(tx.get("cash_delta_thb", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        ts = tx.get("timestamp") or tx.get("created_at") or ""
+        try:
+            dt = pd.to_datetime(ts, errors="coerce")
+        except Exception:
+            dt = pd.NaT
+        if pd.isna(dt):
+            continue
+        rows.append({"timestamp": dt, "type": typ, "gross": gross, "fee": fee, "cash_delta": cash_delta,
+                     "asset": str(tx.get("symbol", tx.get("asset", "THB")) or "THB"),
+                     "note": str(tx.get("note", "") or "")})
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        st.info("ยังไม่มี Cash Flow / Contribution ที่บันทึกไว้ใน Portfolio Ledger")
+        return
+
+    dep = df[df["type"] == "DEPOSIT"]
+    wd = df[df["type"].isin(["WITHDRAWAL", "WITHDRAW"])]
+    buys = df[df["type"] == "BUY"]
+    sells = df[df["type"] == "SELL"]
+    total_dep = float(dep["gross"].sum())
+    total_wd = float(wd["gross"].sum())
+    net_contrib = total_dep - total_wd
+    trading_volume = float(buys["gross"].sum() + sells["gross"].sum())
+    fees = float(df["fee"].sum())
+
+    # Current portfolio snapshot for context.
+    try:
+        price_map = {}
+        if isinstance(market_df, pd.DataFrame) and not market_df.empty:
+            for _, r in market_df.iterrows():
+                sym = str(r.get("symbol", "")).upper()
+                px = r.get("price_usd", r.get("price", 0))
+                if sym:
+                    try:
+                        price_map[sym] = float(px) * float(data["USDTHB"].iloc[-1]) if "USDTHB" in data.columns else float(px)
+                    except Exception:
+                        pass
+        snap = portfolio_snapshot(sim, price_map)
+        current_value = float(snap.get("total_value_thb", snap.get("total_value", 0.0)) or 0.0)
+    except Exception:
+        current_value = float(sim.get("customer_thb", 0.0) or 0.0)
+
+    st.markdown("<div class='xs-section-title'>💰 Cash Flow & Contribution Analytics</div>", unsafe_allow_html=True)
+    k = st.columns(5)
+    metric_card(k[0], "เงินฝากสะสม", fmt_baht_full(total_dep))
+    metric_card(k[1], "ถอนสะสม", fmt_baht_full(total_wd), -total_wd if total_wd else 0)
+    metric_card(k[2], "เงินสุทธิที่เติม", fmt_baht_full(net_contrib), net_contrib)
+    metric_card(k[3], "Trading Volume", fmt_baht_full(trading_volume))
+    metric_card(k[4], "Fees", fmt_baht_full(fees), -fees if fees else 0)
+
+    st.caption(f"Portfolio Value ปัจจุบัน: {fmt_baht_full(current_value)} · Net contribution คำนวณจาก Deposit − Withdrawal · ไม่ใช่ผลตอบแทนลงทุน")
+
+    tab1, tab2 = st.tabs(["📅 รายเดือน", "🧾 รายการ Cash Flow"])
+    with tab1:
+        m = df.copy()
+        m["month"] = m["timestamp"].dt.to_period("M").astype(str)
+        monthly = m.groupby("month", as_index=False).agg(
+            Deposits=("gross", lambda x: float(x[m.loc[x.index, "type"].eq("DEPOSIT")].sum())),
+            Withdrawals=("gross", lambda x: float(x[m.loc[x.index, "type"].isin(["WITHDRAWAL", "WITHDRAW"])].sum())),
+            Trading_Volume=("gross", lambda x: float(x[m.loc[x.index, "type"].isin(["BUY", "SELL"])].sum())),
+            Fees=("fee", "sum"),
+        )
+        monthly["Net Contribution"] = monthly["Deposits"] - monthly["Withdrawals"]
+        monthly = monthly.sort_values("month", ascending=False)
+        st.dataframe(monthly.rename(columns={"month":"เดือน", "Deposits":"ฝาก (THB)", "Withdrawals":"ถอน (THB)",
+                                             "Net Contribution":"เงินสุทธิ (THB)", "Trading_Volume":"Trading Volume (THB)", "Fees":"Fees (THB)"}),
+                     hide_index=True, use_container_width=True)
+        fig = go.Figure()
+        chart = monthly.sort_values("month")
+        fig.add_trace(go.Bar(x=chart["month"], y=chart["Net Contribution"], name="Net Contribution"))
+        fig.update_layout(template="plotly_dark", height=300, margin=dict(t=20,b=20),
+                          paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+        st.plotly_chart(fig, use_container_width=True)
+
+    with tab2:
+        view = df.sort_values("timestamp", ascending=False).copy()
+        view["timestamp"] = view["timestamp"].dt.strftime("%Y-%m-%d %H:%M")
+        view["gross"] = view["gross"].map(lambda x: f"{x:,.2f}")
+        view["fee"] = view["fee"].map(lambda x: f"{x:,.2f}")
+        view["cash_delta"] = view["cash_delta"].map(lambda x: f"{x:+,.2f}")
+        view = view.rename(columns={"timestamp":"เวลา", "type":"ประเภท", "asset":"สินทรัพย์", "gross":"มูลค่า (THB)",
+                                    "fee":"Fee (THB)", "cash_delta":"Cash Δ (THB)", "note":"หมายเหตุ"})
+        st.dataframe(view[["เวลา","ประเภท","สินทรัพย์","มูลค่า (THB)","Fee (THB)","Cash Δ (THB)","หมายเหตุ"]],
+                     hide_index=True, use_container_width=True, height=420)
+
+    st.markdown("<div class='xs-section-title'>📌 สิ่งที่ตัวเลขนี้บอก</div>", unsafe_allow_html=True)
+    st.info("Net Contribution คือเงินที่เติมเข้าพอร์ตสุทธิจากการถอน ส่วน Portfolio Value คือมูลค่าพอร์ตปัจจุบัน ทั้งสองตัวเลขไม่ควรถูกตีความว่าเป็นผลตอบแทนจากการลงทุนโดยตรง")
+
+
 def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
     """Portfolio performance analytics derived from stored portfolio snapshots."""
     sim = st.session_state.get("sim", {})
@@ -11957,6 +12069,8 @@ def _main_body() -> None:
             render_rebalance_simulator(cfg, data, market_df)
         elif nav == NAV_PERFORMANCE:
             render_performance_analytics(cfg, data, market_df)
+        elif nav == NAV_CASHFLOW:
+            render_cash_flow_analytics(cfg, data, market_df)
         elif nav == NAV_SIMPLE:
             from simple_backtest import render_simple_backtest
             render_simple_backtest(
