@@ -7624,8 +7624,8 @@ GLOBAL_NEWS_FLOAT_CSS = r'''<style>
     position: fixed !important;
     top: 132px !important;
     right: 22px !important;
-    width: 330px !important;
-    min-width: 330px !important;
+    width: 150px !important;
+    min-width: 150px !important;
     z-index: 1000000 !important;
     margin: 0 !important;
     padding: 0 !important;
@@ -7633,15 +7633,15 @@ GLOBAL_NEWS_FLOAT_CSS = r'''<style>
 
 .st-key-global_news_float [data-testid="stButton"] > button {
     width: 100% !important;
-    min-height: 104px !important;
+    min-height: 48px !important;
     border: 1px solid rgba(252,213,53,.35) !important;
-    border-radius: 16px !important;
+    border-radius: 12px !important;
     background: linear-gradient(135deg, rgba(24,26,32,.98), rgba(18,20,25,.98)) !important;
     color: #EAECEF !important;
     box-shadow: 0 12px 30px rgba(0,0,0,.28) !important;
     text-align: left !important;
-    padding: 18px 20px !important;
-    font-size: 22px !important;
+    padding: 8px 12px !important;
+    font-size: 16px !important;
     font-weight: 800 !important;
 }
 .st-key-global_news_float [data-testid="stButton"] > button:hover {
@@ -7652,14 +7652,14 @@ GLOBAL_NEWS_FLOAT_CSS = r'''<style>
     .st-key-global_news_float {
         top: 76px !important;
         right: 12px !important;
-        width: 170px !important;
-        min-width: 170px !important;
+        width: 120px !important;
+        min-width: 120px !important;
     }
     .st-key-global_news_float [data-testid="stButton"] > button {
-        min-height: 56px !important;
-        padding: 10px 14px !important;
+        min-height: 42px !important;
+        padding: 7px 10px !important;
         border-radius: 12px !important;
-        font-size: 17px !important;
+        font-size: 14px !important;
     }
 }
 </style>'''
