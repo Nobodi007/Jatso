@@ -8709,9 +8709,16 @@ def render_fee_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.
     """Fee analytics derived from the same portfolio ledger used by Wallet."""
     sim = st.session_state.get("sim", {})
     ensure_portfolio_ledger(sim)
-    ledger = sim.get("portfolio_ledger", {}) if isinstance(sim, dict) else {}
-    txs = ledger.get("transactions", []) if isinstance(ledger, dict) else []
-    txs = [t for t in txs if isinstance(t, dict)]
+    # portfolio_ledger is a list of transaction records in this app.
+    # Keep backward compatibility if an older state stores it as a dict.
+    ledger = sim.get("portfolio_ledger", []) if isinstance(sim, dict) else []
+    if isinstance(ledger, list):
+        txs = [t for t in ledger if isinstance(t, dict)]
+    elif isinstance(ledger, dict):
+        txs = ledger.get("transactions", [])
+        txs = [t for t in txs if isinstance(t, dict)]
+    else:
+        txs = []
 
     rows = []
     for t in txs:
