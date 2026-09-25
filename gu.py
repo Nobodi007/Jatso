@@ -8424,8 +8424,7 @@ def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
                         if logo else f'<div class="mobile-home-asset-logo-fallback">{sym[:1]}</div>')
             st.markdown(
                 f'<div class="mobile-home-asset-row">{logo_html}'
-                f'<div class="mobile-home-asset-main"><div class="mobile-home-asset-sym">{sym}</div>'
-                f'<div class="mobile-home-asset-name">{COIN_NAMES.get(sym, sym)} · {h["qty"]:,.6f} {sym}</div></div>'
+                f'<div class="mobile-home-asset-main"><div class="mobile-home-asset-sym">{sym}</div></div>'
                 f'<div class="mobile-home-asset-right">'
                 f'<div class="mobile-home-asset-val">฿{h["value"]:,.0f}</div>'
                 f'<div class="mobile-home-asset-pct {pct_cls}">{pct_txt}</div></div></div>',
@@ -8440,15 +8439,14 @@ def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     )
 
     # ---- เมนูด่วน ----
-    st.markdown('<div class="mobile-home-section-label mobile-home-qa-title">เมนูด่วน</div>', unsafe_allow_html=True)
-    qa1, qa2 = st.columns(2, gap="small")
+    st.markdown('<div class="mobile-home-section-label">เมนูด่วน</div>', unsafe_allow_html=True)
+    qa1, qa2, qa3 = st.columns(3, gap="small")
     with qa1:
         st.button("📊 Backtest", key="mobile_home_qa_bt", use_container_width=True,
                   on_click=_mobile_home_goto, args=(MOBILE_NAV[4],))
     with qa2:
         st.button("💱 Trade", key="mobile_home_qa_trade", use_container_width=True,
                   on_click=_mobile_home_goto, args=(MOBILE_NAV[2],))
-    qa3, _qa_spacer = st.columns(2, gap="small")
     with qa3:
         st.button("💼 Asset", key="mobile_home_qa_asset", use_container_width=True,
                   on_click=_mobile_home_goto, args=(MOBILE_NAV[3],))
@@ -9134,49 +9132,43 @@ def render_mobile_settings() -> None:
 
 
 MOBILE_HOME_CSS = r'''<style>
-.mobile-home-greet { color:#848e9c; font-size:13px; font-weight:600; margin:2px 0 3px; }
-.mobile-home-port-label { color:#848e9c; font-size:12px; margin-top:5px; }
- .mobile-home-port-value { color:#EAECEF; font-size:30px; font-weight:850; line-height:1.12;
+.mobile-home-greet { color:#848e9c; font-size:13px; font-weight:600; margin:4px 0 2px; }
+.mobile-home-port-label { color:#848e9c; font-size:11px; margin-top:6px; }
+.mobile-home-port-value { color:#EAECEF; font-size:32px; font-weight:850; line-height:1.15;
   margin:2px 0 4px; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
-.mobile-home-port-change { font-size:12px; font-weight:700; margin-bottom:12px; }
+.mobile-home-port-change { font-size:13px; font-weight:700; margin-bottom:14px; }
 
-.mobile-home-chart-card { background:#181a20; border:1px solid #2b3139; border-radius:14px;
-  padding:10px 8px 3px; margin:0 0 14px; overflow:hidden; }
-.mobile-home-chart-title { color:#EAECEF; font-size:14px; font-weight:800; margin:0 0 4px; padding-left:4px; }
+.mobile-home-chart-card { background:#181a20; border:1px solid #2b3139; border-radius:16px;
+  padding:12px 10px 4px; margin-bottom:16px; }
+.mobile-home-chart-title { color:#EAECEF; font-size:13px; font-weight:750; margin-bottom:4px; padding-left:4px; }
 .mobile-home-chart-empty { color:#848e9c; font-size:12px; text-align:center; padding:34px 10px; }
 
-.mobile-home-section-label { color:#EAECEF; font-size:15px; font-weight:800; margin:18px 0 9px; padding-left:10px; border-left:3px solid #0ecb81; line-height:1.2; }
-.mobile-home-qa-title { margin-top:20px; }
+.mobile-home-section-label { color:#EAECEF; font-size:14px; font-weight:800; margin:16px 0 8px; }
 
 .mobile-home-asset-row { display:flex; align-items:center; gap:10px; background:#181a20;
-  border:1px solid #2b3139; border-radius:12px; padding:10px 12px; margin-bottom:7px; min-height:52px; box-sizing:border-box; }
+  border:1px solid #2b3139; border-radius:13px; padding:10px 12px; margin-bottom:8px; }
 .mobile-home-asset-logo, .mobile-home-asset-logo-fallback { width:30px; height:30px; border-radius:50%; flex:0 0 30px; }
 .mobile-home-asset-logo { object-fit:contain; background:#20252d; }
 .mobile-home-asset-logo-fallback { display:flex; align-items:center; justify-content:center;
   background:#303640; color:#EAECEF; font-size:14px; font-weight:700; }
 .mobile-home-asset-main { flex:1; min-width:0; }
-.mobile-home-asset-sym { color:#EAECEF; font-size:14px; font-weight:800; line-height:1.2; }
-.mobile-home-asset-name { color:#848e9c; font-size:11px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mobile-home-asset-sym { color:#EAECEF; font-size:13px; font-weight:750; }
 .mobile-home-asset-right { text-align:right; }
 .mobile-home-asset-val { color:#EAECEF; font-size:13px; font-weight:750; font-variant-numeric:tabular-nums; }
 .mobile-home-asset-pct { font-size:11px; font-weight:700; margin-top:2px; }
 
 .mobile-home-cash-row { display:flex; justify-content:space-between; align-items:center;
-  background:#181a20; border:1px solid #2b3139; border-radius:12px; padding:11px 14px;
-  margin:4px 0 18px; color:#848e9c; font-size:13px; font-weight:650; min-height:46px; box-sizing:border-box; }
+  background:#181a20; border:1px solid #2b3139; border-radius:13px; padding:11px 14px;
+  margin:2px 0 16px; color:#848e9c; font-size:13px; font-weight:650; }
 .mobile-home-cash-row b { color:#EAECEF; font-size:14px; font-variant-numeric:tabular-nums; }
 
 .st-key-mobile_home_qa_bt button, .st-key-mobile_home_qa_trade button, .st-key-mobile_home_qa_asset button {
-  width:100% !important; border-radius:12px !important; background:#181a20 !important; border:1px solid #2b3139 !important;
-  color:#EAECEF !important; font-weight:700 !important; font-size:12px !important; min-height:48px !important;
-  margin:0 !important; padding:0 8px !important; box-shadow:none !important;
+  border-radius:12px !important; background:#181a20 !important; border:1px solid #2b3139 !important;
+  color:#EAECEF !important; font-weight:700 !important; font-size:12px !important; min-height:46px !important;
 }
 .st-key-mobile_home_qa_bt button:hover, .st-key-mobile_home_qa_trade button:hover,
 .st-key-mobile_home_qa_asset button:hover {
   border-color:#0ecb81 !important; color:#0ecb81 !important;
-}
-@media (max-width: 900px) {
-  .block-container { padding-top:1.25rem !important; padding-bottom:6.5rem !important; }
 }
 </style>'''
 
@@ -9552,137 +9544,91 @@ def _main_body() -> None:
     if "main_nav" not in st.session_state:
         st.session_state["main_nav"] = NAV_DASHBOARD
 
-    # แถบเมนูหลักยังคงแสดงแท็บเดิมทั้งหมด ยกเว้นข่าวที่ย้ายไปเป็นปุ่มเล็กด้านบน
-    # ใช้ key แยกจาก main_nav เพื่อให้ radio ไม่หายไปเมื่ออยู่หน้า News
-    nav_labels_main = [label for label in NAV_LABELS if label != NAV_NEWS]
-    current_nav = st.session_state.get("main_nav", nav_labels_main[0])
-    if current_nav not in nav_labels_main and current_nav != NAV_NEWS:
-        current_nav = nav_labels_main[0]
+    # ------------------------------------------------------------------
+    # DESKTOP NAV — compact menu / tab launcher
+    # ------------------------------------------------------------------
+    # แทนแถบแท็บยาว ๆ ด้วยปุ่มเล็กเพียงปุ่มเดียว เมื่อกดจึงเปิดรายการ
+    # หน้าทั้งหมดให้เลือก ช่วยลดความรกของ header และยังคงใช้ main_nav เดิม
+    # เพื่อให้ routing / state ของทุกหน้าทำงานเหมือนเดิม
+    nav_labels_all = list(NAV_LABELS)
+    current_nav = st.session_state.get("main_nav", NAV_DASHBOARD)
+    if current_nav not in nav_labels_all:
+        current_nav = NAV_DASHBOARD
         st.session_state["main_nav"] = current_nav
 
     with st.container(key="desktop_navigation"):
-        # Desktop navigation ใช้ st.radio จริง เพื่อให้คลิกและ sync กับ session state ได้
         st.markdown("""
         <style>
-        div[data-testid="stRadio"] {
-            width: fit-content !important;
-            max-width: 100% !important;
-            margin: 0 !important;
-            padding: 0 !important;
+        .st-key-desktop_navigation {
+            margin: 2px 0 14px 0 !important;
         }
-        div[data-testid="stRadio"] > label {
-            display: none !important;
-        }
-        div[data-testid="stRadio"] div[role="radiogroup"] {
-            display: flex !important;
-            flex-direction: row !important;
-            align-items: center !important;
-            justify-content: flex-start !important;
-            width: fit-content !important;
-            max-width: 100% !important;
-            gap: 5px !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            overflow-x: auto !important;
-            overflow-y: hidden !important;
-            scrollbar-width: none !important;
-        }
-        div[data-testid="stRadio"] div[role="radiogroup"]::-webkit-scrollbar {
-            display: none !important;
-        }
-        div[data-testid="stRadio"] div[role="radiogroup"] > label {
-            position: relative !important;
-            flex: 0 0 auto !important;
+        .st-key-desktop_navigation [data-testid="stPopover"] > button {
+            min-height: 38px !important;
             width: auto !important;
-            min-width: 0 !important;
-            max-width: none !important;
-            margin: 0 !important;
-            padding: 4px 24px 4px 7px !important;
-            white-space: nowrap !important;
-            border-radius: 7px !important;
-            background: transparent !important;
+            padding: 6px 14px !important;
+            border: 1px solid #2f3640 !important;
+            border-radius: 10px !important;
+            background: #181a20 !important;
+            color: #EAECEF !important;
+            font-size: 13px !important;
+            font-weight: 700 !important;
+            box-shadow: none !important;
+        }
+        .st-key-desktop_navigation [data-testid="stPopover"] > button:hover {
+            border-color: #0ecb81 !important;
+            background: #20242b !important;
+        }
+        .st-key-desktop_navigation [data-testid="stPopoverBody"] {
+            min-width: 280px !important;
+            max-width: 360px !important;
+            padding: 12px !important;
+            background: #181a20 !important;
+            border: 1px solid #2b3139 !important;
+            border-radius: 14px !important;
+        }
+        .st-key-desktop_navigation [data-testid="stPopoverBody"] [data-testid="stRadio"] label {
+            padding: 9px 10px !important;
+            border-radius: 9px !important;
             color: #b8bac2 !important;
+            font-size: 13px !important;
+        }
+        .st-key-desktop_navigation [data-testid="stPopoverBody"] [data-testid="stRadio"] label:hover {
+            background: rgba(255,255,255,.05) !important;
+            color: #fff !important;
+        }
+        .st-key-desktop_navigation .desktop-current-page {
+            display: inline-flex !important;
+            align-items: center !important;
+            margin-left: 8px !important;
+            color: #848e9c !important;
             font-size: 12px !important;
-            font-weight: 500 !important;
-            line-height: 1.2 !important;
+            vertical-align: middle !important;
         }
-        div[data-testid="stRadio"] div[role="radiogroup"] > label:hover {
-            background: rgba(255,255,255,.055) !important;
-            color: #ffffff !important;
-        }
-
-        /* ซ่อนไอคอนเดิมที่ Streamlit ใส่มาใน radio ทุกตัว */
-        div[data-testid="stRadio"] div[role="radiogroup"] > label > div:not(:last-child),
-        div[data-testid="stRadio"] div[role="radiogroup"] > label svg,
-        div[data-testid="stRadio"] div[role="radiogroup"] > label img {
-            display: none !important;
-        }
-
-        /* แท็บที่เลือก */
-        div[data-testid="stRadio"] div[role="radiogroup"] > label[data-checked="true"],
-        div[data-testid="stRadio"] div[role="radiogroup"] > label:has(input:checked) {
-            position: relative !important;
-            background: #087a3f !important;
-            color: #ffffff !important;
-            font-weight: 600 !important;
-            padding-right: 24px !important;
-            border-radius: 7px !important;
-        }
-
-        /* สามเหลี่ยมเล็กอยู่ข้างใน */
-        div[data-testid="stRadio"] div[role="radiogroup"] > label[data-checked="true"]::after,
-        div[data-testid="stRadio"] div[role="radiogroup"] > label:has(input:checked)::after {
-            content: "" !important;
-            position: absolute !important;
-            right: 8px !important;
-            top: 50% !important;
-            transform: translateY(-50%) !important;
-            width: 0 !important;
-            height: 0 !important;
-            border-top: 4px solid transparent !important;
-            border-bottom: 4px solid transparent !important;
-            border-left: 6px solid #ffffff !important;
-            pointer-events: none !important;
-            background: none !important;
-        }
-
         @media (max-width: 900px) {
-            div[data-testid="stRadio"] div[role="radiogroup"] {
-                width: 100% !important;
-                gap: 2px !important;
-            }
-            div[data-testid="stRadio"] div[role="radiogroup"] > label {
-                padding: 4px 24px 4px 6px !important;
-                font-size: 11px !important;
-            }
+            .st-key-desktop_navigation { display:none !important; }
         }
         </style>
         """, unsafe_allow_html=True)
 
-        if current_nav == NAV_NEWS:
-            selected_nav = st.radio(
-                "เมนูหลัก",
-                nav_labels_main,
-                horizontal=True,
-                index=None,
-                key="main_nav_tabs_news",
-                label_visibility="collapsed",
+        menu_col, current_col = st.columns([1.15, 5.85], vertical_alignment="center")
+        with menu_col:
+            with st.popover("☰ เมนู", use_container_width=False):
+                st.markdown("### ไปยังหน้า")
+                for _nav_item in nav_labels_all:
+                    _active = _nav_item == current_nav
+                    if st.button(
+                        ("●  " if _active else "○  ") + _nav_item,
+                        key=f"desktop_menu_{nav_labels_all.index(_nav_item)}",
+                        use_container_width=True,
+                        type="primary" if _active else "secondary",
+                    ):
+                        st.session_state["main_nav"] = _nav_item
+                        st.rerun()
+        with current_col:
+            st.markdown(
+                f'<span class="desktop-current-page">กำลังอยู่: <b style="color:#EAECEF;margin-left:4px;">{current_nav}</b></span>',
+                unsafe_allow_html=True,
             )
-            nav = selected_nav if selected_nav else NAV_NEWS
-            if selected_nav:
-                st.session_state["main_nav"] = selected_nav
-        else:
-            default_idx = nav_labels_main.index(current_nav)
-            selected_nav = st.radio(
-                "เมนูหลัก",
-                nav_labels_main,
-                horizontal=True,
-                index=default_idx,
-                key="main_nav_tabs",
-                label_visibility="collapsed",
-            )
-            nav = selected_nav
-            st.session_state["main_nav"] = selected_nav
 
     # Mobile UI อยู่ใน shell แยก เพื่อไม่ให้ถูก render บน Desktop
     # แต่ยังคงสร้าง widget ได้ปกติบน Mobile viewport
