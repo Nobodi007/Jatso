@@ -7637,39 +7637,7 @@ MOBILE_CSS = r'''<style>
   .mobile-kicker { color:#848e9c; font-size:11px; margin-bottom:4px; }
   .mobile-big { color:#EAECEF; font-size:25px; line-height:1.15; font-weight:800; font-variant-numeric:tabular-nums; }
   .mobile-grid { display:grid; grid-template-columns:1fr 1fr; gap:9px; margin-bottom:10px; }
-  .mobile-section-title {
-    color:#F5F7FA !important;
-    font-size:17px !important;
-    font-weight:900 !important;
-    line-height:1.35 !important;
-    margin:18px 2px 10px !important;
-    padding:0 0 6px 10px !important;
-    border-left:3px solid #0ecb81 !important;
-    letter-spacing:.1px !important;
-    opacity:1 !important;
-  }
-  .mobile-section-title * {
-    color:#F5F7FA !important;
-    opacity:1 !important;
-  }
-  .mobile-card, .mobile-asset-card, .mobile-mini {
-    color:#EAECEF !important;
-  }
-  .mobile-card b, .mobile-asset-card b, .mobile-mini-value {
-    color:#F5F7FA !important;
-  }
-  /* Streamlit markdown headings on the mobile home page: prevent the
-     section labels from looking sunken/gray and keep spacing consistent. */
-  .st-key-mobile_shell h1,
-  .st-key-mobile_shell h2,
-  .st-key-mobile_shell h3 {
-    color:#F5F7FA !important;
-    opacity:1 !important;
-    line-height:1.3 !important;
-    margin-top:16px !important;
-    margin-bottom:9px !important;
-    font-weight:900 !important;
-  }
+  .mobile-section-title { color:#EAECEF; font-size:15px; font-weight:800; margin:14px 0 9px; }
   .mobile-asset-card { background:#181a20; border:1px solid #2b3139; border-radius:15px; padding:13px; margin-bottom:9px; }
   .mobile-asset-top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
   .mobile-asset-left { display:flex; align-items:center; gap:10px; min-width:0; }
@@ -7806,7 +7774,7 @@ def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     except Exception: pass
     st.markdown('<div class="mobile-page-title">Dashboard</div><div class="mobile-page-sub">ภาพรวม Dealer · Live configuration</div>',unsafe_allow_html=True)
     st.markdown(f'''<div class="mobile-card"><div class="mobile-kicker">Total Capital</div><div class="mobile-big">{_mobile_money(cap)}</div><div class="mobile-kicker" style="margin-top:7px">{asset} · Inventory target {_mobile_money(target)}</div></div><div class="mobile-grid"><div class="mobile-mini"><div class="mobile-mini-label">P&L จาก Ledger</div><div class="mobile-mini-value {'mobile-green' if pnl>=0 else 'mobile-red'}">{_mobile_money(pnl,True)}</div></div><div class="mobile-mini"><div class="mobile-mini-label">NC Buffer</div><div class="mobile-mini-value {'mobile-green' if ncbuf>=0 else 'mobile-red'}">{_mobile_money(ncbuf,True)}</div></div><div class="mobile-mini"><div class="mobile-mini-label">CEX Margin</div><div class="mobile-mini-value">{_mobile_money(cex)}</div></div><div class="mobile-mini"><div class="mobile-mini-label">FX Used</div><div class="mobile-mini-value">${fx:,.0f} / ${fxlim:,.0f}</div></div></div><div class="mobile-card"><div class="mobile-kicker">Customer Liabilities</div><div class="mobile-big">{_mobile_money(liab)}</div></div>''',unsafe_allow_html=True)
-    st.markdown('<div class="mobile-section-title">📌 สถานะล่าสุด</div>', unsafe_allow_html=True)
+    st.markdown('### 📌 สถานะล่าสุด')
     orders=sim.get('orders',[]) if isinstance(sim,dict) else []
     if orders:
         for o in reversed(orders[-3:]):
@@ -7814,19 +7782,6 @@ def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
             st.markdown(f'<div class="mobile-card"><b style="color:#EAECEF">{sym}</b> · {side}<span style="float:right;color:#848e9c">{amount}</span></div>',unsafe_allow_html=True)
     else: st.caption('ยังไม่มีออเดอร์ล่าสุด')
 
-    # Quick menu — จัดปุ่มให้เป็นกริด 3 ช่องบนมือถือและอ่านง่าย
-    st.markdown('<div class="mobile-section-title">⚡ เมนูด่วน</div>', unsafe_allow_html=True)
-    quick = st.columns(3, gap="small")
-    quick_items = [
-        ("📊 Backtest", MOBILE_NAV[3] if len(MOBILE_NAV) > 3 else None),
-        ("⇄ Trade", MOBILE_NAV[1] if len(MOBILE_NAV) > 1 else None),
-        ("▣ Asset", MOBILE_NAV[2] if len(MOBILE_NAV) > 2 else None),
-    ]
-    for col, (label, nav_key) in zip(quick, quick_items):
-        with col:
-            if nav_key and st.button(label, key=f"quick_{nav_key}", use_container_width=True):
-                st.session_state["mobile_nav"] = nav_key
-                st.rerun()
 
 
 def _apply_mobile_pct(pct_key: str, target_key: str, base: float, kind: str) -> None:
@@ -8378,21 +8333,8 @@ def _main_body() -> None:
     # แต่ยังคงสร้าง widget ได้ปกติบน Mobile viewport
     with st.container(key="mobile_shell"):
         mobile_selected = st.session_state.get("mobile_nav", MOBILE_NAV[0])
-
-        # ป้องกัน ValueError หลังมีการเปลี่ยนรายการเมนู Mobile แล้ว session
-        # เดิมยังเก็บค่าจากเมนูเวอร์ชันเก่าไว้
-        if mobile_selected not in MOBILE_NAV:
-            mobile_selected = MOBILE_NAV[0]
-            st.session_state["mobile_nav"] = mobile_selected
-
-        mobile_nav = st.radio(
-            "Mobile navigation",
-            MOBILE_NAV,
-            index=MOBILE_NAV.index(mobile_selected),
-            horizontal=True,
-            key="mobile_nav",
-            label_visibility="collapsed",
-        )
+        mobile_nav = st.radio("Mobile navigation", MOBILE_NAV, index=MOBILE_NAV.index(mobile_selected),
+                              horizontal=True, key="mobile_nav", label_visibility="collapsed")
         # สำคัญ: mobile_nav เป็น widget key แล้ว Streamlit จะ sync ค่าให้เอง
         # ห้ามเขียน st.session_state["mobile_nav"] ซ้ำหลังสร้าง widget
 
