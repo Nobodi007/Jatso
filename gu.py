@@ -346,6 +346,12 @@ def fmt_num(value: Any, force_sign: bool = False) -> str:
 def fmt_baht(value: Any, force_sign: bool = False) -> str:
     return f"฿ {fmt_num(value, force_sign)}"
 
+def fmt_baht_full(value: Any, force_sign: bool = False) -> str:
+    """Portfolio/Wallet money display: never abbreviate to K/M/B."""
+    value = 0.0 if pd.isna(value) else float(value)
+    sign = "-" if value < 0 else ("+" if force_sign else "")
+    return f"฿ {sign}{abs(value):,.2f}"
+
 def fmt_coin(value: float, symbol: str = "") -> str:
     v = abs(float(value))
     d = 6 if v < 1 else (4 if v < 1000 else 2)
@@ -7277,6 +7283,16 @@ def _portfolio_cash_card(cash_thb: float, total_value: float) -> None:
         )
 
 
+def _portfolio_metric_card(col, label: str, value: str, tone: str = "") -> None:
+    col.markdown(
+        f'<div class="portfolio-metric-card {tone}">'
+        f'<div class="portfolio-metric-label">{_html.escape(label)}</div>'
+        f'<div class="portfolio-metric-value">{_html.escape(value)}</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
     if data.empty:
         st.error("⚠️ ไม่สามารถโหลดข้อมูลได้")
@@ -7305,15 +7321,21 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         "<h2>Portfolio & Wallet</h2>"
         "<p>สินทรัพย์ของคุณ · ต้นทุน · P&amp;L · Allocation</p></div>"
         "<div class=\"portfolio-hero-value\"><span>มูลค่าพอร์ตรวม</span>"
-        f"<strong>{fmt_baht(snap['total_value_thb'])}</strong></div></div>",
+        f"<strong>{fmt_baht_full(snap['total_value_thb'])}</strong></div></div>",
         unsafe_allow_html=True,
     )
 
-    m1, m2, m3, m4 = st.columns(4)
-    metric_card(m1, "เงินสด THB", fmt_baht(snap["cash_thb"]))
-    metric_card(m2, "ต้นทุนคงเหลือ", fmt_baht(snap["invested_cost_thb"]))
-    metric_card(m3, "Unrealized P&L", fmt_baht(snap["unrealized_pnl_thb"], True))
-    metric_card(m4, "Realized P&L", fmt_baht(snap["realized_pnl_thb"], True))
+    m1, m2, m3, m4 = st.columns(4, gap="small")
+    _portfolio_metric_card(m1, "เงินสด THB", fmt_baht_full(snap["cash_thb"]))
+    _portfolio_metric_card(m2, "ต้นทุนคงเหลือ", fmt_baht_full(snap["invested_cost_thb"]))
+    _portfolio_metric_card(
+        m3, "Unrealized P&L", fmt_baht_full(snap["unrealized_pnl_thb"], True),
+        _portfolio_pnl_class(snap["unrealized_pnl_thb"]),
+    )
+    _portfolio_metric_card(
+        m4, "Realized P&L", fmt_baht_full(snap["realized_pnl_thb"], True),
+        _portfolio_pnl_class(snap["realized_pnl_thb"]),
+    )
 
     st.markdown(
         f'<div class="portfolio-summary-strip">'
@@ -9754,6 +9776,23 @@ MOBILE_HOME_CSS = r'''<style>
 
 PORTFOLIO_WALLET_CSS = """
 <style>
+.portfolio-metric-card {
+    position:relative; overflow:hidden; min-height:96px; padding:16px 17px 14px;
+    background:linear-gradient(145deg,#181b22 0%,#111318 100%);
+    border:1px solid #2b3139; border-radius:14px;
+    box-shadow:0 8px 24px rgba(0,0,0,.12);
+}
+.portfolio-metric-card::before {
+    content:""; position:absolute; left:0; top:0; bottom:0; width:3px;
+    background:#3a414c; opacity:.8;
+}
+.portfolio-metric-card.up::before { background:#0ecb81; }
+.portfolio-metric-card.down::before { background:#f6465d; }
+.portfolio-metric-label { color:#8b95a5; font-size:.73rem; font-weight:650; letter-spacing:.01em; margin-bottom:8px; }
+.portfolio-metric-value { color:#f0f2f5; font-size:1.22rem; line-height:1.15; font-weight:800; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.portfolio-metric-card.up .portfolio-metric-value { color:#0ecb81; }
+.portfolio-metric-card.down .portfolio-metric-value { color:#f6465d; }
+
 .portfolio-wallet-hero {
     display:flex; justify-content:space-between; align-items:flex-end; gap:18px;
     padding:18px 20px; margin:4px 0 14px;
@@ -9810,6 +9849,8 @@ PORTFOLIO_WALLET_CSS = """
 .portfolio-watch-row b.up { color:#0ecb81 !important; }
 .portfolio-watch-row b.down { color:#f6465d !important; }
 @media (max-width: 900px) {
+    .portfolio-metric-card { min-height:88px; padding:13px 14px; }
+    .portfolio-metric-value { font-size:1.02rem; }
     .portfolio-wallet-hero { align-items:flex-start; flex-direction:column; }
     .portfolio-hero-value { text-align:left; }
     [class*="st-key-portfolio_asset_card_"] .portfolio-wallet-row { grid-template-columns:minmax(180px,2fr) repeat(2,minmax(95px,1fr)); }
@@ -9820,6 +9861,8 @@ PORTFOLIO_WALLET_CSS = """
     .portfolio-watch-row > div:last-child { display:none; }
 }
 @media (max-width: 560px) {
+    .portfolio-metric-card { min-height:82px; }
+    .portfolio-metric-value { font-size:.96rem; }
     .portfolio-wallet-hero { padding:14px; }
     .portfolio-wallet-hero h2 { font-size:1.25rem; }
     .portfolio-hero-value strong { font-size:1.15rem; }
