@@ -1704,19 +1704,19 @@ THEME_CSS = """
     /* ---------- AI Chat (ปุ่มลอย + ฟองแชท) ---------- */
     .st-key-ai_fab {
     position: fixed !important;
-    bottom: 78px; right: 24px;
-    z-index: 999995 !important;
-    width: auto !important;
-    }
+    bottom: 78px; left: 24px; right: auto;
+    z-index: 999990; width: auto !important;
+}
     .st-key-ai_fab button {
         border-radius: 999px !important; padding: 10px 20px !important;
         background: #0ecb81 !important; border: none !important;
         box-shadow: 0 8px 24px rgba(14,203,129,.35) !important;
     }
-    @media (max-width: 768px) {
+   @media (max-width: 768px) {
     .st-key-ai_fab {
         bottom: calc(64px + env(safe-area-inset-bottom, 0px)) !important;
-        right: 16px !important;
+        left: 16px !important;
+        right: auto !important;
         z-index: 999995 !important;
     }
 }
