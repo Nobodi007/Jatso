@@ -53,7 +53,7 @@ API_BASE = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
 
-BOT_BUILD = "2026-09-26-stable-v2-alert"
+BOT_BUILD = "2026-09-26-stable-v3-single-send"
 
 ALLOWED_EMAILS = {
     e.strip().lower()
@@ -2581,6 +2581,26 @@ def handle_command(chat_id: int, text: str) -> str:
 # Main polling loop
 # =========================================================
 
+# กันการส่งคำตอบซ้ำจาก update เดิมภายใน process เดียว
+# และช่วยกรองกรณี Telegram/network retry ที่ทำให้คำสั่งเดียวถูกประมวลผลซ้ำ
+_LAST_HANDLED_UPDATES: dict[int, float] = {}
+_LAST_SENT_RESPONSES: dict[tuple[int, str], float] = {}
+
+def _should_send_response(chat_id: int, text: str, now: float, window: float = 3.0) -> bool:
+    key = (int(chat_id), str(text).strip())
+    previous = _LAST_SENT_RESPONSES.get(key)
+    if previous is not None and (now - previous) < window:
+        print(f"[dedup] skip duplicate response for chat={chat_id}")
+        return False
+    _LAST_SENT_RESPONSES[key] = now
+    # cleanup
+    if len(_LAST_SENT_RESPONSES) > 500:
+        cutoff = now - 60.0
+        for k, ts in list(_LAST_SENT_RESPONSES.items()):
+            if ts < cutoff:
+                _LAST_SENT_RESPONSES.pop(k, None)
+    return True
+
 def main_loop() -> None:
     validate_config()
     _acquire_bot_lock()
@@ -2610,13 +2630,15 @@ def main_loop() -> None:
             for upd in updates:
                 update_id = upd.get("update_id")
                 if update_id is not None:
-                    if update_id in seen_updates:
+                    uid = int(update_id)
+                    if uid in seen_updates:
+                        print(f"[dedup] skip duplicate update_id={uid}")
                         continue
-                    seen_updates.add(update_id)
+                    seen_updates.add(uid)
                     # กัน memory โตไม่จบ
                     if len(seen_updates) > 2000:
                         seen_updates = set(sorted(seen_updates)[-1000:])
-                    offset = int(update_id) + 1
+                    offset = uid + 1
 
                 msg = upd.get("message") or {}
                 chat = msg.get("chat") or {}
@@ -2633,7 +2655,9 @@ def main_loop() -> None:
                     reply = "❌ เกิดข้อผิดพลาดภายใน Bot กรุณาลองใหม่อีกครั้ง"
 
                 try:
-                    send_message(int(chat_id), reply)
+                    send_now = time.monotonic()
+                    if _should_send_response(int(chat_id), reply, send_now):
+                        send_message(int(chat_id), reply)
                 except Exception as exc:
                     print(f"[sendMessage] error: {exc}")
 
