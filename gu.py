@@ -7817,13 +7817,14 @@ def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     # Quick menu — จัดปุ่มให้เป็นกริด 3 ช่องบนมือถือและอ่านง่าย
     st.markdown('<div class="mobile-section-title">⚡ เมนูด่วน</div>', unsafe_allow_html=True)
     quick = st.columns(3, gap="small")
-    for col, label, nav_key in zip(
-        quick,
-        ["📊 Backtest", "⇄ Trade", "▣ Asset"],
-        [MOBILE_NAV[3], MOBILE_NAV[1], MOBILE_NAV[2]],
-    ):
+    quick_items = [
+        ("📊 Backtest", MOBILE_NAV[3] if len(MOBILE_NAV) > 3 else None),
+        ("⇄ Trade", MOBILE_NAV[1] if len(MOBILE_NAV) > 1 else None),
+        ("▣ Asset", MOBILE_NAV[2] if len(MOBILE_NAV) > 2 else None),
+    ]
+    for col, (label, nav_key) in zip(quick, quick_items):
         with col:
-            if st.button(label, key=f"quick_{nav_key}", use_container_width=True):
+            if nav_key and st.button(label, key=f"quick_{nav_key}", use_container_width=True):
                 st.session_state["mobile_nav"] = nav_key
                 st.rerun()
 
@@ -8377,8 +8378,21 @@ def _main_body() -> None:
     # แต่ยังคงสร้าง widget ได้ปกติบน Mobile viewport
     with st.container(key="mobile_shell"):
         mobile_selected = st.session_state.get("mobile_nav", MOBILE_NAV[0])
-        mobile_nav = st.radio("Mobile navigation", MOBILE_NAV, index=MOBILE_NAV.index(mobile_selected),
-                              horizontal=True, key="mobile_nav", label_visibility="collapsed")
+
+        # ป้องกัน ValueError หลังมีการเปลี่ยนรายการเมนู Mobile แล้ว session
+        # เดิมยังเก็บค่าจากเมนูเวอร์ชันเก่าไว้
+        if mobile_selected not in MOBILE_NAV:
+            mobile_selected = MOBILE_NAV[0]
+            st.session_state["mobile_nav"] = mobile_selected
+
+        mobile_nav = st.radio(
+            "Mobile navigation",
+            MOBILE_NAV,
+            index=MOBILE_NAV.index(mobile_selected),
+            horizontal=True,
+            key="mobile_nav",
+            label_visibility="collapsed",
+        )
         # สำคัญ: mobile_nav เป็น widget key แล้ว Streamlit จะ sync ค่าให้เอง
         # ห้ามเขียน st.session_state["mobile_nav"] ซ้ำหลังสร้าง widget
 
