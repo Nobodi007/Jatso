@@ -11531,6 +11531,22 @@ def render_rebalance_simulator(cfg: dict[str, Any], data: pd.DataFrame,
     .rb-value{font-size:1.25rem;font-weight:800;color:#eaecef;margin-top:4px}
     .rb-note{font-size:.78rem;color:#848e9c}
     .rb-pill{display:inline-block;padding:4px 9px;border-radius:999px;background:#20242b;color:#c4cad3;font-size:.72rem}
+    .rb-table-wrap{margin-top:10px;border:1px solid #2b3139;border-radius:16px;overflow:hidden;background:#101318;box-shadow:0 8px 24px rgba(0,0,0,.16)}
+    .rb-table-head,.rb-table-row{display:grid;grid-template-columns:1.65fr .82fr .82fr 1.22fr 1.22fr 1.08fr;gap:0;align-items:center}
+    .rb-table-head{background:linear-gradient(180deg,#20242b,#191c22);color:#8f99a8;font-size:.72rem;font-weight:800;letter-spacing:.03em;text-transform:uppercase;border-bottom:1px solid #2b3139}
+    .rb-table-head>div,.rb-table-row>div{padding:13px 14px;min-width:0}
+    .rb-table-row{border-bottom:1px solid #252a31;transition:background .15s ease}
+    .rb-table-row:last-child{border-bottom:0}
+    .rb-table-row:hover{background:#171b21}
+    .rb-asset-cell{display:flex;align-items:center;gap:10px}
+    .rb-asset-cell b{display:block;color:#eaecef;font-size:.88rem;font-weight:800}
+    .rb-asset-cell small,.rb-table-row small{display:block;color:#737e8e;font-size:.67rem;margin-top:3px}
+    .rb-main-number{display:block;color:#eaecef;font-size:.82rem;font-weight:750;font-variant-numeric:tabular-nums;white-space:nowrap}
+    .rb-pos{color:#0ecb81 !important}
+    .rb-neg{color:#f6465d !important}
+    .rb-zero{color:#848e9c !important}
+    @media (max-width:900px){.rb-table-wrap{overflow-x:auto}.rb-table-head,.rb-table-row{min-width:860px}}
+    @media (max-width:560px){.rb-table-head,.rb-table-row{min-width:820px}.rb-table-head>div,.rb-table-row>div{padding:11px 10px}}
     </style>
     """, unsafe_allow_html=True)
 
@@ -11554,7 +11570,49 @@ def render_rebalance_simulator(cfg: dict[str, Any], data: pd.DataFrame,
     st.markdown("### 🎯 Target Allocation")
     st.caption("ตั้งเป้าหมายเป็นเปอร์เซ็นต์ ระบบจะปรับ THB เป็นตัว residual เพื่อให้รวม 100%")
 
-    symbols = [str(r.get("symbol","")).upper() for r in rows if r.get("symbol")]
+    # Build the asset list defensively.  Some older session states can have
+    # holdings in `customer_coins` even when the normalized ledger snapshot
+    # does not carry the expected alias.  Rebalance must still render the
+    # target-allocation controls in that case.
+    symbols = []
+    for r in rows:
+        sym = str(r.get("symbol") or r.get("asset") or "").upper().strip()
+        if sym and sym not in symbols:
+            symbols.append(sym)
+
+    if not symbols:
+        cust_coins = sim.get("customer_coins", {}) if isinstance(sim, dict) else {}
+        if isinstance(cust_coins, dict):
+            for sym, qty in cust_coins.items():
+                try:
+                    if float(qty or 0) > 0:
+                        sym = str(sym).upper().strip()
+                        if sym and sym != "THB" and sym not in symbols:
+                            symbols.append(sym)
+                except (TypeError, ValueError):
+                    continue
+
+        # Last-resort rows for legacy wallet states.  This is local to the
+        # Rebalance sandbox and does not modify the real portfolio state.
+        if symbols:
+            row_by_symbol = {str(r.get("symbol") or r.get("asset") or "").upper(): r for r in rows}
+            for sym in symbols:
+                if sym in row_by_symbol:
+                    continue
+                try:
+                    qty = float(cust_coins.get(sym, 0) or 0)
+                except (TypeError, ValueError):
+                    qty = 0.0
+                px = float(price_map.get(sym, 0.0) or 0.0)
+                rows.append({
+                    "symbol": sym,
+                    "asset": sym,
+                    "qty": qty,
+                    "market_value_thb": qty * px,
+                    "market_value": qty * px,
+                    "allocation_pct": (qty * px / total * 100.0) if total > 0 else 0.0,
+                })
+
     target = {}
     if not symbols:
         st.info("ยังไม่มีสินทรัพย์ใน Portfolio สำหรับจำลอง Rebalance")
@@ -11600,6 +11658,7 @@ def render_rebalance_simulator(cfg: dict[str, Any], data: pd.DataFrame,
         return
 
     st.markdown("### 📊 Scenario")
+    st.caption("ภาพเปรียบเทียบ Allocation ปัจจุบันกับเป้าหมาย พร้อมโลโก้เหรียญและจำนวนเงินที่ต้องปรับใน Simulation")
     scenario_rows = []
     for r in rows:
         sym = str(r["symbol"]).upper()
@@ -11619,14 +11678,52 @@ def render_rebalance_simulator(cfg: dict[str, Any], data: pd.DataFrame,
 
     scenario_df = pd.DataFrame(scenario_rows)
     if not scenario_df.empty:
-        def _fmt_change(v):
-            return f"{float(v):+,.2f}"
-        show_df = scenario_df.copy()
-        for col in ["Current %", "Target %"]:
-            show_df[col] = show_df[col].map(lambda x: f"{x:.2f}%")
-        for col in ["Current Value", "Target Value", "Change"]:
-            show_df[col] = show_df[col].map(_fmt_change)
-        st.dataframe(show_df, use_container_width=True, hide_index=True)
+        def _rb_money(v):
+            return f"฿{float(v):,.2f}"
+
+        def _rb_pct(v):
+            return f"{float(v):.2f}%"
+
+        def _rb_change(v):
+            val = float(v)
+            cls = "rb-pos" if val > 0 else ("rb-neg" if val < 0 else "rb-zero")
+            sign = "+" if val > 0 else ""
+            return f'<span class="{cls}">{sign}฿{val:,.2f}</span>'
+
+        table_rows = []
+        for _, rr in scenario_df.iterrows():
+            sym = str(rr["Asset"]).upper()
+            logo = coin_icon_html(sym, 34)
+            name = _html.escape(str(COIN_NAMES.get(sym, sym)))
+            cur_pct = float(rr["Current %"])
+            tgt_pct = float(rr["Target %"])
+            cur_val = float(rr["Current Value"])
+            tgt_val = float(rr["Target Value"])
+            delta = float(rr["Change"])
+            diff_pct = tgt_pct - cur_pct
+            diff_cls = "rb-pos" if diff_pct > 0 else ("rb-neg" if diff_pct < 0 else "rb-zero")
+            diff_sign = "+" if diff_pct > 0 else ""
+            table_rows.append(
+                f'<div class="rb-table-row">'
+                f'<div class="rb-asset-cell">{logo}<div><b>{_html.escape(sym)}</b><small>{name}</small></div></div>'
+                f'<div><span class="rb-main-number">{_rb_pct(cur_pct)}</span><small>Current</small></div>'
+                f'<div><span class="rb-main-number">{_rb_pct(tgt_pct)}</span><small>Target</small></div>'
+                f'<div><span class="rb-main-number">{_rb_money(cur_val)}</span><small>มูลค่าปัจจุบัน</small></div>'
+                f'<div><span class="rb-main-number">{_rb_money(tgt_val)}</span><small>มูลค่าเป้าหมาย</small></div>'
+                f'<div>{_rb_change(delta)}<small class="{diff_cls}">{diff_sign}{diff_pct:.2f} จุด</small></div>'
+                f'</div>'
+            )
+
+        st.markdown(
+            '<div class="rb-table-wrap">'
+            '<div class="rb-table-head">'
+            '<div>Asset</div><div>Current %</div><div>Target %</div>'
+            '<div>Current Value</div><div>Target Value</div><div>Change</div>'
+            '</div>'
+            + ''.join(table_rows) +
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
     st.markdown("### 🧾 Simulated Summary")
     target_cash = total * cash_target / 100.0
