@@ -1267,6 +1267,10 @@ NAV_LABELS = [
     "🧠 Portfolio Intelligence",
     "🧪 What-if Simulator",
     "📓 Trading Journal",
+    "📅 Portfolio Calendar",
+    "💸 Fee Analytics",
+    "🔗 Correlation & Diversification",
+    "🔔 Smart Alerts",
 ]
 NAV_DASHBOARD = NAV_LABELS[0]
 NAV_EXCHANGE = NAV_LABELS[3]
@@ -1276,6 +1280,10 @@ NAV_RISK = NAV_LABELS[6]
 NAV_INTELLIGENCE = NAV_LABELS[7]
 NAV_WHATIF = NAV_LABELS[8]
 NAV_JOURNAL = NAV_LABELS[9]
+NAV_CALENDAR = NAV_LABELS[10]
+NAV_FEES = NAV_LABELS[11]
+NAV_CORRELATION = NAV_LABELS[12]
+NAV_ALERTS = NAV_LABELS[13]
 
 def _go_to_exchange(sym: str) -> None:
     st.session_state["bt_asset"] = sym
@@ -7842,6 +7850,145 @@ def _journal_save(sim: dict[str, Any], tx_id: str, reason: str, tags: list[str],
     save_sim_state(sim)
 
 
+
+
+def _portfolio_snapshots_init(sim: dict[str, Any]) -> list[dict[str, Any]]:
+    snapshots = sim.setdefault("portfolio_snapshots", [])
+    if not isinstance(snapshots, list):
+        snapshots = []
+        sim["portfolio_snapshots"] = snapshots
+    return snapshots
+
+
+def _record_portfolio_snapshot(sim: dict[str, Any], snap: dict[str, Any], *, force: bool = False) -> dict[str, Any]:
+    snapshots = _portfolio_snapshots_init(sim)
+    now = datetime.now(timezone.utc)
+    day = now.date().isoformat()
+    existing = next((x for x in snapshots if isinstance(x, dict) and str(x.get("date", ""))[:10] == day), None)
+    payload = {
+        "date": day,
+        "timestamp": now.isoformat(),
+        "total_value_thb": float(snap.get("total_value_thb", 0.0) or 0.0),
+        "cash_thb": float(snap.get("cash_thb", 0.0) or 0.0),
+        "invested_cost_thb": float(snap.get("invested_cost_thb", 0.0) or 0.0),
+        "unrealized_pnl_thb": float(snap.get("unrealized_pnl_thb", 0.0) or 0.0),
+        "realized_pnl_thb": float(snap.get("realized_pnl_thb", 0.0) or 0.0),
+        "fees_thb": float(snap.get("fees_thb", 0.0) or 0.0),
+        "total_pnl_thb": float(snap.get("total_pnl_thb", 0.0) or 0.0),
+        "pnl_pct": float(snap.get("pnl_pct", 0.0) or 0.0),
+        "assets": [
+            {
+                "asset": str(r.get("asset", "")).upper(),
+                "qty": float(r.get("qty", 0.0) or 0.0),
+                "market_value": float(r.get("market_value", 0.0) or 0.0),
+                "allocation_pct": float(r.get("allocation_pct", 0.0) or 0.0),
+                "unrealized_pnl": float(r.get("unrealized_pnl", 0.0) or 0.0),
+            }
+            for r in snap.get("rows", []) if isinstance(r, dict)
+        ],
+    }
+    if existing is None:
+        snapshots.append(payload)
+        changed = True
+    else:
+        changed = force or abs(float(existing.get("total_value_thb", 0.0) or 0.0) - payload["total_value_thb"]) > 0.005
+        if changed:
+            existing.update(payload)
+    if changed:
+        snapshots.sort(key=lambda x: str(x.get("date", "")))
+        save_sim_state(sim)
+    return payload
+
+
+def _snapshot_for_date(snapshots: list[dict[str, Any]], day: str) -> Optional[dict[str, Any]]:
+    return next((x for x in snapshots if isinstance(x, dict) and str(x.get("date", ""))[:10] == day), None)
+
+
+def render_portfolio_calendar(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
+    sim = st.session_state.get("sim", {})
+    ensure_portfolio_ledger(sim)
+    if data.empty:
+        st.error("⚠️ ไม่สามารถโหลดข้อมูลได้")
+        return
+    current_date_val = pd.to_datetime(data.index[-1])
+    usdthb_current = float(data.loc[current_date_val, "USDTHB"])
+    price_thb_map = {"THB": 1.0}
+    if market_df is not None and not market_df.empty:
+        for _, row in market_df.iterrows():
+            try:
+                price_thb_map[str(row["symbol"]).upper()] = float(row["price_usd"]) * usdthb_current
+            except (TypeError, ValueError, KeyError):
+                pass
+    asset = str(cfg.get("asset", "BTC")).upper()
+    if "Global_USD" in data.columns:
+        try:
+            price_thb_map[asset] = float(data.loc[current_date_val, "Global_USD"]) * usdthb_current
+        except (TypeError, ValueError, KeyError):
+            pass
+    snap = portfolio_snapshot(sim, price_thb_map)
+    _record_portfolio_snapshot(sim, snap)
+    snapshots = _portfolio_snapshots_init(sim)
+
+    st.markdown("""
+    <style>
+    .cal-hero{padding:26px 28px;border:1px solid #2b3139;border-radius:20px;background:linear-gradient(135deg,#171a20,#0f1115 65%,#151a1d);margin-bottom:16px}
+    .cal-eyebrow{font-size:.7rem;letter-spacing:.18em;font-weight:800;color:#848e9c}
+    .cal-hero h2{margin:5px 0;color:#f1f3f5;font-size:1.8rem}.cal-hero p{margin:0;color:#8d96a5;font-size:.86rem}
+    .cal-card{border:1px solid #2b3139;border-radius:16px;background:#0f1115;padding:18px;margin-bottom:14px}
+    .cal-stat{font-size:1.45rem;font-weight:850;color:#eaecef}.cal-label{color:#848e9c;font-size:.7rem;text-transform:uppercase;letter-spacing:.05em}
+    .cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
+    .cal-head{color:#687282;font-size:.7rem;text-align:center;padding:5px}
+    .cal-day{min-height:88px;border:1px solid #252b33;border-radius:10px;background:#111419;padding:8px;overflow:hidden}
+    .cal-day.empty{background:transparent;border-color:transparent}.cal-day.has{background:#12161b}
+    .cal-date{font-size:.72rem;color:#848e9c;font-weight:800}.cal-value{font-size:.82rem;font-weight:800;color:#eaecef;margin-top:8px}
+    .cal-pnl{font-size:.7rem;margin-top:3px;font-weight:750}.cal-pos{color:#0ecb81}.cal-neg{color:#f6465d}.cal-flat{color:#848e9c}
+    .cal-detail{display:flex;justify-content:space-between;gap:14px;padding:12px 0;border-bottom:1px solid #1f232a}.cal-detail:last-child{border-bottom:0}
+    @media(max-width:700px){.cal-grid{gap:3px}.cal-day{min-height:72px;padding:6px}.cal-value{font-size:.68rem}.cal-pnl{font-size:.62rem}}
+    </style>
+    """, unsafe_allow_html=True)
+    st.markdown('<div class="cal-hero"><div class="cal-eyebrow">PORTFOLIO HISTORY</div><h2>📅 Portfolio Calendar</h2><p>ดูมูลค่าพอร์ตและ P&L รายวันจาก Snapshot ที่ระบบบันทึกไว้</p></div>', unsafe_allow_html=True)
+
+    c1,c2,c3,c4=st.columns(4)
+    c1.markdown(f'<div class="cal-card"><div class="cal-label">CURRENT VALUE</div><div class="cal-stat">฿{snap["total_value_thb"]:,.2f}</div></div>', unsafe_allow_html=True)
+    c2.markdown(f'<div class="cal-card"><div class="cal-label">UNREALIZED P&L</div><div class="cal-stat">฿{snap["unrealized_pnl_thb"]:+,.2f}</div></div>', unsafe_allow_html=True)
+    c3.markdown(f'<div class="cal-card"><div class="cal-label">REALIZED P&L</div><div class="cal-stat">฿{snap["realized_pnl_thb"]:+,.2f}</div></div>', unsafe_allow_html=True)
+    c4.markdown(f'<div class="cal-card"><div class="cal-label">SNAPSHOTS</div><div class="cal-stat">{len(snapshots):,}</div></div>', unsafe_allow_html=True)
+
+    if st.button("📸 บันทึก Snapshot ตอนนี้", key="portfolio_manual_snapshot", use_container_width=True):
+        _record_portfolio_snapshot(sim, snap, force=True)
+        st.toast("บันทึก Portfolio Snapshot แล้ว", icon="📸")
+        st.rerun()
+
+    today = datetime.now(timezone.utc).date()
+    default_month = pd.Timestamp(today.replace(day=1))
+    month_value = st.date_input("เดือนที่ต้องการดู", value=today, key="portfolio_calendar_month")
+    month_start = pd.Timestamp(month_value).replace(day=1)
+    next_month = month_start + pd.offsets.MonthBegin(1)
+    days_in_month = (next_month - month_start).days
+    start_weekday = month_start.weekday()
+    month_days = [month_start + pd.Timedelta(days=i) for i in range(days_in_month)]
+    by_day = {str(x.get("date", ""))[:10]: x for x in snapshots if isinstance(x, dict)}
+
+    st.markdown('<div class="cal-card"><h4 style="margin:0 0 12px;color:#eaecef">'+month_start.strftime('%B %Y')+'</h4><div class="cal-grid">' + ''.join(f'<div class="cal-head">{d}</div>' for d in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']), unsafe_allow_html=True)
+    cells=[]
+    for _ in range(start_weekday): cells.append('<div class="cal-day empty"></div>')
+    for d in month_days:
+        key=d.strftime('%Y-%m-%d'); s=by_day.get(key)
+        if not s:
+            cells.append(f'<div class="cal-day"><div class="cal-date">{d.day}</div><div class="cal-pnl cal-flat">No snapshot</div></div>')
+            continue
+        pnl=float(s.get('total_pnl_thb',0) or 0); cls='cal-pos' if pnl>0 else ('cal-neg' if pnl<0 else 'cal-flat')
+        cells.append(f'<div class="cal-day has"><div class="cal-date">{d.day}</div><div class="cal-value">฿{float(s.get("total_value_thb",0) or 0):,.0f}</div><div class="cal-pnl {cls}">P&L ฿{pnl:+,.0f}</div></div>')
+    st.markdown(''.join(cells)+'</div></div>', unsafe_allow_html=True)
+
+    available=sorted([str(x.get('date',''))[:10] for x in snapshots if isinstance(x,dict) and x.get('date')], reverse=True)
+    if available:
+        selected_day=st.selectbox('ดูรายละเอียด Snapshot', available, key='portfolio_snapshot_day')
+        selected=_snapshot_for_date(snapshots, selected_day)
+        if selected:
+            st.markdown(f'<div class="cal-card"><h4 style="margin:0;color:#eaecef">Snapshot · {selected_day}</h4><div class="cal-detail"><span>Portfolio Value</span><b>฿{float(selected.get("total_value_thb",0) or 0):,.2f}</b></div><div class="cal-detail"><span>Cash</span><b>฿{float(selected.get("cash_thb",0) or 0):,.2f}</b></div><div class="cal-detail"><span>Invested Cost</span><b>฿{float(selected.get("invested_cost_thb",0) or 0):,.2f}</b></div><div class="cal-detail"><span>Unrealized P&L</span><b>฿{float(selected.get("unrealized_pnl_thb",0) or 0):+,.2f}</b></div><div class="cal-detail"><span>Realized P&L</span><b>฿{float(selected.get("realized_pnl_thb",0) or 0):+,.2f}</b></div><div class="cal-detail"><span>Fees</span><b>฿{float(selected.get("fees_thb",0) or 0):,.2f}</b></div></div>', unsafe_allow_html=True)
+
+
 def render_trading_journal(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
     sim = st.session_state.get("sim", {})
     ensure_portfolio_ledger(sim)
@@ -7895,6 +8042,258 @@ def render_trading_journal(cfg: dict[str, Any], data: pd.DataFrame, market_df: p
         row=(f'<div class="journal-row"><div class="journal-asset">{coin_icon_html(sym,30)}<div><strong>{_html.escape(typ)} · {_html.escape(sym)}</strong><span>{ts} · Qty {qty:.8g} · Gross ฿{gross:,.2f} · Fee ฿{fee:,.2f}</span></div></div><div style="text-align:right;max-width:55%"><div class="{cls}" style="font-weight:800">{typ}</div><div style="color:#b8bec8;font-size:.78rem;margin:4px 0">{reason_html}</div><div>{tags_html}</div></div></div>')
         st.markdown(row,unsafe_allow_html=True)
     st.markdown('</div>',unsafe_allow_html=True)
+
+
+
+@_cache_data(ttl=300, show_spinner="กำลังคำนวณ Correlation…")
+def _portfolio_correlation_returns(tickers: tuple[str, ...], days: int = 180) -> tuple[pd.DataFrame, Optional[str]]:
+    """Fetch normalized daily THB prices and return daily percentage returns."""
+    end = pd.Timestamp.now(tz=None).normalize()
+    start = end - pd.Timedelta(days=max(30, int(days)))
+    series: dict[str, pd.Series] = {}
+    errors: list[str] = []
+    for sym in tickers:
+        if sym in STABLECOINS:
+            # Stablecoins are modeled as approximately flat in THB terms for diversification view.
+            series[sym] = pd.Series(0.0, index=pd.date_range(start, end, freq="D"))
+            continue
+        df, err = fetch_price_data(sym, start, end)
+        if err or df is None or df.empty:
+            errors.append(f"{sym}: {err or 'ไม่มีข้อมูล'}")
+            continue
+        px = pd.to_numeric(df.get("Global_USD"), errors="coerce") * pd.to_numeric(df.get("USDTHB"), errors="coerce")
+        px = px.replace([np.inf, -np.inf], np.nan).dropna()
+        if len(px) < 10:
+            errors.append(f"{sym}: ข้อมูลน้อยเกินไป")
+            continue
+        px = px.resample("D").last().ffill()
+        series[sym] = px.pct_change().dropna()
+
+    if not series:
+        return pd.DataFrame(), "ไม่สามารถดึงข้อมูลราคาย้อนหลังสำหรับคำนวณ Correlation ได้"
+    ret = pd.concat(series, axis=1).replace([np.inf, -np.inf], np.nan).dropna(how="all")
+    ret = ret.dropna(axis=1, how="all")
+    if errors:
+        # Keep usable assets; caller can show the warning.
+        ret.attrs["errors"] = errors
+    return ret, None
+
+
+def render_correlation_center(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
+    """Correlation and diversification view; descriptive only, no trading recommendation."""
+    st.markdown("## 🔗 Correlation & Diversification")
+    st.caption("ดูความสัมพันธ์ของผลตอบแทนย้อนหลังและการกระจุกตัวของพอร์ต — ไม่ใช่สัญญาณซื้อ/ขาย")
+
+    sim = st.session_state.get("sim", {})
+    ensure_portfolio_ledger(sim)
+    price_map = {}
+    if isinstance(market_df, pd.DataFrame) and not market_df.empty:
+        for _, row in market_df.iterrows():
+            try:
+                price_map[str(row.get("symbol", "")).upper()] = float(row.get("price_thb", row.get("price_usd", 0)) or 0)
+            except Exception:
+                pass
+    snap = portfolio_snapshot(sim, price_map)
+    rows = snap.get("rows", []) if isinstance(snap, dict) else []
+    held = [str(r.get("asset", "")).upper() for r in rows if float(r.get("qty", 0) or 0) > 0 and str(r.get("asset", "")).upper() != "THB"]
+    held = [x for x in held if x in SUPPORTED_ASSETS]
+
+    if not held:
+        st.info("ยังไม่มี Holdings สำหรับคำนวณ Correlation")
+        return
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        days = st.select_slider("ช่วงข้อมูล", options=[30, 60, 90, 180, 365], value=180, format_func=lambda x: f"ย้อนหลัง {x} วัน")
+    with c2:
+        st.markdown("<div style='padding-top:29px;color:#848e9c;font-size:.82rem;'>คำนวณจาก Daily Return และใช้เฉพาะสินทรัพย์ที่ถืออยู่</div>", unsafe_allow_html=True)
+
+    ret, err = _portfolio_correlation_returns(tuple(sorted(set(held))), days)
+    if ret.empty:
+        st.error(err or "ไม่มีข้อมูล")
+        return
+    if ret.attrs.get("errors"):
+        st.warning("บางสินทรัพย์ไม่มีข้อมูลครบ: " + " • ".join(ret.attrs["errors"]))
+
+    corr = ret.corr().clip(-1, 1)
+    latest_alloc = {str(r.get("asset", "")).upper(): float(r.get("allocation_pct", 0) or 0) for r in rows}
+    top_asset = max(latest_alloc, key=latest_alloc.get) if latest_alloc else ""
+    top_pct = latest_alloc.get(top_asset, 0.0)
+
+    avg_abs = float(corr.where(~np.eye(len(corr), dtype=bool)).abs().stack().mean()) if len(corr) > 1 else 0.0
+    diversification = max(0.0, min(100.0, 100.0 * (1.0 - avg_abs))) if len(corr) > 1 else 0.0
+    h1, h2, h3, h4 = st.columns(4)
+    h1.metric("สินทรัพย์ที่ถือ", len(held))
+    h2.metric("Avg |Correlation|", f"{avg_abs:.2f}")
+    h3.metric("Diversification View", f"{diversification:.0f}/100")
+    h4.metric("Largest Allocation", f"{top_pct:.1f}%", top_asset or "-")
+
+    st.markdown("### 📊 Correlation Matrix")
+    def _corr_style(v):
+        if pd.isna(v): return ""
+        if v >= 0.75: return "background:rgba(14,203,129,.18);color:#0ecb81;font-weight:700"
+        if v <= -0.50: return "background:rgba(246,70,93,.18);color:#f6465d;font-weight:700"
+        return "color:#eaecef"
+    styled = corr.round(2).style.map(_corr_style).format("{:.2f}")
+    st.dataframe(styled, use_container_width=True, height=min(520, 90 + 46 * len(corr)), hide_index=False)
+
+    st.markdown("### 🧭 Diversification Overview")
+    alloc_rows = []
+    for sym in held:
+        pct = latest_alloc.get(sym, 0.0)
+        alloc_rows.append({"asset": sym, "allocation": pct})
+    alloc_rows.sort(key=lambda x: x["allocation"], reverse=True)
+    for r in alloc_rows:
+        sym, pct = r["asset"], r["allocation"]
+        width = max(1.0, min(100.0, pct))
+        st.markdown(
+            f"<div style='display:flex;align-items:center;gap:10px;margin:8px 0;'>"
+            f"{coin_icon_html(sym,28)}<div style='width:55px;font-weight:700;color:#eaecef'>{sym}</div>"
+            f"<div style='flex:1;background:#1e2329;border-radius:999px;height:8px;overflow:hidden;'>"
+            f"<div style='width:{width:.1f}%;height:100%;background:#0ecb81;border-radius:999px;'></div></div>"
+            f"<div style='width:62px;text-align:right;color:#eaecef;font-weight:600'>{pct:.1f}%</div></div>",
+            unsafe_allow_html=True,
+        )
+
+    if top_pct >= 70:
+        st.warning(f"Concentration: {top_asset} คิดเป็น {top_pct:.1f}% ของพอร์ต")
+    elif top_pct >= 50:
+        st.info(f"Largest allocation: {top_asset} คิดเป็น {top_pct:.1f}% ของพอร์ต")
+
+    st.caption("Correlation +1 หมายถึงผลตอบแทนเคลื่อนไหวไปในทิศทางเดียวกันมากกว่า ส่วนค่าติดลบหมายถึงมีแนวโน้มเคลื่อนไหวสวนทางกันในช่วงข้อมูลที่เลือก")
+
+def render_fee_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
+    """Fee analytics derived from the same portfolio ledger used by Wallet."""
+    sim = st.session_state.get("sim", {})
+    ensure_portfolio_ledger(sim)
+    ledger = sim.get("portfolio_ledger", {}) if isinstance(sim, dict) else {}
+    txs = ledger.get("transactions", []) if isinstance(ledger, dict) else []
+    txs = [t for t in txs if isinstance(t, dict)]
+
+    rows = []
+    for t in txs:
+        try:
+            fee = float(t.get("fee_thb", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            fee = 0.0
+        if fee <= 0:
+            continue
+        ts = str(t.get("timestamp", "") or "")
+        try:
+            dt = pd.to_datetime(ts)
+        except Exception:
+            dt = pd.NaT
+        typ = str(t.get("type", "OTHER") or "OTHER").upper()
+        if typ in ("BUY", "SELL"):
+            category = "Trading"
+        elif typ in ("WITHDRAW", "WITHDRAWAL"):
+            category = "Withdrawal"
+        elif typ in ("DEPOSIT",):
+            category = "Deposit"
+        else:
+            category = "Other"
+        rows.append({
+            "timestamp": dt,
+            "date": ts[:10] if ts else "",
+            "month": dt.strftime("%Y-%m") if not pd.isna(dt) else (ts[:7] if ts else "Unknown"),
+            "type": typ,
+            "category": category,
+            "asset": str(t.get("asset", "THB") or "THB").upper(),
+            "fee": fee,
+            "gross": float(t.get("gross_thb", 0.0) or 0.0),
+            "id": str(t.get("id", "") or ""),
+        })
+
+    df = pd.DataFrame(rows)
+    total_fees = float(df["fee"].sum()) if not df.empty else 0.0
+    trading_fees = float(df.loc[df["category"] == "Trading", "fee"].sum()) if not df.empty else 0.0
+    withdrawal_fees = float(df.loc[df["category"] == "Withdrawal", "fee"].sum()) if not df.empty else 0.0
+    deposit_fees = float(df.loc[df["category"] == "Deposit", "fee"].sum()) if not df.empty else 0.0
+    trade_count = int(df["type"].isin(["BUY", "SELL"]).sum()) if not df.empty else 0
+    volume = float(df.loc[df["category"] == "Trading", "gross"].sum()) if not df.empty else 0.0
+    fee_rate = (trading_fees / volume * 100.0) if volume > 0 else 0.0
+
+    st.markdown("""
+    <style>
+    .fee-hero{padding:26px 28px;border:1px solid #2b3139;border-radius:20px;background:linear-gradient(135deg,#171a20,#0f1115 65%,#151a1d);margin-bottom:16px}
+    .fee-eyebrow{font-size:.7rem;letter-spacing:.18em;font-weight:800;color:#848e9c}
+    .fee-hero h2{margin:5px 0;color:#f1f3f5;font-size:1.8rem}
+    .fee-hero p{margin:0;color:#8d96a5;font-size:.86rem}
+    .fee-card{border:1px solid #2b3139;border-radius:16px;background:#0f1115;padding:18px;margin-bottom:14px}
+    .fee-label{color:#848e9c;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em}
+    .fee-value{font-size:1.45rem;font-weight:850;color:#eaecef;margin-top:4px}
+    .fee-sub{font-size:.75rem;color:#687282;margin-top:3px}
+    .fee-table-wrap{overflow-x:auto;border:1px solid #2b3139;border-radius:14px}
+    .fee-table{width:100%;min-width:620px;border-collapse:collapse;background:#0f1115}
+    .fee-table th{padding:12px 14px;text-align:left;background:#181b21;color:#848e9c;font-size:.73rem;text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid #2b3139}
+    .fee-table td{padding:12px 14px;color:#eaecef;border-bottom:1px solid #20242b;font-size:.84rem}
+    .fee-table tr:last-child td{border-bottom:0}
+    .fee-pill{display:inline-flex;padding:4px 9px;border-radius:999px;background:#1b2027;color:#b8bec8;font-size:.7rem;font-weight:750}
+    .fee-note{padding:12px 14px;border-radius:12px;background:#15191f;border:1px solid #252b33;color:#8d96a5;font-size:.78rem}
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown(
+        '<div class="fee-hero"><div class="fee-eyebrow">COST INTELLIGENCE</div>'
+        '<h2>💸 Fee Analytics</h2>'
+        '<p>ดูว่าค่าธรรมเนียมสะสมมาจากธุรกรรมประเภทใด และคิดเป็นสัดส่วนเท่าไรของ Trading Volume</p></div>',
+        unsafe_allow_html=True,
+    )
+
+    c1, c2, c3, c4 = st.columns(4, gap="small")
+    c1.markdown(f'<div class="fee-card"><div class="fee-label">TOTAL FEES</div><div class="fee-value">฿{total_fees:,.2f}</div><div class="fee-sub">{len(df):,} รายการที่มีค่าธรรมเนียม</div></div>', unsafe_allow_html=True)
+    c2.markdown(f'<div class="fee-card"><div class="fee-label">TRADING FEES</div><div class="fee-value">฿{trading_fees:,.2f}</div><div class="fee-sub">จาก {trade_count:,} BUY / SELL</div></div>', unsafe_allow_html=True)
+    c3.markdown(f'<div class="fee-card"><div class="fee-label">TRADING VOLUME</div><div class="fee-value">฿{volume:,.2f}</div><div class="fee-sub">Fee / volume {fee_rate:.4f}%</div></div>', unsafe_allow_html=True)
+    c4.markdown(f'<div class="fee-card"><div class="fee-label">WITHDRAWAL FEES</div><div class="fee-value">฿{withdrawal_fees:,.2f}</div><div class="fee-sub">Deposit ฿{deposit_fees:,.2f}</div></div>', unsafe_allow_html=True)
+
+    if df.empty:
+        st.markdown('<div class="fee-note">ยังไม่มีธุรกรรมที่มีค่าธรรมเนียมใน Ledger</div>', unsafe_allow_html=True)
+        return
+
+    st.markdown('<div class="fee-card"><h3 style="margin:0 0 12px;color:#eaecef">📊 Fees by Type</h3>', unsafe_allow_html=True)
+    by_type = df.groupby(["category"], as_index=False)["fee"].sum().sort_values("fee", ascending=False)
+    html = ['<div class="fee-table-wrap"><table class="fee-table"><thead><tr><th>Category</th><th>Fee</th><th>Share</th></tr></thead><tbody>']
+    for _, r in by_type.iterrows():
+        fee = float(r["fee"])
+        share = fee / total_fees * 100 if total_fees else 0
+        html.append(f'<tr><td><span class="fee-pill">{_html.escape(str(r["category"]))}</span></td><td>฿{fee:,.2f}</td><td>{share:.2f}%</td></tr>')
+    html.append(f'<tr><td><strong>Total</strong></td><td><strong>฿{total_fees:,.2f}</strong></td><td><strong>100.00%</strong></td></tr></tbody></table></div>')
+    st.markdown("".join(html), unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="fee-card"><h3 style="margin:0 0 12px;color:#eaecef">📅 Monthly Fee Trend</h3>', unsafe_allow_html=True)
+    monthly = df.groupby("month", as_index=False)["fee"].sum().sort_values("month", ascending=False)
+    html = ['<div class="fee-table-wrap"><table class="fee-table"><thead><tr><th>Month</th><th>Fees</th><th>Share of Total</th></tr></thead><tbody>']
+    for _, r in monthly.iterrows():
+        fee = float(r["fee"])
+        share = fee / total_fees * 100 if total_fees else 0
+        html.append(f'<tr><td>{_html.escape(str(r["month"]))}</td><td>฿{fee:,.2f}</td><td>{share:.2f}%</td></tr>')
+    html.append('</tbody></table></div>')
+    st.markdown("".join(html), unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="fee-card"><h3 style="margin:0 0 12px;color:#eaecef">🧾 Recent Fee Transactions</h3>', unsafe_allow_html=True)
+    recent = df.sort_values(["timestamp", "id"], ascending=False).head(30)
+    html = ['<div class="fee-table-wrap"><table class="fee-table"><thead><tr><th>Date</th><th>Type</th><th>Asset</th><th>Gross</th><th>Fee</th></tr></thead><tbody>']
+    for _, r in recent.iterrows():
+        dt = r["timestamp"]
+        date_text = dt.strftime("%d/%m/%Y %H:%M") if not pd.isna(dt) else str(r["date"])
+        html.append(
+            f'<tr><td>{_html.escape(date_text)}</td>'
+            f'<td><span class="fee-pill">{_html.escape(str(r["type"]))}</span></td>'
+            f'<td><strong>{_html.escape(str(r["asset"]))}</strong></td>'
+            f'<td>฿{float(r["gross"]):,.2f}</td><td>฿{float(r["fee"]):,.2f}</td></tr>'
+        )
+    html.append('</tbody></table></div>')
+    st.markdown("".join(html), unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown(
+        '<div class="fee-note">ℹ️ ค่าธรรมเนียมคำนวณจากรายการใน Portfolio Ledger ปัจจุบัน '
+        'จึงสะท้อนข้อมูลที่ระบบมีอยู่จริง และไม่สร้างธุรกรรมหรือแก้ยอด Wallet</div>',
+        unsafe_allow_html=True,
+    )
+
 
 def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
     if data.empty:
@@ -10563,6 +10962,256 @@ def _dash_goto(tab_label: str) -> None:
     st.session_state.pop("main_nav_tabs_news", None)
 
 
+
+def _smart_alerts_build(sim: dict[str, Any], snap: dict[str, Any],
+                        risk: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build descriptive portfolio alerts from current ledger/snapshot data.
+
+    Alerts are informational only. They never issue buy/sell instructions.
+    """
+    settings = sim.setdefault("smart_alert_settings", {
+        "concentration_pct": 70.0,
+        "cash_low_pct": 10.0,
+        "drawdown_pct": 15.0,
+        "volatility_pct": 50.0,
+        "loss_pct": 10.0,
+        "fees_pct": 1.0,
+    })
+    alerts: list[dict[str, Any]] = []
+
+    total = float(snap.get("total_value_thb", 0.0) or 0.0)
+    cash_pct = float(risk.get("cash_pct", 0.0) or 0.0)
+    vol = float(risk.get("volatility_pct", 0.0) or 0.0)
+    dd = float(risk.get("max_drawdown_pct", 0.0) or 0.0)
+    fees = float(snap.get("fees_thb", 0.0) or 0.0)
+    unreal = float(snap.get("unrealized_pnl_thb", 0.0) or 0.0)
+    invested = float(snap.get("invested_cost_thb", 0.0) or 0.0)
+    loss_pct = (unreal / invested * 100.0) if invested > 0 else 0.0
+    fee_pct = (fees / invested * 100.0) if invested > 0 else 0.0
+
+    for item in risk.get("concentration", []) or []:
+        pct = float(item.get("pct", 0.0) or 0.0)
+        if pct >= float(settings.get("concentration_pct", 70.0)):
+            alerts.append({
+                "level": "warning",
+                "icon": "⚠️",
+                "title": "Concentration",
+                "text": f'{item.get("asset", "Asset")} มีสัดส่วน {pct:.1f}% ของพอร์ต',
+                "detail": f'เกณฑ์แจ้งเตือน {float(settings.get("concentration_pct", 70.0)):.0f}%',
+            })
+
+    if cash_pct <= float(settings.get("cash_low_pct", 10.0)) and total > 0:
+        alerts.append({
+            "level": "info",
+            "icon": "💧",
+            "title": "Cash ต่ำ",
+            "text": f"Cash คิดเป็น {cash_pct:.1f}% ของ Portfolio",
+            "detail": f'เกณฑ์แจ้งเตือน {float(settings.get("cash_low_pct", 10.0)):.0f}%',
+        })
+
+    if dd <= -abs(float(settings.get("drawdown_pct", 15.0))):
+        alerts.append({
+            "level": "danger",
+            "icon": "📉",
+            "title": "Max Drawdown",
+            "text": f"พบ Max Drawdown {dd:.1f}%",
+            "detail": f'เกณฑ์แจ้งเตือน -{float(settings.get("drawdown_pct", 15.0)):.0f}%',
+        })
+
+    if vol >= float(settings.get("volatility_pct", 50.0)):
+        alerts.append({
+            "level": "warning",
+            "icon": "〽️",
+            "title": "Volatility สูง",
+            "text": f"Annualized Volatility ประมาณ {vol:.1f}%",
+            "detail": f'เกณฑ์แจ้งเตือน {float(settings.get("volatility_pct", 50.0)):.0f}%',
+        })
+
+    if loss_pct <= -abs(float(settings.get("loss_pct", 10.0))):
+        alerts.append({
+            "level": "danger",
+            "icon": "🔻",
+            "title": "Unrealized P&L",
+            "text": f"Unrealized P&L {unreal:,.2f} THB ({loss_pct:.1f}%)",
+            "detail": f'เกณฑ์แจ้งเตือน -{float(settings.get("loss_pct", 10.0)):.0f}%',
+        })
+
+    if fee_pct >= float(settings.get("fees_pct", 1.0)) and invested > 0:
+        alerts.append({
+            "level": "info",
+            "icon": "💸",
+            "title": "Fees",
+            "text": f"Fees สะสม {fees:,.2f} THB ({fee_pct:.2f}% ของต้นทุน)",
+            "detail": f'เกณฑ์แจ้งเตือน {float(settings.get("fees_pct", 1.0)):.2f}%',
+        })
+
+    if not alerts:
+        alerts.append({
+            "level": "ok",
+            "icon": "✓",
+            "title": "No active alerts",
+            "text": "ยังไม่พบเงื่อนไขแจ้งเตือนตามเกณฑ์ที่ตั้งไว้",
+            "detail": "ระบบกำลังติดตาม Portfolio ตามข้อมูลล่าสุด",
+        })
+    return alerts
+
+
+def render_smart_alerts(cfg: dict[str, Any], data: pd.DataFrame,
+                        market_df: pd.DataFrame) -> None:
+    """Informational Portfolio Smart Alerts — no buy/sell recommendations."""
+    if data is None or data.empty:
+        st.error("⚠️ ไม่สามารถโหลดข้อมูลราคาเพื่อสร้าง Smart Alerts ได้")
+        return
+
+    sim = st.session_state.get("sim", {})
+    ensure_portfolio_ledger(sim)
+
+    current_date = pd.to_datetime(data.index[-1])
+    usdthb = float(data.loc[current_date, "USDTHB"]) if "USDTHB" in data.columns else FALLBACK_USDTHB
+    price_map = {"THB": 1.0}
+    if market_df is not None and not market_df.empty:
+        for _, row in market_df.iterrows():
+            try:
+                price_map[str(row["symbol"]).upper()] = float(row["price_usd"]) * usdthb
+            except (TypeError, ValueError, KeyError):
+                continue
+
+    asset = str(cfg.get("asset", "BTC")).upper()
+    if "Global_USD" in data.columns:
+        try:
+            price_map[asset] = float(data.loc[current_date, "Global_USD"]) * usdthb
+        except (TypeError, ValueError, KeyError):
+            pass
+
+    snap = portfolio_snapshot(sim, price_map)
+    risk = _portfolio_risk_metrics(snap, current_date)
+
+    st.markdown("""
+    <style>
+    .sa-hero{padding:24px 26px;border:1px solid #252a31;border-radius:18px;
+      background:linear-gradient(135deg,rgba(14,203,129,.09),rgba(24,27,32,.96));
+      margin-bottom:18px}
+    .sa-title{font-size:1.45rem;font-weight:800;color:#eaecef}
+    .sa-sub{color:#848e9c;font-size:.82rem;margin-top:5px}
+    .sa-card{border:1px solid #252a31;border-radius:14px;padding:16px;
+      background:#181b20;height:100%;margin-bottom:12px}
+    .sa-k{font-size:.72rem;color:#848e9c;text-transform:uppercase;letter-spacing:.05em}
+    .sa-v{font-size:1.22rem;font-weight:800;color:#eaecef;margin-top:4px}
+    .sa-alert{border-radius:14px;padding:15px 17px;margin:9px 0;border:1px solid #2b3139;
+      background:#181b20}
+    .sa-alert.warning{border-color:rgba(240,185,11,.38);background:rgba(240,185,11,.055)}
+    .sa-alert.danger{border-color:rgba(246,70,93,.40);background:rgba(246,70,93,.055)}
+    .sa-alert.info{border-color:rgba(33,150,243,.32);background:rgba(33,150,243,.045)}
+    .sa-alert.ok{border-color:rgba(14,203,129,.35);background:rgba(14,203,129,.05)}
+    .sa-row{display:flex;gap:12px;align-items:flex-start}
+    .sa-icon{font-size:1.2rem;line-height:1.2}
+    .sa-at{font-weight:750;color:#eaecef}
+    .sa-tx{font-size:.84rem;color:#c4cad3;margin-top:3px}
+    .sa-detail{font-size:.72rem;color:#6f7782;margin-top:4px}
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown(
+        '<div class="sa-hero">'
+        '<div class="sa-title">🔔 Smart Alerts</div>'
+        '<div class="sa-sub">แจ้งเตือนจากสถานะ Portfolio ปัจจุบัน — เป็นข้อมูลประกอบ ไม่ใช่คำสั่งซื้อหรือขาย</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    settings = sim.setdefault("smart_alert_settings", {
+        "concentration_pct": 70.0,
+        "cash_low_pct": 10.0,
+        "drawdown_pct": 15.0,
+        "volatility_pct": 50.0,
+        "loss_pct": 10.0,
+        "fees_pct": 1.0,
+    })
+
+    with st.expander("⚙️ Alert Thresholds", expanded=False):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            settings["concentration_pct"] = st.number_input(
+                "Concentration ≥ (%)", min_value=1.0, max_value=100.0,
+                value=float(settings.get("concentration_pct", 70.0)), step=1.0,
+                key="sa_concentration")
+            settings["cash_low_pct"] = st.number_input(
+                "Cash ≤ (%)", min_value=0.0, max_value=100.0,
+                value=float(settings.get("cash_low_pct", 10.0)), step=1.0,
+                key="sa_cash")
+        with c2:
+            settings["drawdown_pct"] = st.number_input(
+                "Max Drawdown ≤ - (%)", min_value=1.0, max_value=100.0,
+                value=float(settings.get("drawdown_pct", 15.0)), step=1.0,
+                key="sa_dd")
+            settings["volatility_pct"] = st.number_input(
+                "Volatility ≥ (%)", min_value=1.0, max_value=300.0,
+                value=float(settings.get("volatility_pct", 50.0)), step=1.0,
+                key="sa_vol")
+        with c3:
+            settings["loss_pct"] = st.number_input(
+                "Unrealized P&L ≤ - (%)", min_value=1.0, max_value=100.0,
+                value=float(settings.get("loss_pct", 10.0)), step=1.0,
+                key="sa_loss")
+            settings["fees_pct"] = st.number_input(
+                "Fees / Cost ≥ (%)", min_value=0.01, max_value=20.0,
+                value=float(settings.get("fees_pct", 1.0)), step=0.05,
+                key="sa_fees")
+        if st.button("💾 บันทึกเกณฑ์", key="sa_save_thresholds", use_container_width=True):
+            save_sim_state(sim)
+            st.success("บันทึกเกณฑ์แจ้งเตือนแล้ว")
+            st.rerun()
+
+    alerts = _smart_alerts_build(sim, snap, risk)
+    active = sum(1 for a in alerts if a["level"] in {"warning", "danger"})
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(f'<div class="sa-card"><div class="sa-k">Active Alerts</div><div class="sa-v">{active}</div></div>', unsafe_allow_html=True)
+    with c2:
+        st.markdown(f'<div class="sa-card"><div class="sa-k">Portfolio Value</div><div class="sa-v">฿{snap["total_value_thb"]:,.2f}</div></div>', unsafe_allow_html=True)
+    with c3:
+        st.markdown(f'<div class="sa-card"><div class="sa-k">Top Exposure</div><div class="sa-v">{risk["top_asset"]["asset"]} · {risk["top_asset"]["pct"]:.1f}%</div></div>', unsafe_allow_html=True)
+    with c4:
+        st.markdown(f'<div class="sa-card"><div class="sa-k">Cash</div><div class="sa-v">{risk["cash_pct"]:.1f}%</div></div>', unsafe_allow_html=True)
+
+    st.subheader("🔔 Current Alerts")
+    for alert in alerts:
+        st.markdown(
+            f'<div class="sa-alert {alert["level"]}"><div class="sa-row">'
+            f'<div class="sa-icon">{alert["icon"]}</div><div>'
+            f'<div class="sa-at">{_html.escape(alert["title"])}</div>'
+            f'<div class="sa-tx">{_html.escape(alert["text"])}</div>'
+            f'<div class="sa-detail">{_html.escape(alert["detail"])}</div>'
+            '</div></div></div>',
+            unsafe_allow_html=True,
+        )
+
+    st.subheader("📊 Portfolio Signals")
+    p1, p2 = st.columns(2)
+    with p1:
+        _risk_metric_card("Volatility", f'{risk["volatility_pct"]:.1f}%',
+                          f'ข้อมูลย้อนหลัง {risk["history_days"]} วัน',
+                          risk["volatility_pct"], 100.0,
+                          "danger" if risk["volatility_pct"] >= settings["volatility_pct"] else "neutral")
+        _risk_metric_card("Max Drawdown", f'{risk["max_drawdown_pct"]:.1f}%',
+                          "จากเส้นพอร์ตจำลองตามน้ำหนักปัจจุบัน",
+                          abs(risk["max_drawdown_pct"]), 50.0,
+                          "danger" if risk["max_drawdown_pct"] <= -settings["drawdown_pct"] else "neutral")
+    with p2:
+        _risk_metric_card("Top Exposure", f'{risk["top_asset"]["pct"]:.1f}%',
+                          risk["top_asset"]["asset"],
+                          risk["top_asset"]["pct"], 100.0,
+                          "danger" if risk["top_asset"]["pct"] >= settings["concentration_pct"] else "neutral")
+        _risk_metric_card("Cash", f'{risk["cash_pct"]:.1f}%',
+                          "THB / Portfolio Value",
+                          risk["cash_pct"], 100.0,
+                          "warning" if risk["cash_pct"] <= settings["cash_low_pct"] else "neutral")
+
+    st.caption(
+        "วิธีคำนวณ: ใช้ Holdings และ Portfolio Ledger ปัจจุบันร่วมกับข้อมูลราคาย้อนหลังที่มีอยู่ "
+        "เกณฑ์แจ้งเตือนสามารถปรับได้เอง และระบบจะไม่ส่งคำสั่งซื้อขาย"
+    )
+
 def render_dashboard(cfg: dict[str, Any], data: pd.DataFrame,
                      market_df: Optional[pd.DataFrame] = None) -> None:
     st.markdown(DASHBOARD_CSS, unsafe_allow_html=True)
@@ -11043,6 +11692,14 @@ def _main_body() -> None:
             render_what_if_simulator(cfg, data, market_df)
         elif nav == NAV_JOURNAL:
             render_trading_journal(cfg, data, market_df)
+        elif nav == NAV_CALENDAR:
+            render_portfolio_calendar(cfg, data, market_df)
+        elif nav == NAV_FEES:
+            render_fee_analytics(cfg, data, market_df)
+        elif nav == NAV_CORRELATION:
+            render_correlation_center(cfg, data, market_df)
+        elif nav == NAV_ALERTS:
+            render_smart_alerts(cfg, data, market_df)
         elif nav == NAV_SIMPLE:
             from simple_backtest import render_simple_backtest
             render_simple_backtest(
