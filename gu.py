@@ -578,6 +578,7 @@ def sim_normalize_state(sim: Any, asset: str, start_date_val: Any,
 
     sim["asset"] = asset
     sim["target_thb"] = float(target_stock_thb)
+    ensure_portfolio_ledger(sim)
     return sim
 
 def execute_order(
@@ -979,12 +980,30 @@ def execute_order(
     if affect_wallet:
         coins_book = sim.setdefault("customer_coins", {})
         cash_now = float(sim.get("customer_thb", 1000000.0))
+        ensure_portfolio_ledger(sim)
         if side == "buy":
             coins_book[current_asset] = coins_book.get(current_asset, 0.0) + coins
             sim["customer_thb"] = cash_now - amount_thb
+            record_portfolio_tx(
+                sim, "BUY", current_asset, qty=coins, price_thb=quote,
+                gross_thb=amount_thb, fee_thb=trading_fee,
+                cash_delta_thb=-amount_thb,
+                note="Trade Simulator — ซื้อ",
+            )
         else:
+            old_snap = portfolio_snapshot(sim, {current_asset: coin_price_global})
+            old_row = next((r for r in old_snap["rows"] if r["asset"] == current_asset), None)
+            avg_before = float(old_row["avg_cost"]) if old_row else 0.0
+            realized_customer = settlement_thb - (coins * avg_before)
             coins_book[current_asset] = max(0.0, coins_book.get(current_asset, 0.0) - coins)
             sim["customer_thb"] = cash_now + settlement_thb
+            record_portfolio_tx(
+                sim, "SELL", current_asset, qty=-coins, price_thb=quote,
+                gross_thb=amount_thb, fee_thb=trading_fee,
+                cash_delta_thb=settlement_thb,
+                realized_pnl_thb=realized_customer,
+                note="Trade Simulator — ขาย",
+            )
 
     record = {
         "วันที่": order_date.strftime("%Y-%m-%d"),
@@ -1236,7 +1255,7 @@ NAV_LABELS = [
     "📊 5-Year Backtest Simulator",
     "🧮 Liquidity & Capital Planner",
     "🛒 Exchange UI Simulator",
-    "💼 Wallet",
+    "💼 Portfolio & Wallet",
     "🎯 Investment Backtest",
 ]
 NAV_DASHBOARD = NAV_LABELS[0]
@@ -4032,6 +4051,15 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     trade_vol = cfg["trade_vol"]
     hedge_fee = cfg["hedge_fee"]
 
+    ps = cfg.get("portfolio_snapshot", {})
+    if ps:
+        pc1, pc2, pc3, pc4 = st.columns(4)
+        pc1.metric("Portfolio ปัจจุบัน", fmt_baht(ps.get("total_value_thb", 0)))
+        pc2.metric("เงินสด", fmt_baht(ps.get("cash_thb", 0)))
+        pc3.metric("Realized P&L", fmt_baht(ps.get("realized_pnl_thb", 0), True))
+        pc4.metric("Unrealized P&L", fmt_baht(ps.get("unrealized_pnl_thb", 0), True))
+        st.caption("Backtest ใช้ Portfolio ปัจจุบันเป็น context สำหรับเงินทุน/สถานะจริงของผู้ใช้; ผล Backtest ยังคงคำนวณจากช่วงราคาที่เลือก")
+
     bt = data.copy()
     bt["Local_THB"] = bt["Global_USD"] * bt["USDTHB"] * (1 + cfg["local_premium"])
     bt["Coin_Volume"] = trade_vol / bt["Global_USD"]
@@ -5321,6 +5349,16 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
     asset = cfg["asset"]
 
+    ps = cfg.get("portfolio_snapshot", {})
+    if ps:
+        section("💼 Live Portfolio Input")
+        pc1, pc2, pc3, pc4 = st.columns(4)
+        pc1.metric("Portfolio Value", fmt_baht(ps.get("total_value_thb", 0)))
+        pc2.metric("Cash", fmt_baht(ps.get("cash_thb", 0)))
+        pc3.metric("Invested Cost", fmt_baht(ps.get("invested_cost_thb", 0)))
+        pc4.metric("Fees", fmt_baht(ps.get("fees_thb", 0)))
+        st.caption("Planner อ่าน Holdings/Allocation จาก Portfolio ปัจจุบันเพื่อใช้เป็นข้อมูลตั้งต้นประกอบการวางแผน Multi-Asset")
+
     # --- FUND FLOW LAYER: อยู่ในแท็บ Liquidity ---
     with st.expander("💧 Cryptocurrency Fund Flow", expanded=False):
         render_fund_flow_section(cfg)
@@ -5630,6 +5668,224 @@ def _apply_pct(pct_key: str, target_key: str, base: float, kind: str) -> None:
     else:
         st.session_state[target_key] = math.floor(base * p * 1e8) / 1e8
     st.session_state[pct_key] = None
+
+
+
+# =========================================================================
+# PORTFOLIO / WATCHLIST LEDGER
+# =========================================================================
+
+PORTFOLIO_SCHEMA_VERSION = 1
+
+
+def _portfolio_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def ensure_portfolio_ledger(sim: dict[str, Any]) -> dict[str, Any]:
+    """Create/migrate a persistent customer portfolio ledger inside sim."""
+    if not isinstance(sim, dict):
+        return {}
+
+    ledger = sim.get("portfolio_ledger")
+    if isinstance(ledger, list) and sim.get("portfolio_schema_version") == PORTFOLIO_SCHEMA_VERSION:
+        return sim
+
+    old_orders = sim.get("orders", []) if isinstance(sim.get("orders", []), list) else []
+    txs: list[dict[str, Any]] = []
+
+    # Opening cash is the simulated wallet balance before any customer trade.
+    # Existing order history is replayed below so old accounts keep their cost basis.
+    opening_cash = 1_000_000.0
+    if not old_orders:
+        opening_cash = float(sim.get("customer_thb", opening_cash) or opening_cash)
+
+    txs.append({
+        "id": "OPENING",
+        "timestamp": _portfolio_now_iso(),
+        "type": "DEPOSIT",
+        "asset": "THB",
+        "qty": 0.0,
+        "price_thb": 1.0,
+        "gross_thb": opening_cash,
+        "fee_thb": 0.0,
+        "cash_delta_thb": opening_cash,
+        "realized_pnl_thb": 0.0,
+        "note": "ยอดเริ่มต้นของ Wallet",
+    })
+
+    for i, rec in enumerate(old_orders):
+        if not isinstance(rec, dict):
+            continue
+        try:
+            qty = float(rec.get("เหรียญที่ส่งมอบ", 0.0) or 0.0)
+            gross = float(rec.get("มูลค่า (บาท)", 0.0) or 0.0)
+            price = float(rec.get("ราคาที่ลูกค้าได้", 0.0) or 0.0)
+            fee = gross * LOCAL_TRADING_FEE_PCT
+        except (TypeError, ValueError):
+            continue
+        if qty <= 0 or gross <= 0 or price <= 0:
+            continue
+        side = "BUY" if str(rec.get("ฝั่ง", "")).strip() == "ซื้อ" else "SELL"
+        txs.append({
+            "id": f"MIG-{i+1}",
+            "timestamp": str(rec.get("วันที่", "")) or _portfolio_now_iso(),
+            "type": side,
+            "asset": str(rec.get("เหรียญ") or sim.get("asset") or "BTC").upper(),
+            "qty": qty if side == "BUY" else -qty,
+            "price_thb": price,
+            "gross_thb": gross,
+            "fee_thb": fee,
+            "cash_delta_thb": -gross if side == "BUY" else gross - fee,
+            "realized_pnl_thb": 0.0,
+            "note": "ย้ายข้อมูลจาก Order Ledger เดิม",
+        })
+
+    sim["portfolio_ledger"] = txs
+    sim["portfolio_schema_version"] = PORTFOLIO_SCHEMA_VERSION
+    sim.setdefault("watchlist", list(st.session_state.get("favorite_tickers", [])))
+    return sim
+
+
+def record_portfolio_tx(
+    sim: dict[str, Any],
+    tx_type: str,
+    asset: str = "THB",
+    qty: float = 0.0,
+    price_thb: float = 0.0,
+    gross_thb: float = 0.0,
+    fee_thb: float = 0.0,
+    cash_delta_thb: float = 0.0,
+    realized_pnl_thb: float = 0.0,
+    note: str = "",
+) -> dict[str, Any]:
+    ensure_portfolio_ledger(sim)
+    rec = {
+        "id": uuid.uuid4().hex[:10].upper(),
+        "timestamp": _portfolio_now_iso(),
+        "type": str(tx_type).upper(),
+        "asset": str(asset).upper(),
+        "qty": float(qty),
+        "price_thb": float(price_thb),
+        "gross_thb": float(gross_thb),
+        "fee_thb": float(fee_thb),
+        "cash_delta_thb": float(cash_delta_thb),
+        "realized_pnl_thb": float(realized_pnl_thb),
+        "note": str(note),
+    }
+    sim["portfolio_ledger"].append(rec)
+    return rec
+
+
+def portfolio_snapshot(sim: dict[str, Any], price_thb_map: Mapping[str, float]) -> dict[str, Any]:
+    ensure_portfolio_ledger(sim)
+    txs = sim.get("portfolio_ledger", [])
+    cash = 0.0
+    qty_map: dict[str, float] = {}
+    avg_cost_map: dict[str, float] = {}
+    realized = 0.0
+    fees = 0.0
+
+    # Rebuild average-cost basis from the transaction history.
+    for tx in txs:
+        if not isinstance(tx, dict):
+            continue
+        typ = str(tx.get("type", "")).upper()
+        asset = str(tx.get("asset", "THB")).upper()
+        qty = float(tx.get("qty", 0.0) or 0.0)
+        gross = float(tx.get("gross_thb", 0.0) or 0.0)
+        fee = float(tx.get("fee_thb", 0.0) or 0.0)
+        cash += float(tx.get("cash_delta_thb", 0.0) or 0.0)
+        fees += fee
+
+        if asset == "THB" or typ in {"DEPOSIT", "WITHDRAWAL", "FEE"}:
+            realized += float(tx.get("realized_pnl_thb", 0.0) or 0.0)
+            continue
+
+        old_qty = qty_map.get(asset, 0.0)
+        old_cost = avg_cost_map.get(asset, 0.0)
+
+        if typ == "BUY" and qty > 0:
+            acquisition_cost = gross
+            new_qty = old_qty + qty
+            avg_cost_map[asset] = (
+                (old_qty * old_cost + acquisition_cost) / new_qty
+                if new_qty > 0 else 0.0
+            )
+            qty_map[asset] = new_qty
+        elif typ == "SELL" and qty < 0:
+            sold_qty = abs(qty)
+            cost_removed = sold_qty * old_cost
+            realized += float(tx.get("realized_pnl_thb", 0.0) or 0.0)
+            qty_map[asset] = max(0.0, old_qty - sold_qty)
+            if qty_map[asset] <= 1e-12:
+                qty_map[asset] = 0.0
+                avg_cost_map[asset] = 0.0
+
+    # The live wallet balance remains the source of truth for cash because
+    # legacy states can contain balances that pre-date the portfolio ledger.
+    if isinstance(sim, dict) and "customer_thb" in sim:
+        cash = float(sim.get("customer_thb", cash) or 0.0)
+
+    rows = []
+    total_assets = cash
+    invested_cost = 0.0
+    market_value = 0.0
+    unrealized = 0.0
+    for asset, qty in sorted(qty_map.items()):
+        if qty <= 1e-12:
+            continue
+        px = float(price_thb_map.get(asset, 0.0) or 0.0)
+        avg = float(avg_cost_map.get(asset, 0.0) or 0.0)
+        value = qty * px
+        cost = qty * avg
+        upnl = value - cost if avg > 0 else 0.0
+        invested_cost += cost
+        market_value += value
+        unrealized += upnl
+        rows.append({
+            "asset": asset,
+            "qty": qty,
+            "avg_cost": avg,
+            "price": px,
+            "market_value": value,
+            "cost_basis": cost,
+            "unrealized_pnl": upnl,
+        })
+
+    total_value = cash + market_value
+    total_pnl = realized + unrealized
+    pnl_pct = (total_pnl / invested_cost * 100.0) if invested_cost > 0 else 0.0
+    for row in rows:
+        row["allocation_pct"] = row["market_value"] / total_value * 100.0 if total_value > 0 else 0.0
+        row["pnl_pct"] = row["unrealized_pnl"] / row["cost_basis"] * 100.0 if row["cost_basis"] > 0 else 0.0
+
+    return {
+        "cash_thb": cash,
+        "rows": rows,
+        "market_value_thb": market_value,
+        "total_value_thb": total_value,
+        "invested_cost_thb": invested_cost,
+        "realized_pnl_thb": realized,
+        "unrealized_pnl_thb": unrealized,
+        "total_pnl_thb": total_pnl,
+        "pnl_pct": pnl_pct,
+        "fees_thb": fees,
+        "transactions": txs,
+    }
+
+
+def portfolio_context_for_models(sim: dict[str, Any], price_thb_map: Mapping[str, float]) -> dict[str, Any]:
+    snap = portfolio_snapshot(sim, price_thb_map)
+    return {
+        "cash_thb": snap["cash_thb"],
+        "total_value_thb": snap["total_value_thb"],
+        "invested_cost_thb": snap["invested_cost_thb"],
+        "realized_pnl_thb": snap["realized_pnl_thb"],
+        "unrealized_pnl_thb": snap["unrealized_pnl_thb"],
+        "fees_thb": snap["fees_thb"],
+        "holdings": snap["rows"],
+    }
 
 
 def _submit_order(sim, side, amount_thb, data, order_date, ctx) -> None:
@@ -6838,6 +7094,67 @@ def _do_deposit() -> None:
     st.session_state["dep_done"] = amt
 
 
+
+def _open_withdraw() -> None:
+    st.session_state["open_withdraw"] = True
+    st.session_state["wd_error"] = None
+
+
+def _set_wd_amt(v: float) -> None:
+    st.session_state["wd_amt"] = f"{v:,.0f}"
+
+
+def _do_withdraw() -> None:
+    amt = _parse_amount(st.session_state.get("wd_amt", "0"))
+    fee = _parse_amount(st.session_state.get("wd_fee", "20"))
+    sim = st.session_state.get("sim")
+    cash = float(sim.get("customer_thb", 0.0)) if isinstance(sim, dict) else 0.0
+    if amt <= 0:
+        st.session_state["wd_error"] = "กรอกจำนวนเงินถอนที่มากกว่า 0"
+        return
+    if fee < 0:
+        st.session_state["wd_error"] = "ค่าธรรมเนียมต้องไม่ติดลบ"
+        return
+    if amt + fee > cash + 1e-9:
+        st.session_state["wd_error"] = "ยอดเงินรวมค่าธรรมเนียมสูงกว่ายอดคงเหลือ"
+        return
+    ensure_portfolio_ledger(sim)
+    sim["customer_thb"] = cash - amt - fee
+    record_portfolio_tx(
+        sim, "WITHDRAWAL", "THB", gross_thb=amt, fee_thb=fee,
+        cash_delta_thb=-(amt + fee), note="ถอนเงินบาท",
+    )
+    st.session_state["wd_amt"] = "0"
+    st.session_state["wd_fee"] = f"{fee:,.2f}"
+    st.session_state["wd_error"] = None
+    st.session_state["wd_done"] = (amt, fee)
+
+
+def _withdraw_dialog_body() -> None:
+    done = st.session_state.pop("wd_done", None)
+    if done:
+        st.session_state["wd_toast"] = done
+        st.rerun()
+    sim = st.session_state.get("sim", {})
+    cash = float(sim.get("customer_thb", 0.0) or 0.0)
+    st.markdown(f"ยอดเงินบาทคงเหลือ: **{cash:,.2f} THB**")
+    amt = comma_number_input("จำนวนเงินที่ต้องการถอน (THB)", value=0, min_value=0, key="wd_amt")
+    fee = comma_number_input("ค่าธรรมเนียมถอน (THB)", value=20, min_value=0, key="wd_fee")
+    quick = st.columns(4, gap="small")
+    for col, v in zip(quick, (1_000, 10_000, 100_000, 1_000_000)):
+        col.button(f"{v:,.0f}", key=f"wd_q_{v}", on_click=_set_wd_amt, args=(float(v),), **WIDE)
+    st.caption(f"ยอดหลังถอน + ค่าธรรมเนียม: {max(0.0, cash - amt - fee):,.2f} THB")
+    err = st.session_state.get("wd_error")
+    if err:
+        st.error(err)
+    st.button("ยืนยันการถอน", key="wd_confirm", type="primary",
+              on_click=_do_withdraw, **WIDE)
+
+
+def withdraw_dialog() -> None:
+    st.dialog("ถอนเงินบาท")(_withdraw_dialog_body)()
+
+
 def _deposit_dialog_body() -> None:
     done = st.session_state.pop("dep_done", None)
     if done:
@@ -6877,117 +7194,146 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         return
 
     sim = st.session_state.get("sim", {})
+    ensure_portfolio_ledger(sim)
     current_date_val = pd.to_datetime(data.index[-1])
-
     usdthb_current = float(data.loc[current_date_val, "USDTHB"])
-    cust_thb = sim.get("customer_thb", 1000000.0)
-    cust_coins = sim.get("customer_coins", {})
 
     price_thb_map = {"THB": 1.0}
     if market_df is not None and not market_df.empty:
         for _, row in market_df.iterrows():
-            sym = str(row["symbol"])
+            sym = str(row["symbol"]).upper()
             price_thb_map[sym] = float(row["price_usd"]) * usdthb_current
-    price_thb_map[cfg["asset"]] = float(data.loc[current_date_val, "Global_USD"]) * usdthb_current
+    asset = str(cfg.get("asset", "BTC")).upper()
+    if "Global_USD" in data.columns:
+        price_thb_map[asset] = float(data.loc[current_date_val, "Global_USD"]) * usdthb_current
 
-    total_thb = cust_thb
-    for sym, qty in cust_coins.items():
-        total_thb += qty * price_thb_map.get(sym, 0.0)
-
-    total_usdt = total_thb / usdthb_current if usdthb_current > 0 else 0
-    time_str = pd.Timestamp.now(tz="Asia/Bangkok").strftime("%H:%M:%S")
-
-    # Header (ไม่มีปุ่มฝาก/ถอน/ประวัติ ตามที่ร้องขอ)
+    snap = portfolio_snapshot(sim, price_thb_map)
     st.markdown(
-        f'<div style="margin-bottom:20px;">'
-        f'<h2 style="margin:0; color:#EAECEF; font-size:1.8rem;">กระเป๋าเงิน</h2>'
-        f'</div>',
-        unsafe_allow_html=True
+        '<div style="margin-bottom:10px;"><h2 style="margin:0;color:#EAECEF;font-size:1.8rem;">'
+        'Portfolio & Wallet</h2><div style="color:#848e9c;font-size:.85rem;margin-top:4px;">'
+        'ติดตามต้นทุนจริง · P&L · Allocation · ธุรกรรม · เงินฝาก/ถอน · ค่าธรรมเนียม</div></div>',
+        unsafe_allow_html=True,
     )
 
-    # Total Box
-    st.markdown(
-        f'<div class="wl-box" style="margin-bottom:20px;">'
-        f'<div style="font-size:0.9rem; color:#848e9c; font-weight:600;">มูลค่าทั้งหมด</div>'
-        f'<div class="wl-total-val">{total_thb:,.2f} <span style="font-size:1.2rem; color:#848e9c;">THB</span></div>'
-        f'<div style="font-size:0.9rem; color:#848e9c;">≈ {total_usdt:,.2f} USDT <span style="float:right; font-size:0.8rem;">อัปเดตล่าสุด: {time_str}</span></div>'
-        f'</div>',
-        unsafe_allow_html=True
-    )
+    m1, m2, m3, m4, m5 = st.columns(5)
+    metric_card(m1, "มูลค่าพอร์ต", fmt_baht(snap["total_value_thb"]))
+    metric_card(m2, "ต้นทุนคงเหลือ", fmt_baht(snap["invested_cost_thb"]))
+    metric_card(m3, "Unrealized P&L", fmt_baht(snap["unrealized_pnl_thb"], True))
+    metric_card(m4, "Realized P&L", fmt_baht(snap["realized_pnl_thb"], True))
+    metric_card(m5, "P&L รวม", f'{fmt_baht(snap["total_pnl_thb"], True)} · {snap["pnl_pct"]:+.2f}%')
 
-    # Asset Table Title and Controls
-    st.markdown(
-        '<div style="display:flex; align-items:center; margin-bottom:16px; gap:8px;">'
-        '<div style="width:3px; height:16px; background:#0ecb81; border-radius:2px;"></div>'
-        '<div style="font-size:1.05rem; font-weight:700; color:#EAECEF;">สินทรัพย์</div>'
-        '</div>',
-        unsafe_allow_html=True
-    )
+    t_port, t_watch, t_tx = st.tabs(["📊 Portfolio", "⭐ Watchlist", "🧾 Transaction History"])
 
-    c_search, c_hide, c_pad = st.columns([2, 1.5, 6])
-    with c_search:
-        search_q = st.text_input("ค้นหา", label_visibility="collapsed", placeholder="🔍 ค้นหาสินทรัพย์")
-    with c_hide:
-        st.markdown('<div style="margin-top:8px;"></div>', unsafe_allow_html=True)
-        hide_small = st.checkbox("ซ่อนเหรียญที่มูลค่า < 1 บาท", value=False)
+    with t_port:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("เงินสด THB", f"฿{snap['cash_thb']:,.2f}")
+        c2.metric("ค่าธรรมเนียมสะสม", f"฿{snap['fees_thb']:,.2f}")
+        c3.metric("จำนวนรายการ", f"{len(snap['transactions']):,}")
 
-    # Asset List Construction
-    assets_to_show = [{"sym": "THB", "qty": cust_thb, "price": 1.0, "val": cust_thb}]
-    for sym in SUPPORTED_ASSETS:
-        qty = cust_coins.get(sym, 0.0)
-        price = price_thb_map.get(sym, 0.0)
-        assets_to_show.append({"sym": sym, "qty": qty, "price": price, "val": qty * price})
-        
-    WL = [2.2, 1.5, 1.5, 1.5, 1.3]
-    with st.container(key="wl_table"):
-        with st.container(key="wlhead"):
-            hc = st.columns(WL, vertical_alignment="center", gap="small")
-            heads = ["สินทรัพย์ ↕", "มูลค่าทั้งหมด ↕", "จำนวนที่ใช้ได้ ↕", "รอดำเนินการ ↕", ""]
-            aligns = ["left", "right", "right", "right", "right"]
-            for col, txt, al in zip(hc, heads, aligns):
-                col.markdown(f'<div class="wl-h" style="text-align:{al}">{txt}</div>',
-                             unsafe_allow_html=True)
-        for a in assets_to_show:
-            sym = a["sym"]
-            sub_name = COIN_NAMES.get(sym, "Thai Baht")
-            if hide_small and a["val"] < 1.0:
-                continue
-            if search_q and search_q.lower() not in sym.lower() \
-                    and search_q.lower() not in sub_name.lower():
-                continue
-            with st.container(key=f"wlrow_{sym}"):
-                c_ast, c_val, c_qty, c_pend, c_act = st.columns(
-                    WL, vertical_alignment="center", gap="small")
-                with c_ast:
-                    c_ic, c_nm = st.columns([1, 6], vertical_alignment="center", gap="small")
-                    c_ic.markdown(coin_icon_html(sym, 28), unsafe_allow_html=True)
-                    if sym == "THB":
-                        c_nm.markdown('<div class="wl-name">THB<br><span>Thai Baht</span></div>',
-                                      unsafe_allow_html=True)
-                    else:
-                        c_nm.button(f"{sym}  ·  {sub_name}", key=f"wlbtn_{sym}",
-                                    type="tertiary", on_click=_go_to_exchange, args=(sym,),
-                                    help=f"เปิดกราฟและหน้าเทรด {sym}")
-                c_val.markdown(f'<div class="wl-cell">{a["val"]:,.2f}</div>', unsafe_allow_html=True)
-                c_qty.markdown(f'<div class="wl-cell">{a["qty"]:,.6f}</div>', unsafe_allow_html=True)
-                c_pend.markdown('<div class="wl-cell" style="color:#848e9c;">0.00</div>',
-                                unsafe_allow_html=True)
-                
-                a_dep, a_wd, a_more = c_act.columns([1, 1, 0.7],
-                                                    vertical_alignment="center", gap="small")
-                if sym == "THB":
-                    a_dep.button("ฝาก", key="wl_deposit", type="tertiary",
-                                 on_click=_open_deposit, disabled=not can_trade(), **WIDE)
-                else:
-                    a_dep.markdown('<div class="wl-act">ฝาก</div>', unsafe_allow_html=True)
-                a_wd.markdown('<div class="wl-act">ถอน</div>', unsafe_allow_html=True)
-                a_more.markdown('<div class="wl-act wl-more">•••</div>', unsafe_allow_html=True)
+        rows = []
+        for r in snap["rows"]:
+            rows.append({
+                "สินทรัพย์": r["asset"],
+                "Holdings": r["qty"],
+                "Average cost": f"฿{r['avg_cost']:,.2f}",
+                "ราคาปัจจุบัน": f"฿{r['price']:,.2f}",
+                "มูลค่าตลาด": f"฿{r['market_value']:,.2f}",
+                "ต้นทุน": f"฿{r['cost_basis']:,.2f}",
+                "Unrealized P&L": f"฿{r['unrealized_pnl']:+,.2f}",
+                "P/L %": f"{r['pnl_pct']:+.2f}%",
+                "Allocation %": f"{r['allocation_pct']:.2f}%",
+            })
+        if rows:
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("ยังไม่มี Holdings — ซื้อสินทรัพย์หรือฝากเงินเพื่อเริ่มสร้าง Portfolio")
 
-    dep_toast = st.session_state.pop("dep_toast", None)
-    if dep_toast:
-        st.toast(f"ฝากเงิน {dep_toast:,.2f} THB สำเร็จ", icon="✅")
-    if st.session_state.pop("open_deposit", False):
-        deposit_dialog()
+        st.markdown("#### Allocation")
+        alloc_rows = [{"สินทรัพย์": "THB", "มูลค่า": snap["cash_thb"],
+                       "Allocation %": snap["cash_thb"] / snap["total_value_thb"] * 100
+                       if snap["total_value_thb"] > 0 else 0}]
+        alloc_rows += [{"สินทรัพย์": r["asset"], "มูลค่า": r["market_value"],
+                        "Allocation %": r["allocation_pct"]} for r in snap["rows"]]
+        if alloc_rows:
+            adf = pd.DataFrame(alloc_rows)
+            adf["มูลค่า"] = adf["มูลค่า"].map(lambda x: f"฿{x:,.2f}")
+            adf["Allocation %"] = adf["Allocation %"].map(lambda x: f"{x:.2f}%")
+            st.dataframe(adf, use_container_width=True, hide_index=True)
+
+        d1, d2, d3 = st.columns(3)
+        if "THB" in price_thb_map and can_trade():
+            if d1.button("💰 ฝากเงิน", use_container_width=True, key="portfolio_deposit"):
+                _open_deposit()
+                st.rerun()
+            if d2.button("↗️ ถอนเงิน", use_container_width=True, key="portfolio_withdraw"):
+                _open_withdraw()
+                st.rerun()
+        if st.session_state.pop("open_deposit", False):
+            deposit_dialog()
+        if st.session_state.pop("open_withdraw", False):
+            withdraw_dialog()
+        dep_toast = st.session_state.pop("dep_toast", None)
+        if dep_toast:
+            st.toast(f"ฝากเงิน {dep_toast:,.2f} THB สำเร็จ", icon="✅")
+        wd_toast = st.session_state.pop("wd_toast", None)
+        if wd_toast:
+            st.toast(f"ถอนเงิน {wd_toast[0]:,.2f} THB · ค่าธรรมเนียม {wd_toast[1]:,.2f} THB", icon="✅")
+
+    with t_watch:
+        current_watch = list(st.session_state.get("favorite_tickers", []))
+        if not current_watch:
+            current_watch = list(sim.get("watchlist", []))
+        current_watch = [x for x in current_watch if x in SUPPORTED_ASSETS]
+        selected = st.multiselect(
+            "สินทรัพย์ที่ติดตาม",
+            SUPPORTED_ASSETS,
+            default=current_watch,
+            key="portfolio_watchlist_editor",
+        )
+        if selected != current_watch:
+            st.session_state["favorite_tickers"] = selected
+            sim["watchlist"] = selected
+            save_favorites(selected)
+        if selected:
+            wrows = []
+            pct_lookup = {}
+            if market_df is not None and not market_df.empty:
+                for _, r in market_df.iterrows():
+                    pct_lookup[str(r["symbol"]).upper()] = float(r.get("pct_change", 0) or 0)
+            for sym in selected:
+                px = float(price_thb_map.get(sym, 0.0))
+                held = next((r for r in snap["rows"] if r["asset"] == sym), None)
+                wrows.append({
+                    "สินทรัพย์": sym,
+                    "ราคาปัจจุบัน": f"฿{px:,.2f}",
+                    "24h %": f"{pct_lookup.get(sym, 0.0):+.2f}%",
+                    "Holdings": held["qty"] if held else 0.0,
+                    "Portfolio Allocation": f'{held["allocation_pct"]:.2f}%' if held else "0.00%",
+                })
+            st.dataframe(pd.DataFrame(wrows), use_container_width=True, hide_index=True)
+        else:
+            st.info("เลือกเหรียญที่ต้องการติดตามจากรายการด้านบน")
+
+    with t_tx:
+        txs = snap["transactions"]
+        if txs:
+            txdf = pd.DataFrame(txs)
+            txdf["timestamp"] = pd.to_datetime(txdf["timestamp"], errors="coerce")
+            txdf = txdf.sort_values("timestamp", ascending=False)
+            display_cols = [
+                "timestamp", "type", "asset", "qty", "price_thb",
+                "gross_thb", "fee_thb", "cash_delta_thb", "realized_pnl_thb", "note",
+            ]
+            display_cols = [c for c in display_cols if c in txdf.columns]
+            st.dataframe(txdf[display_cols], use_container_width=True, hide_index=True)
+        else:
+            st.info("ยังไม่มี Transaction History")
+
+        st.caption(
+            "Average cost ใช้วิธีต้นทุนเฉลี่ยถ่วงน้ำหนัก · Unrealized P&L คำนวณจากราคาปัจจุบัน · "
+            "Realized P&L เกิดเมื่อขาย โดยหักค่าธรรมเนียมแล้ว"
+        )
+
 
 # ---------------- ฟังก์ชัน AI ----------------
 
@@ -9536,7 +9882,7 @@ def render_dashboard(cfg: dict[str, Any], data: pd.DataFrame,
         st.write("")
         with st.container(key="dash_qa_wallet"):
             if st.button("💼 Wallet", key="dash_go_wallet", **WIDE,
-                        on_click=_dash_goto, args=(NAV_LABELS[5],)):
+                        on_click=_dash_goto, args=(NAV_LABELS[4],)):
                 pass
 
 def _main_body() -> None:
@@ -9656,6 +10002,20 @@ def _main_body() -> None:
                                           use_fx_proxy=cfg["use_fx_proxy"])
 
     market_df = fetch_market_overview(SUPPORTED_ASSETS)
+    sim_for_portfolio = st.session_state.get("sim", {})
+    if isinstance(sim_for_portfolio, dict):
+        ensure_portfolio_ledger(sim_for_portfolio)
+        _portfolio_prices = {"THB": 1.0}
+        if not market_df.empty:
+            for _, _r in market_df.iterrows():
+                _portfolio_prices[str(_r.get("symbol", "")).upper()] = float(_r.get("price_usd", 0) or 0) * (
+                    float(data["USDTHB"].iloc[-1]) if isinstance(data, pd.DataFrame) and not data.empty and "USDTHB" in data.columns else FALLBACK_USDTHB
+                )
+        if isinstance(data, pd.DataFrame) and not data.empty and "Global_USD" in data.columns:
+            _portfolio_prices[str(cfg.get("asset", "BTC")).upper()] = float(data["Global_USD"].iloc[-1]) * (
+                float(data["USDTHB"].iloc[-1]) if "USDTHB" in data.columns else FALLBACK_USDTHB
+            )
+        cfg["portfolio_snapshot"] = portfolio_context_for_models(sim_for_portfolio, _portfolio_prices)
     render_alert_banner(compute_active_alerts(cfg, st.session_state.get("sim"), data, market_df))
 
     if "main_nav" not in st.session_state:
