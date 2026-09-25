@@ -53,6 +53,8 @@ API_BASE = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
 
+BOT_BUILD = "2026-09-26-stable-v2-alert"
+
 ALLOWED_EMAILS = {
     e.strip().lower()
     for e in os.environ.get("XSPRING_ALLOWED_EMAIL", "").split(",")
@@ -197,6 +199,7 @@ def get_updates(offset: Optional[int] = None) -> list[dict]:
 def set_bot_commands() -> None:
     """ตั้งเมนูคำสั่งที่ Telegram แสดงเมื่อผู้ใช้พิมพ์ /"""
     commands = [
+        {"command": "version", "description": "ตรวจว่า Bot ตัวไหนกำลังรันอยู่"},
         {"command": "status", "description": "ภาพรวมระบบ / NC / Wallet"},
         {"command": "nc", "description": "เช็ค NC Buffer ล่าสุด"},
         {"command": "snapshot", "description": "ดู Snapshot ล่าสุดแบบละเอียด"},
@@ -2436,6 +2439,7 @@ def cmd_orders(chat_id: int) -> str:
 # =========================================================
 
 HELP_TEXT = (
+    "🧩 Version: " + BOT_BUILD + "\n\n"
     "🤖 XSpring Dealer Suite Bot\n\n"
     "📊 NC / Liquidity\n"
     "/status — ภาพรวมระบบ / NC / Wallet\n"
@@ -2486,6 +2490,9 @@ def handle_command(chat_id: int, text: str) -> str:
 
     if cmd in ("/start", "/help"):
         return HELP_TEXT
+
+    if cmd == "/version":
+        return f"🧩 Bot Build: {BOT_BUILD}\nPrice Alert: /alert /alerts /delalert\nPersonal: /summary /today /risk"
 
     if cmd == "/link":
         return link_email(chat_id, arg) if arg else "ใช้แบบนี้: /link your@email.com"
@@ -2581,6 +2588,7 @@ def main_loop() -> None:
     print("==========================================")
     print("XSpring Telegram Bot")
     print("Stable polling mode")
+    print(f"Build: {BOT_BUILD}")
     print("==========================================")
     print("Bot เริ่มทำงานแล้ว...")
     set_bot_commands()
