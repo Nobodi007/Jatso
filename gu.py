@@ -1236,14 +1236,13 @@ NAV_LABELS = [
     "📊 5-Year Backtest Simulator",
     "🧮 Liquidity & Capital Planner",
     "🛒 Exchange UI Simulator",
-    "📰 News",
     "💼 Wallet",
     "🎯 Investment Backtest",
 ]
 NAV_DASHBOARD = NAV_LABELS[0]
 NAV_EXCHANGE = NAV_LABELS[3]
-NAV_NEWS = NAV_LABELS[4]
-NAV_SIMPLE = NAV_LABELS[6]
+NAV_NEWS = "📰 News"
+NAV_SIMPLE = NAV_LABELS[5]
 
 def _go_to_exchange(sym: str) -> None:
     st.session_state["bt_asset"] = sym
@@ -7868,13 +7867,39 @@ MOBILE_CSS = r'''<style>
   .st-key-desktop_navigation { display:none !important; }
   .st-key-desktop_route { display:none !important; }
   .st-key-mobile_shell { display:block !important; }
-  .mobile-page-title { color:#EAECEF; font-size:22px; font-weight:800; margin:2px 0; }
-  .mobile-page-sub { color:#848e9c; font-size:11px; margin-bottom:12px; }
+  .mobile-page-title {
+    color:#F5F7FA !important;
+    font-size:26px !important;
+    font-weight:900 !important;
+    line-height:1.3 !important;
+    display:block !important;
+    margin:8px 0 4px !important;
+    opacity:1 !important;
+}
+  .mobile-page-sub {
+    color:#AEB6C2 !important;
+    font-size:15px !important;
+    font-weight:500 !important;
+    line-height:1.5 !important;
+    display:block !important;
+    margin:0 0 18px !important;
+    opacity:1 !important;
+}
   .mobile-card { background:#181a20; border:1px solid #2b3139; border-radius:16px; padding:14px; margin-bottom:10px; }
   .mobile-kicker { color:#848e9c; font-size:11px; margin-bottom:4px; }
   .mobile-big { color:#EAECEF; font-size:25px; line-height:1.15; font-weight:800; font-variant-numeric:tabular-nums; }
   .mobile-grid { display:grid; grid-template-columns:1fr 1fr; gap:9px; margin-bottom:10px; }
-  .mobile-section-title { color:#EAECEF; font-size:15px; font-weight:800; margin:14px 0 9px; }
+  .mobile-section-title {
+    color: #F5F7FA !important;
+    font-size: 17px !important;
+    font-weight: 900 !important;
+    line-height: 1.35 !important;
+    display: block !important;
+    margin: 18px 2px 10px !important;
+    padding: 0 0 6px 10px !important;
+    border-left: 3px solid #0ECB81 !important;
+    opacity: 1 !important;
+}
   .mobile-asset-card { background:#181a20; border:1px solid #2b3139; border-radius:15px; padding:13px; margin-bottom:9px; }
   .mobile-asset-top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
   .mobile-asset-left { display:flex; align-items:center; gap:10px; min-width:0; }
@@ -8740,11 +8765,11 @@ def render_mobile_asset(cfg: dict[str, Any], data: pd.DataFrame) -> None:
 MOBILE_BT_CSS = r'''<style>
 .mobile-bt-label {
     color:#F5F7FA !important;
-    font-size:18px !important;
+    font-size:16px !important;
     font-weight:900 !important;
-    line-height:1.35 !important;
+    line-height:1.4 !important;
     display:block !important;
-    margin:16px 0 9px !important;
+    margin:14px 2px 8px !important;
     opacity:1 !important;
 }
 .mobile-bt-helper {
@@ -8840,15 +8865,7 @@ MOBILE_BT_CSS = r'''<style>
 .mbt-up { color:#0ecb81 !important; } .mbt-dn { color:#f6465d !important; }
 
 @media (max-width: 768px) {
-  .mobile-bt-label {
-    color:#F5F7FA !important;
-    font-size:18px !important;
-    font-weight:900 !important;
-    line-height:1.35 !important;
-    display:block !important;
-    margin:16px 0 9px !important;
-    opacity:1 !important;
-}
+  .mobile-bt-label { font-size:13px !important; line-height:1.4 !important; margin:16px 0 8px !important; }
   .mobile-bt-helper { font-size:12px !important; line-height:1.55 !important; padding:11px 13px !important; }
   .st-key-mobile_bt_period label p,
   .st-key-mobile_bt_strategy label p,
@@ -9159,7 +9176,17 @@ MOBILE_HOME_CSS = r'''<style>
 .mobile-home-chart-title { color:#EAECEF; font-size:13px; font-weight:750; margin-bottom:4px; padding-left:4px; }
 .mobile-home-chart-empty { color:#848e9c; font-size:12px; text-align:center; padding:34px 10px; }
 
-.mobile-home-section-label { color:#EAECEF; font-size:14px; font-weight:800; margin:16px 0 8px; }
+.mobile-home-section-label {
+    color: #F5F7FA !important;
+    font-size: 17px !important;
+    font-weight: 900 !important;
+    line-height: 1.35 !important;
+    display: block !important;
+    margin: 18px 2px 10px !important;
+    padding: 0 0 6px 10px !important;
+    border-left: 3px solid #0ECB81 !important;
+    opacity: 1 !important;
+}
 
 .mobile-home-asset-row { display:flex; align-items:center; gap:10px; background:#181a20;
   border:1px solid #2b3139; border-radius:13px; padding:10px 12px; margin-bottom:8px; }
