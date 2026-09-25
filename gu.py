@@ -8500,12 +8500,27 @@ def render_correlation_center(cfg: dict[str, Any], data: pd.DataFrame, market_df
         st.info("ยังคำนวณค่าเฉลี่ย Correlation ไม่ได้ เพราะคู่สินทรัพย์ที่มีข้อมูลร่วมกันไม่เพียงพอหรือมีสินทรัพย์ที่มี Daily Return คงที่ (เช่น Stablecoin) — ค่า N/A ไม่ได้หมายถึง Correlation = 0")
 
     st.markdown("### 📊 Correlation Matrix")
-    def _corr_style(v):
-        if pd.isna(v): return ""
-        if v >= 0.75: return "background:rgba(14,203,129,.18);color:#0ecb81;font-weight:700"
-        if v <= -0.50: return "background:rgba(246,70,93,.18);color:#f6465d;font-weight:700"
-        return "color:#eaecef"
-    styled = corr.round(2).style.map(_corr_style).format("{:.2f}", na_rep="N/A")
+    def _corr_css(v):
+        # Streamlit/Pandas Styler can render missing float cells as the literal
+        # Python value ``None`` in some versions. Build the display matrix
+        # explicitly so users always see N/A for unavailable correlations.
+        out = pd.DataFrame("", index=corr.index, columns=corr.columns)
+        for rr in corr.index:
+            for cc in corr.columns:
+                v = corr.loc[rr, cc]
+                if pd.isna(v):
+                    out.loc[rr, cc] = ""
+                elif v >= 0.75:
+                    out.loc[rr, cc] = "background:rgba(14,203,129,.18);color:#0ecb81;font-weight:700"
+                elif v <= -0.50:
+                    out.loc[rr, cc] = "background:rgba(246,70,93,.18);color:#f6465d;font-weight:700"
+                else:
+                    out.loc[rr, cc] = "color:#eaecef"
+        return out
+
+    corr_display = corr.round(2).astype(object)
+    corr_display = corr_display.where(corr.notna(), "N/A")
+    styled = corr_display.style.apply(lambda _: _corr_css(corr), axis=None)
     st.dataframe(styled, use_container_width=True, height=min(520, 90 + 46 * len(corr)), hide_index=False)
 
     st.markdown("### 🧭 Diversification Overview")
