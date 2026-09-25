@@ -1433,6 +1433,7 @@ def to_csv_bytes_with_assumptions(df: pd.DataFrame, assumptions: Mapping[str, An
 
 THEME_CSS = """
 <style>
+    .stApp, .main, [data-testid="stAppViewContainer"], [data-testid="stMain"] { transform: none !important; }
     .block-container { padding-top: 2rem; padding-bottom: 3rem; max-width: 98% !important; }
     .xs-hero {
         background: linear-gradient(135deg, #0b0e11 0%, #181a20 50%, #1e2329 100%);
@@ -1702,11 +1703,17 @@ THEME_CSS = """
     .st-key-wl_deposit button, .st-key-wl_deposit button p { color:#0ecb81 !important; font-weight:600 !important; font-size:.85rem !important; }
     
     /* ---------- AI Chat (ปุ่มลอย + ฟองแชท) ---------- */
-    .st-key-ai_fab {
-        position: fixed !important;
-        bottom: 78px; right: 24px; left: auto;
-        z-index: 999990; width: auto !important;
-    }
+   .st-key-ai_fab {
+    position: fixed !important;
+    top: auto !important;
+    bottom: 90px !important;
+    left: 16px !important;
+    right: auto !important;
+    inset: auto auto 90px 16px !important;
+    z-index: 2147483000 !important;
+    width: auto !important;
+    margin: 0 !important;
+}
 
     /* ป้องกัน ancestor หลักของ Streamlit ทำให้ position:fixed
        ถูกตีความเป็น fixed ภายใน transformed containing block */
