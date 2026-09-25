@@ -11496,7 +11496,27 @@ def render_rebalance_simulator(cfg: dict[str, Any], data: pd.DataFrame,
         pass
 
     snap = portfolio_snapshot(sim, price_map)
-    rows = [r for r in snap.get("rows", []) if float(r.get("qty", 0) or 0) > 0 and float(r.get("market_value", 0) or 0) > 0]
+
+    # portfolio_snapshot() uses the canonical keys `asset` and `market_value`.
+    # Rebalance previously looked for the old aliases (`symbol`,
+    # `market_value_thb`), which made every holding disappear and showed
+    # "Assets 0" even when the portfolio had real positions.
+    # Normalize only inside this sandbox so no other portfolio/trading logic
+    # is changed.
+    rows = []
+    for r in snap.get("rows", []):
+        try:
+            qty = float(r.get("qty", 0) or 0)
+            value = float(r.get("market_value", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if qty <= 0 or value <= 0:
+            continue
+        rr = dict(r)
+        rr["symbol"] = str(r.get("asset", r.get("symbol", ""))).upper()
+        rr["market_value_thb"] = value
+        rows.append(rr)
+
     cash = float(snap.get("cash_thb", 0) or 0)
     total = float(snap.get("total_value_thb", 0) or 0)
 
