@@ -8637,7 +8637,7 @@ def render_mobile_trade(cfg: dict[str, Any], data: pd.DataFrame) -> None:
             ["25%", "50%", "75%", "100%"],
             key="mobile_buy_pct",
             label_visibility="collapsed",
-            on_change=_apply_mobile_pct,
+            on_change=_apply_pct,
             args=("mobile_buy_pct", "mobile_buy_amount", cash, "buy"),
         )
         buy_px = quote_buy
@@ -8673,7 +8673,7 @@ def render_mobile_trade(cfg: dict[str, Any], data: pd.DataFrame) -> None:
             ["25%", "50%", "75%", "100%"],
             key="mobile_sell_pct",
             label_visibility="collapsed",
-            on_change=_apply_mobile_pct,
+            on_change=_apply_pct,
             args=("mobile_sell_pct", "mobile_sell_qty", coin_bal, "sell"),
         )
         sell_px = quote_sell
