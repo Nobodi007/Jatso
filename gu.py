@@ -8993,9 +8993,13 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
                         '</div>',
                         unsafe_allow_html=True,
                     )
-                    if st.button(f"เปิด {sym}/THB ใน Exchange ↗", key=f"watch_exchange_{sym}", use_container_width=True):
-                        _go_to_exchange(sym)
-                        st.rerun()
+                    st.button(
+                        f"เปิด {sym}/THB ใน Exchange ↗",
+                        key=f"watch_exchange_{sym}",
+                        use_container_width=True,
+                        on_click=_go_to_exchange,
+                        args=(sym,),
+                    )
         else:
             st.info("เลือกเหรียญที่ต้องการติดตามจากรายการด้านบน")
 
