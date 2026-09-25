@@ -1703,14 +1703,28 @@ THEME_CSS = """
     
     /* ---------- AI Chat (ปุ่มลอย + ฟองแชท) ---------- */
     .st-key-ai_fab {
-        position: fixed !important; bottom: 72px; right: 24px;
-        z-index: 999990; width: auto !important;
+    position: fixed !important;
+    bottom: 78px; right: 24px;
+    z-index: 999995 !important;
+    width: auto !important;
     }
     .st-key-ai_fab button {
         border-radius: 999px !important; padding: 10px 20px !important;
         background: #0ecb81 !important; border: none !important;
         box-shadow: 0 8px 24px rgba(14,203,129,.35) !important;
     }
+    @media (max-width: 768px) {
+    .st-key-ai_fab {
+        bottom: calc(64px + env(safe-area-inset-bottom, 0px)) !important;
+        right: 16px !important;
+        z-index: 999995 !important;
+    }
+}
+
+/* กันแถบ mobile bottom nav ทับปุ่มแชท ให้ nav อยู่ชั้นต่ำกว่า */
+.st-key-mobile_nav {
+    z-index: 999980 !important;
+}
     .st-key-ai_fab button, .st-key-ai_fab button * {
         color: #0b0e11 !important; font-weight: 700 !important;
     }
