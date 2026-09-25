@@ -1757,12 +1757,13 @@ THEME_CSS = """
     [class*="st-key-ai_sug_"] button:hover { border-color: #0ecb81 !important; }
 
     @media (max-width: 768px) {
-        .st-key-ai_fab {
-            bottom: calc(64px + env(safe-area-inset-bottom, 0px)) !important;
-            right: 16px !important;
-            left: auto !important;
-            z-index: 999995 !important;
-        }
+    .st-key-ai_fab {
+        bottom: calc(110px + env(safe-area-inset-bottom, 0px)) !important;
+        right: 16px !important;
+        left: auto !important;
+        z-index: 999995 !important;
+    }
+}
 
         .st-key-ai_fab > div {
             width: auto !important;
@@ -7710,7 +7711,7 @@ MOBILE_NAV_CSS = r'''<style>
     width: 100vw !important;
     z-index: 999999 !important;
     margin: 0 !important;
-    padding: 7px 6px calc(7px + env(safe-area-inset-bottom)) !important;
+    padding: 4px 4px calc(4px + env(safe-area-inset-bottom)) !important;
     background: rgba(24,26,32,.98) !important;
     border-top: 1px solid #2b3139 !important;
     box-sizing: border-box !important;
@@ -7728,9 +7729,9 @@ MOBILE_NAV_CSS = r'''<style>
     position: relative !important;
     flex: 1 1 0 !important;
     min-width: 0 !important;
-    height: 42px !important;
+    height: 32px !important;
     margin: 0 !important;
-    padding: 4px 14px 4px 4px !important;
+    padding: 3px 10px 3px 3px !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
@@ -7749,7 +7750,7 @@ MOBILE_NAV_CSS = r'''<style>
 .st-key-mobile_nav label p,
 .st-key-mobile_nav label span {
     color: #848e9c !important;
-    font-size: 10px !important;
+    font-size: 9px !important;
     font-weight: 600 !important;
     margin: 0 !important;
     white-space: nowrap !important;
