@@ -7639,8 +7639,8 @@ def render_portfolio_intelligence(cfg: dict[str, Any], data: pd.DataFrame, marke
     .intel-row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #1f232a;color:#b8bec8}.intel-row:last-child{border-bottom:0}.intel-val{font-weight:800;color:#eaecef}
     .intel-bar{height:7px;background:#252a31;border-radius:999px;overflow:hidden;margin-top:8px}.intel-bar span{display:block;height:100%;border-radius:999px;background:#0ecb81}
     .intel-insight{padding:13px 15px;border:1px solid #2b3139;border-radius:12px;background:#15181e;margin-top:10px;color:#d4d8df;line-height:1.55}.intel-warn{border-color:rgba(246,70,93,.35);background:rgba(246,70,93,.07)}
-    .intel-table{width:100%;border-collapse:collapse;font-size:.8rem}.intel-table th{text-align:left;color:#7f8998;padding:9px;border-bottom:1px solid #2b3139}.intel-table td{padding:10px 9px;border-bottom:1px solid #1f232a;color:#d6dae1}.intel-num{text-align:right;font-variant-numeric:tabular-nums}
-    @media(max-width:700px){.intel-hero{padding:20px}.intel-hero h2{font-size:1.45rem}.intel-score{font-size:2.7rem}}
+    .intel-table{width:100%;border-collapse:separate;border-spacing:0;font-size:.82rem;overflow:hidden}.intel-table th{text-align:left;color:#7f8998;padding:12px 14px;border-bottom:1px solid #2b3139;background:#15181e;font-weight:700;white-space:nowrap}.intel-table td{padding:13px 14px;border-bottom:1px solid #1f232a;color:#d6dae1;vertical-align:middle}.intel-table tbody tr:hover td{background:#13161b}.intel-table tbody tr:last-child td{border-bottom:0}.intel-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.pnl-table th:first-child{width:30%}.pnl-asset{display:flex;align-items:center;gap:10px;min-width:150px}.pnl-asset strong{display:block;color:#eef0f3;font-size:.9rem}.pnl-asset span,.pnl-total-sub{display:block;margin-top:2px;color:#687282;font-size:.68rem}.pnl-total-row td{background:#15181e;border-top:1px solid #303641}.pnl-summary{display:flex;align-items:flex-end;gap:10px;text-align:right}.pnl-summary span{display:block;color:#737d8c;font-size:.7rem}.pnl-summary strong{font-size:1.15rem}.pnl-card-head{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;margin-bottom:14px}.pnl-table-wrap{width:100%;overflow-x:auto;border:1px solid #242a32;border-radius:12px}.pnl-positive{color:#0ecb81!important}.pnl-negative{color:#f6465d!important}.pnl-flat{color:#d6dae1!important}
+    @media(max-width:700px){.intel-hero{padding:20px}.intel-hero h2{font-size:1.45rem}.intel-score{font-size:2.7rem}.pnl-card-head{align-items:flex-start;flex-direction:column}.pnl-summary{text-align:left}.pnl-table{min-width:720px}.pnl-table th,.pnl-table td{padding:10px 11px}}
     </style>
     """, unsafe_allow_html=True)
     st.markdown(f'<div class="intel-hero"><div class="intel-eyebrow">PORTFOLIO INTELLIGENCE</div><h2>🧠 Portfolio Intelligence</h2><p>สรุปโครงสร้างพอร์ต ผลกระทบของแต่ละสินทรัพย์ และต้นทุนการเทรดจาก Ledger ปัจจุบัน</p></div>', unsafe_allow_html=True)
@@ -7667,11 +7667,39 @@ def render_portfolio_intelligence(cfg: dict[str, Any], data: pd.DataFrame, marke
 
     with t_pnl:
         rows=snap.get("rows",[]) or []; pnl_rows=sorted(rows,key=lambda r:abs(float(r.get("unrealized_pnl",0))),reverse=True)
-        st.markdown('<div class="intel-card"><h4>P&L Attribution</h4><div class="intel-sub">ดูว่า Unrealized P&L ปัจจุบันมาจากสินทรัพย์ใด</div><table class="intel-table"><thead><tr><th>Asset</th><th class="intel-num">Cost</th><th class="intel-num">Market Value</th><th class="intel-num">Unrealized P&L</th><th class="intel-num">P/L %</th></tr></thead><tbody>',unsafe_allow_html=True)
-        for r in pnl_rows:
-            st.markdown(f'<tr><td>{coin_icon_html(r["asset"],24)} &nbsp;{_html.escape(r["asset"])}</td><td class="intel-num">฿{r["cost_basis"]:,.2f}</td><td class="intel-num">฿{r["market_value"]:,.2f}</td><td class="intel-num">฿{r["unrealized_pnl"]:+,.2f}</td><td class="intel-num">{r["pnl_pct"]:+.2f}%</td></tr>',unsafe_allow_html=True)
         total_pct=snap["unrealized_pnl_thb"]/snap["invested_cost_thb"]*100 if snap["invested_cost_thb"] else 0
-        st.markdown(f'<tr><td><b>Total</b></td><td class="intel-num"><b>฿{snap["invested_cost_thb"]:,.2f}</b></td><td class="intel-num"><b>฿{snap["market_value_thb"]:,.2f}</b></td><td class="intel-num"><b>฿{snap["unrealized_pnl_thb"]:+,.2f}</b></td><td class="intel-num"><b>{total_pct:+.2f}%</b></td></tr></tbody></table></div>',unsafe_allow_html=True)
+        table_rows=[]
+        for r in pnl_rows:
+            pnl=float(r.get("unrealized_pnl",0) or 0)
+            pnl_pct=float(r.get("pnl_pct",0) or 0)
+            pnl_cls="pnl-positive" if pnl > 0 else ("pnl-negative" if pnl < 0 else "pnl-flat")
+            table_rows.append(
+                f'<tr>'
+                f'<td><div class="pnl-asset">{coin_icon_html(r["asset"],30)}<div><strong>{_html.escape(str(r["asset"]))}</strong><span>Current holding</span></div></div></td>'
+                f'<td class="intel-num">฿{r["cost_basis"]:,.2f}</td>'
+                f'<td class="intel-num">฿{r["market_value"]:,.2f}</td>'
+                f'<td class="intel-num {pnl_cls}"><strong>฿{pnl:+,.2f}</strong></td>'
+                f'<td class="intel-num {pnl_cls}"><strong>{pnl_pct:+.2f}%</strong></td>'
+                f'</tr>'
+            )
+        pnl_table = ''.join(table_rows)
+        pnl_total_cls="pnl-positive" if snap["unrealized_pnl_thb"] > 0 else ("pnl-negative" if snap["unrealized_pnl_thb"] < 0 else "pnl-flat")
+        pnl_table += (
+            f'<tr class="pnl-total-row">'
+            f'<td><strong>Total Portfolio</strong><span class="pnl-total-sub">Unrealized P&amp;L attribution</span></td>'
+            f'<td class="intel-num"><strong>฿{snap["invested_cost_thb"]:,.2f}</strong></td>'
+            f'<td class="intel-num"><strong>฿{snap["market_value_thb"]:,.2f}</strong></td>'
+            f'<td class="intel-num {pnl_total_cls}"><strong>฿{snap["unrealized_pnl_thb"]:+,.2f}</strong></td>'
+            f'<td class="intel-num {pnl_total_cls}"><strong>{total_pct:+.2f}%</strong></td>'
+            f'</tr>'
+        )
+        st.markdown(
+            f'<div class="intel-card pnl-card">'
+            f'<div class="pnl-card-head"><div><h4>P&amp;L Attribution</h4><div class="intel-sub">ดูว่า Unrealized P&amp;L ปัจจุบันมาจากสินทรัพย์ใด</div></div>'
+            f'<div class="pnl-summary"><span>Unrealized P&amp;L</span><strong class="{pnl_total_cls}">฿{snap["unrealized_pnl_thb"]:+,.2f}</strong></div></div>'
+            f'<div class="pnl-table-wrap"><table class="intel-table pnl-table"><thead><tr><th>Asset</th><th class="intel-num">Cost</th><th class="intel-num">Market Value</th><th class="intel-num">Unrealized P&amp;L</th><th class="intel-num">P/L %</th></tr></thead><tbody>{pnl_table}</tbody></table></div>'
+            f'</div>', unsafe_allow_html=True
+        )
         st.markdown(f'<div class="intel-card"><h4>Realized / Unrealized / Fees</h4><div class="intel-row"><span>Realized P&L</span><span class="intel-val">฿{snap["realized_pnl_thb"]:+,.2f}</span></div><div class="intel-row"><span>Unrealized P&L</span><span class="intel-val">฿{snap["unrealized_pnl_thb"]:+,.2f}</span></div><div class="intel-row"><span>Fees</span><span class="intel-val">฿{snap["fees_thb"]:,.2f}</span></div><div class="intel-row"><span>Total P&L</span><span class="intel-val">฿{snap["total_pnl_thb"]:+,.2f}</span></div></div>',unsafe_allow_html=True)
 
     with t_fees:
