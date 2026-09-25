@@ -1264,12 +1264,14 @@ NAV_LABELS = [
     "💼 Portfolio & Wallet",
     "🎯 Investment Backtest",
     "🚨 Risk Center",
+    "🧠 Portfolio Intelligence",
 ]
 NAV_DASHBOARD = NAV_LABELS[0]
 NAV_EXCHANGE = NAV_LABELS[3]
 NAV_NEWS = "📰 News"
 NAV_SIMPLE = NAV_LABELS[5]
 NAV_RISK = NAV_LABELS[6]
+NAV_INTELLIGENCE = NAV_LABELS[7]
 
 def _go_to_exchange(sym: str) -> None:
     st.session_state["bt_asset"] = sym
@@ -7575,6 +7577,111 @@ def render_risk_center(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.Da
     )
 
 
+
+def _portfolio_intelligence_data(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame):
+    sim = st.session_state.get("sim", {})
+    ensure_portfolio_ledger(sim)
+    if data.empty:
+        return sim, {}, portfolio_snapshot(sim, {"THB": 1.0})
+    current_date = pd.to_datetime(data.index[-1])
+    try:
+        usdthb = float(data.loc[current_date, "USDTHB"])
+    except Exception:
+        usdthb = FALLBACK_USDTHB
+    prices = {"THB": 1.0}
+    if market_df is not None and not market_df.empty:
+        for _, row in market_df.iterrows():
+            try:
+                prices[str(row["symbol"]).upper()] = float(row["price_usd"]) * usdthb
+            except (TypeError, ValueError, KeyError):
+                pass
+    asset = str(cfg.get("asset", "BTC")).upper()
+    if "Global_USD" in data.columns:
+        try:
+            prices[asset] = float(data.loc[current_date, "Global_USD"]) * usdthb
+        except (TypeError, ValueError, KeyError):
+            pass
+    return sim, prices, portfolio_snapshot(sim, prices)
+
+
+def _portfolio_health_score(snap: dict[str, Any], risk: dict[str, Any]) -> dict[str, Any]:
+    alloc = risk.get("allocation", []) or []
+    top_pct = float(alloc[0].get("pct", 0.0)) if alloc else 0.0
+    cash_pct = float(risk.get("cash_pct", 0.0))
+    vol = float(risk.get("volatility_pct", 0.0))
+    dd = abs(float(risk.get("max_drawdown_pct", 0.0)))
+    stable = float(risk.get("stablecoin_pct", 0.0))
+    diversification = min(100.0, 35.0 + len(alloc) * 15.0)
+    concentration = max(0.0, 100.0 - max(0.0, top_pct - 20.0) * 1.7)
+    liquidity = min(100.0, 55.0 + cash_pct * 1.4 + stable * 0.35)
+    volatility = max(0.0, 100.0 - min(vol, 80.0) * 0.9)
+    drawdown = max(0.0, 100.0 - min(dd, 60.0) * 1.15)
+    score = round(diversification * .20 + concentration * .25 + liquidity * .20 + volatility * .15 + drawdown * .20)
+    return {"score": int(max(0, min(100, score))), "diversification": round(diversification), "concentration": round(concentration), "liquidity": round(liquidity), "volatility": round(volatility), "drawdown": round(drawdown)}
+
+
+def render_portfolio_intelligence(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
+    if data.empty:
+        st.error("⚠️ ไม่สามารถโหลดข้อมูลราคาเพื่อวิเคราะห์ Portfolio ได้")
+        return
+    sim, prices, snap = _portfolio_intelligence_data(cfg, data, market_df)
+    current_date = pd.to_datetime(data.index[-1])
+    risk = _portfolio_risk_metrics(snap, current_date)
+    health = _portfolio_health_score(snap, risk)
+
+    st.markdown("""
+    <style>
+    .intel-hero{padding:26px 28px;border:1px solid #2b3139;border-radius:20px;background:linear-gradient(135deg,#171a20,#0f1115 65%,#101b18);margin-bottom:16px}
+    .intel-eyebrow{font-size:.7rem;letter-spacing:.18em;font-weight:800;color:#848e9c}
+    .intel-hero h2{margin:5px 0;color:#f1f3f5;font-size:1.8rem}.intel-hero p{margin:0;color:#8d96a5;font-size:.86rem}
+    .intel-score{font-size:3.4rem;font-weight:900;line-height:1;color:#eaecef}.intel-score-label{font-size:.75rem;color:#848e9c}
+    .intel-card{border:1px solid #2b3139;border-radius:16px;background:#0f1115;padding:18px;margin-bottom:12px}.intel-card h4{margin:0 0 4px;color:#eaecef;font-size:1rem}.intel-sub{font-size:.75rem;color:#737d8c}
+    .intel-row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #1f232a;color:#b8bec8}.intel-row:last-child{border-bottom:0}.intel-val{font-weight:800;color:#eaecef}
+    .intel-bar{height:7px;background:#252a31;border-radius:999px;overflow:hidden;margin-top:8px}.intel-bar span{display:block;height:100%;border-radius:999px;background:#0ecb81}
+    .intel-insight{padding:13px 15px;border:1px solid #2b3139;border-radius:12px;background:#15181e;margin-top:10px;color:#d4d8df;line-height:1.55}.intel-warn{border-color:rgba(246,70,93,.35);background:rgba(246,70,93,.07)}
+    .intel-table{width:100%;border-collapse:collapse;font-size:.8rem}.intel-table th{text-align:left;color:#7f8998;padding:9px;border-bottom:1px solid #2b3139}.intel-table td{padding:10px 9px;border-bottom:1px solid #1f232a;color:#d6dae1}.intel-num{text-align:right;font-variant-numeric:tabular-nums}
+    @media(max-width:700px){.intel-hero{padding:20px}.intel-hero h2{font-size:1.45rem}.intel-score{font-size:2.7rem}}
+    </style>
+    """, unsafe_allow_html=True)
+    st.markdown(f'<div class="intel-hero"><div class="intel-eyebrow">PORTFOLIO INTELLIGENCE</div><h2>🧠 Portfolio Intelligence</h2><p>สรุปโครงสร้างพอร์ต ผลกระทบของแต่ละสินทรัพย์ และต้นทุนการเทรดจาก Ledger ปัจจุบัน</p></div>', unsafe_allow_html=True)
+    t_health, t_insights, t_pnl, t_fees = st.tabs(["🩺 Portfolio Health", "💡 Insights", "📊 P&L Attribution", "💸 Fee Analytics"])
+
+    with t_health:
+        c1,c2,c3 = st.columns([1.1,1,1])
+        with c1: st.markdown(f'<div class="intel-card"><div class="intel-sub">PORTFOLIO HEALTH</div><div class="intel-score">{health["score"]}<span style="font-size:1rem;color:#737d8c"> / 100</span></div><div class="intel-score-label">Composite descriptive score</div></div>', unsafe_allow_html=True)
+        with c2: st.markdown(f'<div class="intel-card"><h4>Portfolio Value</h4><div class="intel-score" style="font-size:1.8rem">฿{snap["total_value_thb"]:,.2f}</div><div class="intel-sub">Invested ฿{snap["invested_cost_thb"]:,.2f}</div></div>', unsafe_allow_html=True)
+        with c3: st.markdown(f'<div class="intel-card"><h4>Total P&L</h4><div class="intel-score" style="font-size:1.8rem">฿{snap["total_pnl_thb"]:+,.2f}</div><div class="intel-sub">Realized + Unrealized</div></div>', unsafe_allow_html=True)
+        labels=[("Diversification",health["diversification"]),("Concentration",health["concentration"]),("Liquidity",health["liquidity"]),("Volatility",health["volatility"]),("Drawdown",health["drawdown"])]
+        st.markdown('<div class="intel-card"><h4>Health Components</h4><div class="intel-sub">แต่ละคะแนนเป็นตัวชี้วัดเชิงพรรณนา ไม่ใช่คำแนะนำการลงทุน</div>', unsafe_allow_html=True)
+        for label,val in labels: st.markdown(f'<div class="intel-row"><span>{label}</span><span class="intel-val">{val}/100</span></div><div class="intel-bar"><span style="width:{val}%"></span></div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with t_insights:
+        rows=snap.get("rows",[]) or []; alloc=sorted([(str(r["asset"]),float(r["allocation_pct"])) for r in rows],key=lambda x:x[1],reverse=True)
+        insights=[]
+        if alloc and alloc[0][1]>=70: insights.append(("warn",f'⚠ {alloc[0][0]} คิดเป็น {alloc[0][1]:.1f}% ของ Portfolio Value ซึ่งเป็นสัดส่วนสูงสุดในพอร์ต'))
+        elif alloc: insights.append(("info",f'ℹ {alloc[0][0]} เป็นสินทรัพย์ที่มีสัดส่วนสูงสุดที่ {alloc[0][1]:.1f}% ของ Portfolio Value'))
+        insights += [("info",f'📈 Unrealized P&L รวมอยู่ที่ ฿{snap["unrealized_pnl_thb"]:+,.2f} และ Realized P&L อยู่ที่ ฿{snap["realized_pnl_thb"]:+,.2f}'),("info",f'💰 Cash THB อยู่ที่ {risk["cash_pct"]:.1f}% ของ Portfolio Value'),("info",f'📉 Estimated annualized volatility อยู่ที่ {risk["volatility_pct"]:.1f}% จากน้ำหนักปัจจุบัน'),("info",f'💸 Fees สะสมใน Ledger อยู่ที่ ฿{snap["fees_thb"]:,.2f}')]
+        for kind,msg in insights: st.markdown(f'<div class="intel-insight {"intel-warn" if kind=="warn" else ""}">{msg}</div>',unsafe_allow_html=True)
+        st.caption("Insights อ้างอิงข้อมูล Portfolio/Ledger ที่มีอยู่ ณ เวลาปัจจุบัน และไม่มีคำสั่งซื้อหรือขาย")
+
+    with t_pnl:
+        rows=snap.get("rows",[]) or []; pnl_rows=sorted(rows,key=lambda r:abs(float(r.get("unrealized_pnl",0))),reverse=True)
+        st.markdown('<div class="intel-card"><h4>P&L Attribution</h4><div class="intel-sub">ดูว่า Unrealized P&L ปัจจุบันมาจากสินทรัพย์ใด</div><table class="intel-table"><thead><tr><th>Asset</th><th class="intel-num">Cost</th><th class="intel-num">Market Value</th><th class="intel-num">Unrealized P&L</th><th class="intel-num">P/L %</th></tr></thead><tbody>',unsafe_allow_html=True)
+        for r in pnl_rows:
+            st.markdown(f'<tr><td>{coin_icon_html(r["asset"],24)} &nbsp;{_html.escape(r["asset"])}</td><td class="intel-num">฿{r["cost_basis"]:,.2f}</td><td class="intel-num">฿{r["market_value"]:,.2f}</td><td class="intel-num">฿{r["unrealized_pnl"]:+,.2f}</td><td class="intel-num">{r["pnl_pct"]:+.2f}%</td></tr>',unsafe_allow_html=True)
+        total_pct=snap["unrealized_pnl_thb"]/snap["invested_cost_thb"]*100 if snap["invested_cost_thb"] else 0
+        st.markdown(f'<tr><td><b>Total</b></td><td class="intel-num"><b>฿{snap["invested_cost_thb"]:,.2f}</b></td><td class="intel-num"><b>฿{snap["market_value_thb"]:,.2f}</b></td><td class="intel-num"><b>฿{snap["unrealized_pnl_thb"]:+,.2f}</b></td><td class="intel-num"><b>{total_pct:+.2f}%</b></td></tr></tbody></table></div>',unsafe_allow_html=True)
+        st.markdown(f'<div class="intel-card"><h4>Realized / Unrealized / Fees</h4><div class="intel-row"><span>Realized P&L</span><span class="intel-val">฿{snap["realized_pnl_thb"]:+,.2f}</span></div><div class="intel-row"><span>Unrealized P&L</span><span class="intel-val">฿{snap["unrealized_pnl_thb"]:+,.2f}</span></div><div class="intel-row"><span>Fees</span><span class="intel-val">฿{snap["fees_thb"]:,.2f}</span></div><div class="intel-row"><span>Total P&L</span><span class="intel-val">฿{snap["total_pnl_thb"]:+,.2f}</span></div></div>',unsafe_allow_html=True)
+
+    with t_fees:
+        txs=[x for x in snap.get("transactions",[]) if isinstance(x,dict)]
+        total_fees=sum(float(x.get("fee_thb",0) or 0) for x in txs); trade_fees=sum(float(x.get("fee_thb",0) or 0) for x in txs if str(x.get("type","")).upper() in {"BUY","SELL"}); withdrawal_fees=sum(float(x.get("fee_thb",0) or 0) for x in txs if str(x.get("type","")).upper()=="WITHDRAWAL")
+        trade_count=sum(1 for x in txs if str(x.get("type","")).upper() in {"BUY","SELL"})
+        c1,c2,c3,c4=st.columns(4); c1.metric("Fees สะสม",f"฿{total_fees:,.2f}"); c2.metric("Trading Fees",f"฿{trade_fees:,.2f}"); c3.metric("Withdrawal Fees",f"฿{withdrawal_fees:,.2f}"); c4.metric("จำนวน Trades",f"{trade_count:,}")
+        st.markdown(f'<div class="intel-card"><h4>Fee Breakdown</h4><div class="intel-row"><span>BUY/SELL fees</span><span class="intel-val">฿{trade_fees:,.2f}</span></div><div class="intel-row"><span>Withdrawal fees</span><span class="intel-val">฿{withdrawal_fees:,.2f}</span></div><div class="intel-row"><span>All recorded fees</span><span class="intel-val">฿{total_fees:,.2f}</span></div><div class="intel-row"><span>Ledger transactions</span><span class="intel-val">{len(txs):,}</span></div></div>',unsafe_allow_html=True)
+
+
 def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
     if data.empty:
         st.error("⚠️ ไม่สามารถโหลดข้อมูลได้")
@@ -10413,6 +10520,11 @@ def render_dashboard(cfg: dict[str, Any], data: pd.DataFrame,
             if st.button("🚨 Risk Center", key="dash_go_risk", **WIDE,
                         on_click=_dash_goto, args=(NAV_RISK,)):
                 pass
+        st.write("")
+        with st.container(key="dash_qa_intel"):
+            if st.button("🧠 Intelligence", key="dash_go_intel", **WIDE,
+                        on_click=_dash_goto, args=(NAV_INTELLIGENCE,)):
+                pass
 
 def _main_body() -> None:
     st.markdown(THEME_CSS, unsafe_allow_html=True)
@@ -10711,6 +10823,8 @@ def _main_body() -> None:
             render_news_section(cfg)
         elif nav == NAV_RISK:
             render_risk_center(cfg, data, market_df)
+        elif nav == NAV_INTELLIGENCE:
+            render_portfolio_intelligence(cfg, data, market_df)
         elif nav == NAV_SIMPLE:
             from simple_backtest import render_simple_backtest
             render_simple_backtest(
