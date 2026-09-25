@@ -1256,333 +1256,6 @@ def coin_icon_html(sym: str, size: int = 28) -> str:
             f'background-image:{layers};background-size:cover;background-position:center;"></span>')
 
 
-def render_portfolio_reports(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
-    """Portfolio export/report center. Read-only: no wallet or ledger mutations."""
-    sim = st.session_state.get("sim", {})
-    ensure_portfolio_ledger(sim)
-
-    st.markdown("## 📦 Portfolio Report Center")
-    st.caption("ส่งออกข้อมูล Portfolio / Wallet / Transactions / Snapshots สำหรับเก็บสำรองหรือวิเคราะห์ต่อ")
-
-    price_map: dict[str, float] = {}
-    try:
-        if isinstance(market_df, pd.DataFrame) and not market_df.empty:
-            for _, row in market_df.iterrows():
-                sym = str(row.get("symbol", "")).upper()
-                if sym:
-                    try:
-                        price_map[sym] = float(row.get("price_thb", 0) or 0)
-                    except Exception:
-                        pass
-    except Exception:
-        price_map = {}
-
-    snap = portfolio_snapshot(sim, price_map)
-    holdings = snap.get("holdings", []) if isinstance(snap, dict) else []
-    txs = sim.get("portfolio_ledger", []) if isinstance(sim.get("portfolio_ledger", []), list) else []
-    snapshots = sim.get("portfolio_snapshots", []) if isinstance(sim.get("portfolio_snapshots", []), list) else []
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Portfolio Value", f"฿{float(snap.get('total_value_thb', 0) or 0):,.2f}")
-    c2.metric("Holdings", f"{len(holdings):,}")
-    c3.metric("Transactions", f"{len(txs):,}")
-    c4.metric("Snapshots", f"{len(snapshots):,}")
-
-    st.markdown("### 📊 Export Portfolio")
-    portfolio_rows = []
-    for h in holdings:
-        if not isinstance(h, dict):
-            continue
-        portfolio_rows.append({
-            "asset": h.get("asset", ""),
-            "holdings": float(h.get("qty", 0) or 0),
-            "average_cost_thb": float(h.get("avg_cost_thb", 0) or 0),
-            "current_price_thb": float(h.get("price_thb", 0) or 0),
-            "market_value_thb": float(h.get("market_value_thb", 0) or 0),
-            "cost_basis_thb": float(h.get("cost_basis_thb", 0) or 0),
-            "unrealized_pnl_thb": float(h.get("unrealized_pnl_thb", 0) or 0),
-            "pnl_pct": float(h.get("pnl_pct", 0) or 0),
-            "allocation_pct": float(h.get("allocation_pct", 0) or 0),
-        })
-    portfolio_df = pd.DataFrame(portfolio_rows)
-    if not portfolio_df.empty:
-        st.dataframe(portfolio_df, use_container_width=True, hide_index=True)
-
-    csv_portfolio = portfolio_df.to_csv(index=False).encode("utf-8-sig")
-    csv_tx = pd.DataFrame(txs).to_csv(index=False).encode("utf-8-sig")
-    csv_snap = pd.DataFrame(snapshots).to_csv(index=False).encode("utf-8-sig")
-
-    summary = {
-        "exported_at": _portfolio_now_iso(),
-        "portfolio_value_thb": float(snap.get("total_value_thb", 0) or 0),
-        "cash_thb": float(snap.get("cash_thb", 0) or 0),
-        "invested_cost_thb": float(snap.get("invested_cost_thb", 0) or 0),
-        "unrealized_pnl_thb": float(snap.get("unrealized_pnl_thb", 0) or 0),
-        "realized_pnl_thb": float(snap.get("realized_pnl_thb", 0) or 0),
-        "total_pnl_thb": float(snap.get("total_pnl_thb", 0) or 0),
-        "total_pnl_pct": float(snap.get("total_pnl_pct", 0) or 0),
-        "fees_thb": float(snap.get("fees_thb", 0) or 0),
-        "holdings_count": len(holdings),
-        "transaction_count": len(txs),
-        "snapshot_count": len(snapshots),
-    }
-    json_backup = json.dumps({
-        "schema": "XSpring Portfolio Export v1",
-        "summary": summary,
-        "portfolio": portfolio_rows,
-        "transactions": txs,
-        "snapshots": snapshots,
-    }, ensure_ascii=False, indent=2, default=str).encode("utf-8")
-
-    b1, b2, b3 = st.columns(3)
-    with b1:
-        st.download_button("⬇️ Portfolio CSV", csv_portfolio, "portfolio.csv", "text/csv", use_container_width=True)
-    with b2:
-        st.download_button("⬇️ Transactions CSV", csv_tx, "transactions.csv", "text/csv", use_container_width=True)
-    with b3:
-        st.download_button("⬇️ Snapshots CSV", csv_snap, "portfolio_snapshots.csv", "text/csv", use_container_width=True)
-
-    st.markdown("### 🗄️ Full Backup")
-    st.info("ไฟล์ JSON นี้รวม Summary + Holdings + Transaction Ledger + Snapshot History เพื่อใช้เป็นข้อมูลสำรอง")
-    st.download_button(
-        "📦 Download Full Portfolio Backup",
-        json_backup,
-        "xspring_portfolio_backup.json",
-        "application/json",
-        use_container_width=True,
-    )
-
-    st.markdown("### 🧾 Export Summary")
-    st.code(json.dumps(summary, ensure_ascii=False, indent=2), language="json")
-
-
-def render_portfolio_search_filter(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
-    """Search/filter center for Portfolio, Holdings and transaction history."""
-    sim = st.session_state.get("sim", {})
-    ensure_portfolio_ledger(sim)
-
-    st.markdown("## 🔎 Portfolio Search & Filter")
-    st.caption("ค้นหาและกรอง Holdings / Transactions / Snapshots จากข้อมูล Portfolio ชุดเดียวกัน")
-
-    price_map: dict[str, float] = {}
-    if isinstance(market_df, pd.DataFrame) and not market_df.empty:
-        for _, row in market_df.iterrows():
-            sym = str(row.get("symbol", "")).upper().strip()
-            if sym:
-                try:
-                    price_map[sym] = float(row.get("price_thb", 0) or 0)
-                except Exception:
-                    pass
-
-    snap = portfolio_snapshot(sim, price_map)
-    holdings = snap.get("rows", []) if isinstance(snap, dict) else []
-    txs = sim.get("portfolio_ledger", [])
-    if not isinstance(txs, list):
-        txs = []
-    snapshots = sim.get("portfolio_snapshots", [])
-    if not isinstance(snapshots, list):
-        snapshots = []
-
-    # Compact overview
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Portfolio Value", f"฿{float(snap.get('total_value_thb', 0) or 0):,.2f}")
-    m2.metric("Holdings", f"{len(holdings):,}")
-    m3.metric("Transactions", f"{len(txs):,}")
-    m4.metric("Snapshots", f"{len(snapshots):,}")
-
-    search = st.text_input(
-        "🔎 Search",
-        placeholder="ค้นหา BTC, BUY, Deposit, หมายเหตุ, Transaction ID...",
-        key="portfolio_global_search",
-    ).strip().lower()
-
-    tab_h, tab_tx, tab_snap = st.tabs([
-        "💼 Holdings",
-        "🧾 Transactions",
-        "📸 Snapshots",
-    ])
-
-    def _match_search(row: Mapping[str, Any]) -> bool:
-        if not search:
-            return True
-        hay = " ".join(str(v) for v in row.values()).lower()
-        return search in hay
-
-    with tab_h:
-        hrows = []
-        for h in holdings:
-            if not isinstance(h, dict) or not _match_search(h):
-                continue
-            hrows.append({
-                "Asset": str(h.get("asset", "")).upper(),
-                "Holdings": float(h.get("qty", 0) or 0),
-                "Average Cost": float(h.get("avg_cost", 0) or 0),
-                "Current Price": float(h.get("price", 0) or 0),
-                "Market Value": float(h.get("market_value", 0) or 0),
-                "Unrealized P&L": float(h.get("unrealized_pnl", 0) or 0),
-                "P/L %": float(h.get("pnl_pct", 0) or 0),
-                "Allocation %": float(h.get("allocation_pct", 0) or 0),
-            })
-
-        if hrows:
-            hdf = pd.DataFrame(hrows)
-            st.dataframe(
-                hdf,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Holdings": st.column_config.NumberColumn(format="%.8f"),
-                    "Average Cost": st.column_config.NumberColumn(format="฿%,.2f"),
-                    "Current Price": st.column_config.NumberColumn(format="฿%,.2f"),
-                    "Market Value": st.column_config.NumberColumn(format="฿%,.2f"),
-                    "Unrealized P&L": st.column_config.NumberColumn(format="฿%,.2f"),
-                    "P/L %": st.column_config.NumberColumn(format="%.2f%%"),
-                    "Allocation %": st.column_config.NumberColumn(format="%.2f%%"),
-                },
-            )
-            st.caption(f"พบ {len(hdf):,} รายการ")
-        else:
-            st.info("ไม่พบ Holdings ที่ตรงกับคำค้น")
-
-    with tab_tx:
-        types = sorted({
-            str(x.get("type", "")).upper()
-            for x in txs if isinstance(x, dict) and str(x.get("type", "")).strip()
-        })
-        assets = sorted({
-            str(x.get("asset", "")).upper()
-            for x in txs if isinstance(x, dict) and str(x.get("asset", "")).strip()
-        })
-
-        f1, f2, f3 = st.columns(3)
-        with f1:
-            type_filter = st.multiselect(
-                "Transaction Type",
-                options=types,
-                placeholder="ทั้งหมด",
-                key="portfolio_tx_type_filter",
-            )
-        with f2:
-            asset_filter = st.multiselect(
-                "Asset",
-                options=assets,
-                placeholder="ทั้งหมด",
-                key="portfolio_tx_asset_filter",
-            )
-        with f3:
-            sort_order = st.selectbox(
-                "เรียงวันที่",
-                ["ใหม่ → เก่า", "เก่า → ใหม่"],
-                key="portfolio_tx_sort",
-            )
-
-        filtered = []
-        for tx in txs:
-            if not isinstance(tx, dict):
-                continue
-            typ = str(tx.get("type", "")).upper()
-            asset = str(tx.get("asset", "")).upper()
-            if type_filter and typ not in type_filter:
-                continue
-            if asset_filter and asset not in asset_filter:
-                continue
-            if not _match_search(tx):
-                continue
-            filtered.append(tx)
-
-        def _ts_sort_key(v: Any) -> int:
-            """Return a timezone-safe integer sort key for mixed transaction timestamps.
-
-            Ledger data can contain both timezone-aware and timezone-naive timestamp
-            strings. Comparing those Timestamp objects directly raises TypeError in
-            pandas. Converting to UTC nanoseconds gives us one comparable scalar
-            without changing the stored transaction timestamp.
-            """
-            try:
-                x = pd.to_datetime(v, errors="coerce", utc=True)
-                if pd.isna(x):
-                    return -1
-                return int(x.value)
-            except Exception:
-                return -1
-
-        filtered.sort(key=lambda x: _ts_sort_key(x.get("timestamp")), reverse=(sort_order == "ใหม่ → เก่า"))
-
-        txrows = []
-        for tx in filtered:
-            txrows.append({
-                "Timestamp": tx.get("timestamp", ""),
-                "Type": str(tx.get("type", "")).upper(),
-                "Asset": str(tx.get("asset", "")).upper(),
-                "Quantity": float(tx.get("qty", 0) or 0),
-                "Price THB": float(tx.get("price_thb", 0) or 0),
-                "Gross THB": float(tx.get("gross_thb", 0) or 0),
-                "Fee THB": float(tx.get("fee_thb", 0) or 0),
-                "Cash Delta THB": float(tx.get("cash_delta_thb", 0) or 0),
-                "Realized P&L": float(tx.get("realized_pnl_thb", 0) or 0),
-                "Note": tx.get("note", ""),
-                "ID": tx.get("id", ""),
-            })
-
-        if txrows:
-            txdf = pd.DataFrame(txrows)
-            st.dataframe(
-                txdf,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Quantity": st.column_config.NumberColumn(format="%.8f"),
-                    "Price THB": st.column_config.NumberColumn(format="฿%,.2f"),
-                    "Gross THB": st.column_config.NumberColumn(format="฿%,.2f"),
-                    "Fee THB": st.column_config.NumberColumn(format="฿%,.2f"),
-                    "Cash Delta THB": st.column_config.NumberColumn(format="฿%,.2f"),
-                    "Realized P&L": st.column_config.NumberColumn(format="฿%,.2f"),
-                },
-            )
-            st.caption(f"แสดง {len(txdf):,} จาก {len(txs):,} Transactions")
-        else:
-            st.info("ไม่พบ Transaction ที่ตรงกับเงื่อนไข")
-
-    with tab_snap:
-        snap_rows = []
-        for item in snapshots:
-            if not isinstance(item, dict):
-                continue
-            if not _match_search(item):
-                continue
-            snap_rows.append({
-                "Date": item.get("date", item.get("timestamp", "")),
-                "Portfolio Value": float(item.get("portfolio_value_thb", item.get("total_value_thb", 0)) or 0),
-                "Cash": float(item.get("cash_thb", 0) or 0),
-                "Invested Cost": float(item.get("invested_cost_thb", 0) or 0),
-                "Unrealized P&L": float(item.get("unrealized_pnl_thb", 0) or 0),
-                "Realized P&L": float(item.get("realized_pnl_thb", 0) or 0),
-                "Fees": float(item.get("fees_thb", 0) or 0),
-            })
-        if snap_rows:
-            sdf = pd.DataFrame(snap_rows)
-            try:
-                sdf = sdf.sort_values("Date", ascending=False)
-            except Exception:
-                pass
-            st.dataframe(
-                sdf,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Portfolio Value": st.column_config.NumberColumn(format="฿%,.2f"),
-                    "Cash": st.column_config.NumberColumn(format="฿%,.2f"),
-                    "Invested Cost": st.column_config.NumberColumn(format="฿%,.2f"),
-                    "Unrealized P&L": st.column_config.NumberColumn(format="฿%,.2f"),
-                    "Realized P&L": st.column_config.NumberColumn(format="฿%,.2f"),
-                    "Fees": st.column_config.NumberColumn(format="฿%,.2f"),
-                },
-            )
-            st.caption(f"พบ {len(sdf):,} Snapshots")
-        else:
-            st.info("ไม่พบ Snapshot ที่ตรงกับคำค้น")
-
-
 NAV_LABELS = [
     "🏠 Dashboard",
     "📊 5-Year Backtest Simulator",
@@ -1600,9 +1273,8 @@ NAV_LABELS = [
     "🔔 Smart Alerts",
     "⚖️ Rebalance Simulator",
     "📈 Performance Analytics",
-    "📦 Portfolio Reports",
-    "🔎 Portfolio Search & Filter",
-    "🔔 Notification Center",
+    "💰 Cash Flow Analytics",
+    "🕒 Customer Timeline",
 ]
 NAV_DASHBOARD = NAV_LABELS[0]
 NAV_EXCHANGE = NAV_LABELS[3]
@@ -1618,9 +1290,8 @@ NAV_CORRELATION = NAV_LABELS[12]
 NAV_ALERTS = NAV_LABELS[13]
 NAV_REBALANCE = NAV_LABELS[14]
 NAV_PERFORMANCE = NAV_LABELS[15]
-NAV_REPORTS = NAV_LABELS[16]
-NAV_SEARCH = NAV_LABELS[17]
-NAV_NOTIFICATIONS = NAV_LABELS[18]
+NAV_CASHFLOW = NAV_LABELS[16]
+NAV_TIMELINE = NAV_LABELS[17]
 
 def _go_to_exchange(sym: str) -> None:
     st.session_state["bt_asset"] = sym
@@ -6136,149 +5807,6 @@ def record_portfolio_tx(
     return rec
 
 
-def sync_telegram_orders_to_portfolio_ledger(sim: dict[str, Any]) -> int:
-    """นำ Filled Telegram trades เข้า customer portfolio ledger แบบ idempotent.
-
-    Telegram bot เป็นผู้แก้ customer wallet + orders ใน Supabase อยู่แล้ว
-    ส่วนฟังก์ชันนี้เติมเฉพาะ portfolio ledger เพื่อให้ Holdings / P&L /
-    Transaction History เห็นรายการเดียวกัน โดยไม่หักเงินหรือเหรียญซ้ำ
-    และไม่แตะ dealer-side Exchange ledger.
-    """
-    if not isinstance(sim, dict):
-        return 0
-
-    ensure_portfolio_ledger(sim)
-    orders = sim.get("orders", [])
-    if not isinstance(orders, list):
-        return 0
-
-    ledger = sim.setdefault("portfolio_ledger", [])
-    existing_ids = {
-        str(tx.get("external_order_id"))
-        for tx in ledger
-        if isinstance(tx, dict) and tx.get("external_order_id")
-    }
-
-    # Process chronologically so SELL realized P&L uses the correct
-    # weighted-average cost after earlier Telegram BUYs.
-    tg_orders = []
-    for idx, rec in enumerate(orders):
-        if not isinstance(rec, dict):
-            continue
-        source_value = rec.get("Source", rec.get("source", rec.get("source_system", "")))
-        if "telegram" not in str(source_value or "").strip().lower():
-            continue
-        status_value = rec.get("สถานะ", rec.get("status", "Filled"))
-        if str(status_value or "Filled").strip().lower() not in {"filled", "fill", "completed", "executed", "success", "successful"}:
-            continue
-        order_id = str(rec.get("Order ID") or "").strip()
-        if not order_id or order_id in existing_ids:
-            continue
-        tg_orders.append((idx, rec, order_id))
-
-    if not tg_orders:
-        return 0
-
-    def _order_key(item):
-        _, rec, _ = item
-        try:
-            ts = pd.to_datetime(
-                f"{rec.get('วันที่','')} {rec.get('เวลา','')}",
-                errors="coerce", utc=True,
-            )
-            if pd.isna(ts):
-                ts = pd.Timestamp("1970-01-01", tz="UTC")
-        except Exception:
-            ts = pd.Timestamp("1970-01-01", tz="UTC")
-        return ts
-
-    tg_orders.sort(key=_order_key)
-    added = 0
-
-    for _, rec, order_id in tg_orders:
-        asset = str(rec.get("เหรียญ") or "").upper()
-        if not asset:
-            continue
-        try:
-            qty = abs(float(rec.get("เหรียญที่ส่งมอบ", 0.0) or 0.0))
-            price = float(rec.get("ราคาที่ลูกค้าได้", 0.0) or 0.0)
-            gross_or_settlement = float(rec.get("มูลค่า (บาท)", 0.0) or 0.0)
-            fee = float(rec.get("ค่าธรรมเนียม", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            continue
-        if qty <= 0 or price <= 0 or gross_or_settlement <= 0:
-            continue
-
-        side = "BUY" if str(rec.get("ฝั่ง", "")).strip() == "ซื้อ" else "SELL"
-
-        # If the portfolio ledger was first created after this Telegram trade,
-        # ensure_portfolio_ledger may already have migrated the order as MIG-*
-        # without preserving its external Order ID. Reuse that row instead of
-        # booking the same customer trade a second time.
-        signed_qty = qty if side == "BUY" else -qty
-        legacy_match = None
-        for tx0 in ledger:
-            if not isinstance(tx0, dict):
-                continue
-            if tx0.get("external_order_id"):
-                continue
-            if "ย้ายข้อมูลจาก Order Ledger เดิม" not in str(tx0.get("note", "")):
-                continue
-            try:
-                same = (
-                    str(tx0.get("type", "")).upper() == side
-                    and str(tx0.get("asset", "")).upper() == asset
-                    and abs(float(tx0.get("qty", 0.0) or 0.0) - signed_qty) <= 1e-10
-                    and abs(float(tx0.get("price_thb", 0.0) or 0.0) - price) <= 1e-6
-                    and abs(float(tx0.get("gross_thb", 0.0) or 0.0) - gross_or_settlement) <= 0.01
-                )
-            except (TypeError, ValueError):
-                same = False
-            if same:
-                legacy_match = tx0
-                break
-        if legacy_match is not None:
-            legacy_match["external_order_id"] = order_id
-            legacy_match["source"] = "Telegram"
-            legacy_match["exchange"] = str(rec.get("Exchange") or "Bitkub")
-            legacy_match["order_type"] = str(rec.get("ประเภท") or "MARKET").upper()
-            existing_ids.add(order_id)
-            continue
-
-        if side == "BUY":
-            # Telegram BUY deducts exactly the requested THB amount from cash;
-            # the fee is taken from delivered coin quantity.
-            tx = record_portfolio_tx(
-                sim, "BUY", asset, qty=qty, price_thb=price,
-                gross_thb=gross_or_settlement, fee_thb=fee,
-                cash_delta_thb=-gross_or_settlement,
-                note=f"Telegram BUY — Order ID {order_id}",
-            )
-        else:
-            # Telegram SELL records net THB received after fee. Use the
-            # portfolio's current weighted-average cost for realized P&L.
-            snap = portfolio_snapshot(sim, {asset: price})
-            old_row = next((r for r in snap.get("rows", []) if r.get("asset") == asset), None)
-            avg_cost = float(old_row.get("avg_cost", 0.0) or 0.0) if old_row else 0.0
-            realized = gross_or_settlement - (qty * avg_cost)
-            tx = record_portfolio_tx(
-                sim, "SELL", asset, qty=-qty, price_thb=price,
-                gross_thb=gross_or_settlement, fee_thb=fee,
-                cash_delta_thb=gross_or_settlement,
-                realized_pnl_thb=realized,
-                note=f"Telegram SELL — Order ID {order_id}",
-            )
-
-        tx["external_order_id"] = order_id
-        tx["source"] = "Telegram"
-        tx["exchange"] = str(rec.get("Exchange") or "Bitkub")
-        tx["order_type"] = str(rec.get("ประเภท") or "MARKET").upper()
-        existing_ids.add(order_id)
-        added += 1
-
-    return added
-
-
 def portfolio_snapshot(sim: dict[str, Any], price_thb_map: Mapping[str, float]) -> dict[str, Any]:
     ensure_portfolio_ledger(sim)
     txs = sim.get("portfolio_ledger", [])
@@ -7349,12 +6877,6 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         target_stock_thb,
         price_lookup=price_lookup,
     )
-
-    # Telegram /confirm already settles the customer wallet.
-    # Reconcile only the portfolio ledger here so Holdings / P&L /
-    # Transaction History use the same filled Telegram trades without
-    # applying the cash/coin movement a second time.
-    sync_telegram_orders_to_portfolio_ledger(sim)
 
     mid_now = spot_usd_current * usdthb_current * (1 + cfg["local_premium"])
     
@@ -8533,49 +8055,34 @@ def render_trading_journal(cfg: dict[str, Any], data: pd.DataFrame, market_df: p
 
 @_cache_data(ttl=300, show_spinner="กำลังคำนวณ Correlation…")
 def _portfolio_correlation_returns(tickers: tuple[str, ...], days: int = 180) -> tuple[pd.DataFrame, Optional[str]]:
-    """Fetch normalized daily THB prices and return daily percentage returns.
-
-    Assets with effectively zero return variance (for example a stablecoin modeled
-    as flat when no historical series is available) are kept in the matrix but
-    their correlation values remain NaN. This is mathematically preferable to
-    manufacturing a correlation value from a constant series.
-    """
+    """Fetch normalized daily THB prices and return daily percentage returns."""
     end = pd.Timestamp.now(tz=None).normalize()
     start = end - pd.Timedelta(days=max(30, int(days)))
     series: dict[str, pd.Series] = {}
     errors: list[str] = []
     for sym in tickers:
         if sym in STABLECOINS:
-            # Keep a constant THB-return series only as a placeholder when a
-            # stablecoin historical series is unavailable. Its zero variance
-            # will intentionally produce NaN correlations rather than 0/100%.
-            idx = pd.date_range(start, end, freq="D")
-            series[sym] = pd.Series(0.0, index=idx, name=sym)
+            # Stablecoins are modeled as approximately flat in THB terms for diversification view.
+            series[sym] = pd.Series(0.0, index=pd.date_range(start, end, freq="D"))
             continue
         df, err = fetch_price_data(sym, start, end)
         if err or df is None or df.empty:
             errors.append(f"{sym}: {err or 'ไม่มีข้อมูล'}")
             continue
-        usd = pd.to_numeric(df.get("Global_USD"), errors="coerce")
-        fx = pd.to_numeric(df.get("USDTHB"), errors="coerce")
-        px = usd * fx
+        px = pd.to_numeric(df.get("Global_USD"), errors="coerce") * pd.to_numeric(df.get("USDTHB"), errors="coerce")
         px = px.replace([np.inf, -np.inf], np.nan).dropna()
         if len(px) < 10:
             errors.append(f"{sym}: ข้อมูลน้อยเกินไป")
             continue
         px = px.resample("D").last().ffill()
-        daily_ret = px.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
-        if daily_ret.empty:
-            errors.append(f"{sym}: ไม่สามารถคำนวณ Daily Return ได้")
-            continue
-        series[sym] = daily_ret.rename(sym)
+        series[sym] = px.pct_change().dropna()
 
     if not series:
         return pd.DataFrame(), "ไม่สามารถดึงข้อมูลราคาย้อนหลังสำหรับคำนวณ Correlation ได้"
-
     ret = pd.concat(series, axis=1).replace([np.inf, -np.inf], np.nan).dropna(how="all")
     ret = ret.dropna(axis=1, how="all")
     if errors:
+        # Keep usable assets; caller can show the warning.
         ret.attrs["errors"] = errors
     return ret, None
 
@@ -8587,31 +8094,13 @@ def render_correlation_center(cfg: dict[str, Any], data: pd.DataFrame, market_df
 
     sim = st.session_state.get("sim", {})
     ensure_portfolio_ledger(sim)
-    # Portfolio snapshot must use THB prices. market_df stores USD quotes,
-    # so never pass price_usd directly as if it were THB.
-    usdthb = FALLBACK_USDTHB
-    try:
-        if isinstance(data, pd.DataFrame) and not data.empty and "USDTHB" in data.columns:
-            usdthb = float(data["USDTHB"].iloc[-1])
-        else:
-            usdthb, _ = get_reference_usdthb(data if isinstance(data, pd.DataFrame) else None)
-    except (TypeError, ValueError, IndexError):
-        usdthb = FALLBACK_USDTHB
-    if not np.isfinite(usdthb) or usdthb <= 0:
-        usdthb = FALLBACK_USDTHB
-
-    price_map = {"THB": 1.0}
+    price_map = {}
     if isinstance(market_df, pd.DataFrame) and not market_df.empty:
         for _, row in market_df.iterrows():
             try:
-                sym = str(row.get("symbol", "")).upper().strip()
-                usd_px = float(row.get("price_usd", 0) or 0)
-                if sym and np.isfinite(usd_px) and usd_px > 0:
-                    price_map[sym] = usd_px * usdthb
-            except (TypeError, ValueError):
+                price_map[str(row.get("symbol", "")).upper()] = float(row.get("price_thb", row.get("price_usd", 0)) or 0)
+            except Exception:
                 pass
-    # Ensure the currently selected asset has a fresh price even if it was
-    # temporarily missing from the short market overview response.
     snap = portfolio_snapshot(sim, price_map)
     rows = snap.get("rows", []) if isinstance(snap, dict) else []
     held = [str(r.get("asset", "")).upper() for r in rows if float(r.get("qty", 0) or 0) > 0 and str(r.get("asset", "")).upper() != "THB"]
@@ -8639,52 +8128,24 @@ def render_correlation_center(cfg: dict[str, Any], data: pd.DataFrame, market_df
     top_asset = max(latest_alloc, key=latest_alloc.get) if latest_alloc else ""
     top_pct = latest_alloc.get(top_asset, 0.0)
 
-    # Only average valid off-diagonal correlations. A constant/flat asset
-    # (e.g. a stablecoin placeholder) has undefined Pearson correlation and
-    # must not be treated as 0 correlation, otherwise diversification is
-    # falsely shown as 100/100.
-    if len(corr) > 1:
-        mask = ~np.eye(len(corr), dtype=bool)
-        off_diag = corr.where(mask).stack().dropna()
-    else:
-        off_diag = pd.Series(dtype=float)
-    avg_abs = float(off_diag.abs().mean()) if not off_diag.empty else float("nan")
-    diversification = (max(0.0, min(100.0, 100.0 * (1.0 - avg_abs)))
-                       if np.isfinite(avg_abs) else float("nan"))
+    avg_abs = float(corr.where(~np.eye(len(corr), dtype=bool)).abs().stack().mean()) if len(corr) > 1 else 0.0
+    diversification = max(0.0, min(100.0, 100.0 * (1.0 - avg_abs))) if len(corr) > 1 else 0.0
     h1, h2, h3, h4 = st.columns(4)
     h1.metric("สินทรัพย์ที่ถือ", len(held))
-    h2.metric("Avg |Correlation|", f"{avg_abs:.2f}" if np.isfinite(avg_abs) else "N/A")
-    h3.metric("Diversification View", f"{diversification:.0f}/100" if np.isfinite(diversification) else "N/A")
-    h4.metric("Largest Allocation", f"{top_pct:.2f}%", top_asset or "-")
-    if not np.isfinite(avg_abs):
-        st.info("ยังคำนวณค่าเฉลี่ย Correlation ไม่ได้ เพราะคู่สินทรัพย์ที่มีข้อมูลร่วมกันไม่เพียงพอหรือมีสินทรัพย์ที่มี Daily Return คงที่ (เช่น Stablecoin) — ค่า N/A ไม่ได้หมายถึง Correlation = 0")
+    h2.metric("Avg |Correlation|", f"{avg_abs:.2f}")
+    h3.metric("Diversification View", f"{diversification:.0f}/100")
+    h4.metric("Largest Allocation", f"{top_pct:.1f}%", top_asset or "-")
 
     st.markdown("### 📊 Correlation Matrix")
-    def _corr_css(v):
-        # Streamlit/Pandas Styler can render missing float cells as the literal
-        # Python value ``None`` in some versions. Build the display matrix
-        # explicitly so users always see N/A for unavailable correlations.
-        out = pd.DataFrame("", index=corr.index, columns=corr.columns)
-        for rr in corr.index:
-            for cc in corr.columns:
-                v = corr.loc[rr, cc]
-                if pd.isna(v):
-                    out.loc[rr, cc] = ""
-                elif v >= 0.75:
-                    out.loc[rr, cc] = "background:rgba(14,203,129,.18);color:#0ecb81;font-weight:700"
-                elif v <= -0.50:
-                    out.loc[rr, cc] = "background:rgba(246,70,93,.18);color:#f6465d;font-weight:700"
-                else:
-                    out.loc[rr, cc] = "color:#eaecef"
-        return out
-
-    corr_display = corr.round(2).astype(object)
-    corr_display = corr_display.where(corr.notna(), "N/A")
-    styled = corr_display.style.apply(lambda _: _corr_css(corr), axis=None)
+    def _corr_style(v):
+        if pd.isna(v): return ""
+        if v >= 0.75: return "background:rgba(14,203,129,.18);color:#0ecb81;font-weight:700"
+        if v <= -0.50: return "background:rgba(246,70,93,.18);color:#f6465d;font-weight:700"
+        return "color:#eaecef"
+    styled = corr.round(2).style.map(_corr_style).format("{:.2f}")
     st.dataframe(styled, use_container_width=True, height=min(520, 90 + 46 * len(corr)), hide_index=False)
 
     st.markdown("### 🧭 Diversification Overview")
-    st.caption("Allocation ของแต่ละเหรียญคิดจาก Market Value ÷ Portfolio Value รวมเงินสด จึงอาจต่ำมากหากเงินสดมีสัดส่วนสูง")
     alloc_rows = []
     for sym in held:
         pct = latest_alloc.get(sym, 0.0)
@@ -8713,16 +8174,9 @@ def render_fee_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.
     """Fee analytics derived from the same portfolio ledger used by Wallet."""
     sim = st.session_state.get("sim", {})
     ensure_portfolio_ledger(sim)
-    # portfolio_ledger is a list of transaction records in this app.
-    # Keep backward compatibility if an older state stores it as a dict.
-    ledger = sim.get("portfolio_ledger", []) if isinstance(sim, dict) else []
-    if isinstance(ledger, list):
-        txs = [t for t in ledger if isinstance(t, dict)]
-    elif isinstance(ledger, dict):
-        txs = ledger.get("transactions", [])
-        txs = [t for t in txs if isinstance(t, dict)]
-    else:
-        txs = []
+    ledger = sim.get("portfolio_ledger", {}) if isinstance(sim, dict) else {}
+    txs = ledger.get("transactions", []) if isinstance(ledger, dict) else []
+    txs = [t for t in txs if isinstance(t, dict)]
 
     rows = []
     for t in txs:
@@ -9004,13 +8458,9 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
                         '</div>',
                         unsafe_allow_html=True,
                     )
-                    st.button(
-                        f"เปิด {sym}/THB ใน Exchange ↗",
-                        key=f"watch_exchange_{sym}",
-                        use_container_width=True,
-                        on_click=_go_to_exchange,
-                        args=(sym,),
-                    )
+                    if st.button(f"เปิด {sym}/THB ใน Exchange ↗", key=f"watch_exchange_{sym}", use_container_width=True):
+                        _go_to_exchange(sym)
+                        st.rerun()
         else:
             st.info("เลือกเหรียญที่ต้องการติดตามจากรายการด้านบน")
 
@@ -11615,189 +11065,294 @@ def _smart_alerts_build(sim: dict[str, Any], snap: dict[str, Any],
 
 
 
-
-def _notification_center_items(sim: dict[str, Any], market_df: Optional[pd.DataFrame] = None) -> list[dict[str, Any]]:
-    """สร้าง Notification Center จากข้อมูลเดิมของพอร์ต โดยไม่สร้างธุรกรรมใหม่."""
-    items: list[dict[str, Any]] = []
-    ledger = sim.get("portfolio_ledger", []) if isinstance(sim, dict) else []
-    if not isinstance(ledger, list):
-        ledger = []
-
-    def _dt(v: Any) -> pd.Timestamp:
-        try:
-            x = pd.to_datetime(v, errors="coerce", utc=True)
-            return x if not pd.isna(x) else pd.Timestamp("1970-01-01", tz="UTC")
-        except Exception:
-            return pd.Timestamp("1970-01-01", tz="UTC")
-
-    def _add(nid: str, category: str, icon: str, title: str, text: str,
-             ts: Any = None, level: str = "info") -> None:
-        items.append({
-            "id": str(nid), "category": category, "icon": icon,
-            "title": title, "text": text, "timestamp": _dt(ts), "level": level,
-        })
-
-    # Transaction notifications: read directly from the existing portfolio ledger.
-    for tx in ledger:
-        if not isinstance(tx, dict):
-            continue
-        typ = str(tx.get("type", "")).upper()
-        asset = str(tx.get("asset", "")).upper()
-        gross = float(tx.get("gross_thb", 0.0) or 0.0)
-        fee = float(tx.get("fee_thb", 0.0) or 0.0)
-        ts = tx.get("timestamp") or tx.get("date")
-        ext = str(tx.get("external_order_id") or tx.get("id") or f"{typ}-{asset}-{ts}")
-        if typ == "BUY":
-            _add(f"tx:{ext}", "transaction", "🔵", "ซื้อสำเร็จ",
-                 f"BUY {asset} ฿{gross:,.2f}" + (f" • Fee ฿{fee:,.2f}" if fee else ""), ts)
-        elif typ == "SELL":
-            _add(f"tx:{ext}", "transaction", "🔵", "ขายสำเร็จ",
-                 f"SELL {asset} ฿{gross:,.2f}" + (f" • Fee ฿{fee:,.2f}" if fee else ""), ts)
-        elif typ in {"DEPOSIT", "DEPOSIT_THB"}:
-            _add(f"tx:{ext}", "system", "🟢", "Deposit สำเร็จ",
-                 f"ฝากเงิน ฿{gross:,.2f}", ts)
-        elif typ in {"WITHDRAW", "WITHDRAWAL", "WITHDRAW_THB"}:
-            _add(f"tx:{ext}", "system", "🟢", "Withdrawal สำเร็จ",
-                 f"ถอนเงิน ฿{abs(gross):,.2f}", ts)
-        elif typ == "FEE":
-            _add(f"tx:{ext}", "transaction", "🔵", "มีค่าธรรมเนียม",
-                 f"Fee ฿{fee or abs(gross):,.2f}", ts)
-
-    # Portfolio notification: compare the two latest stored snapshots.
-    snaps = sim.get("portfolio_snapshots", [])
-    if isinstance(snaps, list):
-        valid = [x for x in snaps if isinstance(x, dict)]
-        valid.sort(key=lambda x: _dt(x.get("date") or x.get("timestamp")))
-        if len(valid) >= 2:
-            prev, cur = valid[-2], valid[-1]
-            pv = float(prev.get("total_value_thb", 0) or 0)
-            cv = float(cur.get("total_value_thb", 0) or 0)
-            if pv > 0:
-                chg = (cv / pv - 1.0) * 100.0
-                if chg <= -3.0:
-                    _add("portfolio:drop:" + str(cur.get("date")), "portfolio", "🟡",
-                         "Portfolio ลดลง", f"มูลค่าพอร์ตลดลง {abs(chg):.2f}% จาก Snapshot ก่อนหน้า",
-                         cur.get("date"), "warning")
-                elif chg >= 3.0:
-                    _add("portfolio:up:" + str(cur.get("date")), "portfolio", "🟢",
-                         "Portfolio เพิ่มขึ้น", f"มูลค่าพอร์ตเพิ่มขึ้น {chg:.2f}% จาก Snapshot ก่อนหน้า",
-                         cur.get("date"), "info")
-
-    # Price notifications: surface existing alert definitions if the app has them.
-    price_alerts = sim.get("price_alerts", sim.get("price_alert_settings", []))
-    if isinstance(price_alerts, list):
-        for i, a in enumerate(price_alerts):
-            if not isinstance(a, dict):
-                continue
-            asset = str(a.get("asset") or a.get("symbol") or "").upper()
-            if not asset:
-                continue
-            status = str(a.get("status") or a.get("state") or "active").lower()
-            if status not in {"active", "enabled", "pending", ""}:
-                continue
-            direction = str(a.get("direction") or a.get("condition") or "").lower()
-            target = a.get("target") or a.get("price") or a.get("threshold")
-            if target is None:
-                continue
-            op = "<=" if "below" in direction or "ต่ำ" in direction else ">="
-            try:
-                target_txt = f"฿{float(target):,.2f}"
-            except (TypeError, ValueError):
-                target_txt = str(target)
-            _add(f"price:{a.get('id', i)}", "price", "🔴", "Price Alert",
-                 f"{asset} {op} {target_txt}", a.get("updated_at") or a.get("created_at"), "warning")
-
-    # Security notifications: only show if an existing login history is present.
-    history = sim.get("login_history", [])
-    if isinstance(history, list) and history:
-        latest = history[-1] if isinstance(history[-1], dict) else {}
-        ts = latest.get("timestamp") or latest.get("time") or latest.get("date")
-        device = latest.get("device") or latest.get("user_agent") or "อุปกรณ์ใหม่"
-        _add(f"security:{ts}:{device}", "security", "🟣", "การเข้าสู่ระบบล่าสุด",
-             f"{device}", ts, "info")
-
-    return sorted(items, key=lambda x: x["timestamp"], reverse=True)
+def _timeline_timestamp(value: Any) -> pd.Timestamp:
+    """Parse mixed legacy/new timestamps into one comparable UTC timestamp."""
+    try:
+        ts = pd.to_datetime(value, errors="coerce", utc=True)
+    except Exception:
+        return pd.NaT
+    return ts if not pd.isna(ts) else pd.NaT
 
 
-def render_notification_center(cfg: dict[str, Any], data: pd.DataFrame,
-                               market_df: pd.DataFrame) -> None:
-    """ศูนย์แจ้งเตือนลูกค้า: Web inbox + channel/category preferences."""
-    sim = st.session_state.get("sim", {}) or {}
+def _timeline_thai_time(ts: pd.Timestamp) -> str:
+    """Render a UTC timestamp in Thailand time without creating naive/aware sort bugs."""
+    if pd.isna(ts):
+        return "-"
+    try:
+        local = ts.tz_convert("Asia/Bangkok")
+        return local.strftime("%d %b %Y · %H:%M น.")
+    except Exception:
+        return str(ts)
+
+
+def render_customer_timeline(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
+    """Unified customer activity timeline built only from existing portfolio data.
+
+    Sources: portfolio ledger transactions and portfolio snapshots. No state is
+    mutated except the existing snapshot mechanism when it is explicitly used
+    elsewhere in the app.
+    """
+    sim = load_sim_state()
     ensure_portfolio_ledger(sim)
-    prefs = sim.setdefault("notification_preferences", {
-        "channels": {"web": True, "telegram": True, "email": False},
-        "categories": {"price": True, "portfolio": True, "transaction": True, "security": True, "system": True},
-    })
-    channels = prefs.setdefault("channels", {})
-    categories = prefs.setdefault("categories", {})
-    for k, v in {"web": True, "telegram": True, "email": False}.items():
-        channels.setdefault(k, v)
-    for k in ("price", "portfolio", "transaction", "security", "system"):
-        categories.setdefault(k, True)
+
+    ledger = sim.get("portfolio_ledger", [])
+    snapshots = sim.get("portfolio_snapshots", [])
+    events: list[dict[str, Any]] = []
+
+    # Transactions ---------------------------------------------------------
+    if isinstance(ledger, list):
+        for tx in ledger:
+            if not isinstance(tx, dict):
+                continue
+            ts = _timeline_timestamp(tx.get("timestamp") or tx.get("created_at") or tx.get("date"))
+            if pd.isna(ts):
+                continue
+            typ = str(tx.get("type", "")).upper()
+            asset = str(tx.get("asset", tx.get("symbol", "THB")) or "THB").upper()
+            qty = float(tx.get("qty", 0.0) or 0.0)
+            gross = float(tx.get("gross_thb", tx.get("amount_thb", 0.0)) or 0.0)
+            fee = float(tx.get("fee_thb", 0.0) or 0.0)
+            realized = float(tx.get("realized_pnl_thb", 0.0) or 0.0)
+            note = str(tx.get("note", "") or "")
+
+            if typ == "BUY":
+                icon, title = "🟢", f"ซื้อ {asset}"
+                detail = f"฿{gross:,.2f} · +{abs(qty):,.8f} {asset}"
+                if fee:
+                    detail += f" · Fee ฿{fee:,.2f}"
+            elif typ == "SELL":
+                icon, title = "🔴", f"ขาย {asset}"
+                detail = f"{abs(qty):,.8f} {asset} · ฿{gross:,.2f}"
+                if realized:
+                    detail += f" · Realized P&L {realized:+,.2f} บาท"
+                if fee:
+                    detail += f" · Fee ฿{fee:,.2f}"
+            elif typ in {"DEPOSIT", "DEPOSIT_CASH"}:
+                icon, title = "💰", "ฝากเงิน"
+                detail = f"+฿{gross:,.2f}"
+            elif typ in {"WITHDRAWAL", "WITHDRAW"}:
+                icon, title = "💸", "ถอนเงิน"
+                detail = f"-฿{gross:,.2f}"
+                if fee:
+                    detail += f" · Fee ฿{fee:,.2f}"
+            elif typ == "FEE":
+                icon, title = "💳", "ค่าธรรมเนียม"
+                detail = f"฿{abs(gross or fee):,.2f}"
+            else:
+                icon, title = "•", typ or "กิจกรรม"
+                detail = note or (f"฿{gross:,.2f}" if gross else "")
+
+            events.append({
+                "ts": ts,
+                "kind": "transaction",
+                "icon": icon,
+                "title": title,
+                "detail": detail,
+                "note": note,
+                "id": str(tx.get("id", "")),
+            })
+
+    # Portfolio snapshots --------------------------------------------------
+    if isinstance(snapshots, list):
+        for snap in snapshots:
+            if not isinstance(snap, dict):
+                continue
+            ts = _timeline_timestamp(snap.get("timestamp") or snap.get("date"))
+            if pd.isna(ts):
+                continue
+            value = float(snap.get("total_value_thb", 0.0) or 0.0)
+            pnl = float(snap.get("total_pnl_thb", 0.0) or 0.0)
+            events.append({
+                "ts": ts,
+                "kind": "snapshot",
+                "icon": "📸",
+                "title": "Portfolio Snapshot",
+                "detail": f"฿{value:,.2f} · P&L {pnl:+,.2f} บาท",
+                "note": "Snapshot ของพอร์ต",
+                "id": "",
+            })
+
+    if not events:
+        st.markdown("""
+        <div style="border:1px solid #2b3139;border-radius:16px;padding:28px;background:#141820;color:#9aa4b2;text-align:center">
+            ยังไม่มีประวัติกิจกรรมใน Timeline<br><small>เมื่อมีรายการซื้อ/ขาย ฝาก/ถอน หรือ Snapshot ระบบจะแสดงที่นี่</small>
+        </div>
+        """, unsafe_allow_html=True)
+        return
+
+    events.sort(key=lambda x: x["ts"].value if not pd.isna(x["ts"]) else float("-inf"), reverse=True)
 
     st.markdown("""
     <style>
-    .nc-hero{padding:26px 28px;border:1px solid #2b3139;border-radius:18px;background:linear-gradient(135deg,#11151b,#171b22);margin-bottom:18px}
-    .nc-kicker{font-size:.72rem;letter-spacing:.18em;color:#8b95a5;font-weight:800;text-transform:uppercase}
-    .nc-title{font-size:2rem;font-weight:850;color:#f2f4f7;margin-top:8px}
-    .nc-sub{color:#8f98a6;margin-top:8px}
-    .nc-card{padding:15px 17px;border:1px solid #2b3139;border-radius:14px;background:#15181e;margin:8px 0}
-    .nc-card.warn{border-color:rgba(240,185,11,.4)}
-    .nc-card.info{border-color:rgba(33,150,243,.28)}
-    .nc-card.ok{border-color:rgba(14,203,129,.30)}
-    .nc-row{display:flex;gap:12px;align-items:flex-start}
-    .nc-icon{font-size:1.25rem}.nc-cat{font-size:.68rem;color:#7d8795;text-transform:uppercase;letter-spacing:.08em}
-    .nc-head{font-weight:800;color:#eef1f4;margin-top:2px}.nc-text{color:#b9c0ca;font-size:.88rem;margin-top:3px}.nc-time{color:#697381;font-size:.72rem;margin-top:5px}
+      .tl-hero{padding:24px 28px;border:1px solid #2b3139;border-radius:20px;background:linear-gradient(135deg,#171a20,#0f1115 68%,#151a1d);margin-bottom:16px}
+      .tl-eyebrow{font-size:.7rem;letter-spacing:.18em;font-weight:800;color:#848e9c;text-transform:uppercase}
+      .tl-hero h2{margin:5px 0;color:#f1f3f5;font-size:1.8rem}.tl-hero p{margin:0;color:#8d96a5;font-size:.86rem}
+      .tl-wrap{border-left:2px solid #2b3139;margin:8px 0 0 18px;padding-left:22px}
+      .tl-day{font-weight:800;color:#eaecef;font-size:1.02rem;margin:22px 0 10px -2px}
+      .tl-item{position:relative;padding:13px 16px;margin:0 0 10px;border:1px solid #2b3139;border-radius:14px;background:#141820}
+      .tl-dot{position:absolute;left:-31px;top:18px;width:14px;height:14px;border-radius:50%;background:#20c997;border:3px solid #0f1115;box-sizing:content-box}
+      .tl-time{font-size:.72rem;color:#7f8a9a;margin-bottom:3px}.tl-title{font-weight:800;color:#f1f3f5;font-size:.95rem}.tl-detail{color:#c7cbd1;font-size:.84rem;margin-top:3px}.tl-note{color:#7f8a9a;font-size:.74rem;margin-top:4px}
+      @media(max-width:700px){.tl-wrap{margin-left:10px;padding-left:16px}.tl-dot{left:-25px}.tl-hero{padding:18px}}
     </style>
     """, unsafe_allow_html=True)
 
-    st.markdown('<div class="nc-hero"><div class="nc-kicker">CUSTOMER EXPERIENCE</div><div class="nc-title">🔔 Notification Center</div><div class="nc-sub">รวม Price, Portfolio, Transaction, Security และ System notification จากข้อมูลเดิมของบัญชี</div></div>', unsafe_allow_html=True)
+    st.markdown("<div class='tl-hero'><div class='tl-eyebrow'>CUSTOMER JOURNEY</div><h2>🕒 Customer Timeline</h2><p>รวมกิจกรรมสำคัญของลูกค้าไว้ใน Timeline เดียว จาก Portfolio Ledger และ Snapshot ที่มีอยู่แล้ว</p></div>", unsafe_allow_html=True)
 
-    with st.expander("⚙️ Notification Preferences", expanded=True):
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**ช่องทาง**")
-            channels["web"] = st.checkbox("🌐 Web", value=bool(channels.get("web", True)), key="nc_web")
-            channels["telegram"] = st.checkbox("📱 Telegram", value=bool(channels.get("telegram", True)), key="nc_telegram")
-            channels["email"] = st.checkbox("✉️ Email", value=bool(channels.get("email", False)), key="nc_email")
-        with c2:
-            st.markdown("**ประเภทการแจ้งเตือน**")
-            categories["price"] = st.checkbox("🔴 Price Alert", value=bool(categories.get("price", True)), key="nc_price")
-            categories["portfolio"] = st.checkbox("🟡 Portfolio", value=bool(categories.get("portfolio", True)), key="nc_portfolio")
-            categories["transaction"] = st.checkbox("🔵 Transaction", value=bool(categories.get("transaction", True)), key="nc_transaction")
-            categories["security"] = st.checkbox("🟣 Security", value=bool(categories.get("security", True)), key="nc_security")
-            categories["system"] = st.checkbox("🟢 System", value=bool(categories.get("system", True)), key="nc_system")
-        if st.button("💾 บันทึกการตั้งค่า", key="nc_save", use_container_width=True):
-            save_sim_state(sim)
-            st.success("บันทึกการตั้งค่า Notification แล้ว")
-            st.rerun()
+    f1, f2, f3 = st.columns([1.2, 1.2, 2.2])
+    with f1:
+        kind_filter = st.selectbox("ประเภท", ["ทั้งหมด", "ธุรกรรม", "Snapshot"], key="timeline_kind_filter")
+    with f2:
+        period = st.selectbox("ช่วงเวลา", ["7 วัน", "30 วัน", "90 วัน", "365 วัน", "ทั้งหมด"], index=1, key="timeline_period_filter")
+    with f3:
+        st.caption(f"กิจกรรมทั้งหมด {len(events):,} รายการ · แสดงเวลาไทย (UTC+7)")
 
-    items = _notification_center_items(sim, market_df)
-    visible = [x for x in items if bool(categories.get(x["category"], True))]
-    unread = len(visible)
-    c1, c2, c3, c4 = st.columns(4)
-    with c1: metric_card("Notifications", f"{unread:,}", "แสดงจากข้อมูลปัจจุบัน")
-    with c2: metric_card("Web", "ON" if channels.get("web") else "OFF", "Inbox")
-    with c3: metric_card("Telegram", "ON" if channels.get("telegram") else "OFF", "Channel preference")
-    with c4: metric_card("Email", "ON" if channels.get("email") else "OFF", "Channel preference")
+    filtered = events
+    if kind_filter == "ธุรกรรม":
+        filtered = [e for e in filtered if e["kind"] == "transaction"]
+    elif kind_filter == "Snapshot":
+        filtered = [e for e in filtered if e["kind"] == "snapshot"]
 
-    st.markdown("### 🔔 Notifications")
-    if not visible:
-        st.info("ยังไม่มี Notification ตามประเภทที่เปิดไว้")
-    else:
-        for item in visible[:100]:
-            ts = item["timestamp"].tz_convert(None) if getattr(item["timestamp"], "tzinfo", None) else item["timestamp"]
-            ts_txt = ts.strftime("%d/%m/%Y %H:%M") if not pd.isna(ts) else ""
+    if period != "ทั้งหมด":
+        days = int(period.split()[0])
+        cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
+        filtered = [e for e in filtered if e["ts"] >= cutoff]
+
+    if not filtered:
+        st.info("ไม่มีรายการตามตัวกรองที่เลือก")
+        return
+
+    # Group by Thailand local date so naive/aware timestamps never get mixed.
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for e in filtered:
+        local_day = e["ts"].tz_convert("Asia/Bangkok").strftime("%d %b %Y")
+        grouped.setdefault(local_day, []).append(e)
+
+    st.markdown("<div class='tl-wrap'>", unsafe_allow_html=True)
+    for day, items in grouped.items():
+        st.markdown(f"<div class='tl-day'>{day}</div>", unsafe_allow_html=True)
+        for e in items:
+            time_txt = e["ts"].tz_convert("Asia/Bangkok").strftime("%H:%M น.")
+            note = e.get("note", "")
+            eid = e.get("id", "")
+            note_html = f"<div class='tl-note'>{note}</div>" if note and note != "Snapshot ของพอร์ต" else ""
+            id_html = f"<div class='tl-note'>ID: {eid}</div>" if eid else ""
             st.markdown(
-                f'<div class="nc-card {item["level"]}"><div class="nc-row">'
-                f'<div class="nc-icon">{item["icon"]}</div><div><div class="nc-cat">{_html.escape(item["category"])}</div>'
-                f'<div class="nc-head">{_html.escape(item["title"])}</div>'
-                f'<div class="nc-text">{_html.escape(item["text"])}</div>'
-                f'<div class="nc-time">{_html.escape(ts_txt)}</div></div></div></div>',
+                f"<div class='tl-item'><span class='tl-dot'></span><div class='tl-time'>{time_txt}</div>"
+                f"<div class='tl-title'>{e['icon']} {e['title']}</div>"
+                f"<div class='tl-detail'>{e['detail']}</div>{note_html}{id_html}</div>",
                 unsafe_allow_html=True,
             )
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    st.caption("Web notification แสดงจาก Ledger / Snapshot เดิมเท่านั้น การเปิด Telegram หรือ Email เป็นการตั้ง preference ของช่องทาง; การส่งออกจริงจะใช้ตัวเชื่อมของช่องทางนั้น")
+
+def render_cash_flow_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
+    """Cash-flow / contribution analytics based on the existing portfolio ledger."""
+    sim = load_sim_state()
+    ensure_portfolio_ledger(sim)
+    ledger = sim.get("portfolio_ledger", []) or []
+    txs = ledger if isinstance(ledger, list) else []
+
+    rows = []
+    for tx in txs:
+        if not isinstance(tx, dict):
+            continue
+        typ = str(tx.get("type", "")).upper()
+        if typ not in {"DEPOSIT", "WITHDRAWAL", "WITHDRAW", "BUY", "SELL"}:
+            continue
+        try:
+            gross = float(tx.get("gross_thb", tx.get("amount_thb", 0.0)) or 0.0)
+            fee = float(tx.get("fee_thb", 0.0) or 0.0)
+            cash_delta = float(tx.get("cash_delta_thb", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        ts = tx.get("timestamp") or tx.get("created_at") or ""
+        try:
+            dt = pd.to_datetime(ts, errors="coerce")
+        except Exception:
+            dt = pd.NaT
+        if pd.isna(dt):
+            continue
+        rows.append({"timestamp": dt, "type": typ, "gross": gross, "fee": fee, "cash_delta": cash_delta,
+                     "asset": str(tx.get("symbol", tx.get("asset", "THB")) or "THB"),
+                     "note": str(tx.get("note", "") or "")})
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        st.info("ยังไม่มี Cash Flow / Contribution ที่บันทึกไว้ใน Portfolio Ledger")
+        return
+
+    dep = df[df["type"] == "DEPOSIT"]
+    wd = df[df["type"].isin(["WITHDRAWAL", "WITHDRAW"])]
+    buys = df[df["type"] == "BUY"]
+    sells = df[df["type"] == "SELL"]
+    total_dep = float(dep["gross"].sum())
+    total_wd = float(wd["gross"].sum())
+    net_contrib = total_dep - total_wd
+    trading_volume = float(buys["gross"].sum() + sells["gross"].sum())
+    fees = float(df["fee"].sum())
+
+    # Current portfolio snapshot for context.
+    try:
+        price_map = {}
+        if isinstance(market_df, pd.DataFrame) and not market_df.empty:
+            for _, r in market_df.iterrows():
+                sym = str(r.get("symbol", "")).upper()
+                px = r.get("price_usd", r.get("price", 0))
+                if sym:
+                    try:
+                        price_map[sym] = float(px) * float(data["USDTHB"].iloc[-1]) if "USDTHB" in data.columns else float(px)
+                    except Exception:
+                        pass
+        snap = portfolio_snapshot(sim, price_map)
+        current_value = float(snap.get("total_value_thb", snap.get("total_value", 0.0)) or 0.0)
+    except Exception:
+        current_value = float(sim.get("customer_thb", 0.0) or 0.0)
+
+    st.markdown("<div class='xs-section-title'>💰 Cash Flow & Contribution Analytics</div>", unsafe_allow_html=True)
+    k = st.columns(5)
+    metric_card(k[0], "เงินฝากสะสม", fmt_baht_full(total_dep))
+    metric_card(k[1], "ถอนสะสม", fmt_baht_full(total_wd), -total_wd if total_wd else 0)
+    metric_card(k[2], "เงินสุทธิที่เติม", fmt_baht_full(net_contrib), net_contrib)
+    metric_card(k[3], "Trading Volume", fmt_baht_full(trading_volume))
+    metric_card(k[4], "Fees", fmt_baht_full(fees), -fees if fees else 0)
+
+    st.caption(f"Portfolio Value ปัจจุบัน: {fmt_baht_full(current_value)} · Net contribution คำนวณจาก Deposit − Withdrawal · ไม่ใช่ผลตอบแทนลงทุน")
+
+    tab1, tab2 = st.tabs(["📅 รายเดือน", "🧾 รายการ Cash Flow"])
+    with tab1:
+        m = df.copy()
+        m["month"] = m["timestamp"].dt.to_period("M").astype(str)
+        monthly = m.groupby("month", as_index=False).agg(
+            Deposits=("gross", lambda x: float(x[m.loc[x.index, "type"].eq("DEPOSIT")].sum())),
+            Withdrawals=("gross", lambda x: float(x[m.loc[x.index, "type"].isin(["WITHDRAWAL", "WITHDRAW"])].sum())),
+            Trading_Volume=("gross", lambda x: float(x[m.loc[x.index, "type"].isin(["BUY", "SELL"])].sum())),
+            Fees=("fee", "sum"),
+        )
+        monthly["Net Contribution"] = monthly["Deposits"] - monthly["Withdrawals"]
+        monthly = monthly.sort_values("month", ascending=False)
+        st.dataframe(monthly.rename(columns={"month":"เดือน", "Deposits":"ฝาก (THB)", "Withdrawals":"ถอน (THB)",
+                                             "Net Contribution":"เงินสุทธิ (THB)", "Trading_Volume":"Trading Volume (THB)", "Fees":"Fees (THB)"}),
+                     hide_index=True, use_container_width=True)
+        fig = go.Figure()
+        chart = monthly.sort_values("month")
+        fig.add_trace(go.Bar(x=chart["month"], y=chart["Net Contribution"], name="Net Contribution"))
+        fig.update_layout(template="plotly_dark", height=300, margin=dict(t=20,b=20),
+                          paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+        st.plotly_chart(fig, use_container_width=True)
+
+    with tab2:
+        view = df.sort_values("timestamp", ascending=False).copy()
+        view["timestamp"] = view["timestamp"].dt.strftime("%Y-%m-%d %H:%M")
+        view["gross"] = view["gross"].map(lambda x: f"{x:,.2f}")
+        view["fee"] = view["fee"].map(lambda x: f"{x:,.2f}")
+        view["cash_delta"] = view["cash_delta"].map(lambda x: f"{x:+,.2f}")
+        view = view.rename(columns={"timestamp":"เวลา", "type":"ประเภท", "asset":"สินทรัพย์", "gross":"มูลค่า (THB)",
+                                    "fee":"Fee (THB)", "cash_delta":"Cash Δ (THB)", "note":"หมายเหตุ"})
+        st.dataframe(view[["เวลา","ประเภท","สินทรัพย์","มูลค่า (THB)","Fee (THB)","Cash Δ (THB)","หมายเหตุ"]],
+                     hide_index=True, use_container_width=True, height=420)
+
+    st.markdown("<div class='xs-section-title'>📌 สิ่งที่ตัวเลขนี้บอก</div>", unsafe_allow_html=True)
+    st.info("Net Contribution คือเงินที่เติมเข้าพอร์ตสุทธิจากการถอน ส่วน Portfolio Value คือมูลค่าพอร์ตปัจจุบัน ทั้งสองตัวเลขไม่ควรถูกตีความว่าเป็นผลตอบแทนจากการลงทุนโดยตรง")
 
 
 def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
@@ -11865,14 +11420,10 @@ def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market
     worst_day = float(returns.min() * 100) if len(returns) else 0.0
 
     c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        metric_card("Portfolio Value", f"฿{latest_value:,.2f}", "Latest snapshot")
-    with c2:
-        metric_card("Total Return", f"{total_return:+.2f}%", f"From {hist['date'].iloc[0].date()}")
-    with c3:
-        metric_card("Max Drawdown", f"{max_dd:.2f}%", "Peak-to-trough")
-    with c4:
-        metric_card("Volatility", f"{volatility:.2f}%", "Annualized estimate")
+    metric_card(c1, "Portfolio Value", f"฿{latest_value:,.2f}", None, "Latest snapshot")
+    metric_card(c2, "Total Return", f"{total_return:+.2f}%", total_return, f"From {hist['date'].iloc[0].date()}")
+    metric_card(c3, "Max Drawdown", f"{max_dd:.2f}%", max_dd, "Peak-to-trough")
+    metric_card(c4, "Volatility", f"{volatility:.2f}%", None, "Annualized estimate")
 
     st.markdown("### 📊 Portfolio Value")
     chart = hist.set_index("date")[["value"]].rename(columns={"value": "Portfolio Value (THB)"})
@@ -11926,7 +11477,7 @@ def render_rebalance_simulator(cfg: dict[str, Any], data: pd.DataFrame,
             pass
 
     snap = portfolio_snapshot(sim, price_map)
-    rows = [r for r in snap.get("rows", []) if float(r.get("market_value", 0) or 0) > 0]
+    rows = [r for r in snap.get("rows", []) if float(r.get("market_value_thb", 0) or 0) > 0]
     cash = float(snap.get("cash_thb", 0) or 0)
     total = float(snap.get("total_value_thb", 0) or 0)
 
@@ -11964,7 +11515,7 @@ def render_rebalance_simulator(cfg: dict[str, Any], data: pd.DataFrame,
     st.markdown("### 🎯 Target Allocation")
     st.caption("ตั้งเป้าหมายเป็นเปอร์เซ็นต์ ระบบจะปรับ THB เป็นตัว residual เพื่อให้รวม 100%")
 
-    symbols = [str(r.get("asset", "")).upper() for r in rows if r.get("asset")]
+    symbols = [str(r.get("symbol","")).upper() for r in rows if r.get("symbol")]
     target = {}
     if not symbols:
         st.info("ยังไม่มีสินทรัพย์ใน Portfolio สำหรับจำลอง Rebalance")
@@ -11975,7 +11526,7 @@ def render_rebalance_simulator(cfg: dict[str, Any], data: pd.DataFrame,
         ["Custom", "Current Allocation", "Equal Weight"],
         key="rb_preset_select",
     )
-    current_alloc = {str(r["asset"]).upper(): float(r.get("allocation_pct", 0) or 0) for r in rows}
+    current_alloc = {str(r["symbol"]).upper(): float(r.get("allocation_pct", 0) or 0) for r in rows}
     if preset == "Current Allocation":
         for sym in symbols:
             target[sym] = current_alloc.get(sym, 0.0)
@@ -12012,8 +11563,8 @@ def render_rebalance_simulator(cfg: dict[str, Any], data: pd.DataFrame,
     st.markdown("### 📊 Scenario")
     scenario_rows = []
     for r in rows:
-        sym = str(r["asset"]).upper()
-        cur_val = float(r.get("market_value", 0) or 0)
+        sym = str(r["symbol"]).upper()
+        cur_val = float(r.get("market_value_thb", 0) or 0)
         cur_pct = float(r.get("allocation_pct", 0) or 0)
         tgt_pct = float(target.get(sym, 0.0))
         tgt_val = total * tgt_pct / 100.0
@@ -12503,38 +12054,9 @@ def _main_body() -> None:
                                           use_fx_proxy=cfg["use_fx_proxy"])
 
     market_df = fetch_market_overview(SUPPORTED_ASSETS)
-
-    # Telegram /confirm writes the authoritative customer state (wallet + orders)
-    # to the shared sim_state.  A long-lived Streamlit session may otherwise keep
-    # an older in-memory copy and never see a Telegram trade that happened after
-    # the session was opened.  Refresh the persisted state on every rerun before
-    # reconciling Telegram trades.  This is intentionally limited to the shared
-    # sim_state and does not create or modify any dealer-side records.
-    if not is_guest_mode():
-        try:
-            _latest_saved_sim = load_sim_state()
-            if isinstance(_latest_saved_sim, dict):
-                st.session_state["sim"] = _latest_saved_sim
-        except Exception as _tg_reload_exc:
-            print(f"[telegram portfolio reload] error: {_tg_reload_exc}")
-
     sim_for_portfolio = st.session_state.get("sim", {})
     if isinstance(sim_for_portfolio, dict):
         ensure_portfolio_ledger(sim_for_portfolio)
-
-        # Reconcile ALL filled Telegram assets through the same generic path.
-        # No asset-specific branch exists here, so BTC/ETH/XRP/SOL/USDT/etc.
-        # all use the exact same ledger logic.
-        try:
-            _tg_added = sync_telegram_orders_to_portfolio_ledger(sim_for_portfolio)
-            if _tg_added > 0:
-                st.session_state["sim"] = sim_for_portfolio
-                save_sim_state(sim_for_portfolio)
-        except Exception as _tg_sync_exc:
-            # Portfolio reconciliation must never prevent the main app from
-            # rendering. The Telegram order itself remains intact in Orders.
-            print(f"[telegram portfolio sync] error: {_tg_sync_exc}")
-
         _portfolio_prices = {"THB": 1.0}
         if not market_df.empty:
             for _, _r in market_df.iterrows():
@@ -12729,12 +12251,10 @@ def _main_body() -> None:
             render_rebalance_simulator(cfg, data, market_df)
         elif nav == NAV_PERFORMANCE:
             render_performance_analytics(cfg, data, market_df)
-        elif nav == NAV_REPORTS:
-            render_portfolio_reports(cfg, data, market_df)
-        elif nav == NAV_SEARCH:
-            render_portfolio_search_filter(cfg, data, market_df)
-        elif nav == NAV_NOTIFICATIONS:
-            render_notification_center(cfg, data, market_df)
+        elif nav == NAV_CASHFLOW:
+            render_cash_flow_analytics(cfg, data, market_df)
+        elif nav == NAV_TIMELINE:
+            render_customer_timeline(cfg, data, market_df)
         elif nav == NAV_SIMPLE:
             from simple_backtest import render_simple_backtest
             render_simple_backtest(
