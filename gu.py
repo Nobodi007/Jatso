@@ -8747,15 +8747,7 @@ def render_mobile_asset(cfg: dict[str, Any], data: pd.DataFrame) -> None:
 # =========================================================================
 
 MOBILE_BT_CSS = r'''<style>
-.mobile-bt-label {
-    color:#F5F7FA !important;
-    font-size:16px !important;
-    font-weight:900 !important;
-    line-height:1.4 !important;
-    display:block !important;
-    margin:16px 0 8px !important;
-    opacity:1 !important;
-}
+.mobile-bt-label { color:#EAECEF; font-size:12px; font-weight:700; margin:14px 0 8px; }
 .mobile-bt-helper {
     color:#848e9c; font-size:11px; line-height:1.5;
     background:#111318; border:1px solid #252a31; border-radius:12px;
@@ -8849,7 +8841,7 @@ MOBILE_BT_CSS = r'''<style>
 .mbt-up { color:#0ecb81 !important; } .mbt-dn { color:#f6465d !important; }
 
 @media (max-width: 768px) {
-  .mobile-bt-label { font-size:13px !important; line-height:1.4 !important; margin:16px 0 8px !important; }
+  .mobile-bt-label { color:#F5F7FA !important; font-size:17px !important; font-weight:900 !important; line-height:1.4 !important; margin:16px 0 9px !important; opacity:1 !important; }
   .mobile-bt-helper { font-size:12px !important; line-height:1.55 !important; padding:11px 13px !important; }
   .st-key-mobile_bt_period label p,
   .st-key-mobile_bt_strategy label p,
