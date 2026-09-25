@@ -35,6 +35,9 @@ import json
 import math
 import os
 import time
+import atexit
+import tempfile
+import hashlib
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -68,6 +71,82 @@ if create_client and SUPABASE_URL and SUPABASE_KEY:
         sb = create_client(SUPABASE_URL, SUPABASE_KEY)
     except Exception as exc:
         print(f"[Supabase] client init error: {exc}")
+
+
+# =========================================================
+# Single-instance guard
+# =========================================================
+# ป้องกันเปิด Bot Token เดียวกันซ้อนกันบนเครื่องเดียวกัน
+# ซึ่งเป็นสาเหตุหลักของอาการคำสั่งเดียวตอบกลับ 2 ครั้ง / ตัวเก่าตอบ
+# "ไม่รู้จักคำสั่ง" พร้อมกับตัวใหม่ตอบถูกต้อง
+_BOT_LOCK_PATH = os.path.join(
+    tempfile.gettempdir(),
+    "xspring_telegram_bot_" + hashlib.sha256(TELEGRAM_TOKEN.encode()).hexdigest()[:16] + ".lock",
+)
+_BOT_LOCK_HELD = False
+
+
+def _pid_is_alive(pid: int) -> bool:
+    try:
+        if pid <= 0:
+            return False
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    except Exception:
+        return False
+
+
+def _release_bot_lock() -> None:
+    global _BOT_LOCK_HELD
+    if not _BOT_LOCK_HELD:
+        return
+    try:
+        if os.path.exists(_BOT_LOCK_PATH):
+            os.remove(_BOT_LOCK_PATH)
+    except Exception:
+        pass
+    _BOT_LOCK_HELD = False
+
+
+def _acquire_bot_lock() -> None:
+    global _BOT_LOCK_HELD
+    payload = f"pid={os.getpid()}\ntime={time.time():.0f}\n"
+    try:
+        fd = os.open(_BOT_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+        _BOT_LOCK_HELD = True
+        atexit.register(_release_bot_lock)
+        return
+    except FileExistsError:
+        pass
+    except Exception as exc:
+        print(f"[lock] cannot create lock: {exc}")
+        return
+
+    # ล็อกค้างจาก process ที่ตายแล้ว ให้เก็บกวาดได้อัตโนมัติ
+    try:
+        raw = open(_BOT_LOCK_PATH, "r", encoding="utf-8").read()
+        old_pid = 0
+        for line in raw.splitlines():
+            if line.startswith("pid="):
+                old_pid = int(line.split("=", 1)[1])
+                break
+        if old_pid and _pid_is_alive(old_pid):
+            raise SystemExit(
+                f"Bot Token นี้กำลังถูกรันอยู่แล้ว (PID {old_pid})\n"
+                "กรุณาปิด Bot ตัวเก่าก่อน แล้วค่อยรันไฟล์นี้"
+            )
+        os.remove(_BOT_LOCK_PATH)
+        _acquire_bot_lock()
+    except SystemExit:
+        raise
+    except Exception as exc:
+        raise SystemExit(f"ไม่สามารถตรวจ/สร้าง Bot lock ได้: {exc}")
 
 
 # =========================================================
@@ -1467,11 +1546,11 @@ def cmd_delete_price_alert(chat_id: int, arg: str) -> str:
 
 
 def check_price_alerts() -> None:
-    """Poll active alerts and send one notification when a threshold is crossed.
+    """ตรวจ Price Alerts แบบประหยัด API และไม่เขียน sim_state ทุกครั้งที่ราคาเปลี่ยน.
 
-    Alerts are stored inside each linked user's existing sim_state. This does not
-    create or modify portfolio balances/orders. After triggering, an alert becomes
-    inactive so a 30-second polling loop cannot spam the chat.
+    - cache ticker ต่อ asset ภายในรอบเดียว
+    - บันทึกลง Supabase เฉพาะตอน trigger/invalid
+    - ถ้า Telegram ส่งไม่สำเร็จ จะยังคง ACTIVE เพื่อไม่ทำ Alert หาย
     """
     if sb is None:
         return
@@ -1481,6 +1560,9 @@ def check_price_alerts() -> None:
     except Exception as exc:
         print(f"[alert] load sim_state error: {exc}")
         return
+
+    ticker_cache: dict[str, float] = {}
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     for row in rows:
         email = str(row.get("actor") or "").strip()
@@ -1496,29 +1578,38 @@ def check_price_alerts() -> None:
             if not alert.get("active", True):
                 continue
             chat_id = alert.get("chat_id")
-            asset = str(alert.get("asset") or "").upper()
-            condition = str(alert.get("condition") or "").lower()
+            asset = str(alert.get("asset") or "").upper().strip()
+            condition = str(alert.get("condition") or "").lower().strip()
             try:
                 target = float(alert.get("target"))
                 previous = float(alert.get("last_price")) if alert.get("last_price") is not None else None
-                if not chat_id or not asset or condition not in {"above", "below"} or target <= 0:
+                chat_id = int(chat_id)
+                if not asset or condition not in {"above", "below"} or target <= 0 or chat_id <= 0:
                     alert["active"] = False
                     changed = True
                     continue
-                ticker = _bitkub_ticker(asset)
-                current = float(ticker["last"])
+            except (TypeError, ValueError):
+                alert["active"] = False
+                changed = True
+                continue
+
+            try:
+                if asset not in ticker_cache:
+                    ticker_cache[asset] = float(_bitkub_ticker(asset)["last"])
+                current = ticker_cache[asset]
             except Exception as exc:
                 print(f"[alert] {asset} ticker error: {exc}")
                 continue
 
-            crossed = False
-            if condition == "above":
-                crossed = current >= target and (previous is None or previous < target)
-            else:
-                crossed = current <= target and (previous is None or previous > target)
+            crossed = (
+                current >= target and (previous is None or previous < target)
+                if condition == "above"
+                else current <= target and (previous is None or previous > target)
+            )
 
+            # อัปเดต last_price ใน memory เพื่อใช้ตรวจ crossing รอบถัดไป
+            # แต่ไม่ save ลง DB ทุก polling cycle
             alert["last_price"] = current
-            changed = True
 
             if crossed:
                 direction = "ขึ้นถึง" if condition == "above" else "ลงถึง"
@@ -1530,11 +1621,12 @@ def check_price_alerts() -> None:
                     "สถานะ: Triggered (หยุดแจ้งซ้ำแล้ว)"
                 )
                 try:
-                    send_message(int(chat_id), msg)
+                    send_message(chat_id, msg)
                     alert["active"] = False
-                    alert["triggered_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                    alert["triggered_at"] = now_iso
                     changed = True
                 except Exception as exc:
+                    # อย่าปิด Alert หาก Telegram ล้มเหลว
                     print(f"[alert] send error for {chat_id}: {exc}")
 
         if changed:
@@ -2484,25 +2576,39 @@ def handle_command(chat_id: int, text: str) -> str:
 
 def main_loop() -> None:
     validate_config()
+    _acquire_bot_lock()
 
     print("==========================================")
     print("XSpring Telegram Bot")
-    print("Polling mode")
+    print("Stable polling mode")
     print("==========================================")
     print("Bot เริ่มทำงานแล้ว...")
     set_bot_commands()
 
     offset = None
+    next_alert_check = 0.0
+    seen_updates: set[int] = set()
+    ALERT_INTERVAL = 30.0
 
     while True:
         try:
+            now = time.monotonic()
+            if now >= next_alert_check:
+                check_price_alerts()
+                next_alert_check = time.monotonic() + ALERT_INTERVAL
+
             updates = get_updates(offset)
 
-            # ตรวจ Price Alerts ทุก polling cycle โดยไม่ขึ้นกับว่ามีข้อความใหม่หรือไม่
-            check_price_alerts()
-
             for upd in updates:
-                offset = upd["update_id"] + 1
+                update_id = upd.get("update_id")
+                if update_id is not None:
+                    if update_id in seen_updates:
+                        continue
+                    seen_updates.add(update_id)
+                    # กัน memory โตไม่จบ
+                    if len(seen_updates) > 2000:
+                        seen_updates = set(sorted(seen_updates)[-1000:])
+                    offset = int(update_id) + 1
 
                 msg = upd.get("message") or {}
                 chat = msg.get("chat") or {}
@@ -2516,7 +2622,7 @@ def main_loop() -> None:
                     reply = handle_command(int(chat_id), text)
                 except Exception as exc:
                     print(f"[command] error: {exc}")
-                    reply = "❌ เกิดข้อผิดพลาดภายใน Bot"
+                    reply = "❌ เกิดข้อผิดพลาดภายใน Bot กรุณาลองใหม่อีกครั้ง"
 
                 try:
                     send_message(int(chat_id), reply)
@@ -2528,8 +2634,13 @@ def main_loop() -> None:
             break
 
         except Exception as exc:
-            print(f"[polling] error: {exc}")
-            time.sleep(5)
+            msg = str(exc)
+            print(f"[polling] error: {msg}")
+            if "409" in msg or "Conflict" in msg or "terminated by other getUpdates" in msg:
+                print("[polling] พบ Bot Token เดียวกันถูกใช้งานจาก process อื่น — รอ 15 วินาที")
+                time.sleep(15)
+            else:
+                time.sleep(5)
 
 
 if __name__ == "__main__":
