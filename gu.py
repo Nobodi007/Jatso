@@ -7900,22 +7900,70 @@ def _mobile_compact_number(v: float, decimals: int = 2) -> str:
 
 
 def render_mobile_market(cfg: dict[str, Any], market_df: pd.DataFrame, usdthb: float) -> None:
-    """Mobile-first market screen: compact ticker list + chart/order-book switch."""
+    """Mobile-first market screen: chart/order-book first, ticker list below."""
     st.markdown(
         '<div class="mobile-page-title">🌐 Market</div>'
         '<div class="mobile-page-sub">ตลาดสินทรัพย์ · ราคา THB · กราฟเรียลไทม์จาก TradingView</div>',
         unsafe_allow_html=True,
     )
+
     current = str(cfg.get("asset", "BTC"))
     if current not in SUPPORTED_ASSETS:
         current = "BTC"
+
+    # Keep the selected market persistent so the chart stays on the same asset
+    # when the user scrolls between the chart and the ticker list.
+    chart_asset = str(st.session_state.get("mobile_market_selected", current))
+    if chart_asset not in SUPPORTED_ASSETS:
+        chart_asset = current
+
+    # ── Chart / Order Book FIRST ───────────────────────────────────────────
+    st.markdown('<div class="mobile-section-heading">📊 กราฟตลาด</div>', unsafe_allow_html=True)
+    chart_view = st.radio(
+        "มุมมองกราฟ",
+        ["📈 TradingView", "📚 3D Order Book"],
+        horizontal=True,
+        key="mobile_market_chart_view",
+        label_visibility="collapsed",
+    )
+
+    if chart_view == "📈 TradingView":
+        symbol = TV_LOCAL_SYMBOL.get(chart_asset, f"BITKUB:{chart_asset}THB")
+        render_tradingview(
+            symbol,
+            f"tv_mobile_{chart_asset}",
+            390,
+            studies=["MAExp@tv-basicstudies"],
+        )
+    else:
+        try:
+            render_orderbook_3d(
+                symbol=f"{chart_asset.lower()}_thb",
+                title=f"3D Order Book — {chart_asset}/THB",
+                limit=20,
+            )
+        except Exception as exc:
+            st.warning(f"ไม่สามารถแสดง 3D Order Book ได้: {exc}")
+
+    st.caption("ข้อมูลกราฟและราคาอาจมีความล่าช้าตามผู้ให้บริการข้อมูล")
+
+    # ── Watchlist / Market list SECOND ─────────────────────────────────────
     st.markdown('<div class="mobile-section-heading">📈 สินทรัพย์ที่ติดตาม</div>', unsafe_allow_html=True)
     view_mode = st.radio(
-        "จัดเรียงตลาด", ["⭐ รายการโปรด", "ปริมาณ", "▲ เพิ่มขึ้น", "▼ ลดลง"],
-        horizontal=True, key="mobile_market_mode", label_visibility="collapsed",
+        "จัดเรียงตลาด",
+        ["⭐ รายการโปรด", "ปริมาณ", "▲ เพิ่มขึ้น", "▼ ลดลง"],
+        horizontal=True,
+        key="mobile_market_mode",
+        label_visibility="collapsed",
     )
-    mode_map = {"⭐ รายการโปรด":"favorite", "ปริมาณ":"volume", "▲ เพิ่มขึ้น":"top_gain", "▼ ลดลง":"top_loss"}
+    mode_map = {
+        "⭐ รายการโปรด": "favorite",
+        "ปริมาณ": "volume",
+        "▲ เพิ่มขึ้น": "top_gain",
+        "▼ ลดลง": "top_loss",
+    }
     mode = mode_map.get(view_mode, "favorite")
+
     df = market_df if isinstance(market_df, pd.DataFrame) else pd.DataFrame()
     if df.empty:
         st.info("ยังไม่มีข้อมูลตลาดในขณะนี้")
@@ -7924,54 +7972,52 @@ def render_mobile_market(cfg: dict[str, Any], market_df: pd.DataFrame, usdthb: f
             favs = st.session_state.get("favorite_tickers", [])
             rows = df[df["symbol"].isin(favs)].sort_values("volume", ascending=False)
             if rows.empty:
-                rows = df[df["symbol"] == current]
+                rows = df[df["symbol"] == chart_asset]
                 st.caption("ยังไม่มีรายการโปรด — แสดงตลาดที่เลือกอยู่")
-        elif mode == "volume": rows = df.sort_values("volume", ascending=False)
-        elif mode == "top_gain": rows = df.sort_values("pct_change", ascending=False)
-        else: rows = df.sort_values("pct_change", ascending=True)
+        elif mode == "volume":
+            rows = df.sort_values("volume", ascending=False)
+        elif mode == "top_gain":
+            rows = df.sort_values("pct_change", ascending=False)
+        else:
+            rows = df.sort_values("pct_change", ascending=True)
+
         for _, row in rows.iterrows():
             sym = str(row.get("symbol", ""))
-            if not sym: continue
+            if not sym:
+                continue
             try:
                 price = float(row.get("price_usd", 0) or 0) * float(usdthb or 1)
                 pct = float(row.get("pct_change", 0) or 0)
             except (TypeError, ValueError):
                 continue
+
             price_txt = f"฿{price:,.2f}" if price >= 1 else f"฿{price:,.5f}"
-            selected = sym == current
-            color = "#0ecb81" if pct >= 0 else "#f6465d"
-            label = f"{'● ' if selected else ''}{sym}/THB  ·  {COIN_NAMES.get(sym, sym)}   |   {price_txt}   |   {'+' if pct >= 0 else ''}{pct:.2f}%"
+            selected = sym == chart_asset
+            label = (
+                f"{'● ' if selected else ''}{sym}/THB  ·  "
+                f"{COIN_NAMES.get(sym, sym)}   |   {price_txt}   |   "
+                f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+            )
+
             left, star = st.columns([8, 1], gap="small")
             with left:
-                if st.button(label, key=f"mobile_mkt_pick_{mode}_{sym}", use_container_width=True,
-                             type="primary" if selected else "secondary"):
+                if st.button(
+                    label,
+                    key=f"mobile_mkt_pick_{mode}_{sym}",
+                    use_container_width=True,
+                    type="primary" if selected else "secondary",
+                ):
                     _select_asset(sym)
                     st.session_state["mobile_market_selected"] = sym
                     st.rerun()
             with star:
                 is_fav = sym in st.session_state.get("favorite_tickers", [])
-                if st.button("★" if is_fav else "☆", key=f"mobile_mkt_fav_{mode}_{sym}"):
+                if st.button(
+                    "★" if is_fav else "☆",
+                    key=f"mobile_mkt_fav_{mode}_{sym}",
+                ):
                     _toggle_fav(sym)
                     st.rerun()
-
-    chart_asset = str(st.session_state.get("mobile_market_selected", current))
-    if chart_asset not in SUPPORTED_ASSETS:
-        chart_asset = current
-    st.markdown('<div class="mobile-section-heading">📊 กราฟตลาด</div>', unsafe_allow_html=True)
-    chart_view = st.radio(
-        "มุมมองกราฟ", ["📈 TradingView", "📚 3D Order Book"],
-        horizontal=True, key="mobile_market_chart_view", label_visibility="collapsed",
-    )
-    if chart_view == "📈 TradingView":
-        symbol = TV_LOCAL_SYMBOL.get(chart_asset, f"BITKUB:{chart_asset}THB")
-        render_tradingview(symbol, f"tv_mobile_{chart_asset}", 390, studies=["MAExp@tv-basicstudies"])
-    else:
-        try:
-            render_orderbook_3d(symbol=f"{chart_asset.lower()}_thb", title=f"3D Order Book — {chart_asset}/THB", limit=20)
-        except Exception as exc:
-            st.warning(f"ไม่สามารถแสดง 3D Order Book ได้: {exc}")
-    st.caption("ข้อมูลกราฟและราคาอาจมีความล่าช้าตามผู้ให้บริการข้อมูล")
-
 
 def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     sim=st.session_state.get('sim',{}) or {}; asset=cfg.get('asset','BTC')
