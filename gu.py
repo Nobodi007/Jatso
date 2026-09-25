@@ -7911,6 +7911,30 @@ MOBILE_CSS = r'''<style>
   width:36px; height:36px; min-width:36px; border-radius:50%; display:flex;
   align-items:center; justify-content:center; font-size:19px; background:#303640;
 }
+.st-key-mobile_shell .mobile-market-coin-logo-wrap {
+  display:flex; align-items:center; min-width:0; gap:9px; min-height:54px;
+}
+.st-key-mobile_shell .mobile-market-icon-img {
+  width:36px; height:36px; min-width:36px; border-radius:50%; object-fit:contain;
+  display:block; background:#20252d;
+}
+.st-key-mobile_shell .mobile-market-coin-logo-wrap .mobile-market-main { min-width:0; }
+.st-key-mobile_shell [class*="st-key-mobile_market_coin_"] { position:relative; min-height:54px; }
+.st-key-mobile_shell [class*="st-key-mobile_mkt_pick_"] {
+  position:absolute !important; inset:0 !important; z-index:5;
+}
+.st-key-mobile_shell [class*="st-key-mobile_mkt_pick_"] button {
+  min-height:54px !important; height:54px !important; width:100% !important;
+  padding:0 !important; border:0 !important; border-radius:0 !important;
+  background:transparent !important; box-shadow:none !important; color:transparent !important;
+}
+.st-key-mobile_shell [class*="st-key-mobile_mkt_pick_"] button p {
+  color:transparent !important; font-size:1px !important;
+}
+.st-key-mobile_shell [class*="st-key-mobile_mkt_pick_"] button:hover,
+.st-key-mobile_shell [class*="st-key-mobile_mkt_pick_"] button:focus {
+  background:rgba(255,255,255,.025) !important;
+}
 .st-key-mobile_shell .mobile-market-main { min-width:0; }
 .st-key-mobile_shell .mobile-market-symbol {
   color:#EAECEF; font-size:14px; font-weight:800; line-height:1.15;
@@ -7978,8 +8002,26 @@ def _mobile_compact_number(v: float, decimals: int = 2) -> str:
 
 
 
+MOBILE_COIN_LOGOS = {
+    "BTC": "https://coin-images.coingecko.com/coins/images/1/large/bitcoin.png",
+    "ETH": "https://coin-images.coingecko.com/coins/images/279/large/ethereum.png",
+    "USDT": "https://coin-images.coingecko.com/coins/images/325/large/Tether.png",
+    "USDC": "https://coin-images.coingecko.com/coins/images/6319/large/USD_Coin_icon.png",
+    "BNB": "https://coin-images.coingecko.com/coins/images/825/large/bnb-icon2_2x.png",
+    "SOL": "https://coin-images.coingecko.com/coins/images/4128/large/solana.png",
+    "XRP": "https://coin-images.coingecko.com/coins/images/44/large/xrp-symbol-white-128.png",
+    "ADA": "https://coin-images.coingecko.com/coins/images/975/large/cardano.png",
+    "DOGE": "https://coin-images.coingecko.com/coins/images/5/large/dogecoin.png",
+    "TON": "https://coin-images.coingecko.com/coins/images/17980/large/ton_symbol.png",
+    "TRX": "https://coin-images.coingecko.com/coins/images/1094/large/tron-logo.png",
+    "DOT": "https://coin-images.coingecko.com/coins/images/12171/large/polkadot.png",
+    "LINK": "https://coin-images.coingecko.com/coins/images/877/large/chainlink-new-logo.png",
+    "XLM": "https://coin-images.coingecko.com/coins/images/100/large/stellar.png",
+}
+
+
 def render_mobile_market(cfg: dict[str, Any], market_df: pd.DataFrame, usdthb: float) -> None:
-    """Mobile market screen: chart first, then a compact exchange-style watchlist."""
+    """Mobile market: chart/orderbook first, then exchange-style watchlist with real coin logos."""
     st.markdown(
         '<div class="mobile-page-title">🌐 ภาพรวมตลาด (Market)</div>'
         '<div class="mobile-page-sub">ราคา THB · ตลาดคริปโต · อัปเดตตามข้อมูลตลาด</div>',
@@ -8008,7 +8050,6 @@ def render_mobile_market(cfg: dict[str, Any], market_df: pd.DataFrame, usdthb: f
             st.warning(f"ไม่สามารถแสดง 3D Order Book ได้: {exc}")
     st.caption("ข้อมูลกราฟและราคาอาจมีความล่าช้าตามผู้ให้บริการข้อมูล")
 
-    # ── Exchange-style watchlist ───────────────────────────────────────────
     modes = [
         ("favorite", "⭐ รายการโปรด"),
         ("volume", "ปริมาณ"),
@@ -8018,13 +8059,6 @@ def render_mobile_market(cfg: dict[str, Any], market_df: pd.DataFrame, usdthb: f
     mode = st.session_state.get("mobile_market_mode2", "favorite")
     if mode not in {m[0] for m in modes}:
         mode = "favorite"
-    cols = st.columns(4, gap="small")
-    for col, (key, label) in zip(cols, modes):
-        with col:
-            if st.button(label, key=f"mobile_market_tab_{key}", use_container_width=True,
-                         type="primary" if mode == key else "secondary"):
-                st.session_state["mobile_market_mode2"] = key
-                st.rerun()
 
     st.markdown(
         '<div class="mobile-market-header">'
@@ -8034,6 +8068,14 @@ def render_mobile_market(cfg: dict[str, Any], market_df: pd.DataFrame, usdthb: f
         '</div></div>',
         unsafe_allow_html=True,
     )
+
+    tab_cols = st.columns(4, gap="small")
+    for col, (key, label) in zip(tab_cols, modes):
+        with col:
+            if st.button(label, key=f"mobile_market_tab_{key}", use_container_width=True,
+                         type="primary" if mode == key else "secondary"):
+                st.session_state["mobile_market_mode2"] = key
+                st.rerun()
 
     df = market_df if isinstance(market_df, pd.DataFrame) else pd.DataFrame()
     if df.empty:
@@ -8052,10 +8094,8 @@ def render_mobile_market(cfg: dict[str, Any], market_df: pd.DataFrame, usdthb: f
     else:
         rows = df.sort_values("pct_change", ascending=True)
 
-    icon_map = {"BTC":"₿", "ETH":"◆", "USDT":"₮", "USDC":"$", "BNB":"◆", "SOL":"S", "XRP":"X", "ADA":"₳", "DOGE":"Ð", "TON":"T", "TRX":"T", "DOT":"●"}
-
     for _, row in rows.iterrows():
-        sym = str(row.get("symbol", ""))
+        sym = str(row.get("symbol", "")).upper()
         if not sym:
             continue
         try:
@@ -8071,22 +8111,41 @@ def render_mobile_market(cfg: dict[str, Any], market_df: pd.DataFrame, usdthb: f
         is_fav = sym in st.session_state.get("favorite_tickers", [])
         selected = sym == chart_asset
         pct_txt = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
-        icon = icon_map.get(sym, "●")
+        logo = MOBILE_COIN_LOGOS.get(sym, "")
 
-        # The visible row is a single Streamlit button so it is genuinely tappable.
-        # The star remains a separate compact button on the left.
-        star_col, row_col = st.columns([0.42, 8.8], gap="small")
-        with star_col:
-            if st.button("★" if is_fav else "☆", key=f"mobile_mkt_fav_{mode}_{sym}", use_container_width=True):
-                _toggle_fav(sym)
-                st.rerun()
-        with row_col:
-            label = f"{icon}  {sym}/THB  ·  {name}    |    {price_txt}    |    {pct_txt}\n     Vol ฿{vol_txt}"
-            if st.button(label, key=f"mobile_mkt_pick_{mode}_{sym}", use_container_width=True,
-                         type="primary" if selected else "secondary"):
-                _select_asset(sym)
-                st.session_state["mobile_market_selected"] = sym
-                st.rerun()
+        row_wrap = st.container(key=f"mobile_market_row_{mode}_{sym}")
+        with row_wrap:
+            star_col, coin_col, quote_col = st.columns([0.48, 2.15, 1.15], gap="small")
+            with star_col:
+                if st.button("★" if is_fav else "☆", key=f"mobile_mkt_fav_{mode}_{sym}", use_container_width=True):
+                    _toggle_fav(sym)
+                    st.rerun()
+            with coin_col:
+                with st.container(key=f"mobile_market_coin_{mode}_{sym}"):
+                    logo_html = (
+                        f'<img class="mobile-market-icon-img" src="{logo}" alt="{sym} logo">'
+                        if logo else f'<div class="mobile-market-icon">{sym[:1]}</div>'
+                    )
+                    st.markdown(
+                        f'<div class="mobile-market-coin-logo-wrap">{logo_html}'
+                        f'<div class="mobile-market-main">'
+                        f'<div class="mobile-market-symbol">{sym}/THB</div>'
+                        f'<div class="mobile-market-name">{name}</div>'
+                        f'<div class="mobile-market-vol">Vol ฿{vol_txt}</div>'
+                        f'</div></div>',
+                        unsafe_allow_html=True,
+                    )
+                    if st.button("เลือก", key=f"mobile_mkt_pick_{mode}_{sym}", use_container_width=True,
+                                 type="primary" if selected else "secondary"):
+                        _select_asset(sym)
+                        st.session_state["mobile_market_selected"] = sym
+                        st.rerun()
+            with quote_col:
+                st.markdown(
+                    f'<div class="mobile-market-quote"><div class="mobile-market-price">{price_txt}</div>'
+                    f'<div class="mobile-market-pct {"up" if pct >= 0 else "down"}">{pct_txt}</div></div>',
+                    unsafe_allow_html=True,
+                )
 
 def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     sim=st.session_state.get('sim',{}) or {}; asset=cfg.get('asset','BTC')
