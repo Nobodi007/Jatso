@@ -8770,10 +8770,13 @@ MOBILE_BT_CSS = r'''<style>
     line-height:1.4 !important;
     display:block !important;
     clear:both !important;
-    margin:22px 2px 10px !important;
+    margin:22px 2px 14px !important;
     padding-top:14px !important;
+    padding-bottom:2px !important;
     border-top:1px solid #22262d !important;
     opacity:1 !important;
+    position:relative !important;
+    z-index:2 !important;
 }
 /* label แรกไม่ต้องมีเส้นคั่นด้านบน */
 .mobile-bt-label:first-of-type {
@@ -8787,13 +8790,22 @@ MOBILE_BT_CSS = r'''<style>
     padding:10px 12px; margin:6px 0 16px;
 }
 
-/* กัน widget ก่อนหน้าไม่ให้เบียด label ถัดไป */
+/* เว้นระยะ widget ที่ตามหลัง label เพื่อไม่ให้ Streamlit ดึงขึ้นมาชน */
 .st-key-mobile_bt_asset,
 .st-key-mobile_bt_period,
 .st-key-mobile_bt_strategy,
 .st-key-mobile_bt_freq,
 .st-key-mobile_bt_amount {
+    margin-top:6px !important;
     margin-bottom:4px !important;
+}
+
+/* เจาะถึงตัว widget จริงที่อาจมี negative margin จาก Streamlit */
+.st-key-mobile_bt_asset [data-baseweb="select"],
+.st-key-mobile_bt_period [role="radiogroup"],
+.st-key-mobile_bt_strategy [role="radiogroup"],
+.st-key-mobile_bt_freq [role="radiogroup"] {
+    margin-top:4px !important;
 }
 
 /* ===== chip radio (ช่วงเวลา / กลยุทธ์ / ความถี่ DCA) ===== */
@@ -8886,8 +8898,9 @@ MOBILE_BT_CSS = r'''<style>
   .mobile-bt-label {
     font-size:13px !important;
     line-height:1.4 !important;
-    margin:22px 0 10px !important;
+    margin:22px 0 14px !important;
     padding-top:14px !important;
+    padding-bottom:2px !important;
 }
 .mobile-bt-label:first-of-type {
     margin-top:4px !important;
