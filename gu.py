@@ -11149,6 +11149,7 @@ def render_customer_timeline(cfg: dict[str, Any], data: pd.DataFrame, market_df:
                 "title": title,
                 "detail": detail,
                 "note": note,
+                "asset": asset if typ in {"BUY", "SELL"} else "",
                 "id": str(tx.get("id", "")),
             })
 
@@ -11191,7 +11192,8 @@ def render_customer_timeline(cfg: dict[str, Any], data: pd.DataFrame, market_df:
       .tl-day{font-weight:800;color:#eaecef;font-size:1.02rem;margin:22px 0 10px -2px}
       .tl-item{position:relative;padding:13px 16px;margin:0 0 10px;border:1px solid #2b3139;border-radius:14px;background:#141820}
       .tl-dot{position:absolute;left:-31px;top:18px;width:14px;height:14px;border-radius:50%;background:#20c997;border:3px solid #0f1115;box-sizing:content-box}
-      .tl-time{font-size:.72rem;color:#7f8a9a;margin-bottom:3px}.tl-title{font-weight:800;color:#f1f3f5;font-size:.95rem}.tl-detail{color:#c7cbd1;font-size:.84rem;margin-top:3px}.tl-note{color:#7f8a9a;font-size:.74rem;margin-top:4px}
+      .tl-time{font-size:.72rem;color:#7f8a9a;margin-bottom:3px}.tl-title{font-weight:800;color:#f1f3f5;font-size:.95rem;display:flex;align-items:center;gap:8px}.tl-detail{color:#c7cbd1;font-size:.84rem;margin-top:6px}.tl-note{color:#7f8a9a;font-size:.74rem;margin-top:4px}
+      .tl-coin-logo{width:30px;height:30px;border-radius:50%;object-fit:contain;vertical-align:middle;flex:0 0 30px;box-shadow:0 2px 8px rgba(0,0,0,.25);background:#20252d}.tl-event-icon{font-size:1.05rem;line-height:1}
       @media(max-width:700px){.tl-wrap{margin-left:10px;padding-left:16px}.tl-dot{left:-25px}.tl-hero{padding:18px}}
     </style>
     """, unsafe_allow_html=True)
@@ -11236,9 +11238,29 @@ def render_customer_timeline(cfg: dict[str, Any], data: pd.DataFrame, market_df:
             eid = e.get("id", "")
             note_html = f"<div class='tl-note'>{note}</div>" if note and note != "Snapshot ของพอร์ต" else ""
             id_html = f"<div class='tl-note'>ID: {eid}</div>" if eid else ""
+            asset = str(e.get("asset", "") or "").upper()
+            logo_map = {
+                "BTC": "https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/btc.png",
+                "ETH": "https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/eth.png",
+                "SOL": "https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/sol.png",
+                "XRP": "https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/xrp.png",
+                "DOGE": "https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/doge.png",
+                "USDT": "https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/usdt.png",
+                "USDC": "https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/usdc.png",
+                "BNB": "https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/bnb.png",
+                "ADA": "https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/ada.png",
+                "AVAX": "https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/avax.png",
+                "LINK": "https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/link.png",
+                "DOT": "https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/dot.png",
+                "MATIC": "https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/matic.png",
+            }
+            if asset in logo_map:
+                title_html = f"<img class='tl-coin-logo' src='{logo_map[asset]}' alt='{asset}' onerror=\"this.style.display='none'\"><span>{e['title']}</span>"
+            else:
+                title_html = f"<span class='tl-event-icon'>{e['icon']}</span><span>{e['title']}</span>"
             st.markdown(
                 f"<div class='tl-item'><span class='tl-dot'></span><div class='tl-time'>{time_txt}</div>"
-                f"<div class='tl-title'>{e['icon']} {e['title']}</div>"
+                f"<div class='tl-title'>{title_html}</div>"
                 f"<div class='tl-detail'>{e['detail']}</div>{note_html}{id_html}</div>",
                 unsafe_allow_html=True,
             )
