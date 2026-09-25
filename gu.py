@@ -1263,11 +1263,13 @@ NAV_LABELS = [
     "🛒 Exchange UI Simulator",
     "💼 Portfolio & Wallet",
     "🎯 Investment Backtest",
+    "🚨 Risk Center",
 ]
 NAV_DASHBOARD = NAV_LABELS[0]
 NAV_EXCHANGE = NAV_LABELS[3]
 NAV_NEWS = "📰 News"
 NAV_SIMPLE = NAV_LABELS[5]
+NAV_RISK = NAV_LABELS[6]
 
 def _go_to_exchange(sym: str) -> None:
     st.session_state["bt_asset"] = sym
@@ -7293,6 +7295,286 @@ def _portfolio_metric_card(col, label: str, value: str, tone: str = "") -> None:
     )
 
 
+
+def _risk_bar_html(value: float, max_value: float = 100.0, tone: str = "neutral") -> str:
+    """Render a compact risk bar; values are display-only and never a trade signal."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        v = 0.0
+    width = min(max(abs(v) / max(max_value, 1e-9) * 100.0, 0.0), 100.0)
+    return (
+        '<div class="risk-meter">'
+        f'<div class="risk-meter-fill {tone}" style="width:{width:.2f}%"></div>'
+        '</div>'
+    )
+
+
+def _portfolio_risk_history(held_assets: list[str], end_date: Any) -> pd.DataFrame:
+    """Build a current-weight risk series from up to one year of price history.
+
+    This is intentionally a *current-allocation risk estimate*: it applies today's
+    holdings weights to historical asset returns. It is not presented as the
+    historical P&L of the actual account, because the account may have changed
+    holdings over time.
+    """
+    if not held_assets:
+        return pd.DataFrame()
+    end = pd.Timestamp(end_date)
+    start = end - pd.Timedelta(days=365)
+    frames: dict[str, pd.Series] = {}
+    for sym in held_assets:
+        try:
+            hist, _err = fetch_price_data(sym, start, end, use_fx_proxy=False)
+            if hist is None or hist.empty or "Global_USD" not in hist.columns:
+                continue
+            px = pd.to_numeric(hist["Global_USD"], errors="coerce")
+            # USD/THB is applied as well so the risk series is measured in THB.
+            if "USDTHB" in hist.columns:
+                fx = pd.to_numeric(hist["USDTHB"], errors="coerce")
+                px = px * fx
+            px = px.replace([np.inf, -np.inf], np.nan).dropna()
+            if len(px) >= 20:
+                frames[sym] = px
+        except Exception:
+            continue
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, axis=1).sort_index().ffill().dropna(how="all")
+
+
+def _portfolio_risk_metrics(snap: dict[str, Any], end_date: Any) -> dict[str, Any]:
+    """Calculate descriptive portfolio-risk metrics from current holdings."""
+    total = float(snap.get("total_value_thb", 0.0) or 0.0)
+    cash = float(snap.get("cash_thb", 0.0) or 0.0)
+    rows = list(snap.get("rows", []) or [])
+    held = [str(r.get("asset", "")).upper() for r in rows if float(r.get("market_value", 0.0) or 0.0) > 0]
+    history = _portfolio_risk_history(held, end_date)
+
+    weights = {
+        str(r.get("asset", "")).upper(): (
+            float(r.get("market_value", 0.0) or 0.0) / total if total > 0 else 0.0
+        ) for r in rows
+    }
+
+    vol = 0.0
+    max_dd = 0.0
+    coverage = 0
+    if not history.empty:
+        returns = history.pct_change().replace([np.inf, -np.inf], np.nan)
+        weighted = pd.Series(0.0, index=returns.index)
+        used_assets = []
+        for sym, w in weights.items():
+            if sym in returns.columns:
+                weighted = weighted.add(returns[sym].fillna(0.0) * w, fill_value=0.0)
+                used_assets.append(sym)
+        weighted = weighted.dropna()
+        if len(weighted) >= 20:
+            vol = float(weighted.std(ddof=1) * np.sqrt(365) * 100.0)
+            equity = (1.0 + weighted).cumprod()
+            peak = equity.cummax()
+            dd = equity / peak - 1.0
+            max_dd = float(dd.min() * 100.0)
+            coverage = len(weighted)
+
+    allocation = []
+    for r in rows:
+        allocation.append({
+            "asset": str(r.get("asset", "")).upper(),
+            "value": float(r.get("market_value", 0.0) or 0.0),
+            "pct": float(r.get("allocation_pct", 0.0) or 0.0),
+        })
+    if total > 0:
+        allocation.append({"asset": "THB", "value": cash, "pct": cash / total * 100.0})
+    allocation.sort(key=lambda x: x["pct"], reverse=True)
+
+    btc_pct = next((x["pct"] for x in allocation if x["asset"] == "BTC"), 0.0)
+    top = allocation[0] if allocation else {"asset": "—", "pct": 0.0, "value": 0.0}
+    concentration = [x for x in allocation if x["asset"] != "THB" and x["pct"] >= 70.0]
+    stable_pct = sum(x["pct"] for x in allocation if x["asset"] in STABLECOINS)
+
+    return {
+        "volatility_pct": vol,
+        "max_drawdown_pct": max_dd,
+        "btc_exposure_pct": btc_pct,
+        "cash_pct": cash / total * 100.0 if total > 0 else 0.0,
+        "allocation": allocation,
+        "top_asset": top,
+        "concentration": concentration,
+        "stablecoin_pct": stable_pct,
+        "history_days": coverage,
+        "history_available": not history.empty,
+        "method": "Current holdings weights × up to 365 days of THB price returns",
+    }
+
+
+def _risk_metric_card(title: str, value: str, subtitle: str, bar_value: float,
+                      max_value: float, tone: str = "neutral") -> None:
+    st.markdown(
+        '<div class="risk-card">'
+        f'<div class="risk-card-head"><span>{_html.escape(title)}</span><b>{_html.escape(value)}</b></div>'
+        f'{_risk_bar_html(bar_value, max_value, tone)}'
+        f'<div class="risk-card-sub">{_html.escape(subtitle)}</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_risk_center(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
+    """Single-page descriptive Risk Center — no buy/sell recommendations."""
+    if data.empty:
+        st.error("⚠️ ไม่สามารถโหลดข้อมูลราคาเพื่อประเมินความเสี่ยงได้")
+        return
+
+    sim = st.session_state.get("sim", {})
+    ensure_portfolio_ledger(sim)
+    current_date = pd.to_datetime(data.index[-1])
+    usdthb = float(data.loc[current_date, "USDTHB"])
+    price_map = {"THB": 1.0}
+    if market_df is not None and not market_df.empty:
+        for _, row in market_df.iterrows():
+            try:
+                price_map[str(row["symbol"]).upper()] = float(row["price_usd"]) * usdthb
+            except (TypeError, ValueError, KeyError):
+                continue
+    asset = str(cfg.get("asset", "BTC")).upper()
+    if "Global_USD" in data.columns:
+        try:
+            price_map[asset] = float(data.loc[current_date, "Global_USD"]) * usdthb
+        except (TypeError, ValueError, KeyError):
+            pass
+
+    snap = portfolio_snapshot(sim, price_map)
+    risk = _portfolio_risk_metrics(snap, current_date)
+
+    st.markdown(
+        '<style>'
+        '.risk-hero{padding:26px 28px;margin:4px 0 16px;border:1px solid #2b3139;border-radius:20px;'
+        'background:linear-gradient(135deg,#15181e 0%,#0f1115 65%,#121a18 100%);'
+        'box-shadow:0 14px 40px rgba(0,0,0,.20);}'
+        '.risk-eyebrow{font-size:.72rem;letter-spacing:.18em;font-weight:800;color:#848e9c;}'
+        '.risk-hero h2{margin:5px 0 4px;color:#f1f3f5;font-size:1.8rem;}'
+        '.risk-hero p{margin:0;color:#848e9c;font-size:.86rem;}'
+        '.risk-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px;}'
+        '.risk-card{padding:18px;border:1px solid #2b3139;border-radius:15px;background:#0f1115;min-height:126px;}'
+        '.risk-card-head{display:flex;justify-content:space-between;gap:10px;align-items:end;color:#8b95a5;font-size:.82rem;}'
+        '.risk-card-head b{font-size:1.35rem;color:#eaecef;white-space:nowrap;}'
+        '.risk-meter{height:8px;background:#242a32;border-radius:999px;overflow:hidden;margin:18px 0 10px;}'
+        '.risk-meter-fill{height:100%;border-radius:999px;background:#848e9c;}'
+        '.risk-meter-fill.green{background:#0ecb81;}'
+        '.risk-meter-fill.warn{background:#f0b90b;}'
+        '.risk-meter-fill.red{background:#f6465d;}'
+        '.risk-card-sub{font-size:.72rem;color:#6f7886;line-height:1.5;}'
+        '.risk-section{border:1px solid #2b3139;border-radius:16px;background:#0f1115;padding:18px;margin-bottom:14px;}'
+        '.risk-section-title{font-size:1rem;font-weight:800;color:#eaecef;margin-bottom:3px;}'
+        '.risk-section-sub{font-size:.74rem;color:#6f7886;margin-bottom:14px;}'
+        '.risk-alloc-row{display:grid;grid-template-columns:170px 1fr 90px 65px;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid #1f232a;}'
+        '.risk-alloc-row:last-child{border-bottom:0;}'
+        '.risk-alloc-name{display:flex;align-items:center;gap:9px;color:#eaecef;font-weight:700;}'
+        '.risk-alloc-name span{color:#6f7886;font-size:.72rem;font-weight:500;}'
+        '.risk-alloc-bar{height:7px;background:#242a32;border-radius:999px;overflow:hidden;}'
+        '.risk-alloc-bar span{display:block;height:100%;background:#5e6673;border-radius:999px;}'
+        '.risk-alloc-val,.risk-alloc-pct{text-align:right;color:#b8bec8;font-variant-numeric:tabular-nums;font-size:.8rem;}'
+        '.risk-warning{padding:14px 16px;border:1px solid rgba(246,70,93,.35);border-radius:12px;background:rgba(246,70,93,.07);color:#eaecef;margin-top:12px;}'
+        '.risk-info{padding:14px 16px;border:1px solid #2b3139;border-radius:12px;background:#15181e;color:#9aa3af;font-size:.75rem;line-height:1.65;margin-top:12px;}'
+        '@media(max-width:900px){.risk-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.risk-alloc-row{grid-template-columns:135px 1fr 75px 55px;gap:8px;}.risk-hero{padding:20px;}.risk-hero h2{font-size:1.45rem;}}'
+        '@media(max-width:560px){.risk-grid{grid-template-columns:1fr;}.risk-card{min-height:105px;}.risk-alloc-row{grid-template-columns:1fr 80px;}.risk-alloc-bar{display:none;}.risk-alloc-val{display:none;}.risk-alloc-pct{text-align:right;}}'
+        '</style>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        '<div class="risk-hero">'
+        '<div class="risk-eyebrow">RISK CENTER</div>'
+        '<h2>Portfolio Risk</h2>'
+        '<p>ภาพรวมความผันผวน การกระจุกตัว และการถอยตัวของพอร์ตจากข้อมูลปัจจุบัน</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    vol = float(risk["volatility_pct"])
+    dd = float(risk["max_drawdown_pct"])
+    btc = float(risk["btc_exposure_pct"])
+    cash_pct = float(risk["cash_pct"])
+    vol_tone = "green" if vol < 30 else "warn" if vol < 60 else "red"
+    dd_tone = "green" if abs(dd) < 10 else "warn" if abs(dd) < 25 else "red"
+    btc_tone = "green" if btc < 50 else "warn" if btc < 70 else "red"
+    cash_tone = "green" if cash_pct >= 20 else "warn" if cash_pct >= 10 else "red"
+
+    st.markdown('<div class="risk-grid">', unsafe_allow_html=True)
+    # Use columns to keep Streamlit layout responsive while cards themselves remain styled.
+    r1, r2, r3, r4 = st.columns(4, gap="small")
+    with r1:
+        _risk_metric_card("Volatility", f"{vol:.1f}%", "Annualized estimate · current weights", vol, 80, vol_tone)
+    with r2:
+        _risk_metric_card("Max Drawdown", f"{dd:+.1f}%", "Worst peak-to-trough in risk window", abs(dd), 50, dd_tone)
+    with r3:
+        _risk_metric_card("BTC Exposure", f"{btc:.1f}%", "Share of current portfolio value", btc, 100, btc_tone)
+    with r4:
+        _risk_metric_card("Cash", f"{cash_pct:.1f}%", "THB share of current portfolio", cash_pct, 100, cash_tone)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if risk["concentration"]:
+        for item in risk["concentration"]:
+            sym = item["asset"]
+            st.markdown(
+                f'<div class="risk-warning"><b>⚠ Concentration</b><br>'
+                f'{_html.escape(sym)} คิดเป็น <b>{item["pct"]:.1f}%</b> ของพอร์ตทั้งหมด</div>',
+                unsafe_allow_html=True,
+            )
+    elif risk["allocation"]:
+        top = risk["top_asset"]
+        st.markdown(
+            f'<div class="risk-info"><b>Concentration</b><br>'
+            f'สินทรัพย์ที่มีสัดส่วนสูงสุดคือ <b>{_html.escape(top["asset"])}</b> ที่ {top["pct"]:.1f}% ของพอร์ต · '
+            'ยังไม่ถึงเกณฑ์ 70% ที่ใช้เป็นธงเตือนในหน้านี้</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.info("ยังไม่มีสินทรัพย์ใน Portfolio จึงยังไม่มีความเสี่ยงจากการกระจุกตัวให้ประเมิน")
+
+    st.markdown(
+        '<div class="risk-section">'
+        '<div class="risk-section-title">📊 Allocation & Exposure</div>'
+        '<div class="risk-section-sub">ดูว่าส่วนไหนของพอร์ตเป็นตัวขับเคลื่อนความเสี่ยงในปัจจุบัน</div>',
+        unsafe_allow_html=True,
+    )
+    if risk["allocation"]:
+        for item in risk["allocation"]:
+            sym = item["asset"]
+            pct = float(item["pct"])
+            value = float(item["value"])
+            st.markdown(
+                '<div class="risk-alloc-row">'
+                f'<div class="risk-alloc-name">{coin_icon_html(sym, 28)}<div>{_html.escape(sym)}<span> · {_html.escape(COIN_NAMES.get(sym, sym))}</span></div></div>'
+                f'<div class="risk-alloc-bar"><span style="width:{min(max(pct,0),100):.2f}%"></span></div>'
+                f'<div class="risk-alloc-val">฿{value:,.2f}</div>'
+                f'<div class="risk-alloc-pct">{pct:.2f}%</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+    else:
+        st.caption("ยังไม่มี Holdings หรือ Cash ให้แสดง")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    stable = float(risk["stablecoin_pct"])
+    st.markdown(
+        f'<div class="risk-section">'
+        f'<div class="risk-section-title">🔎 Risk Notes</div>'
+        f'<div class="risk-section-sub">ข้อมูลเชิงพรรณนาเพื่อใช้ประกอบการตัดสินใจ ไม่ใช่สัญญาณซื้อหรือขาย</div>'
+        f'<div class="risk-info">'
+        f'• Stablecoin exposure: <b>{stable:.1f}%</b><br>'
+        f'• Current portfolio value: <b>฿{float(snap.get("total_value_thb",0.0)):,.2f}</b><br>'
+        f'• Unrealized P&amp;L: <b>{float(snap.get("unrealized_pnl_thb",0.0)):+,.2f} THB</b><br>'
+        f'• Realized P&amp;L: <b>{float(snap.get("realized_pnl_thb",0.0)):+,.2f} THB</b>'
+        f'</div>'
+        f'<div class="risk-info">วิธีคำนวณ: {risk["method"]}. '
+        f'ใช้ข้อมูลย้อนหลัง {risk["history_days"]:,} จุดที่มีข้อมูลร่วมกัน; หากข้อมูลไม่ครบ ตัวเลขเป็นประมาณการและไม่ใช่ประวัติผลตอบแทนจริงของบัญชี</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
     if data.empty:
         st.error("⚠️ ไม่สามารถโหลดข้อมูลได้")
@@ -10126,6 +10408,11 @@ def render_dashboard(cfg: dict[str, Any], data: pd.DataFrame,
             if st.button("💼 Wallet", key="dash_go_wallet", **WIDE,
                         on_click=_dash_goto, args=(NAV_LABELS[4],)):
                 pass
+        st.write("")
+        with st.container(key="dash_qa_risk"):
+            if st.button("🚨 Risk Center", key="dash_go_risk", **WIDE,
+                        on_click=_dash_goto, args=(NAV_RISK,)):
+                pass
 
 def _main_body() -> None:
     st.markdown(THEME_CSS, unsafe_allow_html=True)
@@ -10422,6 +10709,8 @@ def _main_body() -> None:
                         market_df=market_df)
         elif nav == NAV_NEWS:
             render_news_section(cfg)
+        elif nav == NAV_RISK:
+            render_risk_center(cfg, data, market_df)
         elif nav == NAV_SIMPLE:
             from simple_backtest import render_simple_backtest
             render_simple_backtest(
