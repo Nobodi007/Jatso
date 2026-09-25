@@ -1705,14 +1705,11 @@ THEME_CSS = """
     /* ---------- AI Chat (ปุ่มลอย + ฟองแชท) ---------- */
    .st-key-ai_fab {
     position: fixed !important;
-    top: auto !important;
-    bottom: 90px !important;
-    left: 16px !important;
-    right: auto !important;
-    inset: auto auto 90px 16px !important;
-    z-index: 2147483000 !important;
+    bottom: 78px !important;
+    right: 24px !important;
+    left: auto !important;
+    z-index: 999990 !important;
     width: auto !important;
-    margin: 0 !important;
 }
 
     /* ป้องกัน ancestor หลักของ Streamlit ทำให้ position:fixed
