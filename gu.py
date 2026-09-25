@@ -12310,6 +12310,23 @@ def _main_body() -> None:
     sim_for_portfolio = st.session_state.get("sim", {})
     if isinstance(sim_for_portfolio, dict):
         ensure_portfolio_ledger(sim_for_portfolio)
+
+        # Telegram /confirm writes the filled order into the shared sim_state
+        # (customer wallet + orders).  Portfolio ledger reconciliation must run
+        # here at the global level, not only inside the Backtest/Exchange page.
+        # Otherwise a Telegram trade made after the portfolio ledger was created
+        # is visible in Orders but never reaches Holdings / P&L until a specific
+        # page happens to trigger the old sync call.
+        try:
+            _tg_added = sync_telegram_orders_to_portfolio_ledger(sim_for_portfolio)
+            if _tg_added > 0:
+                st.session_state["sim"] = sim_for_portfolio
+                save_sim_state(sim_for_portfolio)
+        except Exception as _tg_sync_exc:
+            # Portfolio reconciliation must never prevent the main app from
+            # rendering. The Telegram order itself remains intact in Orders.
+            print(f"[telegram portfolio sync] error: {_tg_sync_exc}")
+
         _portfolio_prices = {"THB": 1.0}
         if not market_df.empty:
             for _, _r in market_df.iterrows():
