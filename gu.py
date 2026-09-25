@@ -6163,9 +6163,11 @@ def sync_telegram_orders_to_portfolio_ledger(sim: dict[str, Any]) -> int:
     for idx, rec in enumerate(orders):
         if not isinstance(rec, dict):
             continue
-        if str(rec.get("Source", "")).strip().lower() != "telegram":
+        source_value = rec.get("Source", rec.get("source", rec.get("source_system", "")))
+        if "telegram" not in str(source_value or "").strip().lower():
             continue
-        if str(rec.get("สถานะ", "Filled")).strip().lower() not in {"filled", "fill", "completed"}:
+        status_value = rec.get("สถานะ", rec.get("status", "Filled"))
+        if str(status_value or "Filled").strip().lower() not in {"filled", "fill", "completed", "executed", "success", "successful"}:
             continue
         order_id = str(rec.get("Order ID") or "").strip()
         if not order_id or order_id in existing_ids:
@@ -12314,16 +12316,28 @@ def _main_body() -> None:
                                           use_fx_proxy=cfg["use_fx_proxy"])
 
     market_df = fetch_market_overview(SUPPORTED_ASSETS)
+
+    # Telegram /confirm writes the authoritative customer state (wallet + orders)
+    # to the shared sim_state.  A long-lived Streamlit session may otherwise keep
+    # an older in-memory copy and never see a Telegram trade that happened after
+    # the session was opened.  Refresh the persisted state on every rerun before
+    # reconciling Telegram trades.  This is intentionally limited to the shared
+    # sim_state and does not create or modify any dealer-side records.
+    if not is_guest_mode():
+        try:
+            _latest_saved_sim = load_sim_state()
+            if isinstance(_latest_saved_sim, dict):
+                st.session_state["sim"] = _latest_saved_sim
+        except Exception as _tg_reload_exc:
+            print(f"[telegram portfolio reload] error: {_tg_reload_exc}")
+
     sim_for_portfolio = st.session_state.get("sim", {})
     if isinstance(sim_for_portfolio, dict):
         ensure_portfolio_ledger(sim_for_portfolio)
 
-        # Telegram /confirm writes the filled order into the shared sim_state
-        # (customer wallet + orders).  Portfolio ledger reconciliation must run
-        # here at the global level, not only inside the Backtest/Exchange page.
-        # Otherwise a Telegram trade made after the portfolio ledger was created
-        # is visible in Orders but never reaches Holdings / P&L until a specific
-        # page happens to trigger the old sync call.
+        # Reconcile ALL filled Telegram assets through the same generic path.
+        # No asset-specific branch exists here, so BTC/ETH/XRP/SOL/USDT/etc.
+        # all use the exact same ledger logic.
         try:
             _tg_added = sync_telegram_orders_to_portfolio_ledger(sim_for_portfolio)
             if _tg_added > 0:
