@@ -7706,7 +7706,69 @@ MOBILE_NAV_CSS = r'''<style>
 /* Mobile Market layout */
 .st-key-mobile_shell .mobile-section-heading { color:#EAECEF; font-size:1rem; font-weight:750; margin:18px 0 9px; }
 .st-key-mobile_shell [key^="mobile_mkt_pick_"] { text-align:left !important; font-size:12px !important; line-height:1.35 !important; padding:9px 10px !important; border-radius:10px !important; white-space:normal !important; }
-.st-key-mobile_shell [key^="mobile_mkt_fav_"] { min-width:38px !important; padding:7px 4px !important; }
+
+/* ============================================================
+   MOBILE MARKET — STAR ONLY (NO BUTTON FRAME)
+   Keep the favorite control as a clean star, not a boxed button.
+   This selector is intentionally scoped to mobile_mkt_fav_* only
+   so Trade / Backtest / Settings buttons keep their normal UI.
+   ============================================================ */
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_"] {
+  width:36px !important;
+  min-width:36px !important;
+  max-width:36px !important;
+  height:36px !important;
+  min-height:36px !important;
+  margin:0 !important;
+  padding:0 !important;
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  background:transparent !important;
+  border:0 !important;
+  box-shadow:none !important;
+}
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_"] button {
+  width:32px !important;
+  min-width:32px !important;
+  max-width:32px !important;
+  height:32px !important;
+  min-height:32px !important;
+  margin:0 !important;
+  padding:0 !important;
+  border:0 !important;
+  border-width:0 !important;
+  border-style:none !important;
+  border-color:transparent !important;
+  border-radius:0 !important;
+  outline:none !important;
+  box-shadow:none !important;
+  background:transparent !important;
+  color:#EAECEF !important;
+  font-size:22px !important;
+  line-height:1 !important;
+  font-weight:400 !important;
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+}
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_"] button:hover,
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_"] button:focus,
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_"] button:active {
+  border:0 !important;
+  border-width:0 !important;
+  outline:none !important;
+  box-shadow:none !important;
+  background:transparent !important;
+  color:#FFD43B !important;
+}
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_"] button p {
+  margin:0 !important;
+  padding:0 !important;
+  color:inherit !important;
+  font-size:22px !important;
+  line-height:1 !important;
+}
 @media (max-width: 700px) {
   .st-key-mobile_shell [data-testid="stRadio"] div[role="radiogroup"] { flex-wrap:wrap !important; gap:5px !important; }
   .st-key-mobile_shell [data-testid="stRadio"] label { font-size:11px !important; }
@@ -7962,6 +8024,8 @@ MOBILE_CSS = r'''<style>
   .st-key-mobile_shell .mobile-market-tabs { gap:14px; font-size:12px; }
   .st-key-mobile_shell .mobile-market-columns { grid-template-columns:minmax(0,1.55fr) .85fr .7fr; padding-left:48px; }
   .st-key-mobile_shell .mobile-market-row { grid-template-columns:32px minmax(0,1.55fr) .85fr .7fr; gap:6px; min-height:58px; }
+  .st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_"] { align-self:center !important; }
+  .st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_"] button { align-self:center !important; }
   .st-key-mobile_shell .mobile-market-icon { width:32px; height:32px; min-width:32px; font-size:17px; }
   .st-key-mobile_shell .mobile-market-symbol { font-size:13px; }
   .st-key-mobile_shell .mobile-market-price { font-size:12px; }
