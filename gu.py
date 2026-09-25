@@ -9556,6 +9556,12 @@ def _main_body() -> None:
         current_nav = NAV_DASHBOARD
         st.session_state["main_nav"] = current_nav
 
+    # Keep the legacy routing variable in sync with the compact navigation.
+    # The desktop route below still uses `nav`, so it must be defined before
+    # the route dispatch.  Previously the compact-nav refactor only created
+    # `current_nav`, which caused NameError: nav on Streamlit Cloud.
+    nav = current_nav
+
     with st.container(key="desktop_navigation"):
         st.markdown("""
         <style>
