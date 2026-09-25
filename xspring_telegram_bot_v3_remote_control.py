@@ -53,7 +53,7 @@ API_BASE = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
 
-BOT_BUILD = "2026-09-26-stable-v3-single-send"
+BOT_BUILD = "2026-09-26-stable-v4-command-stable"
 
 ALLOWED_EMAILS = {
     e.strip().lower()
@@ -189,7 +189,7 @@ def send_message(chat_id: int, text: str) -> None:
 
 
 def get_updates(offset: Optional[int] = None) -> list[dict]:
-    payload = {"timeout": 30}
+    payload = {"timeout": 30, "allowed_updates": ["message"]}
     if offset is not None:
         payload["offset"] = offset
 
@@ -232,6 +232,15 @@ def set_bot_commands() -> None:
         print("[Telegram] command menu updated")
     except Exception as exc:
         print(f"[Telegram] setMyCommands error: {exc}")
+
+
+def clear_webhook_keep_updates() -> None:
+    """Ensure polling mode is active without deleting pending user messages."""
+    try:
+        tg_call("deleteWebhook", {"drop_pending_updates": False})
+        print("[Telegram] webhook disabled; pending updates kept")
+    except Exception as exc:
+        print(f"[Telegram] deleteWebhook warning: {exc}")
 
 
 # =========================================================
@@ -2485,8 +2494,23 @@ def handle_command(chat_id: int, text: str) -> str:
     if not parts:
         return HELP_TEXT
 
-    cmd = parts[0].split("@", 1)[0].lower()
+    # Telegram may deliver /command@BotName in groups.
+    # Normalize harmless punctuation/case so the same command is always routed
+    # to one handler instead of falling through to the old "unknown command" reply.
+    cmd = parts[0].split("@", 1)[0].strip().lower()
+    cmd = cmd.rstrip(".,!?;:，。！？")
     arg = parts[1].strip() if len(parts) > 1 else ""
+
+    # Backward-compatible aliases for commands users may already have typed.
+    aliases = {
+        "/alerts": "/alerts",
+        "/pricealerts": "/alerts",
+        "/price-alerts": "/alerts",
+        "/pricealert": "/alert",
+        "/del-alert": "/delalert",
+        "/deletealert": "/delalert",
+    }
+    cmd = aliases.get(cmd, cmd)
 
     if cmd in ("/start", "/help"):
         return HELP_TEXT
@@ -2574,7 +2598,18 @@ def handle_command(chat_id: int, text: str) -> str:
     if cmd == "/orders":
         return cmd_orders(chat_id)
 
-    return "ไม่รู้จักคำสั่งนี้\nพิมพ์ /help เพื่อดูคำสั่งทั้งหมด"
+    return (
+        "❌ ไม่รู้จักคำสั่งนี้\n\n"
+        "คำสั่งที่ใช้ได้ เช่น\n"
+        "• /alert BTC above 3000000\n"
+        "• /alerts\n"
+        "• /price BTC\n"
+        "• /prices\n"
+        "• /summary\n"
+        "• /today\n"
+        "• /risk\n\n"
+        "พิมพ์ /help เพื่อดูทั้งหมด"
+    )
 
 
 # =========================================================
@@ -2611,6 +2646,7 @@ def main_loop() -> None:
     print(f"Build: {BOT_BUILD}")
     print("==========================================")
     print("Bot เริ่มทำงานแล้ว...")
+    clear_webhook_keep_updates()
     set_bot_commands()
 
     offset = None
