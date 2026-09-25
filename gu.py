@@ -1704,15 +1704,8 @@ THEME_CSS = """
     /* ---------- AI Chat (ปุ่มลอย + ฟองแชท) ---------- */
     .st-key-ai_fab {
         position: fixed !important;
-        top: auto !important;
-        bottom: 72px !important;
-        left: auto !important;
-        right: 24px !important;
-        inset: auto 24px 72px auto !important;
-        z-index: 2147483000 !important;
-        width: auto !important;
-        margin: 0 !important;
-        transform: none !important;
+        bottom: 78px; right: 24px; left: auto;
+        z-index: 999990; width: auto !important;
     }
 
     /* ป้องกัน ancestor หลักของ Streamlit ทำให้ position:fixed
@@ -1756,23 +1749,12 @@ THEME_CSS = """
     }
     [class*="st-key-ai_sug_"] button:hover { border-color: #0ecb81 !important; }
 
-    /* Mobile: ยึดปุ่ม AI กับ viewport โดยตรง ไม่ให้ layout ของ Streamlit ดึงตำแหน่งไปตาม parent */
     @media (max-width: 768px) {
         .st-key-ai_fab {
-            position: fixed !important;
-            top: auto !important;
-            bottom: 90px !important;
-            left: 16px !important;
-            right: auto !important;
-            inset: auto auto 90px 16px !important;
-            z-index: 2147483000 !important;
-            width: auto !important;
-            max-width: none !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            transform: none !important;
-            filter: none !important;
-            will-change: auto !important;
+            bottom: calc(64px + env(safe-area-inset-bottom, 0px)) !important;
+            right: 16px !important;
+            left: auto !important;
+            z-index: 999995 !important;
         }
 
         .st-key-ai_fab > div {
