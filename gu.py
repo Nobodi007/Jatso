@@ -1265,6 +1265,8 @@ NAV_LABELS = [
     "🎯 Investment Backtest",
     "🚨 Risk Center",
     "🧠 Portfolio Intelligence",
+    "🧪 What-if Simulator",
+    "📓 Trading Journal",
 ]
 NAV_DASHBOARD = NAV_LABELS[0]
 NAV_EXCHANGE = NAV_LABELS[3]
@@ -1272,6 +1274,8 @@ NAV_NEWS = "📰 News"
 NAV_SIMPLE = NAV_LABELS[5]
 NAV_RISK = NAV_LABELS[6]
 NAV_INTELLIGENCE = NAV_LABELS[7]
+NAV_WHATIF = NAV_LABELS[8]
+NAV_JOURNAL = NAV_LABELS[9]
 
 def _go_to_exchange(sym: str) -> None:
     st.session_state["bt_asset"] = sym
@@ -7710,6 +7714,188 @@ def render_portfolio_intelligence(cfg: dict[str, Any], data: pd.DataFrame, marke
         st.markdown(f'<div class="intel-card"><h4>Fee Breakdown</h4><div class="intel-row"><span>BUY/SELL fees</span><span class="intel-val">฿{trade_fees:,.2f}</span></div><div class="intel-row"><span>Withdrawal fees</span><span class="intel-val">฿{withdrawal_fees:,.2f}</span></div><div class="intel-row"><span>All recorded fees</span><span class="intel-val">฿{total_fees:,.2f}</span></div><div class="intel-row"><span>Ledger transactions</span><span class="intel-val">{len(txs):,}</span></div></div>',unsafe_allow_html=True)
 
 
+
+def render_what_if_simulator(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
+    """Scenario-only portfolio simulator. Never mutates real holdings or ledger."""
+    if data.empty:
+        st.error("⚠️ ไม่สามารถโหลดข้อมูลราคาเพื่อจำลอง Portfolio ได้")
+        return
+
+    sim = st.session_state.get("sim", {})
+    ensure_portfolio_ledger(sim)
+    current_date = pd.to_datetime(data.index[-1])
+    try:
+        usdthb = float(data.loc[current_date, "USDTHB"])
+    except Exception:
+        usdthb = FALLBACK_USDTHB
+
+    prices = {"THB": 1.0}
+    if market_df is not None and not market_df.empty:
+        for _, row in market_df.iterrows():
+            try:
+                prices[str(row["symbol"]).upper()] = float(row["price_usd"]) * usdthb
+            except (TypeError, ValueError, KeyError):
+                pass
+    asset_cfg = str(cfg.get("asset", "BTC")).upper()
+    if "Global_USD" in data.columns:
+        try:
+            prices[asset_cfg] = float(data.loc[current_date, "Global_USD"]) * usdthb
+        except (TypeError, ValueError, KeyError):
+            pass
+
+    snap = portfolio_snapshot(sim, prices)
+    rows = [r for r in (snap.get("rows", []) or []) if float(r.get("holdings", 0) or 0) > 0 and str(r.get("asset", "")).upper() != "THB"]
+
+    st.markdown("""
+    <style>
+    .whatif-hero{padding:26px 28px;border:1px solid #2b3139;border-radius:20px;background:linear-gradient(135deg,#171a20,#0f1115 65%,#17131d);margin-bottom:16px}
+    .whatif-eyebrow{font-size:.7rem;letter-spacing:.18em;font-weight:800;color:#848e9c}
+    .whatif-hero h2{margin:5px 0;color:#f1f3f5;font-size:1.8rem}.whatif-hero p{margin:0;color:#8d96a5;font-size:.86rem}
+    .whatif-card{border:1px solid #2b3139;border-radius:16px;background:#0f1115;padding:18px;margin-bottom:12px}
+    .whatif-label{color:#848e9c;font-size:.75rem}.whatif-big{font-size:1.75rem;font-weight:850;color:#eaecef}.whatif-muted{color:#737d8c;font-size:.76rem}
+    .whatif-note{padding:12px 14px;border:1px solid #2b3139;border-radius:12px;background:#15181e;color:#aeb6c2;font-size:.8rem;line-height:1.55}
+    .whatif-positive{color:#0ecb81!important}.whatif-negative{color:#f6465d!important}.whatif-flat{color:#d6dae1!important}
+    .whatif-asset{display:flex;align-items:center;gap:10px;font-weight:750;color:#eaecef}
+    </style>
+    """, unsafe_allow_html=True)
+    st.markdown('<div class="whatif-hero"><div class="whatif-eyebrow">SCENARIO LAB</div><h2>🧪 What-if Simulator</h2><p>จำลองการเปลี่ยนแปลงราคาของสินทรัพย์ในพอร์ต โดยไม่แก้ไข Holdings, Wallet หรือ Transaction Ledger จริง</p></div>', unsafe_allow_html=True)
+
+    if not rows:
+        st.info("ยังไม่มี Holdings สำหรับจำลองสถานการณ์")
+        return
+
+    # Scenario presets are independent from the real portfolio.
+    preset = st.selectbox("Scenario preset", ["Custom", "Bull +10%", "Bear -10%", "Stress -20%", "Mixed: BTC +10% / Others -5%"], key="whatif_preset")
+    preset_map = {}
+    if preset == "Bull +10%":
+        preset_map = {str(r["asset"]).upper(): 10.0 for r in rows}
+    elif preset == "Bear -10%":
+        preset_map = {str(r["asset"]).upper(): -10.0 for r in rows}
+    elif preset == "Stress -20%":
+        preset_map = {str(r["asset"]).upper(): -20.0 for r in rows}
+    elif preset.startswith("Mixed"):
+        preset_map = {str(r["asset"]).upper(): (10.0 if str(r["asset"]).upper() == "BTC" else -5.0) for r in rows}
+
+    changes = {}
+    for r in rows:
+        sym = str(r["asset"]).upper()
+        default = float(preset_map.get(sym, 0.0))
+        changes[sym] = st.slider(f"{sym} price change", -100.0, 200.0, default, 0.5, format="%+.1f%%", key=f"whatif_change_{sym}")
+
+    current_value = float(snap.get("total_value_thb", 0.0))
+    cash = float(snap.get("cash_thb", 0.0))
+    scenario_asset_value = 0.0
+    detail = []
+    for r in rows:
+        sym = str(r["asset"]).upper()
+        base = float(r.get("market_value", 0.0) or 0.0)
+        chg = float(changes.get(sym, 0.0))
+        scenario_val = base * (1.0 + chg / 100.0)
+        scenario_asset_value += scenario_val
+        detail.append((sym, base, scenario_val, chg))
+    scenario_total = cash + scenario_asset_value
+    delta = scenario_total - current_value
+    delta_pct = (delta / current_value * 100.0) if current_value else 0.0
+    cls = "whatif-positive" if delta > 0 else ("whatif-negative" if delta < 0 else "whatif-flat")
+
+    c1,c2,c3,c4=st.columns(4)
+    c1.markdown(f'<div class="whatif-card"><div class="whatif-label">Current Portfolio</div><div class="whatif-big">฿{current_value:,.2f}</div></div>', unsafe_allow_html=True)
+    c2.markdown(f'<div class="whatif-card"><div class="whatif-label">Scenario Portfolio</div><div class="whatif-big">฿{scenario_total:,.2f}</div></div>', unsafe_allow_html=True)
+    c3.markdown(f'<div class="whatif-card"><div class="whatif-label">Change</div><div class="whatif-big {cls}">฿{delta:+,.2f}</div></div>', unsafe_allow_html=True)
+    c4.markdown(f'<div class="whatif-card"><div class="whatif-label">Portfolio Change</div><div class="whatif-big {cls}">{delta_pct:+.2f}%</div></div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="whatif-card"><h4 style="margin:0 0 4px;color:#eaecef">Scenario Breakdown</h4><div class="whatif-muted">มูลค่าที่เปลี่ยนด้านล่างเป็นผลจำลองจากราคาปัจจุบันเท่านั้น</div>', unsafe_allow_html=True)
+    for sym, base, scen, chg in detail:
+        d = scen - base
+        dcls = "whatif-positive" if d > 0 else ("whatif-negative" if d < 0 else "whatif-flat")
+        st.markdown(f'<div style="display:flex;justify-content:space-between;align-items:center;padding:13px 0;border-bottom:1px solid #1f232a;gap:12px"><div class="whatif-asset">{coin_icon_html(sym,30)}<span>{_html.escape(sym)}</span></div><div style="text-align:right"><div style="color:#737d8c;font-size:.72rem">฿{base:,.2f} → ฿{scen:,.2f}</div><strong class="{dcls}">{chg:+.1f}% · ฿{d:+,.2f}</strong></div></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown(f'<div class="whatif-note">💡 <b>Cash THB ฿{cash:,.2f}</b> ถูกคงที่ในสถานการณ์นี้ และไม่มีการสร้างธุรกรรมจริง การเปลี่ยนแปลงทั้งหมดเป็นเพียงการจำลองจากราคาของ Holdings ปัจจุบัน</div>', unsafe_allow_html=True)
+
+
+
+
+def _journal_init(sim: dict[str, Any]) -> list[dict[str, Any]]:
+    journal = sim.setdefault("trade_journal", [])
+    if not isinstance(journal, list):
+        journal = []
+        sim["trade_journal"] = journal
+    return journal
+
+
+def _journal_entry_for(journal: list[dict[str, Any]], tx_id: str) -> dict[str, Any]:
+    for item in journal:
+        if isinstance(item, dict) and str(item.get("tx_id", "")) == str(tx_id):
+            return item
+    return {"tx_id": str(tx_id), "reason": "", "tags": [], "review": "", "updated_at": ""}
+
+
+def _journal_save(sim: dict[str, Any], tx_id: str, reason: str, tags: list[str], review: str) -> None:
+    journal = _journal_init(sim)
+    found = next((x for x in journal if isinstance(x, dict) and str(x.get("tx_id", "")) == str(tx_id)), None)
+    payload = {"tx_id": str(tx_id), "reason": reason.strip(), "tags": [str(x) for x in tags], "review": review.strip(), "updated_at": datetime.now(timezone.utc).isoformat()}
+    if found is None:
+        journal.append(payload)
+    else:
+        found.update(payload)
+    save_sim_state(sim)
+
+
+def render_trading_journal(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
+    sim = st.session_state.get("sim", {})
+    ensure_portfolio_ledger(sim)
+    journal = _journal_init(sim)
+    txs = [t for t in sim.get("portfolio_ledger", []) if isinstance(t, dict) and str(t.get("type", "")).upper() in {"BUY", "SELL"}]
+    txs = sorted(txs, key=lambda x: str(x.get("timestamp", "")), reverse=True)
+
+    st.markdown("""
+    <style>
+    .journal-hero{padding:26px 28px;border:1px solid #2b3139;border-radius:20px;background:linear-gradient(135deg,#171a20,#0f1115 65%,#151a1d);margin-bottom:16px}
+    .journal-eyebrow{font-size:.7rem;letter-spacing:.18em;font-weight:800;color:#848e9c}
+    .journal-hero h2{margin:5px 0;color:#f1f3f5;font-size:1.8rem}.journal-hero p{margin:0;color:#8d96a5;font-size:.86rem}
+    .journal-card{border:1px solid #2b3139;border-radius:16px;background:#0f1115;padding:18px;margin-bottom:12px}
+    .journal-stat{font-size:1.55rem;font-weight:850;color:#eaecef}.journal-label{color:#848e9c;font-size:.72rem}.journal-muted{color:#737d8c;font-size:.76rem}
+    .journal-row{display:flex;justify-content:space-between;gap:16px;padding:13px 0;border-bottom:1px solid #1f232a;align-items:center}.journal-row:last-child{border-bottom:0}
+    .journal-asset{display:flex;align-items:center;gap:10px;min-width:150px}.journal-asset strong{color:#eef0f3}.journal-asset span{display:block;color:#687282;font-size:.68rem;margin-top:2px}
+    .journal-buy{color:#0ecb81!important}.journal-sell{color:#f6465d!important}
+    .journal-chip{display:inline-block;padding:4px 8px;border:1px solid #303641;border-radius:999px;background:#15181e;color:#b8bec8;font-size:.68rem;margin:2px 4px 2px 0}
+    </style>
+    """, unsafe_allow_html=True)
+    st.markdown('<div class="journal-hero"><div class="journal-eyebrow">DECISION LOG</div><h2>📓 Trading Journal</h2><p>บันทึกเหตุผล บริบท และผลทบทวนของแต่ละธุรกรรม โดยเชื่อมกับ Portfolio Ledger เดิม</p></div>', unsafe_allow_html=True)
+    buys=sum(1 for t in txs if str(t.get("type", "")).upper()=="BUY"); sells=sum(1 for t in txs if str(t.get("type", "")).upper()=="SELL")
+    total_journaled=sum(1 for t in txs if any(str(j.get("tx_id", ""))==str(t.get("id", "")) and (j.get("reason") or j.get("review") or j.get("tags")) for j in journal if isinstance(j, dict)))
+    c1,c2,c3,c4=st.columns(4)
+    c1.markdown(f'<div class="journal-card"><div class="journal-label">TRADES</div><div class="journal-stat">{len(txs)}</div></div>',unsafe_allow_html=True)
+    c2.markdown(f'<div class="journal-card"><div class="journal-label">BUY</div><div class="journal-stat journal-buy">{buys}</div></div>',unsafe_allow_html=True)
+    c3.markdown(f'<div class="journal-card"><div class="journal-label">SELL</div><div class="journal-stat journal-sell">{sells}</div></div>',unsafe_allow_html=True)
+    c4.markdown(f'<div class="journal-card"><div class="journal-label">JOURNALED</div><div class="journal-stat">{total_journaled}</div></div>',unsafe_allow_html=True)
+    if not txs:
+        st.info("ยังไม่มี BUY / SELL transaction สำหรับทำ Journal")
+        return
+    st.markdown('<div class="journal-card"><h4 style="margin:0 0 4px;color:#eaecef">✍️ Add / Edit Journal Entry</h4><div class="journal-muted">เลือก transaction แล้วบันทึกเหตุผลและบทเรียนได้โดยไม่แก้ไขข้อมูลการซื้อขายจริง</div>',unsafe_allow_html=True)
+    options=[]; tx_by_label={}
+    for t in txs:
+        tid=str(t.get("id", "")); sym=str(t.get("asset", "THB")).upper(); typ=str(t.get("type", "")).upper(); ts=str(t.get("timestamp", ""))[:16].replace("T", " ")
+        label=f"{ts} · {typ} · {sym} · ฿{float(t.get('gross_thb',0) or 0):,.2f} · {tid}"; options.append(label); tx_by_label[label]=t
+    selected_label=st.selectbox("Transaction",options,key="journal_tx_select"); selected=tx_by_label[selected_label]; txid=str(selected.get("id", "")); existing=_journal_entry_for(journal,txid)
+    tag_options=["DCA","Breakout","Rebalance","Hedge","Take Profit","Risk Control","Other"]
+    reason=st.text_area("Reason / Thesis",value=str(existing.get("reason", "")),placeholder="ทำไมถึงเปิดหรือปิดสถานะนี้?",key=f"journal_reason_{txid}")
+    tags=st.multiselect("Tags",tag_options,default=[x for x in existing.get("tags",[]) if x in tag_options],key=f"journal_tags_{txid}")
+    review=st.text_area("Review / Lesson",value=str(existing.get("review", "")),placeholder="หลังจากนั้นเกิดอะไรขึ้น และได้บทเรียนอะไร?",key=f"journal_review_{txid}")
+    if st.button("💾 Save Journal Entry",key=f"journal_save_{txid}",use_container_width=True):
+        _journal_save(sim,txid,reason,tags,review); st.success("บันทึก Journal แล้ว"); st.rerun()
+    st.markdown('</div>',unsafe_allow_html=True)
+    st.markdown('<div class="journal-card"><h4 style="margin:0 0 10px;color:#eaecef">🧾 Recent Transactions</h4>',unsafe_allow_html=True)
+    for t in txs[:20]:
+        tid=str(t.get("id", "")); typ=str(t.get("type", "")).upper(); sym=str(t.get("asset", "THB")).upper(); entry=_journal_entry_for(journal,tid); cls="journal-buy" if typ=="BUY" else "journal-sell"
+        tags_html=" ".join(f'<span class="journal-chip">{_html.escape(str(x))}</span>' for x in entry.get("tags", []))
+        reason_html=_html.escape(str(entry.get("reason", ""))) if entry.get("reason") else "ยังไม่มีเหตุผลบันทึก"
+        ts=_html.escape(str(t.get("timestamp", ""))[:16].replace("T", " ")); gross=float(t.get("gross_thb",0) or 0); fee=float(t.get("fee_thb",0) or 0); qty=abs(float(t.get("qty",0) or 0))
+        row=(f'<div class="journal-row"><div class="journal-asset">{coin_icon_html(sym,30)}<div><strong>{_html.escape(typ)} · {_html.escape(sym)}</strong><span>{ts} · Qty {qty:.8g} · Gross ฿{gross:,.2f} · Fee ฿{fee:,.2f}</span></div></div><div style="text-align:right;max-width:55%"><div class="{cls}" style="font-weight:800">{typ}</div><div style="color:#b8bec8;font-size:.78rem;margin:4px 0">{reason_html}</div><div>{tags_html}</div></div></div>')
+        st.markdown(row,unsafe_allow_html=True)
+    st.markdown('</div>',unsafe_allow_html=True)
+
 def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
     if data.empty:
         st.error("⚠️ ไม่สามารถโหลดข้อมูลได้")
@@ -10853,6 +11039,10 @@ def _main_body() -> None:
             render_risk_center(cfg, data, market_df)
         elif nav == NAV_INTELLIGENCE:
             render_portfolio_intelligence(cfg, data, market_df)
+        elif nav == NAV_WHATIF:
+            render_what_if_simulator(cfg, data, market_df)
+        elif nav == NAV_JOURNAL:
+            render_trading_journal(cfg, data, market_df)
         elif nav == NAV_SIMPLE:
             from simple_backtest import render_simple_backtest
             render_simple_backtest(
