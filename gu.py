@@ -7726,9 +7726,9 @@ MOBILE_NAV_CSS = r'''<style>
     position: relative !important;
     flex: 1 1 0 !important;
     min-width: 0 !important;
-    height: 32px !important;
+    height: 40px !important;
     margin: 0 !important;
-    padding: 3px 10px 3px 3px !important;
+    padding: 5px 12px 5px 5px !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
@@ -7747,8 +7747,8 @@ MOBILE_NAV_CSS = r'''<style>
 .st-key-mobile_nav label p,
 .st-key-mobile_nav label span {
     color: #848e9c !important;
-    font-size: 9px !important;
-    font-weight: 600 !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
     margin: 0 !important;
     white-space: nowrap !important;
 }
