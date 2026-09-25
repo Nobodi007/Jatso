@@ -7618,6 +7618,52 @@ def render_customer_leaderboard(sim: dict[str, Any], cfg: dict[str, Any]) -> Non
 
 MOBILE_NAV = ["🏠 Home", "🌐 Market", "💱 Trade", "💼 Asset", "📊 Backtest", "⚙️ Settings"]
 
+GLOBAL_NEWS_FLOAT_CSS = r'''<style>
+/* Global News launcher: stays in the same top-right empty area on every tab */
+.st-key-global_news_float {
+    position: fixed !important;
+    top: 132px !important;
+    right: 22px !important;
+    width: 330px !important;
+    min-width: 330px !important;
+    z-index: 1000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+.st-key-global_news_float [data-testid="stButton"] > button {
+    width: 100% !important;
+    min-height: 104px !important;
+    border: 1px solid rgba(252,213,53,.35) !important;
+    border-radius: 16px !important;
+    background: linear-gradient(135deg, rgba(24,26,32,.98), rgba(18,20,25,.98)) !important;
+    color: #EAECEF !important;
+    box-shadow: 0 12px 30px rgba(0,0,0,.28) !important;
+    text-align: left !important;
+    padding: 18px 20px !important;
+    font-size: 22px !important;
+    font-weight: 800 !important;
+}
+.st-key-global_news_float [data-testid="stButton"] > button:hover {
+    border-color: #fcd535 !important;
+    background: linear-gradient(135deg, rgba(30,32,38,.99), rgba(20,22,28,.99)) !important;
+}
+@media (max-width: 900px) {
+    .st-key-global_news_float {
+        top: 76px !important;
+        right: 12px !important;
+        width: 170px !important;
+        min-width: 170px !important;
+    }
+    .st-key-global_news_float [data-testid="stButton"] > button {
+        min-height: 56px !important;
+        padding: 10px 14px !important;
+        border-radius: 12px !important;
+        font-size: 17px !important;
+    }
+}
+</style>'''
+
 MOBILE_NAV_CSS = r'''<style>
 /* ---------- Mobile bottom nav ---------- */
 .st-key-mobile_nav {
@@ -7789,29 +7835,6 @@ MOBILE_NAV_CSS = r'''<style>
   .st-key-mobile_shell [data-testid="stRadio"] div[role="radiogroup"] { flex-wrap:wrap !important; gap:5px !important; }
   .st-key-mobile_shell [data-testid="stRadio"] label { font-size:11px !important; }
 }
-</style>'''
-
-
-MOBILE_NEWS_TAB_CSS = r'''<style>
-/* ---------- Mobile top section tabs: Market / News ---------- */
-.st-key-mobile_section_tab { margin: 2px 0 10px !important; }
-.st-key-mobile_section_tab [role="radiogroup"] { display:flex !important; gap:6px !important; width:100% !important; overflow-x:auto !important; scrollbar-width:none !important; }
-.st-key-mobile_section_tab [role="radiogroup"]::-webkit-scrollbar{display:none!important;}
-.st-key-mobile_section_tab label { flex:0 0 auto !important; min-width:118px !important; height:34px !important; padding:5px 14px !important; margin:0 !important; border:1px solid #2b3139 !important; border-radius:10px !important; background:#181a20 !important; color:#848e9c !important; display:flex !important; align-items:center !important; justify-content:center !important; }
-.st-key-mobile_section_tab label > div:first-child,.st-key-mobile_section_tab label svg,.st-key-mobile_section_tab label input { display:none !important; }
-.st-key-mobile_section_tab label p,.st-key-mobile_section_tab label span { margin:0 !important; color:#848e9c !important; font-size:12px !important; font-weight:700 !important; white-space:nowrap !important; }
-.st-key-mobile_section_tab label:has(input:checked),.st-key-mobile_section_tab label[data-checked="true"] { background:#087a3f !important; border-color:#087a3f !important; }
-.st-key-mobile_section_tab label:has(input:checked) p,.st-key-mobile_section_tab label:has(input:checked) span,.st-key-mobile_section_tab label[data-checked="true"] p { color:#fff !important; }
-.mobile-news-full-title{color:#EAECEF;font-size:22px;font-weight:800;margin:4px 0 2px;}
-.mobile-news-full-sub{color:#848e9c;font-size:11px;margin-bottom:10px;}
-.mobile-news-card{display:flex;gap:10px;padding:10px 0;border-bottom:1px solid #2b3139;}
-.mobile-news-card:last-child{border-bottom:0;}
-.mobile-news-thumb{width:92px;height:62px;flex:0 0 92px;border-radius:9px;object-fit:cover;background:#161a20;}
-.mobile-news-body{min-width:0;}
-.mobile-news-title{display:block;color:#EAECEF !important;text-decoration:none !important;font-size:13px;font-weight:750;line-height:1.35;margin-bottom:5px;}
-.mobile-news-meta{color:#848e9c;font-size:10px;line-height:1.35;}
-.mobile-news-tags{color:#0ecb81;font-size:9px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-@media (max-width:430px){.st-key-mobile_section_tab label{min-width:108px !important;padding:5px 10px !important;}.mobile-news-thumb{width:82px;height:58px;flex-basis:82px;}.mobile-news-title{font-size:12px;}}
 </style>'''
 
 
@@ -8143,41 +8166,22 @@ MOBILE_COIN_LOGOS = {
 }
 
 
-
-def render_mobile_news_full(cfg: dict[str, Any]) -> None:
-    """Mobile News tab using the same news engine/content as the desktop website."""
-    st.markdown('<div class="mobile-news-full-title">📰 ข่าวตลาด</div>', unsafe_allow_html=True)
-    st.markdown('<div class="mobile-news-full-sub">ข่าวคริปโตจากแหล่งเดียวกับหน้าเว็บ · อัปเดตอัตโนมัติ</div>', unsafe_allow_html=True)
-    c1, c2 = st.columns([7, 2])
-    with c1:
-        st.caption("ข่าวล่าสุด")
-    with c2:
-        if st.button("🔄 รีเฟรช", key="mobile_news_refresh", use_container_width=True):
-            fetch_crypto_news.clear(); fetch_crypto_news_rss.clear(); st.rerun()
-    news_items = fetch_crypto_news(limit=30)
-    if not news_items:
-        st.warning("ยังดึงข่าวจากแหล่งข่าวไม่สำเร็จ หรือยังไม่มีข่าวที่ตรงกับเหรียญในระบบ")
-        return
-    st.caption(f"พบข่าวที่เกี่ยวข้อง {len(news_items)} ข่าว")
-    for news in news_items:
-        title = news.get("title") or "(ไม่มีหัวข้อข่าว)"
-        url = news.get("url") or ""
-        img = news.get("image_url") or NEWS_PLACEHOLDER_URL
-        source = news.get("source") or "Unknown"
-        ago = _news_time_ago(int(news.get("published_ts") or 0))
-        tags = " · ".join(news.get("tags") or [])
-        safe_title = _html.escape(str(title))
-        if url:
-            title_html = f'<a class="mobile-news-title" href="{_html.escape(str(url), quote=True)}" target="_blank" rel="noopener">{safe_title}</a>'
-        else:
-            title_html = f'<div class="mobile-news-title">{safe_title}</div>'
-        st.markdown(f'<div class="mobile-news-card"><img class="mobile-news-thumb" src="{_html.escape(str(img), quote=True)}"><div class="mobile-news-body">{title_html}<div class="mobile-news-meta">{_html.escape(str(source))} · {_html.escape(str(ago))}</div><div class="mobile-news-tags">{_html.escape(tags)}</div></div></div>', unsafe_allow_html=True)
-
-
 def render_mobile_market(cfg: dict[str, Any], market_df: pd.DataFrame, usdthb: float) -> None:
-    # Market page — ข่าวแยกเป็นแท็บด้านบน
-    st.markdown('<div class="mobile-page-title">🌐 ภาพรวมตลาด (Market)</div>', unsafe_allow_html=True)
-    st.markdown('<div class="mobile-page-sub">ราคา THB · ตลาดคริปโต · อัปเดตตามข้อมูลตลาด</div>', unsafe_allow_html=True)
+    """Mobile market: chart/orderbook first, then exchange-style watchlist with real coin logos."""
+    # Market header remains clean; News is a global launcher available on every tab.
+    st.markdown(
+        '<div class="mobile-page-title">🌐 ภาพรวมตลาด (Market)</div>'
+        '<div class="mobile-page-sub">ราคา THB · ตลาดคริปโต · อัปเดตตามข้อมูลตลาด</div>',
+        unsafe_allow_html=True,
+    )
+
+    current = str(cfg.get("asset", "BTC"))
+    if current not in SUPPORTED_ASSETS:
+        current = "BTC"
+    chart_asset = str(st.session_state.get("mobile_market_selected", current))
+    if chart_asset not in SUPPORTED_ASSETS:
+        chart_asset = current
+
     st.markdown('<div class="mobile-section-heading">📊 Market chart</div>', unsafe_allow_html=True)
     chart_view = st.radio(
         "มุมมองกราฟ", ["📈 TradingView", "📊 3D Order Book"],
@@ -9014,9 +9018,17 @@ def _main_body() -> None:
     st.markdown(THEME_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_NAV_CSS, unsafe_allow_html=True)
-    st.markdown(MOBILE_NEWS_TAB_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_MARKET_NEWS_CSS, unsafe_allow_html=True)
+    st.markdown(GLOBAL_NEWS_FLOAT_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_BT_CSS, unsafe_allow_html=True)
+
+    # Global News launcher: อยู่ตำแหน่งเดิมตลอด ไม่ว่าผู้ใช้จะอยู่แท็บไหน
+    with st.container(key="global_news_float"):
+        if st.button("📰  News", key="global_news_button", use_container_width=True):
+            st.session_state["main_nav"] = NAV_NEWS
+            st.session_state["mobile_news_return_tab"] = st.session_state.get("mobile_nav", MOBILE_NAV[0])
+            st.session_state["mobile_news_open"] = True
+            st.rerun()
 
     if is_guest_mode():
         st.session_state.setdefault("favorite_tickers", [])
@@ -9123,10 +9135,11 @@ def _main_body() -> None:
     if "main_nav" not in st.session_state:
         st.session_state["main_nav"] = NAV_LABELS[0]
 
-    # News เป็นแท็บหลักจริง ไม่ได้ฝังอยู่เฉพาะหน้า Market
-    nav_labels_main = list(NAV_LABELS)
+    # แถบเมนูหลักยังคงแสดงแท็บเดิมทั้งหมด ยกเว้นข่าวที่ย้ายไปเป็นปุ่มเล็กด้านบน
+    # ใช้ key แยกจาก main_nav เพื่อให้ radio ไม่หายไปเมื่ออยู่หน้า News
+    nav_labels_main = [label for label in NAV_LABELS if label != NAV_NEWS]
     current_nav = st.session_state.get("main_nav", nav_labels_main[0])
-    if current_nav not in nav_labels_main:
+    if current_nav not in nav_labels_main and current_nav != NAV_NEWS:
         current_nav = nav_labels_main[0]
         st.session_state["main_nav"] = current_nav
 
@@ -9229,17 +9242,30 @@ def _main_body() -> None:
         </style>
         """, unsafe_allow_html=True)
 
-        default_idx = nav_labels_main.index(current_nav)
-        selected_nav = st.radio(
-            "เมนูหลัก",
-            nav_labels_main,
-            horizontal=True,
-            index=default_idx,
-            key="main_nav_tabs",
-            label_visibility="collapsed",
-        )
-        nav = selected_nav
-        st.session_state["main_nav"] = selected_nav
+        if current_nav == NAV_NEWS:
+            selected_nav = st.radio(
+                "เมนูหลัก",
+                nav_labels_main,
+                horizontal=True,
+                index=None,
+                key="main_nav_tabs_news",
+                label_visibility="collapsed",
+            )
+            nav = selected_nav if selected_nav else NAV_NEWS
+            if selected_nav:
+                st.session_state["main_nav"] = selected_nav
+        else:
+            default_idx = nav_labels_main.index(current_nav)
+            selected_nav = st.radio(
+                "เมนูหลัก",
+                nav_labels_main,
+                horizontal=True,
+                index=default_idx,
+                key="main_nav_tabs",
+                label_visibility="collapsed",
+            )
+            nav = selected_nav
+            st.session_state["main_nav"] = selected_nav
 
     # Mobile UI อยู่ใน shell แยก เพื่อไม่ให้ถูก render บน Desktop
     # แต่ยังคงสร้าง widget ได้ปกติบน Mobile viewport
@@ -9260,25 +9286,13 @@ def _main_body() -> None:
             key="mobile_nav",
             label_visibility="collapsed",
         )
+        # ถ้าผู้ใช้เลือก bottom-nav ตัวอื่นระหว่างเปิด News ให้กลับไปแท็บนั้น
+        if st.session_state.get("mobile_news_open", False):
+            return_tab = st.session_state.get("mobile_news_return_tab", mobile_nav)
+            if mobile_nav != return_tab:
+                st.session_state["mobile_news_open"] = False
         # สำคัญ: mobile_nav เป็น widget key แล้ว Streamlit จะ sync ค่าให้เอง
         # ห้ามเขียน st.session_state["mobile_nav"] ซ้ำหลังสร้าง widget
-
-        # แท็บบน: Market / News — แสดงเฉพาะเมื่ออยู่หมวด Market
-        # News เป็นหน้าหลักแยก ไม่ใช่กล่องข่าวที่ฝังอยู่ใน Market
-        mobile_section = "🌐 Market"
-        if mobile_nav == MOBILE_NAV[1]:
-            if "mobile_section_tab" not in st.session_state:
-                st.session_state["mobile_section_tab"] = "🌐 Market"
-            mobile_section = st.radio(
-                "Market section",
-                ["🌐 Market", "📰 News"],
-                index=0 if st.session_state["mobile_section_tab"] == "🌐 Market" else 1,
-                horizontal=True,
-                key="mobile_section_tab",
-                label_visibility="collapsed",
-            )
-        else:
-            st.session_state["mobile_section_tab"] = "🌐 Market"
 
         mobile_usdthb = 1.0
         try:
@@ -9286,13 +9300,17 @@ def _main_body() -> None:
                 mobile_usdthb = float(data["USDTHB"].iloc[-1])
         except (TypeError, ValueError, IndexError):
             pass
-        if mobile_nav == MOBILE_NAV[0]:
+        if st.session_state.get("mobile_news_open", False):
+            # News is a global page opened from the fixed top-right launcher.
+            # It is independent of the bottom navigation tab.
+            if st.button("← กลับ", key="mobile_news_back"):
+                st.session_state["mobile_news_open"] = False
+                st.rerun()
+            render_news_section(cfg)
+        elif mobile_nav == MOBILE_NAV[0]:
             render_mobile_home(cfg, data)
         elif mobile_nav == MOBILE_NAV[1]:
-            if mobile_section == "📰 News":
-                render_mobile_news_full(cfg)
-            else:
-                render_mobile_market(cfg, market_df, mobile_usdthb)
+            render_mobile_market(cfg, market_df, mobile_usdthb)
         elif mobile_nav == MOBILE_NAV[2]:
             render_mobile_trade(cfg, data)
         elif mobile_nav == MOBILE_NAV[3]:
