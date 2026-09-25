@@ -1490,14 +1490,23 @@ def render_portfolio_search_filter(cfg: dict[str, Any], data: pd.DataFrame, mark
                 continue
             filtered.append(tx)
 
-        def _ts(v: Any) -> pd.Timestamp:
-            try:
-                x = pd.to_datetime(v, errors="coerce")
-                return x if not pd.isna(x) else pd.Timestamp.min
-            except Exception:
-                return pd.Timestamp.min
+        def _ts_sort_key(v: Any) -> int:
+            """Return a timezone-safe integer sort key for mixed transaction timestamps.
 
-        filtered.sort(key=lambda x: _ts(x.get("timestamp")), reverse=(sort_order == "ใหม่ → เก่า"))
+            Ledger data can contain both timezone-aware and timezone-naive timestamp
+            strings. Comparing those Timestamp objects directly raises TypeError in
+            pandas. Converting to UTC nanoseconds gives us one comparable scalar
+            without changing the stored transaction timestamp.
+            """
+            try:
+                x = pd.to_datetime(v, errors="coerce", utc=True)
+                if pd.isna(x):
+                    return -1
+                return int(x.value)
+            except Exception:
+                return -1
+
+        filtered.sort(key=lambda x: _ts_sort_key(x.get("timestamp")), reverse=(sort_order == "ใหม่ → เก่า"))
 
         txrows = []
         for tx in filtered:
