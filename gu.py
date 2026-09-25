@@ -7752,6 +7752,22 @@ MOBILE_NAV_CSS = r'''<style>
   align-items:center !important;
   justify-content:center !important;
 }
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_active_"] button {
+  color:#FFD43B !important;
+  -webkit-text-fill-color:#FFD43B !important;
+}
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_active_"] button p {
+  color:#FFD43B !important;
+  -webkit-text-fill-color:#FFD43B !important;
+}
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_inactive_"] button {
+  color:#EAECEF !important;
+  -webkit-text-fill-color:#EAECEF !important;
+}
+.st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_inactive_"] button p {
+  color:#EAECEF !important;
+  -webkit-text-fill-color:#EAECEF !important;
+}
 .st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_"] button:hover,
 .st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_"] button:focus,
 .st-key-mobile_shell div[class*="st-key-mobile_mkt_fav_"] button:active {
@@ -8181,7 +8197,7 @@ def render_mobile_market(cfg: dict[str, Any], market_df: pd.DataFrame, usdthb: f
         with row_wrap:
             star_col, coin_col, quote_col = st.columns([0.48, 2.15, 1.15], gap="small")
             with star_col:
-                if st.button("★" if is_fav else "☆", key=f"mobile_mkt_fav_{mode}_{sym}", use_container_width=True):
+                if st.button("★" if is_fav else "☆", key=f"mobile_mkt_fav_{'active' if is_fav else 'inactive'}_{mode}_{sym}", use_container_width=True):
                     _toggle_fav(sym)
                     st.rerun()
             with coin_col:
