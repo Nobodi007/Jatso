@@ -11926,7 +11926,7 @@ def render_rebalance_simulator(cfg: dict[str, Any], data: pd.DataFrame,
             pass
 
     snap = portfolio_snapshot(sim, price_map)
-    rows = [r for r in snap.get("rows", []) if float(r.get("market_value_thb", 0) or 0) > 0]
+    rows = [r for r in snap.get("rows", []) if float(r.get("market_value", 0) or 0) > 0]
     cash = float(snap.get("cash_thb", 0) or 0)
     total = float(snap.get("total_value_thb", 0) or 0)
 
@@ -11964,7 +11964,7 @@ def render_rebalance_simulator(cfg: dict[str, Any], data: pd.DataFrame,
     st.markdown("### 🎯 Target Allocation")
     st.caption("ตั้งเป้าหมายเป็นเปอร์เซ็นต์ ระบบจะปรับ THB เป็นตัว residual เพื่อให้รวม 100%")
 
-    symbols = [str(r.get("symbol","")).upper() for r in rows if r.get("symbol")]
+    symbols = [str(r.get("asset", "")).upper() for r in rows if r.get("asset")]
     target = {}
     if not symbols:
         st.info("ยังไม่มีสินทรัพย์ใน Portfolio สำหรับจำลอง Rebalance")
@@ -11975,7 +11975,7 @@ def render_rebalance_simulator(cfg: dict[str, Any], data: pd.DataFrame,
         ["Custom", "Current Allocation", "Equal Weight"],
         key="rb_preset_select",
     )
-    current_alloc = {str(r["symbol"]).upper(): float(r.get("allocation_pct", 0) or 0) for r in rows}
+    current_alloc = {str(r["asset"]).upper(): float(r.get("allocation_pct", 0) or 0) for r in rows}
     if preset == "Current Allocation":
         for sym in symbols:
             target[sym] = current_alloc.get(sym, 0.0)
@@ -12012,8 +12012,8 @@ def render_rebalance_simulator(cfg: dict[str, Any], data: pd.DataFrame,
     st.markdown("### 📊 Scenario")
     scenario_rows = []
     for r in rows:
-        sym = str(r["symbol"]).upper()
-        cur_val = float(r.get("market_value_thb", 0) or 0)
+        sym = str(r["asset"]).upper()
+        cur_val = float(r.get("market_value", 0) or 0)
         cur_pct = float(r.get("allocation_pct", 0) or 0)
         tgt_pct = float(target.get(sym, 0.0))
         tgt_val = total * tgt_pct / 100.0
