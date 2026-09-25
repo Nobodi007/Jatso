@@ -7867,24 +7867,8 @@ MOBILE_CSS = r'''<style>
   .st-key-desktop_navigation { display:none !important; }
   .st-key-desktop_route { display:none !important; }
   .st-key-mobile_shell { display:block !important; }
-  .mobile-page-title {
-    color:#F5F7FA !important;
-    font-size:26px !important;
-    font-weight:900 !important;
-    line-height:1.3 !important;
-    display:block !important;
-    margin:8px 0 4px !important;
-    opacity:1 !important;
-}
-  .mobile-page-sub {
-    color:#AEB6C2 !important;
-    font-size:15px !important;
-    font-weight:500 !important;
-    line-height:1.5 !important;
-    display:block !important;
-    margin:0 0 18px !important;
-    opacity:1 !important;
-}
+  .mobile-page-title { color:#EAECEF; font-size:22px; font-weight:800; margin:2px 0; }
+  .mobile-page-sub { color:#848e9c; font-size:11px; margin-bottom:12px; }
   .mobile-card { background:#181a20; border:1px solid #2b3139; border-radius:16px; padding:14px; margin-bottom:10px; }
   .mobile-kicker { color:#848e9c; font-size:11px; margin-bottom:4px; }
   .mobile-big { color:#EAECEF; font-size:25px; line-height:1.15; font-weight:800; font-variant-numeric:tabular-nums; }
@@ -8769,7 +8753,7 @@ MOBILE_BT_CSS = r'''<style>
     font-weight:900 !important;
     line-height:1.4 !important;
     display:block !important;
-    margin:14px 2px 8px !important;
+    margin:16px 0 8px !important;
     opacity:1 !important;
 }
 .mobile-bt-helper {
