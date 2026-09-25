@@ -9669,7 +9669,7 @@ def _main_body() -> None:
     # เพื่อให้ routing / state ของทุกหน้าทำงานเหมือนเดิม
     nav_labels_all = list(NAV_LABELS)
     current_nav = st.session_state.get("main_nav", NAV_DASHBOARD)
-    if current_nav not in nav_labels_all:
+    if current_nav not in nav_labels_all and current_nav != NAV_NEWS:
         current_nav = NAV_DASHBOARD
         st.session_state["main_nav"] = current_nav
 
