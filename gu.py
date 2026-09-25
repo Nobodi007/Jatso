@@ -7623,6 +7623,7 @@ MOBILE_NAV = ["🏠 Home", "🌐 Market", "💱 Trade", "💼 Asset", "📊 Back
 GLOBAL_NEWS_FLOAT_CSS = r'''<style>
 /* Global News launcher: stays in the same top-right empty area on every tab */
 .st-key-global_news_float {
+    display: none !important;
     position: fixed !important;
     top: 132px !important;
     right: 22px !important;
@@ -7652,6 +7653,7 @@ GLOBAL_NEWS_FLOAT_CSS = r'''<style>
 }
 @media (max-width: 900px) {
     .st-key-global_news_float {
+        display: block !important;
         top: 76px !important;
         right: 12px !important;
         width: 120px !important;
@@ -8373,15 +8375,31 @@ def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
             odf["วันที่"] = pd.to_datetime(odf.get("วันที่"), errors="coerce")
             odf = odf.dropna(subset=["วันที่"]).sort_values("วันที่")
             odf["กำไรออเดอร์"] = pd.to_numeric(odf.get("กำไรออเดอร์", 0), errors="coerce").fillna(0.0)
-            odf["equity"] = initial_capital + odf["กำไรออเดอร์"].cumsum()
+            # Aggregate orders by day. The source ledger stores dates without time, so
+            # plotting every order separately can collapse the x-axis to microseconds.
+            daily = (odf.groupby("วันที่", as_index=False)["กำไรออเดอร์"].sum()
+                     .sort_values("วันที่"))
+            daily["equity"] = initial_capital + daily["กำไรออเดอร์"].cumsum()
+            # Add a starting point so the portfolio line has a visible baseline.
+            start_date = daily["วันที่"].iloc[0] - pd.Timedelta(days=1)
+            plot_df = pd.concat([
+                pd.DataFrame({"วันที่": [start_date], "equity": [initial_capital]}),
+                daily[["วันที่", "equity"]],
+            ], ignore_index=True)
+            marker_mode = "lines+markers" if len(plot_df) <= 8 else "lines"
+            ymin, ymax = float(plot_df["equity"].min()), float(plot_df["equity"].max())
+            span = max(ymax - ymin, initial_capital * 0.005, 1.0)
+            pad = span * 0.18
             fig = go.Figure(go.Scatter(
-                x=odf["วันที่"], y=odf["equity"], mode="lines",
+                x=plot_df["วันที่"], y=plot_df["equity"], mode=marker_mode,
                 line=dict(color="#0ecb81", width=2.2),
+                marker=dict(size=6),
                 fill="tozeroy", fillcolor="rgba(14,203,129,0.12)",
             ))
             fig.update_layout(
                 template="plotly_dark", height=170, margin=dict(t=4, b=4, l=4, r=4),
-                showlegend=False, xaxis=dict(visible=False), yaxis=dict(visible=False),
+                showlegend=False, xaxis=dict(visible=False),
+                yaxis=dict(visible=False, range=[ymin - pad, ymax + pad]),
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             )
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
@@ -9312,16 +9330,30 @@ def render_dashboard(cfg: dict[str, Any], data: pd.DataFrame,
             odf["วันที่"] = pd.to_datetime(odf.get("วันที่"), errors="coerce")
             odf = odf.dropna(subset=["วันที่"]).sort_values("วันที่")
             odf["กำไรออเดอร์"] = pd.to_numeric(odf.get("กำไรออเดอร์", 0), errors="coerce").fillna(0.0)
-            odf["equity"] = initial_capital + odf["กำไรออเดอร์"].cumsum()
+            # Aggregate the ledger to daily P&L. Orders currently carry a date (not a
+            # timestamp), so duplicate dates otherwise produce a collapsed microsecond axis.
+            daily = (odf.groupby("วันที่", as_index=False)["กำไรออเดอร์"].sum()
+                     .sort_values("วันที่"))
+            daily["equity"] = initial_capital + daily["กำไรออเดอร์"].cumsum()
+            start_date = daily["วันที่"].iloc[0] - pd.Timedelta(days=1)
+            plot_df = pd.concat([
+                pd.DataFrame({"วันที่": [start_date], "equity": [initial_capital]}),
+                daily[["วันที่", "equity"]],
+            ], ignore_index=True)
+            marker_mode = "lines+markers" if len(plot_df) <= 8 else "lines"
+            ymin, ymax = float(plot_df["equity"].min()), float(plot_df["equity"].max())
+            span = max(ymax - ymin, initial_capital * 0.005, 1.0)
+            pad = span * 0.18
             fig = go.Figure(go.Scatter(
-                x=odf["วันที่"], y=odf["equity"], mode="lines",
+                x=plot_df["วันที่"], y=plot_df["equity"], mode=marker_mode,
                 line=dict(color="#0ecb81", width=2.4),
+                marker=dict(size=7),
                 fill="tozeroy", fillcolor="rgba(14,203,129,0.12)",
             ))
             fig.update_layout(
                 template="plotly_dark", height=320, margin=dict(t=10, b=10, l=10, r=10),
                 showlegend=False, hovermode="x unified",
-                yaxis_title="THB",
+                yaxis_title="THB", yaxis=dict(range=[ymin - pad, ymax + pad]),
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             )
             st.plotly_chart(fig, **WIDE)
