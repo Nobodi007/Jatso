@@ -11899,7 +11899,38 @@ def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market
     inst_chart, inst_metrics = _institutional_analytics(hist)
     if not inst_chart.empty:
         chart_cols = [c for c in ["Portfolio", "BTC", "SET Index", "S&P 500"] if c in inst_chart.columns]
-        st.line_chart(inst_chart[chart_cols], height=340, use_container_width=True)
+
+        # ใช้ Altair แทน st.line_chart เพื่อไม่ให้แกน Y เริ่มที่ 0
+        # เพราะการ normalize เป็น 100 + ช่วงข้อมูลสั้นอาจทำให้เส้นอื่น
+        # ดูเหมือนหายไป ทั้งที่จริงอยู่ใกล้กันมาก
+        try:
+            import altair as alt
+            chart_df = (
+                inst_chart[chart_cols]
+                .reset_index(names="date")
+                .melt("date", var_name="Series", value_name="Index")
+                .dropna(subset=["Index"])
+            )
+            chart = (
+                alt.Chart(chart_df)
+                .mark_line(point=alt.OverlayMarkDef(size=45), strokeWidth=2.5)
+                .encode(
+                    x=alt.X("date:T", title=None, axis=alt.Axis(format="%d %b", labelAngle=0)),
+                    y=alt.Y("Index:Q", title="Index (Start = 100)", scale=alt.Scale(zero=False)),
+                    color=alt.Color("Series:N", title=None),
+                    tooltip=[
+                        alt.Tooltip("date:T", title="Date", format="%d %b %Y"),
+                        alt.Tooltip("Series:N", title="Series"),
+                        alt.Tooltip("Index:Q", title="Index", format=".2f"),
+                    ],
+                )
+                .properties(height=360)
+                .interactive()
+            )
+            st.altair_chart(chart, use_container_width=True)
+        except Exception:
+            # Fallback ถ้า Altair ใช้งานไม่ได้
+            st.line_chart(inst_chart[chart_cols], height=360, use_container_width=True)
 
         ia, ib, ic = st.columns(3)
         with ia:
