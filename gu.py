@@ -12370,13 +12370,13 @@ def render_quant_research_lab(cfg: dict[str, Any], data: pd.DataFrame, market_df
         k_range = c1.multiselect("K ที่จะทดสอบ (BIC)", [2, 3, 4, 5], default=[2, 3, 4], key="quant_hmm_ks")
         threshold = c2.slider("Hysteresis probability", 0.50, 0.90, 0.65, 0.01, key="quant_hmm_thr")
         min_days = c3.number_input("ยืนยัน label ติดต่อกัน (วัน)", 1, 5, 2, key="quant_hmm_days")
-        if st.button("▶️ Fit HMM + BIC", key="quant_hmm_fit", use_container_width=True):
+        if st.button("▶️ Fit HMM + BIC", key="quant_hmm_fit_btn", use_container_width=True):
             try:
                 fit = fit_hmm_bic(returns, tuple(k_range or [2, 3, 4]))
-                st.session_state["quant_hmm_fit"] = fit
+                st.session_state["quant_hmm_fit_result"] = fit
             except Exception as exc:
                 st.error(f"HMM fit ไม่สำเร็จ: {exc}")
-        fit = st.session_state.get("quant_hmm_fit")
+        fit = st.session_state.get("quant_hmm_fit_result")
         if fit:
             rows = [{"K": k, "BIC": round(float(m["bic"]), 2), "Log-Likelihood": round(float(m["loglik"]), 2)} for k, m in fit["fits"]]
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
