@@ -40,6 +40,16 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import pandas as pd
 
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    HAS_MPL = True
+except ImportError:
+    matplotlib = None
+    plt = None
+    HAS_MPL = False
+
 MODEL_VERSION = "1.7.0"
 
 try:
@@ -1419,6 +1429,7 @@ NAV_LABELS = [
     "📈 Performance Analytics",
     "💰 Cash Flow Analytics",
     "🕒 Customer Timeline",
+    "🖨️ Fund Fact Sheet (Print)",
 ]
 NAV_DASHBOARD = NAV_LABELS[0]
 NAV_EXCHANGE = NAV_LABELS[3]
@@ -1436,6 +1447,7 @@ NAV_REBALANCE = NAV_LABELS[14]
 NAV_PERFORMANCE = NAV_LABELS[15]
 NAV_CASHFLOW = NAV_LABELS[16]
 NAV_TIMELINE = NAV_LABELS[17]
+NAV_FACTSHEET_PRINT = NAV_LABELS[18]
 
 def _go_to_exchange(sym: str) -> None:
     st.session_state["bt_asset"] = sym
@@ -8159,6 +8171,9 @@ def render_portfolio_calendar(cfg: dict[str, Any], data: pd.DataFrame, market_df
         if selected:
             st.markdown(f'<div class="cal-card"><h4 style="margin:0;color:#eaecef">Snapshot · {selected_day}</h4><div class="cal-detail"><span>Portfolio Value</span><b>฿{float(selected.get("total_value_thb",0) or 0):,.2f}</b></div><div class="cal-detail"><span>Cash</span><b>฿{float(selected.get("cash_thb",0) or 0):,.2f}</b></div><div class="cal-detail"><span>Invested Cost</span><b>฿{float(selected.get("invested_cost_thb",0) or 0):,.2f}</b></div><div class="cal-detail"><span>Unrealized P&L</span><b>฿{float(selected.get("unrealized_pnl_thb",0) or 0):+,.2f}</b></div><div class="cal-detail"><span>Realized P&L</span><b>฿{float(selected.get("realized_pnl_thb",0) or 0):+,.2f}</b></div><div class="cal-detail"><span>Fees</span><b>฿{float(selected.get("fees_thb",0) or 0):,.2f}</b></div></div>', unsafe_allow_html=True)
 
+    with st.expander("📄 Fund Fact Sheet — PDF", expanded=False):
+        render_fund_factsheet_panel(cfg, sim, snap, fetch_price_data, fund_name="XSpring Digital Asset Fund")
+
 
 def render_trading_journal(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
     sim = st.session_state.get("sim", {})
@@ -12169,6 +12184,309 @@ def render_smart_alerts(cfg: dict[str, Any], data: pd.DataFrame,
         "เกณฑ์แจ้งเตือนสามารถปรับได้เอง และระบบจะไม่ส่งคำสั่งซื้อขาย"
     )
 
+
+# =========================================================================
+# FUND FACT SHEET / PRINT REPORT
+# =========================================================================
+
+def _factsheet_series(sim: dict) -> pd.DataFrame:
+    snaps = sim.get("portfolio_snapshots", []) or []
+    rows = []
+    for item in snaps:
+        if not isinstance(item, dict):
+            continue
+        try:
+            rows.append({
+                "date": pd.to_datetime(str(item.get("date", ""))),
+                "value": float(item.get("total_value_thb", 0) or 0),
+            })
+        except (TypeError, ValueError):
+            continue
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).dropna().sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+
+
+def compute_factsheet_metrics(sim: dict[str, Any], snap: dict[str, Any]) -> dict[str, Any]:
+    """คำนวณ metrics จาก Portfolio Snapshot History จริง ไม่ใช่ backtest."""
+    hist = _factsheet_series(sim)
+    out = {
+        "portfolio_value": float(snap.get("total_value_thb", 0) or 0),
+        "unrealized_pnl": float(snap.get("unrealized_pnl_thb", 0) or 0),
+        "realized_pnl": float(snap.get("realized_pnl_thb", 0) or 0),
+        "total_pnl": float(snap.get("total_pnl_thb", 0) or 0),
+        "pnl_pct": float(snap.get("pnl_pct", 0) or 0),
+        "history": hist,
+        "sharpe": 0.0,
+        "sortino": 0.0,
+        "max_drawdown_pct": 0.0,
+        "volatility_pct": 0.0,
+        "period_return_pct": 0.0,
+        "start_date": None,
+        "end_date": None,
+    }
+    if len(hist) >= 2:
+        vals = hist["value"].to_numpy(dtype=float)
+        rets = pd.Series(vals).pct_change().replace([np.inf, -np.inf], np.nan).dropna()
+        out["start_date"] = hist["date"].iloc[0]
+        out["end_date"] = hist["date"].iloc[-1]
+        out["period_return_pct"] = ((vals[-1] / vals[0]) - 1) * 100 if vals[0] else 0.0
+        if len(rets) >= 2 and rets.std(ddof=1) > 0:
+            ann = np.sqrt(365)
+            out["sharpe"] = float(rets.mean() / rets.std(ddof=1) * ann)
+            downside = rets[rets < 0]
+            if len(downside) >= 2 and downside.std(ddof=1) > 0:
+                out["sortino"] = float(rets.mean() / downside.std(ddof=1) * ann)
+            out["volatility_pct"] = float(rets.std(ddof=1) * ann * 100)
+        peak = pd.Series(vals).cummax()
+        dd = (pd.Series(vals) / peak - 1) * 100
+        out["max_drawdown_pct"] = float(dd.min())
+    return out
+
+
+def _normalize_to_100(s: pd.Series) -> pd.Series:
+    s = s.dropna()
+    if s.empty or s.iloc[0] == 0:
+        return s
+    return s / s.iloc[0] * 100.0
+
+
+def _render_equity_chart_png(hist: pd.DataFrame, benchmark: Optional[pd.Series],
+                             benchmark_label: str = "BTC", dark: bool = False) -> bytes:
+    if not HAS_MPL or hist.empty:
+        return b""
+    bg = "#0f1115" if dark else "#ffffff"
+    fg = "#EAECEF" if dark else "#0b0e11"
+    grid = "#2b3139" if dark else "#e5e7eb"
+    fig, ax = plt.subplots(figsize=(7.2, 3.1), dpi=150)
+    fig.patch.set_facecolor(bg)
+    ax.set_facecolor(bg)
+    port_norm = _normalize_to_100(hist.set_index("date")["value"])
+    ax.plot(port_norm.index, port_norm.values, color="#0ecb81", linewidth=2.2, label="Portfolio")
+    if benchmark is not None and not benchmark.empty:
+        bn = _normalize_to_100(benchmark)
+        ax.plot(bn.index, bn.values, color="#848e9c", linewidth=1.5, linestyle="--", label=benchmark_label)
+    ax.axhline(100, color=grid, linewidth=1)
+    ax.legend(loc="upper left", frameon=False, labelcolor=fg, fontsize=9)
+    ax.tick_params(colors="#8a93a0", labelsize=8)
+    for spine in ax.spines.values():
+        spine.set_color(grid)
+    ax.set_ylabel("Index (Start = 100)", color="#8a93a0", fontsize=8)
+    fig.tight_layout()
+    buf = BytesIO()
+    fig.savefig(buf, format="png", facecolor=fig.get_facecolor(), bbox_inches="tight")
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def generate_fund_factsheet_pdf(fund_name: str, cfg: dict[str, Any], sim: dict[str, Any],
+                                snap: dict[str, Any], metrics: dict[str, Any],
+                                benchmark: Optional[pd.Series] = None,
+                                benchmark_label: str = "BTC",
+                                logo_bytes: Optional[bytes] = None) -> bytes:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage, HRFlowable
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=28, leftMargin=28, topMargin=26, bottomMargin=26)
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("FSTitle", parent=styles["Title"], fontSize=19, textColor=colors.HexColor("#0b0e11"), spaceAfter=2)
+    sub_style = ParagraphStyle("FSSub", parent=styles["Normal"], fontSize=9, textColor=colors.HexColor("#5e6673"))
+    section_style = ParagraphStyle("FSSection", parent=styles["Heading2"], fontSize=12, textColor=colors.HexColor("#0a9c63"), spaceBefore=14, spaceAfter=6)
+    disc_style = ParagraphStyle("FSDisc", parent=styles["Normal"], fontSize=7, textColor=colors.HexColor("#8a93a0"), leading=10)
+    story = []
+
+    period = "-"
+    if metrics.get("start_date") is not None:
+        period = f"{metrics['start_date'].strftime('%d %b %Y')} – {metrics['end_date'].strftime('%d %b %Y')}"
+    title_block = [
+        Paragraph(fund_name, title_style),
+        Paragraph(f"Fund Fact Sheet · {cfg.get('asset', '')} Strategy", sub_style),
+        Paragraph(f"Reporting Period: {period}", sub_style),
+        Paragraph(f"Generated: {datetime.now(timezone.utc).strftime('%d %b %Y, %H:%M UTC')}", sub_style),
+    ]
+    if logo_bytes:
+        try:
+            logo_img = RLImage(BytesIO(logo_bytes), width=32 * mm, height=32 * mm)
+            head_table = Table([[logo_img, title_block]], colWidths=[38 * mm, None])
+            head_table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+            story.append(head_table)
+        except Exception:
+            story.extend(title_block)
+    else:
+        story.extend(title_block)
+
+    story += [Spacer(1, 8), HRFlowable(width="100%", thickness=1, color=colors.HexColor("#2b3139")), Spacer(1, 10)]
+    story.append(Paragraph("Performance Summary", section_style))
+    kpi_rows = [
+        ["Portfolio Value", f"THB {metrics['portfolio_value']:,.2f}", "Period Return", f"{metrics['period_return_pct']:+.2f}%"],
+        ["Total P&L", f"THB {metrics['total_pnl']:+,.2f}", "P&L %", f"{snap.get('pnl_pct', 0):+.2f}%"],
+        ["Sharpe Ratio", f"{metrics['sharpe']:.2f}", "Sortino Ratio", f"{metrics['sortino']:.2f}"],
+        ["Max Drawdown", f"{metrics['max_drawdown_pct']:.2f}%", "Volatility (Ann.)", f"{metrics['volatility_pct']:.2f}%"],
+    ]
+    kt = Table(kpi_rows, colWidths=[110, 100, 110, 100])
+    kt.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 9), ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#1a1d21")),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"), ("FONTNAME", (2, 0), (2, -1), "Helvetica-Bold"),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7), ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("LINEBELOW", (0, 0), (-1, -2), 0.5, colors.HexColor("#e5e7eb")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f7f9fa")),
+    ]))
+    story += [kt, Spacer(1, 14)]
+
+    chart_png = _render_equity_chart_png(metrics["history"], benchmark, benchmark_label)
+    if chart_png:
+        story.append(Paragraph("Portfolio vs Benchmark (Indexed to 100)", section_style))
+        story.append(RLImage(BytesIO(chart_png), width=480, height=205))
+        story.append(Spacer(1, 10))
+
+    rows = snap.get("rows", []) or []
+    if rows:
+        story.append(Paragraph("Current Holdings", section_style))
+        data_rows = [["Asset", "Qty", "Avg Cost", "Price", "Value (THB)", "Alloc %", "Unreal. P&L"]]
+        for r in sorted(rows, key=lambda x: x.get("market_value", 0), reverse=True):
+            data_rows.append([
+                str(r.get("asset", "")), f'{float(r.get("qty", 0)):,.6f}', f'{float(r.get("avg_cost", 0)):,.2f}',
+                f'{float(r.get("price", 0)):,.2f}', f'{float(r.get("market_value", 0)):,.2f}',
+                f'{float(r.get("allocation_pct", 0)):.1f}%', f'{float(r.get("unrealized_pnl", 0)):+,.2f}',
+            ])
+        ht = Table(data_rows, colWidths=[45, 65, 58, 55, 75, 45, 68])
+        ht.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0b0e11")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 7.5), ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#d7dbe0")),
+            ("ALIGN", (1, 0), (-1, -1), "RIGHT"), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f7f9fa")]),
+        ]))
+        story += [ht, Spacer(1, 12)]
+
+    story += [HRFlowable(width="100%", thickness=0.6, color=colors.HexColor("#2b3139")), Spacer(1, 6)]
+    story.append(Paragraph(
+        "This document is generated by a portfolio simulation tool for planning and educational purposes only. "
+        "It is not investment advice, a solicitation, or a guarantee of future performance. Past performance "
+        "(simulated or otherwise) does not guarantee future results. Figures are based on internal simulation "
+        "parameters and may differ from actual market execution.", disc_style))
+    doc.build(story)
+    return buf.getvalue()
+
+
+def render_fund_factsheet_panel(cfg: dict[str, Any], sim: dict[str, Any], snap: dict[str, Any],
+                               fetch_price_data_fn: Any,
+                               fund_name: str = "XSpring Digital Asset Fund") -> None:
+    st.markdown("#### 📄 Fund Fact Sheet (PDF)")
+    if not HAS_MPL:
+        st.warning("ต้องติดตั้ง matplotlib ก่อนใช้งาน: `pip install matplotlib`")
+        return
+    metrics = compute_factsheet_metrics(sim, snap)
+    if metrics["history"].empty or len(metrics["history"]) < 2:
+        st.info("ต้องมี Portfolio Snapshot อย่างน้อย 2 วันก่อนจึงจะสร้างรายงานได้ — ไปที่ Portfolio Calendar แล้วกด '📸 บันทึก Snapshot ตอนนี้'")
+        return
+
+    c1, c2 = st.columns([2, 3])
+    with c1:
+        bench_choice = st.selectbox("Benchmark เทียบผลงาน", ["BTC", "ETH", "ไม่ใช้ Benchmark"], key="fs_bench")
+    with c2:
+        custom_name = st.text_input("ชื่อกองทุน/แบรนด์บนรายงาน", value=fund_name, key="fs_name")
+
+    benchmark_series = None
+    if bench_choice != "ไม่ใช้ Benchmark":
+        bdf, err = fetch_price_data_fn(bench_choice, metrics["start_date"], metrics["end_date"])
+        if bdf is not None and not bdf.empty and "Global_USD" in bdf.columns and "USDTHB" in bdf.columns:
+            benchmark_series = (bdf["Global_USD"] * bdf["USDTHB"]).rename("value")
+            benchmark_series.index = pd.to_datetime(benchmark_series.index)
+        else:
+            st.caption(f"⚠️ ดึงราคา {bench_choice} สำหรับ benchmark ไม่สำเร็จ: {err or 'ไม่พบข้อมูล'}")
+
+    if st.button("📄 สร้าง Fund Fact Sheet", key="fs_generate", use_container_width=True):
+        with st.spinner("กำลังสร้างรายงาน…"):
+            pdf_bytes = generate_fund_factsheet_pdf(custom_name, cfg, sim, snap, metrics, benchmark_series, bench_choice)
+        st.session_state["fs_pdf_bytes"] = pdf_bytes
+        st.session_state["fs_pdf_name"] = custom_name
+
+    pdf_bytes = st.session_state.get("fs_pdf_bytes")
+    if pdf_bytes:
+        fname = str(st.session_state.get("fs_pdf_name", fund_name)).strip().replace(" ", "_") or "XSpring_Fund"
+        st.download_button("⬇️ ดาวน์โหลด Fund Fact Sheet (PDF)", pdf_bytes,
+                           f"{fname}_factsheet_{datetime.now().strftime('%Y%m%d')}.pdf",
+                           "application/pdf", use_container_width=True)
+
+
+_PRINT_TRIGGER_JS = r"""<script>(function(){try{window.parent.print();}catch(e){}})();</script>"""
+
+
+def render_print_button() -> None:
+    if st.button("🖨️ Print / Save as PDF", key="print_report_btn", use_container_width=True):
+        components.html(_PRINT_TRIGGER_JS, height=0, width=0)
+
+
+PRINT_REPORT_CSS = """
+<style>
+@media print {
+  [data-testid="stSidebar"], [data-testid="stHeader"], .st-key-desktop_navigation,
+  .st-key-desktop_chrome, .st-key-mobile_nav, .st-key-global_news_float,
+  button, .stButton, [data-testid="stToolbar"] { display:none !important; }
+  .block-container { padding:0 !important; max-width:100% !important; }
+  .print-report-card { box-shadow:none !important; border:none !important; }
+  body { background:#fff !important; }
+}
+.print-report-card { background:#fff; color:#0b0e11; border:1px solid #d7dbe0; border-radius:14px;
+  padding:32px 36px; max-width:860px; margin:12px auto; font-family:-apple-system,'Segoe UI',sans-serif;
+  box-shadow:0 10px 30px rgba(0,0,0,.06); }
+.print-report-header { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #0ecb81;
+  padding-bottom:16px; margin-bottom:20px; gap:18px; }
+.print-report-title { font-size:1.6rem; font-weight:800; color:#0b0e11; }
+.print-report-sub { color:#5e6673; font-size:.82rem; margin-top:4px; }
+.print-kpi-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:18px 0; }
+.print-kpi { border:1px solid #e5e7eb; border-radius:10px; padding:12px 14px; }
+.print-kpi .k { color:#8a93a0; font-size:.68rem; text-transform:uppercase; letter-spacing:.03em; }
+.print-kpi .v { color:#0b0e11; font-size:1.15rem; font-weight:800; margin-top:3px; font-variant-numeric:tabular-nums; }
+.print-section-title { font-size:.95rem; font-weight:800; color:#0a9c63; margin:22px 0 8px; }
+.print-table { width:100%; border-collapse:collapse; font-size:.78rem; }
+.print-table th { text-align:left; background:#0b0e11; color:#fff; padding:8px 10px; }
+.print-table td { padding:7px 10px; border-bottom:1px solid #eceef0; font-variant-numeric:tabular-nums; }
+.print-disclaimer { font-size:.66rem; color:#8a93a0; margin-top:26px; border-top:1px solid #eceef0; padding-top:10px; line-height:1.6; }
+@media(max-width:700px){.print-report-card{padding:20px}.print-kpi-grid{grid-template-columns:repeat(2,1fr)}.print-report-header{display:block}}
+</style>
+"""
+
+
+def render_print_report(fund_name: str, cfg: dict[str, Any], sim: dict[str, Any], snap: dict[str, Any], metrics: dict[str, Any]) -> None:
+    st.markdown(PRINT_REPORT_CSS, unsafe_allow_html=True)
+    render_print_button()
+    period = "-"
+    if metrics.get("start_date") is not None:
+        period = f"{metrics['start_date'].strftime('%d %b %Y')} – {metrics['end_date'].strftime('%d %b %Y')}"
+    st.markdown(f"""<div class="print-report-card">
+      <div class="print-report-header"><div><div class="print-report-title">{_html.escape(fund_name)}</div>
+      <div class="print-report-sub">Portfolio Fact Sheet · {_html.escape(str(cfg.get("asset", "")))} Strategy</div>
+      <div class="print-report-sub">Reporting Period: {period}</div></div>
+      <div class="print-report-sub">Generated {datetime.now(timezone.utc).strftime("%d %b %Y, %H:%M UTC")}</div></div>
+      <div class="print-kpi-grid">
+        <div class="print-kpi"><div class="k">Portfolio Value</div><div class="v">฿{metrics['portfolio_value']:,.2f}</div></div>
+        <div class="print-kpi"><div class="k">Period Return</div><div class="v">{metrics['period_return_pct']:+.2f}%</div></div>
+        <div class="print-kpi"><div class="k">Sharpe Ratio</div><div class="v">{metrics['sharpe']:.2f}</div></div>
+        <div class="print-kpi"><div class="k">Max Drawdown</div><div class="v">{metrics['max_drawdown_pct']:.2f}%</div></div>
+      </div>
+      <div class="print-section-title">Portfolio Value Trend</div>""", unsafe_allow_html=True)
+    if not metrics["history"].empty:
+        st.line_chart(metrics["history"].set_index("date")[["value"]], height=260)
+    rows_html = ""
+    rows = sorted(snap.get("rows", []) or [], key=lambda x: x.get("market_value", 0), reverse=True)
+    for r in rows:
+        rows_html += (f'<tr><td>{_html.escape(str(r.get("asset", "")))}</td>'
+                      f'<td>{float(r.get("qty", 0)):,.6f}</td><td>฿{float(r.get("market_value", 0)):,.2f}</td>'
+                      f'<td>{float(r.get("allocation_pct", 0)):.1f}%</td><td>{float(r.get("unrealized_pnl", 0)):+,.2f}</td></tr>')
+    if not rows_html:
+        rows_html = '<tr><td colspan="5">No holdings</td></tr>'
+    st.markdown(f"""<div class="print-section-title">Current Holdings</div>
+      <table class="print-table"><thead><tr><th>Asset</th><th>Qty</th><th>Value (THB)</th><th>Alloc %</th><th>Unreal. P&amp;L</th></tr></thead>
+      <tbody>{rows_html}</tbody></table>
+      <div class="print-disclaimer">This document is generated by a portfolio simulation tool for planning and educational purposes only.
+      It is not investment advice, a solicitation, or a guarantee of future performance.</div></div>""", unsafe_allow_html=True)
+
+
 # =========================================================================
 
 
@@ -12799,6 +13117,27 @@ def _main_body() -> None:
             render_cash_flow_analytics(cfg, data, market_df)
         elif nav == NAV_TIMELINE:
             render_customer_timeline(cfg, data, market_df)
+        elif nav == NAV_FACTSHEET_PRINT:
+            sim = st.session_state.get("sim", {}) or {}
+            ensure_portfolio_ledger(sim)
+            # Build current THB price map from the same market data used elsewhere.
+            _usdthb = float(data["USDTHB"].iloc[-1]) if isinstance(data, pd.DataFrame) and not data.empty and "USDTHB" in data.columns else FALLBACK_USDTHB
+            _prices = {"THB": 1.0}
+            if isinstance(market_df, pd.DataFrame) and not market_df.empty:
+                for _, _r in market_df.iterrows():
+                    try:
+                        _prices[str(_r.get("symbol", "")).upper()] = float(_r.get("price_usd", 0) or 0) * _usdthb
+                    except (TypeError, ValueError):
+                        pass
+            _asset = str(cfg.get("asset", "BTC")).upper()
+            if isinstance(data, pd.DataFrame) and not data.empty and "Global_USD" in data.columns:
+                _prices[_asset] = float(data["Global_USD"].iloc[-1]) * _usdthb
+            _snap = portfolio_snapshot(sim, _prices)
+            _metrics = compute_factsheet_metrics(sim, _snap)
+            if _metrics["history"].empty or len(_metrics["history"]) < 2:
+                st.info("ต้องมี Portfolio Snapshot อย่างน้อย 2 วันก่อน — ไปที่ Portfolio Calendar แล้วกด '📸 บันทึก Snapshot ตอนนี้'")
+            else:
+                render_print_report("XSpring Digital Asset Fund", cfg, sim, _snap, _metrics)
         elif nav == NAV_SIMPLE:
             from simple_backtest import render_simple_backtest
             render_simple_backtest(
