@@ -32,8 +32,6 @@ import copy
 import xml.etree.ElementTree as ET
 import html as _html
 from datetime import datetime, timezone
-from dataclasses import dataclass
-from itertools import product
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -1430,7 +1428,6 @@ NAV_LABELS = [
     "⚖️ Rebalance Simulator",
     "📈 Performance Analytics",
     "💰 Cash Flow Analytics",
-    "🧪 Quant Research Lab",
     "🕒 Customer Timeline",
     "🖨️ Fund Fact Sheet (Print)",
 ]
@@ -1449,9 +1446,8 @@ NAV_ALERTS = NAV_LABELS[13]
 NAV_REBALANCE = NAV_LABELS[14]
 NAV_PERFORMANCE = NAV_LABELS[15]
 NAV_CASHFLOW = NAV_LABELS[16]
-NAV_QUANT = NAV_LABELS[17]
-NAV_TIMELINE = NAV_LABELS[18]
-NAV_FACTSHEET_PRINT = NAV_LABELS[19]
+NAV_TIMELINE = NAV_LABELS[17]
+NAV_FACTSHEET_PRINT = NAV_LABELS[18]
 
 def _go_to_exchange(sym: str) -> None:
     st.session_state["bt_asset"] = sym
@@ -3534,6 +3530,191 @@ def load_nc_snapshots(limit: int = 100) -> list[dict[str, Any]]:
         except Exception:
             pass
     return list(st.session_state.get("nc_snapshots", []))[-limit:]
+
+
+
+
+# =========================================================================
+# INVESTOR SHARE — Read-only public link + QR code
+# =========================================================================
+
+INVESTOR_SHARE_TABLE = "investor_shares"
+
+
+def build_investor_share_payload(cfg: dict[str, Any], sim: dict[str, Any],
+                                 snap: dict[str, Any], fund_name: str,
+                                 show_amounts: bool) -> dict[str, Any]:
+    metrics = compute_factsheet_metrics(sim, snap)
+    hist = metrics["history"]
+    if hist.empty:
+        history_points = []
+    elif show_amounts:
+        history_points = [{"date": d.strftime("%Y-%m-%d"), "value": float(v)}
+                          for d, v in zip(hist["date"], hist["value"])]
+    else:
+        norm = _normalize_to_100(hist.set_index("date")["value"])
+        history_points = [{"date": d.strftime("%Y-%m-%d"), "value": float(v)}
+                          for d, v in norm.items()]
+
+    allocation = []
+    for r in snap.get("rows", []) or []:
+        item = {
+            "asset": r.get("asset", ""),
+            "allocation_pct": round(float(r.get("allocation_pct", 0) or 0), 2),
+        }
+        if show_amounts:
+            item["value_thb"] = round(float(r.get("market_value", 0) or 0), 2)
+        allocation.append(item)
+
+    total_val = float(snap.get("total_value_thb", 0) or 0)
+    cash_pct = (float(snap.get("cash_thb", 0) or 0) / total_val * 100.0) if total_val else 0.0
+
+    payload = {
+        "fund_name": fund_name,
+        "asset": cfg.get("asset", ""),
+        "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "show_amounts": bool(show_amounts),
+        "period_return_pct": round(metrics["period_return_pct"], 2),
+        "sharpe": round(metrics["sharpe"], 2),
+        "sortino": round(metrics["sortino"], 2),
+        "max_drawdown_pct": round(metrics["max_drawdown_pct"], 2),
+        "volatility_pct": round(metrics["volatility_pct"], 2),
+        "cash_pct": round(cash_pct, 2),
+        "history": history_points,
+        "allocation": allocation,
+    }
+    if show_amounts:
+        payload["portfolio_value_thb"] = round(total_val, 2)
+        payload["total_pnl_thb"] = round(float(snap.get("total_pnl_thb", 0) or 0), 2)
+    return payload
+
+
+def create_investor_share(payload: dict[str, Any], expires_days: Optional[int] = 30) -> Optional[str]:
+    if is_guest_mode():
+        return None
+    token = uuid.uuid4().hex
+    now = datetime.now(timezone.utc)
+    expires_at = (now + pd.Timedelta(days=int(expires_days))).isoformat() if expires_days else None
+    record = {
+        "token": token, "actor": _current_actor(),
+        "created_at": now.isoformat(), "expires_at": expires_at,
+        "revoked": False, "payload": _json_safe(payload),
+    }
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            sb.table(INVESTOR_SHARE_TABLE).insert(record).execute()
+            return token
+        except Exception as exc:
+            print(f"[investor_share] save error: {exc}")
+
+    p = _HERE / "investor_shares.json"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    data[token] = record
+    try:
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return token
+    except OSError:
+        return None
+
+
+def load_investor_share(token: str) -> Optional[dict[str, Any]]:
+    token = str(token or "").strip()
+    if not token:
+        return None
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            res = sb.table(INVESTOR_SHARE_TABLE).select("*").eq("token", token).limit(1).execute()
+            if res.data:
+                return res.data[0]
+        except Exception as exc:
+            print(f"[investor_share] load error: {exc}")
+    p = _HERE / "investor_shares.json"
+    if p.is_file():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            return data.get(token) if isinstance(data, dict) else None
+        except (OSError, json.JSONDecodeError):
+            return None
+    return None
+
+
+def list_investor_shares(actor: Optional[str] = None) -> list[dict[str, Any]]:
+    actor = actor or _current_actor()
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            res = (sb.table(INVESTOR_SHARE_TABLE)
+                     .select("token,created_at,expires_at,revoked,payload")
+                     .eq("actor", actor).order("created_at", desc=True).execute())
+            return res.data or []
+        except Exception as exc:
+            print(f"[investor_share] list error: {exc}")
+    p = _HERE / "investor_shares.json"
+    if p.is_file():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            return [v for v in data.values() if isinstance(v, dict) and v.get("actor") == actor] if isinstance(data, dict) else []
+        except (OSError, json.JSONDecodeError):
+            return []
+    return []
+
+
+def revoke_investor_share(token: str) -> bool:
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            sb.table(INVESTOR_SHARE_TABLE).update({"revoked": True}).eq("token", token).execute()
+            return True
+        except Exception as exc:
+            print(f"[investor_share] revoke error: {exc}")
+    p = _HERE / "investor_shares.json"
+    if p.is_file():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and token in data:
+                data[token]["revoked"] = True
+                p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                return True
+        except (OSError, json.JSONDecodeError):
+            pass
+    return False
+
+
+def is_share_valid(record: Optional[dict[str, Any]]) -> tuple[bool, str]:
+    if not record:
+        return False, "ไม่พบลิงก์นี้"
+    if record.get("revoked"):
+        return False, "ลิงก์นี้ถูกยกเลิกแล้ว"
+    exp = record.get("expires_at")
+    if exp:
+        try:
+            if pd.Timestamp(exp) < pd.Timestamp.now(tz="UTC"):
+                return False, "ลิงก์นี้หมดอายุแล้ว"
+        except Exception:
+            pass
+    return True, ""
+
+
+def qr_code_image_url(data: str, size: int = 220) -> str:
+    q = urllib.parse.quote(data, safe="")
+    return f"https://api.qrserver.com/v1/create-qr-code/?size={size}x{size}&data={q}"
+
+
+def _fetch_qr_png_bytes(data: str, size: int = 260) -> Optional[bytes]:
+    try:
+        req = urllib.request.Request(qr_code_image_url(data, size),
+                                     headers={"User-Agent": "XSpringDealerSuite"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            return resp.read()
+    except Exception:
+        return None
 
 
 def _config_for_compare(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -8178,6 +8359,160 @@ def render_portfolio_calendar(cfg: dict[str, Any], data: pd.DataFrame, market_df
     with st.expander("📄 Fund Fact Sheet — PDF", expanded=False):
         render_fund_factsheet_panel(cfg, sim, snap, fetch_price_data, fund_name="XSpring Digital Asset Fund")
 
+    with st.expander("🔗 Shareable Investor View", expanded=False):
+        render_investor_share_manager(cfg, sim, snap)
+
+
+
+
+
+def render_investor_share_manager(cfg: dict[str, Any], sim: dict[str, Any],
+                                  snap: dict[str, Any]) -> None:
+    st.markdown("#### 🔗 Shareable Investor View")
+    st.caption(
+        "สร้างลิงก์ Read-only ให้นักลงทุนดู Performance ได้โดยไม่ต้องล็อกอิน "
+        "เป็นภาพนิ่ง ณ เวลาที่กดสร้าง ไม่ใช่ live data และไม่มีข้อมูลบัญชีจริง"
+    )
+    if is_guest_mode():
+        st.info("โหมด Guest ไม่สามารถสร้างลิงก์แชร์ถาวรได้")
+        return
+
+    try:
+        default_base = st.secrets.get("app_base_url", "")
+    except Exception:
+        default_base = ""
+    base_url = st.text_input(
+        "URL ของแอปนี้ (ใช้ต่อท้าย token)",
+        value=st.session_state.get("investor_base_url", default_base),
+        placeholder="https://your-app.streamlit.app",
+        key="investor_base_url",
+    )
+
+    c1, c2, c3 = st.columns(3)
+    fund_name = c1.text_input("ชื่อที่แสดงบนหน้าแชร์", value="XSpring Portfolio", key="inv_share_name")
+    show_amounts = c2.toggle(
+        "แสดงมูลค่าจริง (THB)", value=False, key="inv_share_amounts",
+        help="ปิด = แชร์เฉพาะ % ผลตอบแทนและสัดส่วน ไม่เปิดเผยมูลค่าเงินจริง",
+    )
+    expiry_label = c3.selectbox(
+        "อายุลิงก์", ["7 วัน", "30 วัน", "90 วัน", "ไม่หมดอายุ"],
+        index=1, key="inv_share_exp",
+    )
+    expiry_days = {"7 วัน": 7, "30 วัน": 30, "90 วัน": 90, "ไม่หมดอายุ": None}[expiry_label]
+
+    if st.button("🔗 สร้างลิงก์แชร์ใหม่", key="inv_share_create", use_container_width=True):
+        payload = build_investor_share_payload(cfg, sim, snap, fund_name, show_amounts)
+        token = create_investor_share(payload, expiry_days)
+        if token:
+            st.session_state["inv_share_last_token"] = token
+            st.success("สร้างลิงก์สำเร็จ")
+        else:
+            st.error("สร้างลิงก์ไม่สำเร็จ — ตรวจสอบ Supabase หรือสิทธิ์เขียนไฟล์")
+
+    last_token = st.session_state.get("inv_share_last_token")
+    if last_token and base_url.strip():
+        link = f"{base_url.rstrip('/')}/?share={last_token}"
+        st.code(link, language=None)
+        qc1, qc2 = st.columns([1, 2])
+        qr_bytes = _fetch_qr_png_bytes(link, 260)
+        if qr_bytes:
+            qc1.image(qr_bytes, caption="QR Code", width=160)
+        else:
+            qc1.image(qr_code_image_url(link), caption="QR Code", width=160)
+        qc2.caption("ให้นักลงทุนสแกน QR หรือกดลิงก์ด้านบนเพื่อดู Performance แบบ Read-only")
+    elif last_token:
+        st.warning("กรอก URL ของแอปด้านบนก่อน เพื่อประกอบเป็นลิงก์ที่กดได้จริง")
+        st.code(last_token, language=None)
+
+    st.markdown("##### ลิงก์ที่เคยสร้างไว้")
+    shares = list_investor_shares()
+    if not shares:
+        st.caption("ยังไม่มีลิงก์ที่สร้างไว้")
+        return
+    for s in shares:
+        token = s.get("token", "")
+        payload = s.get("payload", {}) or {}
+        ok, reason = is_share_valid(s)
+        status = "🟢 ใช้งานได้" if ok else f"🔴 {reason}"
+        cA, cB, cC = st.columns([3, 1.4, 1])
+        cA.markdown(f"**{payload.get('fund_name', 'Investor View')}** · `{token[:10]}…` · {status}")
+        cB.caption(f"สร้างเมื่อ {str(s.get('created_at',''))[:16].replace('T',' ')}")
+        if ok and cC.button("ยกเลิกลิงก์", key=f"inv_share_revoke_{token}"):
+            revoke_investor_share(token)
+            st.rerun()
+
+
+
+
+def render_investor_public_view(token: str) -> None:
+    st.set_page_config(page_title="Investor View — XSpring", page_icon="📈", layout="centered")
+    st.markdown(THEME_CSS, unsafe_allow_html=True)
+    record = load_investor_share(token)
+    ok, reason = is_share_valid(record)
+    if not ok:
+        st.error(f"⚠️ {reason}")
+        st.caption("ลิงก์นี้อาจถูกยกเลิก หมดอายุ หรือพิมพ์ไม่ครบ — ติดต่อผู้ที่ส่งลิงก์นี้ให้คุณ")
+        return
+
+    payload = record.get("payload", {}) or {}
+    fund_name = payload.get("fund_name", "Investor Portfolio View")
+    as_of = str(payload.get("as_of", ""))[:16].replace("T", " ")
+    show_amounts = bool(payload.get("show_amounts", False))
+
+    safe_name = _html.escape(str(fund_name))
+    st.markdown(
+        f"<div class='xs-hero'><h1>{safe_name}</h1>"
+        f"<p>Read-only Investor View · ข้อมูล ณ {as_of} UTC</p>"
+        f"<span class='xs-pill'>🔒 Read-only</span>"
+        f"<div class='xs-ver'>สร้างจาก XSpring Dealer Suite · ไม่ใช่คำแนะนำการลงทุน</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    k = st.columns(4)
+    metric_card(k[0], "Period Return", f"{payload.get('period_return_pct', 0):+.2f}%",
+                payload.get("period_return_pct", 0))
+    metric_card(k[1], "Sharpe Ratio", f"{payload.get('sharpe', 0):.2f}")
+    metric_card(k[2], "Max Drawdown", f"{payload.get('max_drawdown_pct', 0):.2f}%",
+                payload.get("max_drawdown_pct", 0))
+    metric_card(k[3], "Volatility (Ann.)", f"{payload.get('volatility_pct', 0):.2f}%")
+
+    if show_amounts and payload.get("portfolio_value_thb") is not None:
+        st.metric("Portfolio Value", fmt_baht(payload["portfolio_value_thb"]))
+
+    hist = payload.get("history", [])
+    if hist:
+        hdf = pd.DataFrame(hist)
+        hdf["date"] = pd.to_datetime(hdf["date"], errors="coerce")
+        hdf["value"] = pd.to_numeric(hdf["value"], errors="coerce")
+        hdf = hdf.dropna(subset=["date", "value"])
+        if not hdf.empty:
+            title = "Portfolio Value (THB)" if show_amounts else "Portfolio Index (Start = 100)"
+            fig = go.Figure(go.Scatter(
+                x=hdf["date"], y=hdf["value"],
+                line=dict(color="#0ecb81", width=2.4),
+                fill="tozeroy", fillcolor="rgba(14,203,129,0.12)",
+            ))
+            fig.update_layout(
+                template="plotly_dark", height=340, margin=dict(t=30, b=20),
+                title=dict(text=title, font=dict(size=14)),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+    alloc = payload.get("allocation", [])
+    if alloc:
+        st.markdown("#### Allocation")
+        adf = pd.DataFrame(alloc).sort_values("allocation_pct", ascending=False)
+        cols = ["asset", "allocation_pct"] + (["value_thb"] if show_amounts else [])
+        cols = [c for c in cols if c in adf.columns]
+        rename = {"asset": "สินทรัพย์", "allocation_pct": "สัดส่วน (%)", "value_thb": "มูลค่า (THB)"}
+        st.dataframe(adf[cols].rename(columns=rename), hide_index=True, use_container_width=True)
+
+    st.caption(
+        f"Cash allocation: {payload.get('cash_pct', 0):.1f}% · "
+        "ข้อมูลนี้เพื่อการรับทราบเท่านั้น ไม่ใช่คำแนะนำการลงทุน และไม่รับประกันผลตอบแทนในอนาคต"
+    )
+
 
 def render_trading_journal(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
     sim = st.session_state.get("sim", {})
@@ -11231,6 +11566,29 @@ DASHBOARD_CSS = """
     .st-key-dash_qa_trade button:hover, .st-key-dash_qa_wallet button:hover {
         border-color:#0ecb81 !important; color:#0ecb81 !important;
     }
+
+    /* Mobile only: compact Dashboard quick-menu buttons.
+       Desktop layout/spacing remains unchanged. */
+    @media (max-width: 900px) {
+        .st-key-dash_qa_bt, .st-key-dash_qa_planner,
+        .st-key-dash_qa_trade, .st-key-dash_qa_wallet,
+        .st-key-dash_qa_risk, .st-key-dash_qa_intel {
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+
+        .st-key-dash_qa_bt button, .st-key-dash_qa_planner button,
+        .st-key-dash_qa_trade button, .st-key-dash_qa_wallet button,
+        .st-key-dash_qa_risk button, .st-key-dash_qa_intel button {
+            min-height: 50px !important;
+            height: 50px !important;
+            padding: 6px 10px !important;
+            border-radius: 10px !important;
+            font-size: 0.88rem !important;
+            line-height: 1.15 !important;
+            box-sizing: border-box !important;
+        }
+    }
 </style>
 """
 
@@ -11649,82 +12007,103 @@ def render_cash_flow_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_d
 
 
 @_cache_data(ttl=900, show_spinner=False)
-def _fetch_institutional_benchmarks(start: Any, end: Any) -> pd.DataFrame:
-    """โหลด benchmark แบบแยก ticker เพื่อไม่ให้ ticker ตัวหนึ่งล้มแล้วทำให้ตัวอื่นหายไป.
-    BTC = BTC-USD, SET = ^SET.BK, S&P 500 = ^GSPC.
+def _fetch_institutional_benchmarks(start: Any, end: Any) -> tuple[pd.DataFrame, dict[str, str]]:
+    """โหลด benchmark แบบแยก ticker พร้อม fallback และเก็บ error ไว้ debug.
+    BTC = BTC-USD, SET = ^SET.BK / SET.BK, S&P 500 = ^GSPC.
+    คืน (DataFrame, errors) — errors คือ {label: เหตุผลที่โหลดไม่สำเร็จ}
     """
     if "yf" not in globals() or yf is None:
-        return pd.DataFrame()
+        return pd.DataFrame(), {"ทั้งหมด": "ไม่มี yfinance ในระบบ"}
 
-    start_ts = pd.Timestamp(start).normalize() - pd.Timedelta(days=30)
+    start_ts = pd.Timestamp(start).normalize() - pd.Timedelta(days=45)
     end_ts = pd.Timestamp(end).normalize() + pd.Timedelta(days=3)
     ticker_map = {
-        "BTC": "BTC-USD",
-        "SET Index": "^SET.BK",
-        "S&P 500": "^GSPC",
+        "BTC": ["BTC-USD"],
+        "SET Index": ["^SET.BK", "SET.BK", "^SETI", "THD"],  # THD = ETF สำรอง ถ้าดัชนีตรงดึงไม่ได้
+        "S&P 500": ["^GSPC", "SPY"],  # SPY = ETF สำรองของ S&P 500
     }
 
-    series = {}
-    for label, ticker in ticker_map.items():
+    def _clean_close(close: Any) -> pd.Series:
+        if close is None:
+            return pd.Series(dtype=float)
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
+        close = pd.to_numeric(close, errors="coerce")
+        idx = pd.to_datetime(close.index, errors="coerce")
         try:
-            raw = yf.download(
-                ticker,
-                start=start_ts,
-                end=end_ts,
-                auto_adjust=False,
-                progress=False,
-                group_by="column",
-                threads=False,
-            )
-            if raw is None or raw.empty:
-                continue
-
-            close = raw["Close"] if "Close" in raw.columns else None
-            if close is None:
-                continue
-            if isinstance(close, pd.DataFrame):
-                close = close.iloc[:, 0]
-
-            close = pd.to_numeric(close, errors="coerce")
-            close.index = pd.to_datetime(close.index, errors="coerce")
-            if getattr(close.index, "tz", None) is not None:
-                close.index = close.index.tz_localize(None)
-            close.index = close.index.normalize()
-            close = close[~close.index.duplicated(keep="last")].dropna().sort_index()
-
-            if not close.empty:
-                series[label] = close
+            if getattr(idx, "tz", None) is not None:
+                idx = idx.tz_localize(None)
         except Exception:
-            # One unavailable benchmark must not remove the others.
-            continue
+            pass
+        close.index = idx.normalize()
+        return close[~close.index.duplicated(keep="last")].dropna().sort_index()
+
+    series: dict[str, pd.Series] = {}
+    errors: dict[str, str] = {}
+
+    for label, tickers in ticker_map.items():
+        last_err = "ไม่ทราบสาเหตุ"
+        got = False
+        for ticker in tickers:
+            try:
+                raw = yf.download(
+                    ticker,
+                    start=start_ts,
+                    end=end_ts,
+                    auto_adjust=False,
+                    progress=False,
+                    threads=False,
+                )
+                if raw is None or raw.empty:
+                    # บาง index ทำงานกับ Ticker().history() ได้ดีกว่า download()
+                    raw = yf.Ticker(ticker).history(
+                        start=start_ts,
+                        end=end_ts,
+                        auto_adjust=False,
+                    )
+                if raw is None or raw.empty:
+                    last_err = f"{ticker}: ไม่มีข้อมูลย้อนหลังในช่วงที่เลือก"
+                    continue
+
+                close = raw["Close"] if "Close" in raw.columns else None
+                if close is None:
+                    last_err = f"{ticker}: ไม่พบคอลัมน์ Close"
+                    continue
+                close = _clean_close(close)
+                if close.empty:
+                    last_err = f"{ticker}: ข้อมูลว่างหลังทำความสะอาด"
+                    continue
+
+                series[label] = close
+                if ticker != tickers[0]:
+                    errors[label] = f"⚠️ ใช้ proxy '{ticker}' แทนดัชนีตรง (ตัวจริงดึงไม่ได้)"
+                got = True
+                break
+            except Exception as e:
+                last_err = f"{ticker}: {type(e).__name__} — {e}"
+
+        if not got:
+            errors[label] = last_err
 
     if not series:
-        return pd.DataFrame()
+        return pd.DataFrame(), errors
 
     out = pd.concat(series, axis=1).sort_index()
     out.columns = [str(c) for c in out.columns]
-    return out.dropna(how="all")
+    return out.dropna(how="all"), errors
 
 
-def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, float]]:
-    """สร้าง Institutional Benchmark Comparison จากวันของ Portfolio Snapshot จริง
-
-    สำคัญ: ไม่บังคับให้วัน Snapshot ตรงกับวันตลาดแบบ exact match
-    เพราะ SET/S&P500 ไม่มีข้อมูลเสาร์-อาทิตย์/วันหยุดตลาด ขณะที่ Portfolio
-    Snapshot อาจถูกบันทึกวันหยุดได้ จึงใช้ราคาตลาดล่าสุดที่มี ณ หรือก่อน
-    วัน Snapshot (forward-fill จาก benchmark) เพื่อให้เปรียบเทียบได้จริง
+def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, float], dict[str, str]]:
+    """สร้าง Institutional Benchmark Comparison
+    Benchmark เดินตามปฏิทินตลาดของมันเอง (ไม่ถูกบีบให้เหลือแค่วัน snapshot ของ portfolio)
+    ส่วน portfolio จะเป็นเส้นขั้นบันได (forward-fill ระหว่าง snapshot) ซึ่งถูกต้องตามจริง
+    เพราะเรารู้มูลค่าพอร์ตแค่ ณ วันที่มี snapshot เท่านั้น
     """
-    empty_metrics = {
-        "beta_btc": 0.0,
-        "alpha_btc_annual": 0.0,
-        "corr_btc": 0.0,
-        "obs": 0.0,
-    }
+    empty_metrics = {"beta_btc": 0.0, "alpha_btc_annual": 0.0, "corr_btc": 0.0, "obs": 0.0}
 
-    if hist is None or hist.empty or len(hist) < 2:
-        return pd.DataFrame(), empty_metrics
+    if hist is None or hist.empty or len(hist) < 1:
+        return pd.DataFrame(), empty_metrics, {}
 
-    # --- Normalize portfolio snapshot dates ---
     port = hist[["date", "value"]].copy()
     port["date"] = pd.to_datetime(port["date"], errors="coerce").dt.tz_localize(None).dt.normalize()
     port["value"] = pd.to_numeric(port["value"], errors="coerce")
@@ -11735,802 +12114,81 @@ def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str
             .set_index("date")
     )
 
-    if len(port) < 2:
-        return pd.DataFrame(), empty_metrics
+    if port.empty:
+        return pd.DataFrame(), empty_metrics, {}
 
-    # --- Download benchmark data ---
-    bench = _fetch_institutional_benchmarks(port.index.min(), port.index.max())
+    port_start = port.index.min()
+    port_end = max(port.index.max(), pd.Timestamp.now().normalize())
+
+    bench, bench_errors = _fetch_institutional_benchmarks(port_start, port_end)
     if bench is None or bench.empty:
-        return pd.DataFrame(), empty_metrics
+        return pd.DataFrame(), empty_metrics, bench_errors
 
     bench = bench.copy()
     bench.index = pd.to_datetime(bench.index, errors="coerce").tz_localize(None).normalize()
     bench = bench[~bench.index.duplicated(keep="last")].sort_index()
     bench = bench.apply(pd.to_numeric, errors="coerce")
 
-    # Resolve EACH portfolio snapshot to the latest benchmark close at or
-    # before that date.  A look-back buffer is fetched above so the first
-    # snapshot can also resolve when it falls on a weekend/holiday.
-    # This is more robust than exact-date intersection and avoids the case
-    # where SET/S&P500 have only one usable point and therefore no visible line.
-    aligned = bench.reindex(port.index, method="ffill")
-    aligned = aligned.dropna(how="all")
+    # ตัดช่วงให้อยู่ในกรอบเวลาที่ portfolio มีข้อมูล (ตั้งแต่ snapshot แรก ถึงวันนี้)
+    bench = bench[(bench.index >= port_start) & (bench.index <= port_end)]
 
-    if aligned.empty:
-        return pd.DataFrame(), empty_metrics
+    for label in ["BTC", "SET Index", "S&P 500"]:
+        if label not in bench.columns or bench[label].dropna().empty:
+            bench_errors.setdefault(label, "ไม่มีข้อมูลราคาสำหรับช่วงเวลานี้")
 
-    comparison = pd.concat(
-        [
-            port["value"].rename("Portfolio"),
-            aligned,
-        ],
-        axis=1,
-    ).dropna(subset=["Portfolio"])
+    benchmark_cols = [c for c in ["BTC", "SET Index", "S&P 500"] if c in bench.columns and not bench[c].dropna().empty]
+    if not benchmark_cols and port.empty:
+        return pd.DataFrame(), empty_metrics, bench_errors
 
-    # Keep rows where at least one benchmark exists.
-    benchmark_cols = [c for c in ["BTC", "SET Index", "S&P 500"] if c in comparison.columns]
-    if not benchmark_cols:
-        return pd.DataFrame(), empty_metrics
+    # รวมปฏิทิน: ทุกวันที่ benchmark มีเทรด + ทุกวันที่มี snapshot จริง
+    all_dates = bench.index.union(port.index).sort_values()
+    if all_dates.empty:
+        return pd.DataFrame(), empty_metrics, bench_errors
 
-    comparison = comparison.dropna(subset=benchmark_cols, how="all")
+    levels = pd.DataFrame(index=all_dates)
 
-    if len(comparison) < 2:
-        return pd.DataFrame(), empty_metrics
+    # Portfolio: forward-fill ระหว่าง snapshot (ถูกต้องแล้ว เพราะรู้ค่าจริงแค่วันที่ snapshot)
+    port_on_all = port["value"].reindex(all_dates).ffill()
+    port_on_all = port_on_all.dropna()
+    if not port_on_all.empty and float(port_on_all.iloc[0]) != 0:
+        base_p = float(port_on_all.iloc[0])
+        levels.loc[port_on_all.index, "Portfolio"] = port_on_all / base_p * 100.0
 
-    # --- Normalize all series to 100 on the first common usable snapshot ---
-    levels = pd.DataFrame(index=comparison.index)
-    portfolio_base = float(comparison["Portfolio"].iloc[0])
-
-    if portfolio_base > 0:
-        levels["Portfolio"] = comparison["Portfolio"] / portfolio_base * 100.0
-
+    # Benchmark: ใช้ค่าตามปฏิทินตลาดจริงของมันเอง ไม่ ffill ทับวันที่ไม่มีเทรดของ portfolio
     for col in benchmark_cols:
-        s = comparison[col].dropna()
-        # A benchmark needs at least 2 aligned observations to draw a
-        # meaningful comparison line.  Because the fetch now includes a
-        # look-back buffer, weekend/holiday snapshots normally have 2 points.
-        if len(s) >= 2 and float(s.iloc[0]) != 0:
+        s = bench[col].dropna()
+        if len(s) >= 1 and float(s.iloc[0]) != 0:
             base = float(s.iloc[0])
-            levels[col] = comparison[col] / base * 100.0
+            levels.loc[s.index, col] = s / base * 100.0
+        else:
+            bench_errors.setdefault(col, "มีข้อมูลไม่พอสำหรับ normalize")
 
-    # For a clean institutional chart, only show the period where Portfolio
-    # and at least one benchmark are both available.
-    levels = levels.dropna(subset=["Portfolio"])
-    if levels.empty:
-        return pd.DataFrame(), empty_metrics
+    levels = levels.dropna(how="all")
+    if levels.empty or "Portfolio" not in levels.columns:
+        return pd.DataFrame(), empty_metrics, bench_errors
 
-    # --- Daily snapshot returns for Alpha/Beta vs BTC ---
-    returns = comparison.pct_change().replace([np.inf, -np.inf], np.nan)
-
+    # ---- Alpha/Beta vs BTC: ใช้เฉพาะวันที่ทั้งคู่มีข้อมูลจริง (ไม่ใช่ ffill) ----
     metrics = dict(empty_metrics)
-
-    if "BTC" in returns.columns:
-        btc_pair = returns[["Portfolio", "BTC"]].dropna()
-
-        if len(btc_pair) >= 2:
-            x = btc_pair["BTC"].astype(float)
-            y = btc_pair["Portfolio"].astype(float)
-
+    if "BTC" in bench.columns:
+        btc_ret = bench["BTC"].dropna().pct_change().dropna()
+        port_ret_on_bench_days = port["value"].reindex(btc_ret.index, method="ffill").pct_change().dropna()
+        common_idx = btc_ret.index.intersection(port_ret_on_bench_days.index)
+        if len(common_idx) >= 2:
+            x = btc_ret.loc[common_idx].astype(float)
+            y = port_ret_on_bench_days.loc[common_idx].astype(float)
             var_x = float(x.var(ddof=1))
-
             if var_x > 0 and x.std(ddof=1) > 0 and y.std(ddof=1) > 0:
                 beta = float(y.cov(x) / var_x)
                 corr = float(y.corr(x))
-
-                # Annualized alpha estimate, rf = 0%.
-                # Snapshot frequency is daily in normal use.
                 alpha = float((y.mean() - beta * x.mean()) * 252 * 100)
-
                 metrics.update({
                     "beta_btc": beta,
                     "alpha_btc_annual": alpha,
                     "corr_btc": corr,
-                    "obs": float(len(btc_pair)),
+                    "obs": float(len(common_idx)),
                 })
 
-    return levels, metrics
-
-
-# =========================================================================
-# QUANT RESEARCH LAB — HMM / FEATURE STORE / WALK-FORWARD / SYNTHETIC / EVAL
-# =========================================================================
-
-@dataclass(frozen=True)
-class FeatureSpec:
-    name: str
-    fn_version: str
-    params: dict[str, Any]
-    lag_days: int = 1
-    description: str = ""
-    expected_range: tuple[float, float] | None = None
-
-    def cache_key(self, asset: str, data_hash: str) -> str:
-        payload = json.dumps({
-            "name": self.name,
-            "version": self.fn_version,
-            "params": self.params,
-            "asset": asset,
-            "data_hash": data_hash,
-        }, sort_keys=True, default=str)
-        return hashlib.sha256(payload.encode()).hexdigest()
-
-
-def _feature_data_hash(raw_df: pd.DataFrame) -> str:
-    if raw_df is None or raw_df.empty:
-        return "empty"
-    try:
-        h = pd.util.hash_pandas_object(raw_df, index=True).values.tobytes()
-        return hashlib.sha256(h).hexdigest()
-    except Exception:
-        return hashlib.sha256(raw_df.to_json(date_format="iso", default_handler=str).encode()).hexdigest()
-
-
-def compute_rolling_vol(prices: pd.Series, window: int, as_of_idx: int) -> float:
-    # Strict t-1 lag: feature at i can only use prices[:i].
-    if as_of_idx <= 1:
-        return float("nan")
-    window_data = pd.to_numeric(prices.iloc[max(0, as_of_idx - window):as_of_idx], errors="coerce")
-    return float(window_data.pct_change().std() * np.sqrt(365)) if len(window_data) >= 3 else float("nan")
-
-
-def _feature_momentum(prices: pd.Series, window: int, i: int) -> float:
-    if i <= 0 or i < window:
-        return float("nan")
-    p_now = float(prices.iloc[i - 1])
-    p_old = float(prices.iloc[max(0, i - window)])
-    return p_now / p_old - 1.0 if p_old > 0 else float("nan")
-
-
-FEATURE_REGISTRY: dict[str, callable] = {
-    "rolling_vol_20d": lambda df, i: compute_rolling_vol(df["price"], 20, i),
-    "rolling_vol_60d": lambda df, i: compute_rolling_vol(df["price"], 60, i),
-    "momentum_10d": lambda df, i: _feature_momentum(df["price"], 10, i),
-    "momentum_30d": lambda df, i: _feature_momentum(df["price"], 30, i),
-}
-
-FEATURE_SPECS: dict[str, FeatureSpec] = {
-    "rolling_vol_20d": FeatureSpec("rolling_vol_20d", "1.0.0", {"window": 20}, 1,
-                                    "Annualized rolling volatility using data through t-1", (0.0, 5.0)),
-    "rolling_vol_60d": FeatureSpec("rolling_vol_60d", "1.0.0", {"window": 60}, 1,
-                                    "Annualized rolling volatility using data through t-1", (0.0, 5.0)),
-    "momentum_10d": FeatureSpec("momentum_10d", "1.0.0", {"window": 10}, 1,
-                                 "10-day price momentum, lagged one observation", (-10.0, 10.0)),
-    "momentum_30d": FeatureSpec("momentum_30d", "1.0.0", {"window": 30}, 1,
-                                 "30-day price momentum, lagged one observation", (-10.0, 10.0)),
-}
-
-
-class FeatureStore:
-    """Small production-friendly feature cache.
-
-    Primary backend is Streamlit session state; an optional local pickle file
-    can persist computed Series between runs. Cache keys include a raw-data hash
-    and feature version, so corrected market data invalidates stale features.
-    """
-    def __init__(self, backend_path: Optional[Path] = None):
-        self.backend_path = backend_path or (_HERE / ".feature_store_cache.pkl")
-        self.mem = st.session_state.setdefault("quant_feature_cache", {}) if HAS_UI else {}
-
-    def _disk_get(self, key: str):
-        try:
-            if not self.backend_path.is_file():
-                return None
-            import pickle
-            with self.backend_path.open("rb") as f:
-                obj = pickle.load(f)
-            return obj.get(key) if isinstance(obj, dict) else None
-        except Exception:
-            return None
-
-    def _disk_set(self, key: str, value: pd.Series) -> None:
-        try:
-            import pickle
-            obj = {}
-            if self.backend_path.is_file():
-                with self.backend_path.open("rb") as f:
-                    old = pickle.load(f)
-                    obj = old if isinstance(old, dict) else {}
-            obj[key] = value
-            # Keep cache bounded.
-            if len(obj) > 64:
-                obj = dict(list(obj.items())[-64:])
-            tmp = self.backend_path.with_suffix(".tmp")
-            with tmp.open("wb") as f:
-                pickle.dump(obj, f, protocol=pickle.HIGHEST_PROTOCOL)
-            os.replace(tmp, self.backend_path)
-        except Exception:
-            pass
-
-    def get_or_compute(self, spec: FeatureSpec, asset: str, raw_df: pd.DataFrame) -> pd.Series:
-        data_hash = _feature_data_hash(raw_df)
-        key = spec.cache_key(asset, data_hash)
-        if key in self.mem:
-            return self.mem[key].copy()
-        cached = self._disk_get(key)
-        if isinstance(cached, pd.Series):
-            self.mem[key] = cached
-            return cached.copy()
-        fn = FEATURE_REGISTRY.get(spec.name)
-        if fn is None:
-            raise KeyError(f"Unknown feature: {spec.name}")
-        result = pd.Series([fn(raw_df, i) for i in range(len(raw_df))], index=raw_df.index, dtype=float)
-        self.mem[key] = result
-        self._disk_set(key, result)
-        return result.copy()
-
-
-def build_feature_matrix(asset: str, raw_df: pd.DataFrame,
-                         specs: list[FeatureSpec], store: FeatureStore) -> pd.DataFrame:
-    cols = {spec.name: store.get_or_compute(spec, asset, raw_df) for spec in specs}
-    return pd.DataFrame(cols, index=raw_df.index)
-
-
-def _fit_gaussian_hmm(returns: np.ndarray, n_states: int, max_iter: int = 120,
-                      tol: float = 1e-6, seed: int = 42) -> dict[str, Any]:
-    """Scaled Gaussian HMM with Baum-Welch EM, no hmmlearn dependency."""
-    x = np.asarray(returns, dtype=float)
-    x = x[np.isfinite(x)]
-    n = len(x)
-    k = int(n_states)
-    if n < max(40, k * 12) or k < 2:
-        raise ValueError("ข้อมูลผลตอบแทนน้อยเกินไปสำหรับ HMM")
-    rng = np.random.default_rng(seed)
-    qs = np.linspace(0.10, 0.90, k)
-    mu = np.quantile(x, qs)
-    mu = np.sort(mu)
-    sigma0 = max(float(np.std(x)), 1e-5)
-    var = np.full(k, sigma0 ** 2, dtype=float)
-    # Start sticky to avoid implausible one-day switching.
-    A = np.full((k, k), 0.15 / max(k - 1, 1))
-    np.fill_diagonal(A, 0.85)
-    pi = np.full(k, 1.0 / k)
-    prev_ll = -np.inf
-
-    def emit(z):
-        vv = np.maximum(var, 1e-10)
-        return np.exp(-0.5 * ((z[:, None] - mu[None, :]) ** 2) / vv[None, :]) / np.sqrt(2 * np.pi * vv[None, :])
-
-    for _ in range(max_iter):
-        B = np.maximum(emit(x), 1e-300)
-        alpha = np.zeros((n, k)); scales = np.zeros(n)
-        alpha[0] = pi * B[0]
-        scales[0] = max(alpha[0].sum(), 1e-300)
-        alpha[0] /= scales[0]
-        for t in range(1, n):
-            alpha[t] = (alpha[t - 1] @ A) * B[t]
-            scales[t] = max(alpha[t].sum(), 1e-300)
-            alpha[t] /= scales[t]
-        ll = float(np.log(scales).sum())
-
-        beta = np.zeros((n, k)); beta[-1] = 1.0
-        for t in range(n - 2, -1, -1):
-            beta[t] = A @ (B[t + 1] * beta[t + 1])
-            beta[t] /= max(scales[t + 1], 1e-300)
-        gamma = alpha * beta
-        gamma /= np.maximum(gamma.sum(axis=1, keepdims=True), 1e-300)
-
-        xi_sum = np.zeros((k, k))
-        for t in range(n - 1):
-            xij = alpha[t][:, None] * A * (B[t + 1] * beta[t + 1])[None, :]
-            denom = max(float(xij.sum()), 1e-300)
-            xi_sum += xij / denom
-
-        pi = np.clip(gamma[0], 1e-10, None); pi /= pi.sum()
-        A = np.maximum(xi_sum, 1e-12)
-        A /= A.sum(axis=1, keepdims=True)
-        weights = np.maximum(gamma.sum(axis=0), 1e-10)
-        mu = (gamma * x[:, None]).sum(axis=0) / weights
-        var = (gamma * (x[:, None] - mu[None, :]) ** 2).sum(axis=0) / weights
-        var = np.maximum(var, 1e-8)
-        if ll - prev_ll < tol and np.isfinite(prev_ll):
-            break
-        prev_ll = ll
-
-    # Final filtered probabilities using only data through each t.
-    B = np.maximum(emit(x), 1e-300)
-    alpha = np.zeros((n, k)); scales = np.zeros(n)
-    alpha[0] = pi * B[0]; scales[0] = max(alpha[0].sum(), 1e-300); alpha[0] /= scales[0]
-    for t in range(1, n):
-        alpha[t] = (alpha[t - 1] @ A) * B[t]
-        scales[t] = max(alpha[t].sum(), 1e-300); alpha[t] /= scales[t]
-    filtered = alpha / np.maximum(alpha.sum(axis=1, keepdims=True), 1e-300)
-
-    # Smoothed probabilities are for research/backtest only.
-    beta = np.zeros((n, k)); beta[-1] = 1.0
-    for t in range(n - 2, -1, -1):
-        beta[t] = A @ (B[t + 1] * beta[t + 1])
-        beta[t] /= max(scales[t + 1], 1e-300)
-    smoothed = alpha * beta
-    smoothed /= np.maximum(smoothed.sum(axis=1, keepdims=True), 1e-300)
-    p = k + k + k * (k - 1) + (k - 1)
-    bic = -2.0 * ll + p * np.log(n)
-    return {"mu": mu, "sigma": np.sqrt(var), "A": A, "pi": pi, "loglik": ll,
-            "bic": float(bic), "filtered": filtered, "smoothed": smoothed, "returns": x}
-
-
-def fit_hmm_bic(returns: pd.Series, k_values=(2, 3, 4, 5), seed: int = 42) -> dict[str, Any]:
-    clean = pd.to_numeric(returns, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
-    fits = []
-    for k in k_values:
-        try:
-            fits.append((k, _fit_gaussian_hmm(clean.to_numpy(), k, seed=seed + k)))
-        except Exception:
-            continue
-    if not fits:
-        raise ValueError("HMM fit ไม่สำเร็จ")
-    best_k, best = min(fits, key=lambda kv: kv[1]["bic"])
-    return {"best_k": best_k, "best": best, "fits": fits, "index": clean.index}
-
-
-def apply_regime_hysteresis(prob: pd.DataFrame, threshold: float = 0.65, min_days: int = 2) -> pd.Series:
-    labels = []
-    current = None; streak = 0; candidate = None
-    for _, row in prob.iterrows():
-        top = str(row.idxmax())
-        top_p = float(row.max())
-        if top == current:
-            candidate = None; streak = 0
-        elif top_p >= threshold:
-            if candidate == top: streak += 1
-            else: candidate, streak = top, 1
-            if streak >= min_days:
-                current = top; candidate = None; streak = 0
-        labels.append(current if current is not None else (labels[-1] if labels else top))
-    return pd.Series(labels, index=prob.index, name="regime")
-
-
-def regime_spread_blend(filtered: np.ndarray, base_spreads: np.ndarray) -> np.ndarray:
-    p = np.asarray(filtered, dtype=float)
-    b = np.asarray(base_spreads, dtype=float)
-    return p @ b
-
-
-@dataclass
-class WFWindow:
-    train_start: pd.Timestamp
-    train_end: pd.Timestamp
-    purge_end: pd.Timestamp
-    test_start: pd.Timestamp
-    test_end: pd.Timestamp
-
-
-def generate_walk_forward_windows(data_start, data_end, train_days=180, test_days=30,
-                                  purge_days=3, mode="rolling") -> list[WFWindow]:
-    windows = []
-    cursor = pd.Timestamp(data_start)
-    end = pd.Timestamp(data_end)
-    while True:
-        train_start = pd.Timestamp(data_start) if mode == "anchored" else cursor
-        train_end = cursor + pd.Timedelta(days=train_days)
-        purge_end = train_end + pd.Timedelta(days=purge_days)
-        test_start = purge_end
-        test_end = test_start + pd.Timedelta(days=test_days)
-        if test_end > end: break
-        windows.append(WFWindow(train_start, train_end, purge_end, test_start, test_end))
-        cursor = cursor + pd.Timedelta(days=test_days)
-    return windows
-
-
-def walk_forward_efficiency(wf_results: pd.DataFrame) -> dict[str, float]:
-    if wf_results is None or wf_results.empty:
-        return {"wfe": float("nan"), "is_mean": float("nan"), "oos_mean": float("nan"),
-                "param_stability_cv": float("nan"), "pct_windows_profitable": 0.0}
-    is_mean = float(wf_results["in_sample_score"].mean())
-    oos_mean = float(wf_results["out_of_sample_score"].mean())
-    spreads = []
-    for p in wf_results.get("chosen_params", []):
-        if isinstance(p, dict) and "dealer_spread" in p:
-            spreads.append(float(p["dealer_spread"]))
-    cv = float(np.std(spreads) / np.mean(spreads)) if spreads and np.mean(spreads) else float("inf")
-    return {"wfe": oos_mean / is_mean if is_mean else float("nan"), "is_mean": is_mean,
-            "oos_mean": oos_mean, "param_stability_cv": cv,
-            "pct_windows_profitable": float((wf_results["out_of_sample_score"] > 0).mean())}
-
-
-def _wf_objective(bt: pd.DataFrame) -> float:
-    m = _backtest_metrics(bt)
-    s = float(m.get("sharpe", 0.0) or 0.0)
-    # Avoid selecting a high-Sharpe result with catastrophic drawdown.
-    dd = abs(float(m.get("max_drawdown", 0.0) or 0.0))
-    return s - 0.02 * dd
-
-
-def run_walk_forward(data: pd.DataFrame, param_grid: list[dict[str, Any]],
-                     backtest_fn, objective_fn=_wf_objective,
-                     train_days=180, test_days=30, purge_days=3, mode="rolling") -> pd.DataFrame:
-    windows = generate_walk_forward_windows(data.index.min(), data.index.max(), train_days, test_days, purge_days, mode)
-    rows = []
-    for w in windows:
-        train = data.loc[w.train_start:w.train_end]
-        test = data.loc[w.test_start:w.test_end]
-        if len(train) < 30 or len(test) < 5:
-            continue
-        is_scores: dict[str, float] = {}
-        oos_scores: dict[str, float] = {}
-        oos_returns: dict[str, list[float]] = {}
-        best_params = None; best_score = -float("inf")
-        for params in param_grid:
-            key = json.dumps(params, sort_keys=True, default=str)
-            try:
-                is_bt = backtest_fn(train, **params)
-                is_score = float(objective_fn(is_bt))
-                is_scores[key] = is_score
-                if is_score > best_score:
-                    best_score, best_params = is_score, params
-                oos_bt = backtest_fn(test, **params)
-                oos_scores[key] = float(objective_fn(oos_bt))
-                if "Actual_Daily_PnL" in oos_bt:
-                    oos_returns[key] = pd.to_numeric(oos_bt["Actual_Daily_PnL"], errors="coerce").fillna(0.0).tolist()
-            except Exception:
-                continue
-        if best_params is None:
-            continue
-        best_key = json.dumps(best_params, sort_keys=True, default=str)
-        rows.append({
-            "window_start": w.test_start, "window_end": w.test_end,
-            "chosen_params": best_params, "in_sample_score": best_score,
-            "out_of_sample_score": oos_scores.get(best_key, float("nan")),
-            "candidate_is_scores": is_scores, "candidate_oos_scores": oos_scores,
-            "chosen_oos_returns": oos_returns.get(best_key, []),
-        })
-    return pd.DataFrame(rows)
-
-
-def pbo_from_wf_results(wf_results: pd.DataFrame) -> float:
-    """PBO-style estimate: how often the IS winner falls below OOS median."""
-    if wf_results is None or wf_results.empty:
-        return float("nan")
-    bad = 0; total = 0
-    for _, row in wf_results.iterrows():
-        is_scores = row.get("candidate_is_scores", {})
-        oos_scores = row.get("candidate_oos_scores", {})
-        if not isinstance(is_scores, dict) or not isinstance(oos_scores, dict) or len(is_scores) < 4:
-            continue
-        winner = max(is_scores, key=lambda k: is_scores.get(k, -float("inf")))
-        vals = pd.Series(oos_scores, dtype=float).dropna()
-        if winner not in vals.index or vals.empty:
-            continue
-        total += 1
-        bad += int(float(vals.rank(pct=True).get(winner, 1.0)) < 0.5)
-    return float(bad / total) if total else float("nan")
-
-
-def wf_oos_return_series(wf_results: pd.DataFrame) -> pd.Series:
-    if wf_results is None or wf_results.empty:
-        return pd.Series(dtype=float)
-    chunks = []
-    for x in wf_results.get("chosen_oos_returns", []):
-        if isinstance(x, list):
-            chunks.extend(x)
-    return pd.Series(chunks, dtype=float).replace([np.inf, -np.inf], np.nan).dropna()
-
-
-def purged_kfold_splits(n_samples: int, n_splits: int = 5, embargo_frac: float = 0.01):
-    fold_size = max(n_samples // n_splits, 1)
-    embargo = int(n_samples * embargo_frac)
-    for k in range(n_splits):
-        test_start = k * fold_size
-        test_end = min(test_start + fold_size, n_samples)
-        train_idx = list(range(0, max(0, test_start - embargo))) + list(range(min(n_samples, test_end + embargo), n_samples))
-        yield train_idx, list(range(test_start, test_end))
-
-
-def simulate_garch(n_days: int, mu: float, omega: float, alpha: float, beta: float,
-                   sigma0: float, seed: int) -> np.ndarray:
-    rng = np.random.default_rng(seed)
-    returns = np.zeros(n_days); sigma2 = np.zeros(n_days); sigma2[0] = sigma0 ** 2
-    for t in range(1, n_days):
-        z = rng.standard_normal()
-        returns[t] = mu + np.sqrt(max(sigma2[t - 1], 1e-12)) * z
-        sigma2[t] = max(omega + alpha * (returns[t] - mu) ** 2 + beta * sigma2[t - 1], 1e-12)
-    return returns
-
-
-def simulate_egarch(n_days: int, mu: float, omega: float, alpha: float, beta: float,
-                    gamma: float, sigma0: float, seed: int) -> np.ndarray:
-    rng = np.random.default_rng(seed); out = np.zeros(n_days); logv = np.zeros(n_days)
-    logv[0] = np.log(max(sigma0 ** 2, 1e-10)); ez = np.sqrt(2 / np.pi)
-    for t in range(1, n_days):
-        sigma = np.sqrt(np.exp(logv[t - 1])); z = rng.standard_normal(); out[t] = mu + sigma * z
-        prev_z = (out[t] - mu) / max(sigma, 1e-10)
-        logv[t] = omega + beta * logv[t - 1] + alpha * (abs(prev_z) - ez) + gamma * prev_z
-    return out
-
-
-def simulate_jump_diffusion(n_days: int, s0: float, mu: float, sigma: float,
-                            jump_lambda: float, jump_mu: float, jump_sigma: float,
-                            seed: int) -> np.ndarray:
-    rng = np.random.default_rng(seed); dt = 1 / 365; prices = np.zeros(n_days); prices[0] = s0
-    for t in range(1, n_days):
-        z = rng.standard_normal(); diffusion = (mu - 0.5 * sigma ** 2) * dt + sigma * np.sqrt(dt) * z
-        n_jumps = rng.poisson(max(jump_lambda, 0) * dt)
-        jump = float(rng.normal(jump_mu, jump_sigma, n_jumps).sum()) if n_jumps else 0.0
-        prices[t] = max(prices[t - 1] * np.exp(diffusion + jump), 1e-12)
-    return prices
-
-
-def simulate_t_copula(n_days: int, corr_matrix: np.ndarray, dof: int, seed: int) -> np.ndarray:
-    try:
-        from scipy.stats import t as student_t
-    except Exception as exc:
-        raise RuntimeError("ต้องมี scipy สำหรับ t-copula") from exc
-    rng = np.random.default_rng(seed); corr = np.asarray(corr_matrix, dtype=float)
-    corr = (corr + corr.T) / 2; np.fill_diagonal(corr, 1.0)
-    L = np.linalg.cholesky(corr + np.eye(corr.shape[0]) * 1e-8)
-    z = rng.standard_normal((n_days, corr.shape[0])) @ L.T
-    chi2 = rng.chisquare(max(int(dof), 2), size=n_days)
-    t_samples = z / np.sqrt(chi2 / max(int(dof), 2))[:, None]
-    return student_t.cdf(t_samples, df=max(int(dof), 2))
-
-
-def validate_synthetic_data(real: np.ndarray, synthetic: np.ndarray) -> dict[str, Any]:
-    real = np.asarray(real, dtype=float); synthetic = np.asarray(synthetic, dtype=float)
-    real = real[np.isfinite(real)]; synthetic = synthetic[np.isfinite(synthetic)]
-    out = {
-        "n_real": int(len(real)), "n_synthetic": int(len(synthetic)),
-        "mean_diff": float(abs(real.mean() - synthetic.mean())) if len(real) else float("nan"),
-        "vol_diff": float(abs(real.std() - synthetic.std())) if len(real) else float("nan"),
-        "skew_diff": float(abs(pd.Series(real).skew() - pd.Series(synthetic).skew())) if len(real) > 2 and len(synthetic) > 2 else float("nan"),
-        "kurtosis_diff": float(abs(pd.Series(real).kurt() - pd.Series(synthetic).kurt())) if len(real) > 3 and len(synthetic) > 3 else float("nan"),
-        "autocorr_lag1_real": float(pd.Series(real).autocorr(1)) if len(real) > 2 else float("nan"),
-        "autocorr_lag1_synth": float(pd.Series(synthetic).autocorr(1)) if len(synthetic) > 2 else float("nan"),
-    }
-    try:
-        from scipy.stats import ks_2samp
-        out["ks_test_pvalue"] = float(ks_2samp(real, synthetic).pvalue)
-    except Exception:
-        out["ks_test_pvalue"] = float("nan")
-    return out
-
-
-def information_coefficient(feature: pd.Series, forward_return: pd.Series) -> float:
-    aligned = pd.concat([feature, forward_return], axis=1).replace([np.inf, -np.inf], np.nan).dropna()
-    if len(aligned) < 8: return float("nan")
-    return float(aligned.iloc[:, 0].rank().corr(aligned.iloc[:, 1].rank()))
-
-
-def _approx_dsr(sharpe_annualized: float, returns: pd.Series, n_trials: int) -> float:
-    try:
-        from scipy.stats import norm
-        r = pd.to_numeric(returns, errors="coerce").dropna().to_numpy()
-        n = len(r)
-        if n < 10: return float("nan")
-        daily_sr = float(np.mean(r) / np.std(r, ddof=1)) if np.std(r, ddof=1) > 0 else 0.0
-        skew = float(pd.Series(r).skew()); kurt_raw = float(pd.Series(r).kurt() + 3.0)
-        trials = max(int(n_trials), 1)
-        gamma_e = 0.5772156649
-        var_sr = max((1 - skew * daily_sr + ((kurt_raw - 1) / 4.0) * daily_sr ** 2) / max(n - 1, 1), 1e-12)
-        sr0 = np.sqrt(var_sr) * ((1 - gamma_e) * norm.ppf(1 - 1 / trials) + gamma_e * norm.ppf(1 - 1 / (trials * np.e))) if trials > 1 else 0.0
-        z = (daily_sr - sr0) / np.sqrt(var_sr)
-        return float(norm.cdf(z))
-    except Exception:
-        return float("nan")
-
-
-def estimate_pbo(score_matrix: pd.DataFrame) -> float:
-    """PBO approximation: probability that IS winner ranks below OOS median."""
-    if score_matrix is None or score_matrix.empty or score_matrix.shape[1] < 2: return float("nan")
-    bad = 0; total = 0
-    for _, row in score_matrix.iterrows():
-        vals = pd.to_numeric(row, errors="coerce").dropna()
-        if len(vals) < 4: continue
-        split = len(vals) // 2
-        is_scores = vals.iloc[:split]; oos_scores = vals.iloc[split:]
-        if is_scores.empty or oos_scores.empty: continue
-        winner = is_scores.idxmax()
-        rank = oos_scores.rank(pct=True).get(winner, np.nan)
-        if pd.notna(rank):
-            total += 1
-            bad += int(float(rank) < 0.5)
-    return float(bad / total) if total else float("nan")
-
-
-def _quant_readiness_rows(ic: float, wfe: float, stability: float, dsr: float, pbo: float,
-                          synth: dict[str, Any], shadow_weeks: int) -> list[tuple[str, bool, str]]:
-    ks = float(synth.get("ks_test_pvalue", np.nan)) if synth else np.nan
-    return [
-        ("Feature IC |IC| > 0.05", bool(np.isfinite(ic) and abs(ic) > 0.05), f"IC={ic:+.3f}"),
-        ("Regime ใช้ filtered probability", True, "Live inference ไม่ใช้ smoothed"),
-        ("WFE > 0.50", bool(np.isfinite(wfe) and wfe > 0.50), f"WFE={wfe:.2f}" if np.isfinite(wfe) else "ยังคำนวณไม่ได้"),
-        ("Parameter stability CV < 0.30", bool(np.isfinite(stability) and stability < 0.30), f"CV={stability:.2f}" if np.isfinite(stability) else "ยังคำนวณไม่ได้"),
-        ("Deflated Sharpe ผ่าน threshold", bool(np.isfinite(dsr) and dsr >= 0.95), f"DSR={dsr:.3f}" if np.isfinite(dsr) else "ยังคำนวณไม่ได้"),
-        ("PBO < 50%", bool(np.isfinite(pbo) and pbo < 0.50), f"PBO={pbo:.1%}" if np.isfinite(pbo) else "ยังคำนวณไม่ได้"),
-        ("Synthetic KS p-value > 0.05", bool(np.isfinite(ks) and ks > 0.05), f"KS p={ks:.3f}" if np.isfinite(ks) else "ยังคำนวณไม่ได้"),
-        ("Shadow mode ก่อน cutover", shadow_weeks >= 2, f"เก็บ shadow {shadow_weeks} สัปดาห์"),
-    ]
-
-
-def _quant_asset_frame(data: pd.DataFrame, cfg: dict[str, Any]) -> pd.DataFrame:
-    if data is None or data.empty: return pd.DataFrame()
-    asset = str(cfg.get("asset", "BTC")).upper()
-    if "Global_USD" not in data.columns: return pd.DataFrame()
-    out = pd.DataFrame({"price": pd.to_numeric(data["Global_USD"], errors="coerce")}, index=pd.to_datetime(data.index))
-    out = out.replace([np.inf, -np.inf], np.nan).dropna()
-    out = out[out["price"] > 0].sort_index()
-    out.attrs["asset"] = asset
-    return out
-
-
-def render_quant_research_lab(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
-    """Institutional-style research lab. Research only; no live order execution."""
-    st.markdown("## 🧪 Quant Research Lab")
-    st.caption("HMM Regime · Point-in-Time Feature Store · Walk-Forward · Synthetic Stress · Evaluation Framework")
-    qdf = _quant_asset_frame(data, cfg)
-    if qdf.empty or len(qdf) < 80:
-        st.info("ต้องมีราคาย้อนหลังอย่างน้อย ~80 จุดเพื่อเปิด Quant Research Lab")
-        return
-    asset = str(qdf.attrs.get("asset", cfg.get("asset", "BTC"))).upper()
-    returns = np.log(qdf["price"] / qdf["price"].shift(1)).replace([np.inf, -np.inf], np.nan).dropna()
-
-    qtabs = st.tabs(["🌡️ Regime HMM", "🧱 Feature Store", "🔄 Walk-Forward", "🧬 Synthetic Stress", "🧪 Evaluation"])
-
-    with qtabs[0]:
-        st.markdown("### Gaussian HMM — filtered probability สำหรับ live")
-        c1, c2, c3 = st.columns(3)
-        k_range = c1.multiselect("K ที่จะทดสอบ (BIC)", [2, 3, 4, 5], default=[2, 3, 4], key="quant_hmm_ks")
-        threshold = c2.slider("Hysteresis probability", 0.50, 0.90, 0.65, 0.01, key="quant_hmm_thr")
-        min_days = c3.number_input("ยืนยัน label ติดต่อกัน (วัน)", 1, 5, 2, key="quant_hmm_days")
-        if st.button("▶️ Fit HMM + BIC", key="quant_hmm_fit_btn", use_container_width=True):
-            try:
-                fit = fit_hmm_bic(returns, tuple(k_range or [2, 3, 4]))
-                st.session_state["quant_hmm_fit_result"] = fit
-            except Exception as exc:
-                st.error(f"HMM fit ไม่สำเร็จ: {exc}")
-        fit = st.session_state.get("quant_hmm_fit_result")
-        if fit:
-            rows = [{"K": k, "BIC": round(float(m["bic"]), 2), "Log-Likelihood": round(float(m["loglik"]), 2)} for k, m in fit["fits"]]
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-            best = fit["best"]
-            prob = pd.DataFrame(best["filtered"], index=fit["index"], columns=[f"State {i+1}" for i in range(fit["best_k"])])
-            labels = apply_regime_hysteresis(prob, threshold, int(min_days))
-            # Sort state descriptions by volatility for readable labels.
-            order = np.argsort(best["sigma"])
-            desc = {int(state): ("Low-vol" if rank == 0 else "High-vol" if rank == len(order)-1 else "Mid-vol") for rank, state in enumerate(order)}
-            final_state = int(np.argmax(best["filtered"][-1]))
-            st.success(f"Best K = {fit['best_k']} · BIC ต่ำสุด · Live filtered state = State {final_state+1} ({desc.get(final_state, 'Regime')}) · probability {best['filtered'][-1].max():.1%}")
-            mcols = st.columns(fit["best_k"])
-            for i, col in enumerate(mcols):
-                col.metric(f"State {i+1}", f"μ {best['mu'][i]*100:+.2f}%", f"σ {best['sigma'][i]*100:.2f}%/day")
-            chart = go.Figure()
-            for col in prob.columns:
-                chart.add_trace(go.Scatter(x=prob.index, y=prob[col], name=col, mode="lines"))
-            chart.update_layout(template="plotly_dark", height=320, yaxis_title="Filtered P(state)", margin=dict(t=20,b=20), legend=dict(orientation="h", y=1.12))
-            st.plotly_chart(chart, **WIDE)
-            with st.expander("Transition matrix / parameter details"):
-                st.dataframe(pd.DataFrame(best["A"], index=[f"S{i+1}" for i in range(fit['best_k'])], columns=[f"S{i+1}" for i in range(fit['best_k'])]).round(3), use_container_width=True)
-                st.caption("Smoothed probabilityมีไว้สำหรับ backtest/research เท่านั้น; live decision ใช้ filtered probability จากข้อมูลถึง t เท่านั้น")
-
-    with qtabs[1]:
-        st.markdown("### Point-in-Time Feature Store")
-        store = FeatureStore()
-        selected = st.multiselect("Features", list(FEATURE_SPECS.keys()), default=["rolling_vol_20d", "momentum_10d"], key="quant_features")
-        specs = [FEATURE_SPECS[x] for x in selected]
-        raw = qdf[["price"]].copy()
-        if specs:
-            fm = build_feature_matrix(asset, raw, specs, store)
-            st.dataframe(fm.tail(20).round(6), use_container_width=True)
-            ic_rows = []
-            fwd1 = qdf["price"].pct_change(1).shift(-1)
-            for s in specs:
-                ic_rows.append({"feature": s.name, "version": s.fn_version, "lag_days": s.lag_days,
-                                "IC_1d_spearman": information_coefficient(fm[s.name], fwd1),
-                                "expected_range": str(s.expected_range)})
-            st.dataframe(pd.DataFrame(ic_rows).round(4), use_container_width=True, hide_index=True)
-            st.caption("Cache key = feature version + params + asset + hash ของ raw price; แก้ข้อมูลย้อนหลังแล้ว cache จะ invalidate")
-        else:
-            st.info("เลือก feature อย่างน้อย 1 ตัว")
-
-    with qtabs[2]:
-        st.markdown("### Walk-Forward Optimization")
-        c1,c2,c3,c4 = st.columns(4)
-        train_days = c1.number_input("Train days", 90, 720, 180, 30, key="quant_wf_train")
-        test_days = c2.number_input("Test days", 7, 120, 30, 7, key="quant_wf_test")
-        purge_days = c3.number_input("Purge days", 1, 30, 3, 1, key="quant_wf_purge")
-        mode = c4.selectbox("Window", ["rolling", "anchored"], key="quant_wf_mode")
-        spread0 = float(cfg.get("dealer_spread", 0.5) or 0.5)
-        prem0 = float(cfg.get("local_premium", 0.0) or 0.0)
-        grid_spreads = st.multiselect("Dealer spread grid", sorted(set([max(0.01, spread0*0.5), spread0, spread0*1.5])), default=[max(0.01, spread0*0.5), spread0], key="quant_wf_spreads")
-        grid_prem = st.multiselect("Local premium grid", sorted(set([prem0-0.25, prem0, prem0+0.25])), default=[prem0], key="quant_wf_prem")
-        grid_vol = st.multiselect("Trade volume grid", sorted(set([0.5, 1.0, 1.5])), default=[1.0], key="quant_wf_vol")
-        param_grid = [{"dealer_spread": s, "local_premium": p, "trade_vol": v} for s,p,v in product(grid_spreads, grid_prem, grid_vol)]
-        st.caption(f"Candidates: {len(param_grid)} configs · optimize train only · purge {purge_days}d · test OOS")
-        if st.button("▶️ Run Walk-Forward", key="quant_wf_run", use_container_width=True):
-            base = copy.deepcopy(cfg)
-            def _bt(frame, **params):
-                c = copy.deepcopy(base); c.update(params); return _backtest_frame(c, frame)
-            try:
-                wf = run_walk_forward(data, param_grid, _bt,
-                                      train_days=int(train_days), test_days=int(test_days), purge_days=int(purge_days), mode=mode)
-                st.session_state["quant_wf_results"] = wf
-            except Exception as exc:
-                st.error(f"Walk-Forward ล้มเหลว: {exc}")
-        wf = st.session_state.get("quant_wf_results")
-        if isinstance(wf, pd.DataFrame) and not wf.empty:
-            wfm = walk_forward_efficiency(wf)
-            k = st.columns(4)
-            k[0].metric("WFE", f"{wfm['wfe']:.2f}" if np.isfinite(wfm['wfe']) else "—")
-            k[1].metric("IS mean", f"{wfm['is_mean']:.3f}")
-            k[2].metric("OOS mean", f"{wfm['oos_mean']:.3f}")
-            k[3].metric("Parameter CV", f"{wfm['param_stability_cv']:.2f}" if np.isfinite(wfm['param_stability_cv']) else "—")
-            st.dataframe(wf.assign(chosen_params=wf["chosen_params"].astype(str)).round(4), use_container_width=True, hide_index=True)
-        else:
-            st.info("ยังไม่มีผล Walk-Forward")
-
-    with qtabs[3]:
-        st.markdown("### Synthetic Market Stress")
-        c1,c2,c3 = st.columns(3)
-        synth_model = c1.selectbox("Model", ["GARCH(1,1)", "EGARCH", "Merton Jump-Diffusion", "t-Copula"], key="quant_synth_model")
-        n_days = c2.number_input("Days", 250, 5000, 1000, 100, key="quant_synth_days")
-        seed = c3.number_input("Seed", 1, 999999, 42, key="quant_synth_seed")
-        # ต้องมี real_ret นอกปุ่มด้วย เพราะผล Synthetic ที่บันทึกไว้ใน session
-        # อาจถูกนำมาแสดงในการ rerun ถัดไป โดยไม่เข้า block ของปุ่มอีกครั้ง
-        real_ret = returns.to_numpy()
-        if st.button("🧬 Generate + Validate", key="quant_synth_run", use_container_width=True):
-            try:
-                if synth_model == "GARCH(1,1)":
-                    synth = simulate_garch(int(n_days), float(real_ret.mean()), 1e-6, 0.08, 0.90, max(float(real_ret.std()),1e-4), int(seed))
-                elif synth_model == "EGARCH":
-                    synth = simulate_egarch(int(n_days), float(real_ret.mean()), -0.15, 0.12, 0.96, -0.08, max(float(real_ret.std()),1e-4), int(seed))
-                elif synth_model == "Merton Jump-Diffusion":
-                    prices = simulate_jump_diffusion(int(n_days), float(qdf["price"].iloc[-1]), float(real_ret.mean()*365), float(real_ret.std()*np.sqrt(365)), 6.0, -0.04, 0.08, int(seed))
-                    synth = np.diff(np.log(prices), prepend=np.log(prices[0]))
-                else:
-                    corr = np.array([[1.0, 0.65],[0.65,1.0]])
-                    u = simulate_t_copula(int(n_days), corr, 5, int(seed))
-                    from scipy.stats import norm
-                    synth = norm.ppf(u[:,0]) * max(float(real_ret.std()),1e-4) + float(real_ret.mean())
-                validation = validate_synthetic_data(real_ret, synth)
-                st.session_state["quant_synth"] = (synth, validation)
-            except Exception as exc:
-                st.error(f"Synthetic generation ล้มเหลว: {exc}")
-        if "quant_synth" in st.session_state:
-            synth, val = st.session_state["quant_synth"]
-            kc = st.columns(5)
-            kc[0].metric("KS p-value", f"{val['ks_test_pvalue']:.3f}" if np.isfinite(val['ks_test_pvalue']) else "—")
-            kc[1].metric("Mean diff", f"{val['mean_diff']:.4f}")
-            kc[2].metric("Vol diff", f"{val['vol_diff']:.4f}")
-            kc[3].metric("Skew diff", f"{val['skew_diff']:.3f}")
-            kc[4].metric("Kurtosis diff", f"{val['kurtosis_diff']:.3f}")
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(y=real_ret[-min(len(real_ret), len(synth)):], name="Real", mode="lines"))
-            fig.add_trace(go.Scatter(y=synth[-min(len(real_ret), len(synth)):], name="Synthetic", mode="lines"))
-            fig.update_layout(template="plotly_dark", height=300, margin=dict(t=20,b=20), legend=dict(orientation="h", y=1.12))
-            st.plotly_chart(fig, **WIDE)
-            st.caption("Validation นี้เป็น distribution/moment check; ไม่ได้พิสูจน์ว่า synthetic market มี microstructure เหมือนตลาดจริง")
-
-    with qtabs[4]:
-        st.markdown("### Evaluation Framework — ก่อน production")
-        feature = pd.Series(dtype=float)
-        try:
-            feature = FeatureStore().get_or_compute(FEATURE_SPECS["rolling_vol_20d"], asset, qdf[["price"]])
-        except Exception:
-            pass
-        fwd = qdf["price"].pct_change().shift(-1)
-        ic = information_coefficient(feature, fwd) if not feature.empty else float("nan")
-        wf = st.session_state.get("quant_wf_results")
-        wfm = walk_forward_efficiency(wf) if isinstance(wf, pd.DataFrame) and not wf.empty else {}
-        dsr = float("nan"); pbo = float("nan")
-        if isinstance(wf, pd.DataFrame) and not wf.empty:
-            oos_returns = wf_oos_return_series(wf)
-            if len(oos_returns) >= 20:
-                daily_sr = float(oos_returns.mean() / oos_returns.std(ddof=1)) if oos_returns.std(ddof=1) > 0 else 0.0
-                dsr = _approx_dsr(daily_sr * np.sqrt(252.0), oos_returns, max(len(wf), 2))
-            pbo = pbo_from_wf_results(wf)
-        synth_val = st.session_state.get("quant_synth", (None, {}))[1]
-        shadow_weeks = int(st.number_input("Shadow-mode ที่เก็บจริง (สัปดาห์)", 0, 104, 0, key="quant_shadow_weeks"))
-        checks = _quant_readiness_rows(ic, float(wfm.get("wfe", np.nan)), float(wfm.get("param_stability_cv", np.nan)), dsr, pbo, synth_val, shadow_weeks)
-        ec = st.columns(4)
-        ec[0].metric("Feature IC", f"{ic:+.3f}" if np.isfinite(ic) else "—")
-        ec[1].metric("WFE", f"{float(wfm.get('wfe')):.2f}" if np.isfinite(float(wfm.get('wfe', np.nan))) else "—")
-        ec[2].metric("Deflated Sharpe", f"{dsr:.3f}" if np.isfinite(dsr) else "—")
-        ec[3].metric("PBO", f"{pbo:.1%}" if np.isfinite(pbo) else "—")
-        st.dataframe(pd.DataFrame([{"check": a, "pass": b, "evidence": c} for a,b,c in checks]), use_container_width=True, hide_index=True)
-        st.markdown("#### IC decay")
-        ic_rows = []
-        for h in [1, 3, 5, 10, 20, 30]:
-            ic_rows.append({"horizon_days": h, "IC": information_coefficient(feature, qdf["price"].pct_change(h).shift(-h))})
-        st.dataframe(pd.DataFrame(ic_rows).round(4), use_container_width=True, hide_index=True)
-        st.warning("Production gate: ใช้ OOS metrics, filtered regime probabilities และ shadow mode ก่อน execute จริงเสมอ")
+    return levels, metrics, bench_errors
 
 
 def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
@@ -12605,13 +12263,12 @@ def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market
 
     st.markdown("### 📊 Institutional Benchmark Comparison")
     st.caption("ดัชนีเริ่มต้น = 100 • Portfolio ใช้ Snapshot จริง • Benchmark: BTC, SET Index และ S&P 500")
-    inst_chart, inst_metrics = _institutional_analytics(hist)
+    inst_chart, inst_metrics, inst_errors = _institutional_analytics(hist)
     if not inst_chart.empty:
         chart_cols = [c for c in ["Portfolio", "BTC", "SET Index", "S&P 500"] if c in inst_chart.columns]
 
-        # ใช้ Altair แทน st.line_chart เพื่อไม่ให้แกน Y เริ่มที่ 0
-        # เพราะการ normalize เป็น 100 + ช่วงข้อมูลสั้นอาจทำให้เส้นอื่น
-        # ดูเหมือนหายไป ทั้งที่จริงอยู่ใกล้กันมาก
+        # ใช้ Altair และแยกเส้นด้วย dash + รูป marker เพื่อให้เส้นที่ค่าเท่ากัน
+        # (เช่น SET/S&P ที่ยังมีข้อมูลตลาดเพียงวันเดียว) ไม่ถูกเส้นอื่นกลบทับจนมองไม่เห็น
         try:
             import altair as alt
             chart_df = (
@@ -12620,23 +12277,70 @@ def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market
                 .melt("date", var_name="Series", value_name="Index")
                 .dropna(subset=["Index"])
             )
-            chart = (
-                alt.Chart(chart_df)
-                .mark_line(point=alt.OverlayMarkDef(size=45), strokeWidth=2.5)
-                .encode(
-                    x=alt.X("date:T", title=None, axis=alt.Axis(format="%d %b", labelAngle=0)),
-                    y=alt.Y("Index:Q", title="Index (Start = 100)", scale=alt.Scale(zero=False)),
-                    color=alt.Color("Series:N", title=None),
-                    tooltip=[
-                        alt.Tooltip("date:T", title="Date", format="%d %b %Y"),
-                        alt.Tooltip("Series:N", title="Series"),
-                        alt.Tooltip("Index:Q", title="Index", format=".2f"),
-                    ],
-                )
-                .properties(height=360)
-                .interactive()
+
+            # ลำดับคงที่ + dash ต่างกัน ทำให้ series ที่ซ้อนกันยังแยกออกจากกันได้
+            series_order = [c for c in ["Portfolio", "BTC", "SET Index", "S&P 500"] if c in chart_cols]
+            dash_range = [[1, 0], [8, 4], [3, 3], [12, 4]]
+            shape_range = ["circle", "diamond", "square", "triangle-up"]
+
+            base = alt.Chart(chart_df).encode(
+                x=alt.X(
+                    "date:T",
+                    title=None,
+                    axis=alt.Axis(
+                        format="%d %b",
+                        labelAngle=0,
+                        tickCount=min(6, max(2, len(chart_df["date"].unique()))),
+                        grid=False,
+                    ),
+                ),
+                y=alt.Y(
+                    "Index:Q",
+                    title="Index (Start = 100)",
+                    scale=alt.Scale(zero=False, padding=12),
+                ),
+                color=alt.Color(
+                    "Series:N",
+                    title=None,
+                    sort=series_order,
+                    legend=alt.Legend(orient="right"),
+                ),
+                detail="Series:N",
+                tooltip=[
+                    alt.Tooltip("date:T", title="Date", format="%d %b %Y"),
+                    alt.Tooltip("Series:N", title="Series"),
+                    alt.Tooltip("Index:Q", title="Index", format=".2f"),
+                ],
             )
+
+            lines = base.mark_line(strokeWidth=2.5).encode(
+                strokeDash=alt.StrokeDash(
+                    "Series:N",
+                    sort=series_order,
+                    scale=alt.Scale(domain=series_order, range=dash_range),
+                    legend=None,
+                )
+            )
+            points = base.mark_point(size=75, filled=True).encode(
+                shape=alt.Shape(
+                    "Series:N",
+                    sort=series_order,
+                    scale=alt.Scale(domain=series_order, range=shape_range),
+                    legend=None,
+                )
+            )
+
+            chart = (lines + points).properties(height=360).interactive()
             st.altair_chart(chart, use_container_width=True)
+
+            # ถ้าหลาย series มีค่าเดียวกันจริง ให้บอกผู้ใช้ตรง ๆ ว่าเป็นการซ้อนกัน
+            latest = chart_df.sort_values("date").groupby("Series", as_index=False).tail(1)
+            if len(latest) >= 2:
+                duplicated = latest.groupby("Index")["Series"].apply(list)
+                overlap_groups = [names for names in duplicated if len(names) > 1]
+                if overlap_groups:
+                    overlap_text = " · ".join(", ".join(names) for names in overlap_groups)
+                    st.caption(f"ℹ️ บางเส้นมีค่าเดียวกัน ณ จุดล่าสุดจึงซ้อนกันจริง: {overlap_text} — ใช้รูป marker และเส้นประแยกให้แล้ว")
         except Exception:
             # Fallback ถ้า Altair ใช้งานไม่ได้
             st.line_chart(inst_chart[chart_cols], height=360, use_container_width=True)
@@ -12652,8 +12356,13 @@ def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market
             st.metric("Correlation vs BTC", f"{inst_metrics['corr_btc']:.2f}",
                       help="Correlation of aligned daily snapshot returns with BTC.")
         st.caption(f"คำนวณจากข้อมูลที่จับคู่กันได้ {int(inst_metrics['obs'])} observations")
+        if inst_errors:
+            st.caption("⚠️ บาง Benchmark โหลดไม่ครบ: " +
+                       " · ".join(f"{k}: {v}" for k, v in inst_errors.items()))
     else:
         st.info("ยังสร้าง Benchmark Comparison ไม่ได้ — ต้องมี Snapshot ที่มีวันที่ทับซ้อนกับข้อมูลตลาดอย่างน้อย 2 จุด")
+        if inst_errors:
+            st.caption("รายละเอียด: " + " · ".join(f"{k}: {v}" for k, v in inst_errors.items()))
 
     st.markdown("### 📊 Portfolio Value")
     chart = hist.set_index("date")[["value"]].rename(columns={"value": "Portfolio Value (THB)"})
@@ -14102,8 +13811,6 @@ def _main_body() -> None:
             render_performance_analytics(cfg, data, market_df)
         elif nav == NAV_CASHFLOW:
             render_cash_flow_analytics(cfg, data, market_df)
-        elif nav == NAV_QUANT:
-            render_quant_research_lab(cfg, data, market_df)
         elif nav == NAV_TIMELINE:
             render_customer_timeline(cfg, data, market_df)
         elif nav == NAV_FACTSHEET_PRINT:
@@ -14380,6 +14087,11 @@ def require_login() -> bool:
     return True
 
 def main() -> None:
+    share_token = st.query_params.get("share")
+    if share_token:
+        render_investor_public_view(str(share_token))
+        return
+
     st.set_page_config(
         page_title="XSpring Dealer Suite",
         page_icon="\u267b\ufe0f",
