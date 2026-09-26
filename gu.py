@@ -11732,17 +11732,14 @@ def _fetch_institutional_benchmarks(start: Any, end: Any) -> tuple[pd.DataFrame,
 
 
 def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, float], dict[str, str]]:
-    """สร้าง Institutional Benchmark Comparison จากวันของ Portfolio Snapshot จริง
-    คืนค่าเพิ่ม errors dict เพื่อบอกว่า benchmark ไหนหาย เพราะอะไร (debug ได้)
+    """สร้าง Institutional Benchmark Comparison
+    Benchmark เดินตามปฏิทินตลาดของมันเอง (ไม่ถูกบีบให้เหลือแค่วัน snapshot ของ portfolio)
+    ส่วน portfolio จะเป็นเส้นขั้นบันได (forward-fill ระหว่าง snapshot) ซึ่งถูกต้องตามจริง
+    เพราะเรารู้มูลค่าพอร์ตแค่ ณ วันที่มี snapshot เท่านั้น
     """
-    empty_metrics = {
-        "beta_btc": 0.0,
-        "alpha_btc_annual": 0.0,
-        "corr_btc": 0.0,
-        "obs": 0.0,
-    }
+    empty_metrics = {"beta_btc": 0.0, "alpha_btc_annual": 0.0, "corr_btc": 0.0, "obs": 0.0}
 
-    if hist is None or hist.empty or len(hist) < 2:
+    if hist is None or hist.empty or len(hist) < 1:
         return pd.DataFrame(), empty_metrics, {}
 
     port = hist[["date", "value"]].copy()
@@ -11755,10 +11752,13 @@ def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str
             .set_index("date")
     )
 
-    if len(port) < 2:
+    if port.empty:
         return pd.DataFrame(), empty_metrics, {}
 
-    bench, bench_errors = _fetch_institutional_benchmarks(port.index.min(), port.index.max())
+    port_start = port.index.min()
+    port_end = max(port.index.max(), pd.Timestamp.now().normalize())
+
+    bench, bench_errors = _fetch_institutional_benchmarks(port_start, port_end)
     if bench is None or bench.empty:
         return pd.DataFrame(), empty_metrics, bench_errors
 
@@ -11767,46 +11767,53 @@ def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str
     bench = bench[~bench.index.duplicated(keep="last")].sort_index()
     bench = bench.apply(pd.to_numeric, errors="coerce")
 
-    # ffill ก่อน แล้ว bfill เพิ่ม เผื่อวัน snapshot แรกอยู่ก่อนข้อมูล benchmark ที่มี
-    aligned = bench.reindex(port.index, method="ffill")
-    aligned = aligned.bfill().ffill()
+    # ตัดช่วงให้อยู่ในกรอบเวลาที่ portfolio มีข้อมูล (ตั้งแต่ snapshot แรก ถึงวันนี้)
+    bench = bench[(bench.index >= port_start) & (bench.index <= port_end)]
 
-    comparison = pd.concat([port["value"].rename("Portfolio"), aligned], axis=1)
-    comparison = comparison.dropna(subset=["Portfolio"])
-
-    benchmark_cols = [c for c in ["BTC", "SET Index", "S&P 500"] if c in comparison.columns]
     for label in ["BTC", "SET Index", "S&P 500"]:
-        if label not in benchmark_cols:
+        if label not in bench.columns or bench[label].dropna().empty:
             bench_errors.setdefault(label, "ไม่มีข้อมูลราคาสำหรับช่วงเวลานี้")
 
-    if not benchmark_cols:
+    benchmark_cols = [c for c in ["BTC", "SET Index", "S&P 500"] if c in bench.columns and not bench[c].dropna().empty]
+    if not benchmark_cols and port.empty:
         return pd.DataFrame(), empty_metrics, bench_errors
 
-    levels = pd.DataFrame(index=comparison.index)
-    portfolio_base = float(comparison["Portfolio"].iloc[0])
-    if portfolio_base > 0:
-        levels["Portfolio"] = comparison["Portfolio"] / portfolio_base * 100.0
+    # รวมปฏิทิน: ทุกวันที่ benchmark มีเทรด + ทุกวันที่มี snapshot จริง
+    all_dates = bench.index.union(port.index).sort_values()
+    if all_dates.empty:
+        return pd.DataFrame(), empty_metrics, bench_errors
 
+    levels = pd.DataFrame(index=all_dates)
+
+    # Portfolio: forward-fill ระหว่าง snapshot (ถูกต้องแล้ว เพราะรู้ค่าจริงแค่วันที่ snapshot)
+    port_on_all = port["value"].reindex(all_dates).ffill()
+    port_on_all = port_on_all.dropna()
+    if not port_on_all.empty and float(port_on_all.iloc[0]) != 0:
+        base_p = float(port_on_all.iloc[0])
+        levels.loc[port_on_all.index, "Portfolio"] = port_on_all / base_p * 100.0
+
+    # Benchmark: ใช้ค่าตามปฏิทินตลาดจริงของมันเอง ไม่ ffill ทับวันที่ไม่มีเทรดของ portfolio
     for col in benchmark_cols:
-        s = comparison[col].dropna()
-        # ผ่อนเกณฑ์จาก >=2 เป็น >=1 จุด เพื่อให้เห็น benchmark แม้ snapshot สั้นมาก
+        s = bench[col].dropna()
         if len(s) >= 1 and float(s.iloc[0]) != 0:
             base = float(s.iloc[0])
-            levels[col] = comparison[col] / base * 100.0
+            levels.loc[s.index, col] = s / base * 100.0
         else:
-            bench_errors.setdefault(col, "มีข้อมูลไม่พอสำหรับ normalize (ราคาเริ่มต้นเป็น 0 หรือไม่มีข้อมูล)")
+            bench_errors.setdefault(col, "มีข้อมูลไม่พอสำหรับ normalize")
 
-    levels = levels.dropna(subset=["Portfolio"])
-    if levels.empty:
+    levels = levels.dropna(how="all")
+    if levels.empty or "Portfolio" not in levels.columns:
         return pd.DataFrame(), empty_metrics, bench_errors
 
-    returns = comparison.pct_change().replace([np.inf, -np.inf], np.nan)
+    # ---- Alpha/Beta vs BTC: ใช้เฉพาะวันที่ทั้งคู่มีข้อมูลจริง (ไม่ใช่ ffill) ----
     metrics = dict(empty_metrics)
-    if "BTC" in returns.columns:
-        btc_pair = returns[["Portfolio", "BTC"]].dropna()
-        if len(btc_pair) >= 2:
-            x = btc_pair["BTC"].astype(float)
-            y = btc_pair["Portfolio"].astype(float)
+    if "BTC" in bench.columns:
+        btc_ret = bench["BTC"].dropna().pct_change().dropna()
+        port_ret_on_bench_days = port["value"].reindex(btc_ret.index, method="ffill").pct_change().dropna()
+        common_idx = btc_ret.index.intersection(port_ret_on_bench_days.index)
+        if len(common_idx) >= 2:
+            x = btc_ret.loc[common_idx].astype(float)
+            y = port_ret_on_bench_days.loc[common_idx].astype(float)
             var_x = float(x.var(ddof=1))
             if var_x > 0 and x.std(ddof=1) > 0 and y.std(ddof=1) > 0:
                 beta = float(y.cov(x) / var_x)
@@ -11816,10 +11823,11 @@ def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str
                     "beta_btc": beta,
                     "alpha_btc_annual": alpha,
                     "corr_btc": corr,
-                    "obs": float(len(btc_pair)),
+                    "obs": float(len(common_idx)),
                 })
 
     return levels, metrics, bench_errors
+
 
 def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
     """Portfolio performance analytics derived from stored portfolio snapshots."""
