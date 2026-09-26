@@ -11644,6 +11644,115 @@ def render_cash_flow_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_d
     st.info("Net Contribution คือเงินที่เติมเข้าพอร์ตสุทธิจากการถอน ส่วน Portfolio Value คือมูลค่าพอร์ตปัจจุบัน ทั้งสองตัวเลขไม่ควรถูกตีความว่าเป็นผลตอบแทนจากการลงทุนโดยตรง")
 
 
+@_cache_data(ttl=900, show_spinner=False)
+def _fetch_institutional_benchmarks(start: Any, end: Any) -> pd.DataFrame:
+    """โหลด benchmark daily closes จาก Yahoo Finance สำหรับ Institutional Analytics.
+    BTC ใช้ BTC-USD, SET ใช้ ^SET.BK และ S&P 500 ใช้ ^GSPC.
+    คืนค่าเป็น DataFrame index=date; columns=BTC, SET, SP500.
+    """
+    if "yf" not in globals() or yf is None:
+        return pd.DataFrame()
+    try:
+        start_ts = pd.Timestamp(start).normalize()
+        end_ts = pd.Timestamp(end).normalize() + pd.Timedelta(days=1)
+        tickers = ["BTC-USD", "^SET.BK", "^GSPC"]
+        raw = yf.download(
+            tickers,
+            start=start_ts,
+            end=end_ts,
+            auto_adjust=False,
+            progress=False,
+            group_by="column",
+        )
+        if raw is None or raw.empty:
+            return pd.DataFrame()
+
+        if isinstance(raw.columns, pd.MultiIndex):
+            # yfinance may return either (Price, Ticker) or (Ticker, Price).
+            if "Close" in raw.columns.get_level_values(0):
+                close = raw["Close"].copy()
+            elif "Close" in raw.columns.get_level_values(1):
+                close = raw.xs("Close", axis=1, level=1).copy()
+            else:
+                return pd.DataFrame()
+        else:
+            if "Close" not in raw.columns:
+                return pd.DataFrame()
+            close = raw[["Close"]].copy()
+            close.columns = [tickers[0]]
+
+        rename = {
+            "BTC-USD": "BTC",
+            "^SET.BK": "SET Index",
+            "^GSPC": "S&P 500",
+        }
+        close = close.rename(columns=rename)
+        keep = [c for c in ["BTC", "SET Index", "S&P 500"] if c in close.columns]
+        if not keep:
+            return pd.DataFrame()
+        close = close[keep]
+        close.index = pd.to_datetime(close.index).tz_localize(None).normalize()
+        close = close[~close.index.duplicated(keep="last")].sort_index()
+        return close.dropna(how="all")
+    except Exception:
+        return pd.DataFrame()
+
+
+def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, float]]:
+    """สร้างดัชนีผลตอบแทนและ Alpha/Beta ต่อ BTC จาก snapshot returns."""
+    empty_metrics = {
+        "beta_btc": 0.0,
+        "alpha_btc_annual": 0.0,
+        "corr_btc": 0.0,
+        "obs": 0.0,
+    }
+    if hist is None or hist.empty or len(hist) < 2:
+        return pd.DataFrame(), empty_metrics
+
+    bench = _fetch_institutional_benchmarks(hist["date"].min(), hist["date"].max())
+    if bench.empty:
+        return pd.DataFrame(), empty_metrics
+
+    port = hist[["date", "value"]].copy()
+    port["date"] = pd.to_datetime(port["date"]).dt.normalize()
+    port = port.drop_duplicates("date").sort_values("date").set_index("date")
+    port_ret = port["value"].pct_change().rename("Portfolio")
+
+    common = pd.concat([port_ret, bench.pct_change()], axis=1, join="inner").dropna()
+    if common.empty:
+        return pd.DataFrame(), empty_metrics
+
+    # Performance chart: each series starts at 100 on its first common date.
+    levels = pd.concat([port["value"].rename("Portfolio") / port["value"].iloc[0] * 100,
+                        bench], axis=1).dropna(how="all")
+    levels = levels.ffill()
+    for col in [c for c in levels.columns if c in bench.columns]:
+        first = levels[col].dropna()
+        if not first.empty and first.iloc[0] != 0:
+            levels[col] = levels[col] / first.iloc[0] * 100
+    # Use a common visible window so all four lines start together.
+    common_levels = levels.dropna(subset=["Portfolio"], how="any")
+    if not common_levels.empty:
+        first_valid = common_levels[[c for c in ["Portfolio", "BTC", "SET Index", "S&P 500"] if c in common_levels.columns]].dropna(how="all").index.min()
+        if first_valid is not None:
+            common_levels = common_levels.loc[first_valid:]
+
+    metrics = dict(empty_metrics)
+    if "BTC" in common.columns and len(common) >= 2:
+        x = common["BTC"].astype(float)
+        y = common["Portfolio"].astype(float)
+        var_x = float(x.var(ddof=1))
+        if var_x > 0:
+            beta = float(y.cov(x) / var_x)
+            # Annualized alpha with rf=0, based on mean daily returns.
+            alpha = float((y.mean() - beta * x.mean()) * 252 * 100)
+            corr = float(y.corr(x)) if x.std(ddof=1) > 0 and y.std(ddof=1) > 0 else 0.0
+            metrics.update({"beta_btc": beta, "alpha_btc_annual": alpha, "corr_btc": corr,
+                            "obs": float(len(common))})
+
+    return common_levels, metrics
+
+
 def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
     """Portfolio performance analytics derived from stored portfolio snapshots."""
     sim = st.session_state.get("sim", {})
@@ -11713,6 +11822,27 @@ def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market
     metric_card(c2, "Total Return", f"{total_return:+.2f}%", total_return, f"From {hist['date'].iloc[0].date()}")
     metric_card(c3, "Max Drawdown", f"{max_dd:.2f}%", max_dd, "Peak-to-trough")
     metric_card(c4, "Volatility", f"{volatility:.2f}%", None, "Annualized estimate")
+
+    st.markdown("### 📊 Institutional Benchmark Comparison")
+    st.caption("ดัชนีเริ่มต้น = 100 • Portfolio ใช้ Snapshot จริง • Benchmark: BTC, SET Index และ S&P 500")
+    inst_chart, inst_metrics = _institutional_analytics(hist)
+    if not inst_chart.empty:
+        chart_cols = [c for c in ["Portfolio", "BTC", "SET Index", "S&P 500"] if c in inst_chart.columns]
+        st.line_chart(inst_chart[chart_cols], height=340, use_container_width=True)
+
+        ia, ib, ic = st.columns(3)
+        with ia:
+            st.metric("Alpha vs BTC", f"{inst_metrics['alpha_btc_annual']:+.2f}%",
+                      help="Annualized alpha estimate from aligned snapshot returns; assumes risk-free rate = 0%.")
+        with ib:
+            st.metric("Beta vs BTC", f"{inst_metrics['beta_btc']:.2f}",
+                      help="Sensitivity of portfolio snapshot returns to BTC returns. 1.00 means similar movement magnitude.")
+        with ic:
+            st.metric("Correlation vs BTC", f"{inst_metrics['corr_btc']:.2f}",
+                      help="Correlation of aligned daily snapshot returns with BTC.")
+        st.caption(f"คำนวณจากข้อมูลที่จับคู่กันได้ {int(inst_metrics['obs'])} observations")
+    else:
+        st.info("ยังสร้าง Benchmark Comparison ไม่ได้ — ต้องมี Snapshot ที่มีวันที่ทับซ้อนกับข้อมูลตลาดอย่างน้อย 2 จุด")
 
     st.markdown("### 📊 Portfolio Value")
     chart = hist.set_index("date")[["value"]].rename(columns={"value": "Portfolio Value (THB)"})
