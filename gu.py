@@ -7128,6 +7128,12 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         with st.container(border=True):
             _order_panel_live(cfg, sim, asset, mid_now, data, current_date_val, ctx)
 
+        with st.expander("🎙️ สั่งซื้อขายด้วยเสียง/ข้อความ (AI)", expanded=False):
+            try:
+                render_voice_trade_panel(sim, cfg, data, ctx)
+            except Exception as exc:
+                st.error(f"Voice Command Trade ใช้งานไม่ได้: {exc}")
+
         with st.expander("🎲 เครื่องมือจำลอง — สุ่มออเดอร์ / รีเซ็ต", expanded=False):
             st.caption("สุ่มออเดอร์ = ลูกค้าคนอื่นในตลาด ไม่แตะกระเป๋าของคุณ · "
                        "สุ่มทั้งเหรียญ วันที่ ฝั่งซื้อ/ขาย และจำนวนเงิน · "
@@ -12168,6 +12174,346 @@ def render_smart_alerts(cfg: dict[str, Any], data: pd.DataFrame,
         "เกณฑ์แจ้งเตือนสามารถปรับได้เอง และระบบจะไม่ส่งคำสั่งซื้อขาย"
     )
 
+# =========================================================================
+# 1) AI PORTFOLIO NARRATOR
+# =========================================================================
+
+NARRATOR_SYSTEM = (
+    "คุณคือผู้บรรยายกีฬาที่ผันตัวมาบรรยายผลงานพอร์ตคริปโท พูดสนุก มีจังหวะ ตื่นเต้นแบบนักพากย์ "
+    "แต่ 'ห้ามกุตัวเลขเอง' ให้ใช้เฉพาะตัวเลขที่มึงให้ไปในพรอมต์เท่านั้น ห้ามแนะนำซื้อ/ขาย "
+    "ห้ามทำนายราคาอนาคต ตอบเป็นภาษาไทย 3-5 ประโยค กระชับ อ่านจบไวๆ ตอนเช้า"
+)
+
+
+def _compute_daily_highlights(snap: dict, market_df: pd.DataFrame) -> dict:
+    """รวบรวมตัวเลขจริงจาก Portfolio Snapshot + ราคาตลาดวันนี้ ให้ Gemini เอาไปบรรยาย
+    (ไม่ให้ Gemini คิดตัวเลขเอง กันหลอน)
+    """
+    rows = snap.get("rows", []) or []
+    pct_map = {}
+    if market_df is not None and not market_df.empty:
+        for _, r in market_df.iterrows():
+            pct_map[str(r.get("symbol", "")).upper()] = float(r.get("pct_change", 0) or 0)
+
+    movers = []
+    for r in rows:
+        sym = str(r.get("asset", "")).upper()
+        pct = pct_map.get(sym)
+        if pct is not None:
+            movers.append({
+                "asset": sym,
+                "pct_24h": round(pct, 2),
+                "value_thb": round(float(r.get("market_value", 0) or 0), 2),
+                "allocation_pct": round(float(r.get("allocation_pct", 0) or 0), 1),
+            })
+    movers.sort(key=lambda x: x["pct_24h"], reverse=True)
+
+    weighted_pct = 0.0
+    total_alloc = sum(m["allocation_pct"] for m in movers)
+    if total_alloc > 0:
+        weighted_pct = sum(m["pct_24h"] * m["allocation_pct"] for m in movers) / total_alloc
+
+    return {
+        "portfolio_value_thb": round(float(snap.get("total_value_thb", 0) or 0), 2),
+        "unrealized_pnl_thb": round(float(snap.get("unrealized_pnl_thb", 0) or 0), 2),
+        "realized_pnl_thb": round(float(snap.get("realized_pnl_thb", 0) or 0), 2),
+        "weighted_24h_pct": round(weighted_pct, 2),
+        "top_gainer": movers[0] if movers else None,
+        "top_loser": movers[-1] if len(movers) > 1 else None,
+        "holdings_count": len(movers),
+    }
+
+
+def generate_portfolio_narration(sim: dict, snap: dict, market_df: pd.DataFrame,
+                                 api_key: str, force: bool = False) -> str:
+    """สร้างบทบรรยายพอร์ตวันนี้ — cache ไว้ 1 ครั้งต่อวันใน sim (ไม่ยิง Gemini ทุก rerun)"""
+    today_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    cache = sim.setdefault("ai_narration_cache", {})
+
+    if not force and cache.get("date") == today_key and cache.get("text"):
+        return cache["text"]
+
+    highlights = _compute_daily_highlights(snap, market_df)
+    if highlights["holdings_count"] == 0:
+        text = "วันนี้พอร์ตยังไม่มีสินทรัพย์คริปโทให้บรรยายเลยครับ ไปเปิดสถานะแรกกันก่อน!"
+        cache.update(date=today_key, text=text)
+        return text
+
+    prompt = (
+        "นี่คือข้อมูลพอร์ตวันนี้ (ห้ามเติมตัวเลขนอกเหนือจากนี้):\n"
+        f"{json.dumps(highlights, ensure_ascii=False)}\n\n"
+        "ช่วยบรรยายสั้นๆ สไตล์นักข่าวกีฬา โดยพูดถึง weighted_24h_pct เป็นทิศทางรวมของพอร์ต "
+        "top_gainer คือดาวเด่นวันนี้ top_loser (ถ้ามี) คือตัวถ่วง แล้วปิดท้ายด้วยมูลค่าพอร์ตรวม"
+    )
+    try:
+        text = _call_gemini(prompt, api_key, NARRATOR_SYSTEM)
+    except Exception as e:
+        text = f"บรรยายพอร์ตไม่สำเร็จตอนนี้ ({e})"
+
+    cache.update(date=today_key, text=text, highlights=highlights)
+    return text
+
+
+def render_ai_narrator_card(sim: dict, snap: dict, market_df: pd.DataFrame) -> None:
+    """การ์ด AI Portfolio Narrator สำหรับวาง Dashboard บนสุด"""
+    try:
+        api_key = st.secrets["gemini_api_key"]
+    except Exception:
+        api_key = __import__("os").environ.get("GEMINI_API_KEY", "")
+
+    if not api_key:
+        return  # ไม่มี key ก็ไม่ต้องโชว์การ์ด ไม่รบกวนหน้าจอ
+
+    c1, c2 = st.columns([6, 1])
+    with c1:
+        st.markdown(
+            '<div style="font-size:.85rem;font-weight:700;color:#EAECEF;'
+            'display:flex;align-items:center;gap:6px;">🎙️ AI Portfolio Narrator</div>',
+            unsafe_allow_html=True,
+        )
+    with c2:
+        refresh = st.button("🔄", key="ai_narrator_refresh", help="สรุปใหม่")
+
+    with st.spinner("กำลังบรรยาย…") if refresh else _nullcontext():
+        text = generate_portfolio_narration(sim, snap, market_df, api_key, force=refresh)
+
+    st.markdown(
+        f'<div style="background:linear-gradient(135deg,rgba(14,203,129,.08),rgba(24,26,32,.9));'
+        f'border:1px solid #2b3139;border-left:3px solid #0ecb81;border-radius:10px;'
+        f'padding:14px 16px;margin:6px 0 16px;color:#EAECEF;font-size:.92rem;'
+        f'line-height:1.7;">🎙️ {text}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+class _nullcontext:
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+
+# =========================================================================
+# 2) VOICE COMMAND TRADE
+# =========================================================================
+
+TRADE_PARSE_SYSTEM = (
+    "คุณคือตัวแปลงคำสั่งซื้อขายคริปโทเป็น JSON เท่านั้น ห้ามพูดอย่างอื่นเด็ดขาด "
+    "ห้ามมี markdown, ห้ามมี ```json, ตอบเป็น raw JSON บรรทัดเดียวเท่านั้น\n"
+    "โครงสร้างที่ต้องตอบ:\n"
+    '{"action": "buy"|"sell"|"unknown", "asset": "<SYMBOL ตัวใหญ่>", '
+    '"amount_thb": <ตัวเลขหรือ null>, "qty": <ตัวเลขหรือ null>}\n\n'
+    "กติกา:\n"
+    "- ถ้าประโยคบอกจำนวนเป็นเงินบาท (เช่น 'ซื้อ BTC 10000 บาท') ให้ใส่ amount_thb เป็นตัวเลข "
+    "และ qty เป็น null\n"
+    "- ถ้าประโยคบอกจำนวนเหรียญ (เช่น 'ขาย 0.01 BTC') ให้ใส่ qty เป็นตัวเลข และ amount_thb เป็น null\n"
+    "- ถ้าไม่เข้าใจ หรือไม่มีเหรียญ/จำนวนชัดเจน ให้ตอบ action เป็น 'unknown'\n"
+    "- asset ต้องเป็นสัญลักษณ์เหรียญเท่านั้น เช่น BTC, ETH, SOL, DOGE, ADA, HBAR, LINK, XLM, XRP, USDT, USDC"
+)
+
+
+def _call_gemini(prompt: str, api_key: str, system_text: str) -> str:
+    """เรียก Gemini แบบเดียวกับ ask_ai() ในไฟล์หลัก — แยกไว้ให้ไฟล์นี้ทำงานได้เอง
+    ถ้าไฟล์หลักมี ask_ai() อยู่แล้วจะใช้ร่วมกันได้เลยโดยไม่ต้องพึ่งฟังก์ชันนี้"""
+    AI_MODEL = "gemini-3-flash-preview"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{AI_MODEL}:generateContent?key={api_key}"
+    payload = {
+        "systemInstruction": {"parts": [{"text": system_text}]},
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"maxOutputTokens": 400, "thinkingConfig": {"thinkingLevel": "low"}},
+    }
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        result = json.loads(resp.read().decode("utf-8"))
+    return result["candidates"][0]["content"]["parts"][0]["text"]
+
+
+def parse_trade_command(text: str, api_key: str, supported_assets: list) -> dict:
+    """แปลงประโยคภาษาคน -> {"action","asset","amount_thb","qty"} คืน action='unknown' ถ้าแปลไม่ได้"""
+    text = (text or "").strip()
+    if not text:
+        return {"action": "unknown"}
+    try:
+        raw = _call_gemini(text, api_key, TRADE_PARSE_SYSTEM)
+        raw = re.sub(r"^```json|```$", "", raw.strip(), flags=re.MULTILINE).strip()
+        data = json.loads(raw)
+    except Exception:
+        return {"action": "unknown"}
+
+    action = str(data.get("action", "unknown")).lower()
+    asset = str(data.get("asset", "") or "").upper().strip()
+    if action not in ("buy", "sell") or asset not in supported_assets:
+        return {"action": "unknown"}
+
+    amount_thb = data.get("amount_thb")
+    qty = data.get("qty")
+    try:
+        amount_thb = float(amount_thb) if amount_thb is not None else None
+    except (TypeError, ValueError):
+        amount_thb = None
+    try:
+        qty = float(qty) if qty is not None else None
+    except (TypeError, ValueError):
+        qty = None
+
+    if amount_thb is None and qty is None:
+        return {"action": "unknown"}
+
+    return {"action": action, "asset": asset, "amount_thb": amount_thb, "qty": qty}
+
+
+# ---- ปุ่มไมค์: ใช้ Web Speech API ของเบราว์เซอร์ (รองรับ Chrome/Edge เป็นหลัก) ----
+_VOICE_MIC_JS = r"""<script>
+(function() {
+  try {
+    const doc = window.parent.document;
+    const SR = window.parent.webkitSpeechRecognition || window.parent.SpeechRecognition;
+    if (!SR) {
+      alert("เบราว์เซอร์นี้ไม่รองรับการพูด ลองใช้ Chrome หรือ Edge");
+      return;
+    }
+    const rec = new SR();
+    rec.lang = "th-TH";
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+
+    // หา text_input ของ Streamlit จาก aria-label ที่ตรงกับ label ของ st.text_input
+    function findInput() {
+      const inputs = doc.querySelectorAll('input[type="text"], textarea');
+      for (const el of inputs) {
+        if (el.getAttribute("aria-label") === "__TARGET_LABEL__") return el;
+      }
+      return null;
+    }
+
+    rec.onresult = function(e) {
+      const said = e.results[0][0].transcript;
+      const el = findInput();
+      if (el) {
+        const proto = el.tagName === "TEXTAREA"
+          ? window.parent.HTMLTextAreaElement.prototype
+          : window.parent.HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, "value");
+        setter.set.call(el, said);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    };
+    rec.onerror = function(e) { console.warn("speech error", e.error); };
+    rec.start();
+  } catch (err) { console.warn(err); }
+})();
+</script>"""
+
+
+def render_voice_mic_button(target_label: str, key: str) -> None:
+    """ปุ่ม 🎤 — กดแล้วพูดได้เลย ข้อความจะไปเติมใน st.text_input ที่มี label ตรงกับ target_label
+    หมายเหตุ: ผู้ใช้ต้องกดปุ่ม "แปลงคำสั่ง" เองอีกทีหลังพูดเสร็จ (Streamlit ไม่ auto-rerun จาก JS)
+    """
+    if st.button("🎤 พูดคำสั่ง", key=key, help="รองรับ Chrome/Edge เท่านั้น"):
+        components.html(
+            _VOICE_MIC_JS.replace("__TARGET_LABEL__", target_label),
+            height=0, width=0,
+        )
+        st.caption("🎙️ กำลังฟัง… พูดแล้วรอสักครู่ ข้อความจะขึ้นในช่องด้านบน")
+
+
+def render_voice_trade_panel(sim: dict, cfg: dict, data: pd.DataFrame, ctx: dict) -> None:
+    """Panel เต็ม: พิมพ์/พูดคำสั่ง -> Gemini แปลง -> ยืนยัน -> ส่งออเดอร์จริงผ่าน execute_order
+    ต้องมีตัวแปร/ฟังก์ชันจากไฟล์หลัก: execute_order, _push_undo_snapshot, can_trade,
+    fmt_baht, LOCAL_TRADING_FEE_PCT, SUPPORTED_ASSETS
+    """
+    from __main__ import (  # เรียกจากไฟล์หลักที่รันอยู่ ถ้า import ไม่ได้ให้ก๊อปฟังก์ชันเข้าไฟล์เดียวกันแทน
+        execute_order, _push_undo_snapshot, can_trade, fmt_baht,
+        LOCAL_TRADING_FEE_PCT, SUPPORTED_ASSETS,
+    )
+
+    try:
+        api_key = st.secrets["gemini_api_key"]
+    except Exception:
+        api_key = __import__("os").environ.get("GEMINI_API_KEY", "")
+
+    st.markdown("#### 🎙️ Voice / Text Command Trade")
+    if not api_key:
+        st.info("ยังไม่ได้ตั้งค่า gemini_api_key — ใช้ฟีเจอร์นี้ไม่ได้")
+        return
+
+    label = "พิมพ์หรือพูดคำสั่ง เช่น 'ซื้อ BTC 10000 บาท'"
+    c1, c2 = st.columns([4, 1])
+    with c1:
+        cmd_text = st.text_input(label, key="voice_cmd_text", label_visibility="visible")
+    with c2:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        render_voice_mic_button(label, key="voice_cmd_mic_btn")
+
+    if st.button("🧠 แปลงคำสั่งด้วย AI", key="voice_cmd_parse", disabled=not cmd_text.strip()):
+        st.session_state["voice_cmd_parsed"] = parse_trade_command(
+            cmd_text, api_key, SUPPORTED_ASSETS)
+
+    parsed = st.session_state.get("voice_cmd_parsed")
+    if not parsed:
+        return
+
+    if parsed.get("action") == "unknown":
+        st.warning("AI แปลคำสั่งนี้ไม่ออก ลองพูด/พิมพ์ให้ชัดขึ้น เช่น 'ซื้อ ETH 5000 บาท'")
+        return
+
+    action = parsed["action"]
+    asset = parsed["asset"]
+    amount_thb = parsed.get("amount_thb")
+    qty = parsed.get("qty")
+
+    st.markdown(
+        f'<div style="background:#181a20;border:1px solid #2b3139;border-radius:10px;'
+        f'padding:12px 14px;margin:8px 0;color:#EAECEF;font-size:.88rem;">'
+        f'AI เข้าใจว่า: <b style="color:{"#0ecb81" if action=="buy" else "#f6465d"}">'
+        f'{"ซื้อ" if action == "buy" else "ขาย"}</b> {asset} '
+        f'{f"จำนวน {amount_thb:,.2f} บาท" if amount_thb else f"จำนวน {qty:,.8f} เหรียญ"}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    if not can_trade():
+        st.caption("🔒 บัญชี Viewer ไม่สามารถส่งคำสั่งซื้อขายได้")
+        return
+
+    cc1, cc2 = st.columns(2)
+    confirm = cc1.button("✅ ยืนยันส่งคำสั่ง", key="voice_cmd_confirm", type="primary", use_container_width=True)
+    cancel = cc2.button("❌ ยกเลิก", key="voice_cmd_cancel", use_container_width=True)
+
+    if cancel:
+        st.session_state.pop("voice_cmd_parsed", None)
+        st.session_state["voice_cmd_text"] = ""
+        st.rerun()
+
+    if confirm:
+        current_date_val = pd.to_datetime(data.index[-1])
+        px_row = data.loc[current_date_val]
+
+        if asset != cfg.get("asset"):
+            st.error(
+                f"ตอนนี้ระบบ sim กำลังดูราคา {cfg.get('asset')} อยู่ "
+                f"กรุณาเปลี่ยนเหรียญในแถบซ้ายเป็น {asset} ก่อน แล้วค่อยยืนยันคำสั่งนี้อีกครั้ง"
+            )
+            return
+
+        if amount_thb is not None:
+            _push_undo_snapshot(sim)
+            execute_order(sim, action, float(amount_thb), current_date_val, px_row, ctx)
+        else:
+            spot = float(px_row["Global_USD"]) * float(px_row["USDTHB"]) * (1 + cfg["local_premium"])
+            est_amount_thb = qty * spot
+            _push_undo_snapshot(sim)
+            execute_order(sim, action, float(est_amount_thb), current_date_val, px_row, ctx)
+
+        st.session_state.pop("voice_cmd_parsed", None)
+        st.session_state["voice_cmd_text"] = ""
+        st.success("ส่งคำสั่งเรียบร้อย!")
+        st.rerun()
+
+
+
+
 def render_dashboard(cfg: dict[str, Any], data: pd.DataFrame,
                      market_df: Optional[pd.DataFrame] = None) -> None:
     st.markdown(DASHBOARD_CSS, unsafe_allow_html=True)
@@ -12232,6 +12578,14 @@ def render_dashboard(cfg: dict[str, Any], data: pd.DataFrame,
         f'</div>',
         unsafe_allow_html=True,
     )
+
+    # ---- AI Portfolio Narrator ----
+    try:
+        narrator_snap = portfolio_snapshot(sim, price_thb_map)
+        render_ai_narrator_card(sim, narrator_snap, market_df)
+    except Exception as exc:
+        # AI feature must never break the existing Dashboard.
+        st.caption(f"AI Portfolio Narrator unavailable: {exc}")
 
     # ---- Portfolio Performance chart ----
     st.markdown('<div class="dash-chart-card">'
