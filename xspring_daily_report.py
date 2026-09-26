@@ -27,43 +27,110 @@ def report_today_bangkok() -> date:
 
 
 def load_sim() -> dict:
-    """โหลด sim_state จากไฟล์ก่อน; ถ้าไม่มีให้โหลดจาก Supabase."""
+    """โหลด state ล่าสุดจาก Supabase ก่อน แล้วค่อย fallback เป็นไฟล์ local.
+
+    GitHub Actions ไม่ควรใช้ sim_state.json เก่าที่ค้างอยู่ใน runner ถ้ามี
+    Supabase persistence พร้อมใช้งาน เพราะ wallet/order ล่าสุดอยู่บน cloud.
+    """
+    url = env("SUPABASE_URL")
+    key = env("SUPABASE_KEY")
+    actor = env("XSPRING_REPORT_ACTOR")
+
+    if url and key and actor:
+        try:
+            import requests
+
+            res = requests.get(
+                f"{url.rstrip('/')}/rest/v1/sim_state",
+                params={
+                    "select": "data",
+                    "actor": f"eq.{actor}",
+                    "limit": "1",
+                },
+                headers={
+                    "apikey": key,
+                    "Authorization": f"Bearer {key}",
+                },
+                timeout=30,
+            )
+            res.raise_for_status()
+            rows = res.json()
+            if rows and isinstance(rows[0].get("data"), dict):
+                data = rows[0]["data"]
+                print(
+                    f"[state] loaded from Supabase actor={actor} "
+                    f"orders={len(data.get('orders', []) or [])} "
+                    f"customer_coins={len(data.get('customer_coins', {}) or {})}"
+                )
+                return data
+            print(f"[state] Supabase returned no row for actor={actor}")
+        except Exception as exc:
+            print(f"[state] Supabase load failed: {exc}")
+
     path = Path(env("XSPRING_SIM_STATE", str(BASE / "sim_state.json")))
     if path.is_file():
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
+            if isinstance(data, dict):
+                print(
+                    f"[state] loaded from local file {path} "
+                    f"orders={len(data.get('orders', []) or [])} "
+                    f"customer_coins={len(data.get('customer_coins', {}) or {})}"
+                )
+                return data
         except Exception as exc:
-            raise RuntimeError(f"อ่าน sim state ไม่สำเร็จ: {exc}") from exc
-
-    url = env("SUPABASE_URL")
-    key = env("SUPABASE_KEY")
-    actor = env("XSPRING_REPORT_ACTOR")
-    if url and key and actor:
-        import requests
-
-        res = requests.get(
-            f"{url.rstrip('/')}/rest/v1/sim_state",
-            params={
-                "select": "data",
-                "actor": f"eq.{actor}",
-                "limit": "1",
-            },
-            headers={
-                "apikey": key,
-                "Authorization": f"Bearer {key}",
-            },
-            timeout=30,
-        )
-        res.raise_for_status()
-        rows = res.json()
-        if rows and isinstance(rows[0].get("data"), dict):
-            return rows[0]["data"]
+            print(f"[state] local sim state load failed: {exc}")
 
     raise FileNotFoundError(
-        "ไม่พบ sim_state.json และไม่มี Supabase config "
-        "(SUPABASE_URL / SUPABASE_KEY / XSPRING_REPORT_ACTOR) ครบ"
+        "ไม่พบข้อมูลพอร์ต: Supabase query ไม่ได้ข้อมูล และไม่มี sim_state.json "
+        "(ตรวจ SUPABASE_URL / SUPABASE_KEY / XSPRING_REPORT_ACTOR)"
     )
+
+
+def get_customer_holdings(sim: dict) -> dict[str, float]:
+    """คืนจำนวนเหรียญลูกค้าจาก wallet ปัจจุบัน; fallback เป็น portfolio ledger."""
+    raw = sim.get("customer_coins")
+    if isinstance(raw, dict):
+        holdings = {}
+        for asset, qty in raw.items():
+            try:
+                q = float(qty or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if q > 0:
+                holdings[str(asset).upper()] = q
+        if holdings:
+            return holdings
+
+    # บัญชีรุ่นเก่าอาจไม่มี customer_coins แต่มี portfolio_ledger แล้ว
+    ledger = sim.get("portfolio_ledger")
+    if isinstance(ledger, list):
+        holdings: dict[str, float] = {}
+        for tx in ledger:
+            if not isinstance(tx, dict):
+                continue
+            typ = str(tx.get("type", "")).upper()
+            asset = str(tx.get("asset", "")).upper().strip()
+            if not asset or asset == "THB" or typ not in {"BUY", "SELL"}:
+                continue
+            try:
+                qty = float(tx.get("qty", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+            holdings[asset] = holdings.get(asset, 0.0) + qty
+        holdings = {k: v for k, v in holdings.items() if v > 1e-12}
+        if holdings:
+            return holdings
+
+    # รองรับ state รุ่นเก่ามาก
+    legacy = sim.get("inv_coins")
+    if isinstance(legacy, dict):
+        return {
+            str(k).upper(): float(v or 0.0)
+            for k, v in legacy.items()
+            if float(v or 0.0) > 0
+        }
+    return {}
 
 
 def load_prices(assets: list[str]) -> dict[str, float]:
@@ -224,12 +291,13 @@ def build_report(sim: dict, report_date: date):
         if not nc_series.empty:
             latest_nc = float(nc_series.iloc[-1])
 
-    assets = list((sim.get("inv_coins") or {}).keys())
+    holdings = get_customer_holdings(sim)
+    assets = list(holdings.keys())
     prices = load_prices(assets)
     target = float(sim.get("target_thb", 0.0) or 0.0)
 
     exposure_rows = []
-    for asset, quantity in (sim.get("inv_coins") or {}).items():
+    for asset, quantity in holdings.items():
         qty = float(quantity or 0.0)
         price = float(prices.get(str(asset).upper(), 0.0))
         stock_value = qty * price
