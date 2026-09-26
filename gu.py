@@ -12540,6 +12540,11 @@ def render_voice_trade_panel(sim: dict, cfg: dict, data: pd.DataFrame, ctx: dict
         st.info("ยังไม่ได้ตั้งค่า gemini_api_key — ใช้ฟีเจอร์นี้ไม่ได้")
         return
 
+    # Streamlit ห้ามแก้ session_state ของ widget หลังจาก widget ถูกสร้างแล้ว
+    # จึงเคลียร์ช่องคำสั่ง "ก่อน" สร้าง text_input ในรอบถัดไป
+    if st.session_state.pop("_clear_voice_cmd_text", False):
+        st.session_state["voice_cmd_text"] = ""
+
     label = "พิมพ์หรือพูดคำสั่ง เช่น 'ซื้อ BTC 10000 บาท'"
     c1, c2 = st.columns([4, 1])
     with c1:
@@ -12585,7 +12590,7 @@ def render_voice_trade_panel(sim: dict, cfg: dict, data: pd.DataFrame, ctx: dict
 
     if cancel:
         st.session_state.pop("voice_cmd_parsed", None)
-        st.session_state["voice_cmd_text"] = ""
+        st.session_state["_clear_voice_cmd_text"] = True
         st.rerun()
 
     if confirm:
@@ -12609,7 +12614,7 @@ def render_voice_trade_panel(sim: dict, cfg: dict, data: pd.DataFrame, ctx: dict
             execute_order(sim, action, float(est_amount_thb), current_date_val, px_row, ctx)
 
         st.session_state.pop("voice_cmd_parsed", None)
-        st.session_state["voice_cmd_text"] = ""
+        st.session_state["_clear_voice_cmd_text"] = True
         st.success("ส่งคำสั่งเรียบร้อย!")
         st.rerun()
 
