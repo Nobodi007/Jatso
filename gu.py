@@ -12255,81 +12255,9 @@ def generate_portfolio_narration(sim: dict, snap: dict, market_df: pd.DataFrame,
     return text
 
 
-def generate_gemini_tts(text: str, api_key: str) -> str:
-    """Generate real Gemini AI speech and return base64 WAV audio."""
-    text = re.sub(r"<[^>]+>", "", str(text or "")).strip()
-    if not text or not api_key:
-        return ""
-
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        "gemini-3.8-flash-tts:generateContent"
-    )
-    payload = {
-        "contents": [{
-            "role": "user",
-            "parts": [{
-                "text": text,
-                "speech_metadata": {
-                    "style": "พูดภาษาไทยแบบนักพากย์กีฬา เป็นธรรมชาติ มีพลัง กระชับ ชัดเจน"
-                },
-            }],
-        }],
-        "generationConfig": {
-            "responseModalities": ["AUDIO"],
-            "responseFormat": {
-                "audio": {"mimeType": "AUDIO_WAV", "sampleRate": 24000}
-            },
-            "speechConfig": {
-                "voiceConfig": {"voice": "Kore"}
-            },
-        },
-    }
-    req = urllib.request.Request(
-        url + "?key=" + urllib.parse.quote(api_key),
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        result = json.loads(resp.read().decode("utf-8"))
-
-    parts = result.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-    for part in parts:
-        inline = part.get("inlineData") or part.get("inline_data")
-        if inline and inline.get("data"):
-            return inline["data"]
-    raise RuntimeError("Gemini TTS ไม่ได้ส่งไฟล์เสียงกลับมา")
-
-
-_GEMINI_TTS_JS = r"""
-<script>
-(function() {
-  try {
-    const b64 = "__AUDIO_B64__";
-    if (!b64) return;
-    const audio = new Audio("data:audio/wav;base64," + b64);
-    audio.volume = 1.0;
-    audio.play().catch(function() {
-      const btn = document.createElement("button");
-      btn.textContent = "🔊 กดเพื่อเล่นเสียง AI";
-      btn.style.cssText = "padding:8px 12px;border-radius:8px;border:1px solid #444;background:#181a20;color:#fff;cursor:pointer";
-      btn.onclick = function() { audio.play(); btn.remove(); };
-      window.parent.document.body.appendChild(btn);
-    });
-  } catch (e) { console.warn("Gemini TTS", e); }
-})();
-</script>
-"""
-
-
-def play_gemini_tts(audio_b64: str) -> None:
-    if audio_b64:
-        components.html(_GEMINI_TTS_JS.replace("__AUDIO_B64__", audio_b64), height=42, width=1)
-
 
 def render_ai_narrator_card(sim: dict, snap: dict, market_df: pd.DataFrame) -> None:
-    """การ์ด AI Portfolio Narrator สำหรับวาง Dashboard บนสุด"""
+    """การ์ด AI Portfolio Narrator สำหรับวาง Dashboard บนสุด — ข้อความเท่านั้น"""
     try:
         api_key = st.secrets["gemini_api_key"]
     except Exception:
@@ -12351,16 +12279,6 @@ def render_ai_narrator_card(sim: dict, snap: dict, market_df: pd.DataFrame) -> N
     with st.spinner("กำลังบรรยาย…") if refresh else _nullcontext():
         text = generate_portfolio_narration(sim, snap, market_df, api_key, force=refresh)
 
-    tts_key = "ai_narrator_tts_audio"
-    if refresh:
-        # Generate fresh Gemini voice only when the user explicitly refreshes.
-        try:
-            with st.spinner("กำลังสร้างเสียง AI…"):
-                st.session_state[tts_key] = generate_gemini_tts(text, api_key)
-        except Exception as exc:
-            st.session_state[tts_key] = ""
-            st.warning(f"Gemini TTS ใช้งานไม่ได้: {exc}")
-
     st.markdown(
         f'<div style="background:linear-gradient(135deg,rgba(14,203,129,.08),rgba(24,26,32,.9));'
         f'border:1px solid #2b3139;border-left:3px solid #0ecb81;border-radius:10px;'
@@ -12368,24 +12286,6 @@ def render_ai_narrator_card(sim: dict, snap: dict, market_df: pd.DataFrame) -> N
         f'line-height:1.7;">🎙️ {text}</div>',
         unsafe_allow_html=True,
     )
-
-    b1, b2 = st.columns([1, 5])
-    with b1:
-        speak = st.button("🔊 ฟังเสียง AI", key="ai_narrator_speak", use_container_width=True)
-    if speak:
-        try:
-            with st.spinner("กำลังสร้างเสียง AI…"):
-                audio_b64 = generate_gemini_tts(text, api_key)
-            st.session_state[tts_key] = audio_b64
-        except Exception as exc:
-            st.error(f"Gemini TTS ใช้งานไม่ได้: {exc}")
-
-    audio_b64 = st.session_state.get(tts_key, "")
-    if audio_b64:
-        # Visible player is the reliable fallback when browser autoplay is blocked.
-        st.audio(base64.b64decode(audio_b64), format="audio/wav")
-        if speak:
-            play_gemini_tts(audio_b64)
 
 
 class _nullcontext:
