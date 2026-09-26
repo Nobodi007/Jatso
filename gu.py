@@ -98,6 +98,131 @@ GLOBAL_EXCHANGE_FEE_PRESET = {
 }
 LOCAL_EXCHANGES = ["Bitkub"]
 
+
+# =========================================================================
+# SOUND / MARKET MOOD / ATH EFFECTS — self-contained, no audio files
+# =========================================================================
+_SOUND_JS_TEMPLATE = r"""<script>
+(function() {
+  try {
+    const parentWin = window.parent;
+    const AudioCtx = parentWin.AudioContext || parentWin.webkitAudioContext;
+    if (!AudioCtx) return;
+    if (!parentWin.__xsAudioCtx) parentWin.__xsAudioCtx = new AudioCtx();
+    const ctx = parentWin.__xsAudioCtx;
+    if (ctx.state === "suspended") ctx.resume();
+    function tone(freq, start, dur, type, gainPeak) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type || "sine";
+      osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+      gain.gain.setValueAtTime(0, ctx.currentTime + start);
+      gain.gain.linearRampToValueAtTime(gainPeak || 0.25, ctx.currentTime + start + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + dur);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(ctx.currentTime + start);
+      osc.stop(ctx.currentTime + start + dur + 0.05);
+    }
+    const kind = "__KIND__";
+    if (kind === "buy") {
+      tone(520, 0, 0.09, "sine", 0.22); tone(780, 0.05, 0.10, "sine", 0.16);
+    } else if (kind === "sell") {
+      tone(480, 0, 0.09, "sine", 0.22); tone(320, 0.05, 0.12, "sine", 0.16);
+    } else if (kind === "profit") {
+      tone(1046, 0, 0.12, "triangle", 0.20); tone(1318, 0.09, 0.16, "triangle", 0.20); tone(1568, 0.17, 0.22, "triangle", 0.18);
+    } else if (kind === "loss") {
+      tone(300, 0, 0.15, "sawtooth", 0.12); tone(220, 0.10, 0.20, "sawtooth", 0.10);
+    } else if (kind === "ath") {
+      [523, 659, 784, 1046].forEach((f, i) => tone(f, i * 0.08, 0.20, "triangle", 0.22));
+    } else if (kind === "reject") {
+      tone(200, 0, 0.10, "square", 0.10); tone(150, 0.08, 0.14, "square", 0.08);
+    }
+  } catch (e) {}
+})();
+</script>"""
+
+def play_sound_effect(kind: str) -> None:
+    """Play a synthesized browser sound: buy/sell/profit/loss/ath/reject."""
+    if kind not in {"buy", "sell", "profit", "loss", "ath", "reject"}:
+        return
+    components.html(_SOUND_JS_TEMPLATE.replace("__KIND__", kind), height=0, width=0)
+
+_CONFETTI_JS = r"""<script>
+(function() {
+  try {
+    const doc = window.parent.document;
+    function fire() {
+      if (!window.parent.confetti) return;
+      const duration = 1600, end = Date.now() + duration;
+      (function frame() {
+        window.parent.confetti({particleCount:4,startVelocity:32,spread:70,angle:60,origin:{x:0,y:0.35},colors:["#0ecb81","#fcd535","#EAECEF"]});
+        window.parent.confetti({particleCount:4,startVelocity:32,spread:70,angle:120,origin:{x:1,y:0.35},colors:["#0ecb81","#fcd535","#EAECEF"]});
+        if (Date.now() < end) requestAnimationFrame(frame);
+      })();
+      window.parent.confetti({particleCount:90,spread:100,origin:{y:0.45},colors:["#0ecb81","#fcd535","#EAECEF"]});
+    }
+    if (doc.getElementById("xs-confetti-lib")) fire();
+    else {
+      const s = doc.createElement("script");
+      s.id = "xs-confetti-lib";
+      s.src = "https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js";
+      s.onload = fire;
+      doc.head.appendChild(s);
+    }
+  } catch (e) {}
+})();
+</script>"""
+
+def fire_confetti() -> None:
+    components.html(_CONFETTI_JS, height=0, width=0)
+
+def celebrate_ath() -> None:
+    play_sound_effect("ath")
+    fire_confetti()
+
+def check_and_celebrate_ath(sim: dict, total_value_thb: float) -> bool:
+    """Celebrate only when portfolio value makes a new ATH."""
+    total_value_thb = float(total_value_thb or 0.0)
+    prev_ath = float(sim.get("_ath_value", 0.0) or 0.0)
+    if prev_ath <= 0.0:
+        sim["_ath_value"] = total_value_thb
+        return False
+    if total_value_thb > prev_ath * 1.0001:
+        sim["_ath_value"] = total_value_thb
+        celebrate_ath()
+        return True
+    return False
+
+def market_mood_css(avg_change_pct: float) -> str:
+    avg_change_pct = max(-10.0, min(10.0, float(avg_change_pct)))
+    intensity = abs(avg_change_pct) / 10.0
+    if avg_change_pct >= 0.15:
+        c1, c2 = "#0a1f18", "#0a2a20"
+        glow = f"rgba(14,203,129,{0.10 + intensity * 0.12:.3f})"
+    elif avg_change_pct <= -0.15:
+        c1, c2 = "#1f100f", "#1c0d10"
+        glow = f"rgba(246,70,93,{0.10 + intensity * 0.12:.3f})"
+    else:
+        c1, c2 = "#0b0e11", "#12151a"
+        glow = "rgba(132,142,156,0.05)"
+    return f"""
+    <style>
+    .stApp {{
+        background: radial-gradient(circle at 15% 8%, {glow}, transparent 45%),
+                    linear-gradient(160deg, {c1} 0%, {c2} 55%, #0b0e11 100%) !important;
+        background-attachment: fixed !important;
+        transition: background 2.2s ease;
+    }}
+    </style>
+    """
+
+def render_market_mood(market_df) -> None:
+    if market_df is None or market_df.empty or "pct_change" not in market_df.columns:
+        avg = 0.0
+    else:
+        avg = float(pd.to_numeric(market_df["pct_change"], errors="coerce").dropna().mean() or 0.0)
+    st.markdown(market_mood_css(avg), unsafe_allow_html=True)
+
 SUPPORTED_ASSETS = [
     "BTC", "ETH", "SOL", "DOGE", "ADA", "HBAR", "LINK", "XLM", "XRP", "USDT", "USDC",
 ]
@@ -5926,6 +6051,20 @@ def _submit_order(sim, side, amount_thb, data, order_date, ctx) -> None:
     steps, _rec = execute_order(sim, side, amount_thb, order_date,
                                 data.loc[order_date], ctx)
     st.session_state.sim_steps = steps
+
+    # Synthesized order feedback — no audio files required.
+    if _rec is not None:
+        result_text = str(_rec.get("ผลด่าน", ""))
+        if result_text.startswith("Reject"):
+            play_sound_effect("reject")
+        else:
+            play_sound_effect("buy" if side == "buy" else "sell")
+            pnl_order = float(_rec.get("กำไรออเดอร์", 0.0) or 0.0)
+            if pnl_order > 0:
+                play_sound_effect("profit")
+            elif pnl_order < 0:
+                play_sound_effect("loss")
+
     st.rerun(scope="app")
 
 
@@ -8416,6 +8555,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         price_thb_map[asset] = float(data.loc[current_date_val, "Global_USD"]) * usdthb_current
 
     snap = portfolio_snapshot(sim, price_thb_map)
+    check_and_celebrate_ath(sim, snap["total_value_thb"])
 
     st.markdown(
         "<div class=\"portfolio-wallet-hero\">"
@@ -9963,6 +10103,8 @@ def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
         market_df = fetch_market_overview(SUPPORTED_ASSETS)
     except Exception:
         market_df = pd.DataFrame()
+
+    render_market_mood(market_df)
 
     price_thb_map: dict[str, float] = {}
     pct_map: dict[str, float] = {}
