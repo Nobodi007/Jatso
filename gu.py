@@ -1432,18 +1432,58 @@ NAV_LABELS = [
     "🖨️ Fund Fact Sheet (Print)",
     "🧪 Scenario Stress Lab",
     "🩺 Portfolio Health Score",
-    "🔬 Research Scorecard",
-    "🛡️ Production Readiness Gate",
-    "🕶️ Shadow Mode",
-    "🧬 Experiment Tracker",
-    "🛡️ Model Governance",
-    "💸 Transaction Cost Lab",
-    "📐 PBO & Deflated Sharpe Lab",
-    "🧾 Quant Research Report",
-    "🧬 Synthetic Market Lab",
-    "🌡️ HMM Production Research",
-    "🚦 Final Quant Production Review",
+    "🧪 Quant Research Lab",
 ]
+NAV_DASHBOARD = NAV_LABELS[0]
+NAV_EXCHANGE = NAV_LABELS[3]
+NAV_NEWS = "📰 News"
+NAV_SIMPLE = NAV_LABELS[5]
+NAV_RISK = NAV_LABELS[6]
+NAV_INTELLIGENCE = NAV_LABELS[7]
+NAV_WHATIF = NAV_LABELS[8]
+NAV_JOURNAL = NAV_LABELS[9]
+NAV_CALENDAR = NAV_LABELS[10]
+NAV_FEES = NAV_LABELS[11]
+NAV_CORRELATION = NAV_LABELS[12]
+NAV_ALERTS = NAV_LABELS[13]
+NAV_REBALANCE = NAV_LABELS[14]
+NAV_PERFORMANCE = NAV_LABELS[15]
+NAV_CASHFLOW = NAV_LABELS[16]
+NAV_TIMELINE = NAV_LABELS[17]
+NAV_FACTSHEET_PRINT = NAV_LABELS[18]
+NAV_STRESS_LAB = NAV_LABELS[19]
+NAV_HEALTH_SCORE = NAV_LABELS[20]
+NAV_QUANT_RESEARCH = NAV_LABELS[21]
+
+# Quant Research pages live under one top-level menu.  Their internal labels
+# stay stable so old session state and direct routing can be migrated safely.
+NAV_RESEARCH_SCORECARD = "🔬 Research Scorecard"
+NAV_PRODUCTION_GATE = "🛡️ Production Readiness Gate"
+NAV_SHADOW_MODE = "🕶️ Shadow Mode"
+NAV_EXPERIMENT_TRACKER = "🧬 Experiment Tracker"
+NAV_MODEL_GOVERNANCE = "🛡️ Model Governance"
+NAV_TRANSACTION_COST_LAB = "💸 Transaction Cost Lab"
+NAV_PBO_DSR_LAB = "📐 PBO & Deflated Sharpe Lab"
+NAV_RESEARCH_REPORT = "🧾 Quant Research Report"
+NAV_SYNTHETIC_LAB = "🧬 Synthetic Market Lab"
+NAV_HMM_RESEARCH = "🌡️ HMM Production Research"
+NAV_FINAL_QUANT_REVIEW = "🚦 Final Quant Production Review"
+
+QUANT_RESEARCH_PAGES = [
+    NAV_RESEARCH_SCORECARD,
+    NAV_PRODUCTION_GATE,
+    NAV_SHADOW_MODE,
+    NAV_EXPERIMENT_TRACKER,
+    NAV_MODEL_GOVERNANCE,
+    NAV_TRANSACTION_COST_LAB,
+    NAV_PBO_DSR_LAB,
+    NAV_RESEARCH_REPORT,
+    NAV_SYNTHETIC_LAB,
+    NAV_HMM_RESEARCH,
+    NAV_FINAL_QUANT_REVIEW,
+]
+QUANT_RESEARCH_LEGACY_NAVS = set(QUANT_RESEARCH_PAGES)
+
 NAV_DASHBOARD = NAV_LABELS[0]
 NAV_EXCHANGE = NAV_LABELS[3]
 NAV_NEWS = "📰 News"
@@ -15348,6 +15388,55 @@ def render_final_quant_production_review(cfg: dict[str,Any], data: pd.DataFrame,
     st.checkbox("Shadow Mode reviewed without live execution",key="final_review_shadow")
     st.info("Final Review เป็น governance layer เท่านั้น. ไม่เปิด live execution และไม่เปลี่ยน execution_order / wallet state")
 
+def render_quant_research_hub(cfg: dict[str, Any], data: pd.DataFrame, market_df: Optional[pd.DataFrame] = None) -> None:
+    """Single entry point for all Quant Research tools.
+
+    Keeps the desktop navigation compact while preserving every existing
+    Quant page and its function unchanged.
+    """
+    st.markdown("## 🧪 Quant Research Lab")
+    st.caption("รวมเครื่องมือ Quant ทั้งหมดไว้ที่เดียว แล้วเลือกโมดูลที่ต้องการจากเมนูด้านล่าง")
+
+    default_page = st.session_state.get("quant_research_section", NAV_RESEARCH_SCORECARD)
+    if default_page not in QUANT_RESEARCH_PAGES:
+        default_page = NAV_RESEARCH_SCORECARD
+
+    selected = st.selectbox(
+        "เลือก Quant Module",
+        QUANT_RESEARCH_PAGES,
+        index=QUANT_RESEARCH_PAGES.index(default_page),
+        key="quant_research_section",
+    )
+
+    st.markdown(
+        '<div style="height:1px;background:#2b3139;margin:8px 0 18px 0;"></div>',
+        unsafe_allow_html=True,
+    )
+
+    if selected == NAV_RESEARCH_SCORECARD:
+        render_research_scorecard(cfg, data, market_df)
+    elif selected == NAV_PRODUCTION_GATE:
+        render_production_readiness_gate(cfg, data, market_df)
+    elif selected == NAV_SHADOW_MODE:
+        render_shadow_mode(cfg, data, market_df)
+    elif selected == NAV_EXPERIMENT_TRACKER:
+        render_experiment_tracker(cfg, data, market_df)
+    elif selected == NAV_MODEL_GOVERNANCE:
+        render_model_governance(cfg, data, market_df)
+    elif selected == NAV_TRANSACTION_COST_LAB:
+        render_transaction_cost_lab(cfg, data, market_df)
+    elif selected == NAV_PBO_DSR_LAB:
+        render_pbo_dsr_lab(cfg, data, market_df)
+    elif selected == NAV_RESEARCH_REPORT:
+        render_quant_research_report(cfg, data, market_df)
+    elif selected == NAV_SYNTHETIC_LAB:
+        render_synthetic_market_lab(cfg, data, market_df)
+    elif selected == NAV_HMM_RESEARCH:
+        render_hmm_production_research(cfg, data, market_df)
+    elif selected == NAV_FINAL_QUANT_REVIEW:
+        render_final_quant_production_review(cfg, data, market_df)
+
+
 def _main_body() -> None:
     # Unlock Web Audio on the user's first real click/tap so order SFX can
     # play after Streamlit reruns without being blocked by browser autoplay.
@@ -15500,6 +15589,11 @@ def _main_body() -> None:
     # เพื่อให้ routing / state ของทุกหน้าทำงานเหมือนเดิม
     nav_labels_all = list(NAV_LABELS)
     current_nav = st.session_state.get("main_nav", NAV_DASHBOARD)
+    # Migrate sessions that were left on one of the old Quant top-level pages.
+    if current_nav in QUANT_RESEARCH_LEGACY_NAVS:
+        st.session_state["quant_research_section"] = current_nav
+        current_nav = NAV_QUANT_RESEARCH
+        st.session_state["main_nav"] = NAV_QUANT_RESEARCH
     if current_nav not in nav_labels_all and current_nav != NAV_NEWS:
         current_nav = NAV_DASHBOARD
         st.session_state["main_nav"] = current_nav
@@ -15678,28 +15772,8 @@ def _main_body() -> None:
             render_scenario_stress_lab(cfg, data, market_df)
         elif nav == NAV_HEALTH_SCORE:
             render_portfolio_health_score(cfg, data, market_df)
-        elif nav == NAV_RESEARCH_SCORECARD:
-            render_research_scorecard(cfg, data, market_df)
-        elif nav == NAV_PRODUCTION_GATE:
-            render_production_readiness_gate(cfg, data, market_df)
-        elif nav == NAV_SHADOW_MODE:
-            render_shadow_mode(cfg, data, market_df)
-        elif nav == NAV_EXPERIMENT_TRACKER:
-            render_experiment_tracker(cfg, data, market_df)
-        elif nav == NAV_MODEL_GOVERNANCE:
-            render_model_governance(cfg, data, market_df)
-        elif nav == NAV_TRANSACTION_COST_LAB:
-            render_transaction_cost_lab(cfg, data, market_df)
-        elif nav == NAV_PBO_DSR_LAB:
-            render_pbo_dsr_lab(cfg, data, market_df)
-        elif nav == NAV_RESEARCH_REPORT:
-            render_quant_research_report(cfg, data, market_df)
-        elif nav == NAV_SYNTHETIC_LAB:
-            render_synthetic_market_lab(cfg, data, market_df)
-        elif nav == NAV_HMM_RESEARCH:
-            render_hmm_production_research(cfg, data, market_df)
-        elif nav == NAV_FINAL_QUANT_REVIEW:
-            render_final_quant_production_review(cfg, data, market_df)
+        elif nav == NAV_QUANT_RESEARCH:
+            render_quant_research_hub(cfg, data, market_df)
         elif nav == NAV_FACTSHEET_PRINT:
             sim = st.session_state.get("sim", {}) or {}
             ensure_portfolio_ledger(sim)
