@@ -306,6 +306,78 @@ def _latest_nc_for_email(email: str) -> dict:
         return {}
 
 
+def _refresh_live_nc_snapshot(email: str, sim: dict) -> dict:
+    """Recalculate NC from the current dealer inventory + live Bitkub prices, then persist it.
+
+    This deliberately reuses the same nc_snapshot formula/inputs used by the web app.
+    It does not execute trades or mutate sim_state.
+    """
+    try:
+        cfg = _trade_model_config(email, sim)
+        inv = sim.get("inv_coins") if isinstance(sim.get("inv_coins"), dict) else {}
+        stock_thb = 0.0
+        live_prices = {}
+        for asset, qty in inv.items():
+            asset = str(asset).upper().strip()
+            q = max(0.0, _to_float(qty))
+            if not asset or q <= 0:
+                continue
+            ticker = _bitkub_ticker(asset)
+            price = _to_float(ticker.get("last"))
+            if price > 0:
+                live_prices[asset] = price
+                stock_thb += q * price
+
+        capital = float(cfg["total_capital_thb"])
+        cex_margin = float(cfg["cex_margin_thb"])
+        liab = float(cfg["liab_thb"])
+        h_crypto = float(cfg["h_crypto"])
+        h_cex = float(cfg["h_cex"])
+        fixed_min_nc = float(cfg["fixed_min_nc"])
+        trading_risk_rate = float(cfg["trading_risk_rate"])
+        daily_volume_thb = float(cfg["daily_volume_thb"])
+        custody_rate = float(cfg["custody_rate_blended"])
+
+        trading_nc = trading_risk_rate * daily_volume_thb
+        custody_nc = stock_thb * custody_rate
+        nc_actual = (
+            capital - stock_thb
+            + stock_thb * (1.0 - h_crypto)
+            + cex_margin * (1.0 - h_cex)
+            - liab
+        )
+        nc_required = fixed_min_nc + trading_nc + custody_nc
+        nc_buffer = nc_actual - nc_required
+
+        latest = _latest_nc_for_email(email)
+        payload = {
+            "snapshot_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "actor": email,
+            "asset": str(cfg.get("asset", sim.get("asset", "BTC"))).upper(),
+            "price_usd": float(latest.get("price_usd") or 0.0),
+            "usdthb": float(latest.get("usdthb") or 0.0),
+            "required_stock_thb": float(latest.get("required_stock_thb") or sim.get("target_thb") or 0.0),
+            "total_capital_thb": capital,
+            "cex_margin_thb": cex_margin,
+            "liab_thb": liab,
+            "nc_actual": nc_actual,
+            "nc_required": nc_required,
+            "nc_buffer": nc_buffer,
+            "config": {
+                **(latest.get("config") if isinstance(latest.get("config"), dict) else {}),
+                "live_prices_thb": live_prices,
+                "refresh_source": "Telegram AI Daily Brief",
+            },
+        }
+        if sb is not None:
+            sb.table("nc_snapshots").insert(payload).execute()
+        print(f"[ai-brief] refreshed NC snapshot for {email}: buffer={nc_buffer:,.2f} THB")
+        return payload
+    except Exception as exc:
+        print(f"[ai-brief] NC refresh error for {email}: {exc}")
+        return _latest_nc_for_email(email)
+
+
 def _brief_market_rows(portfolio: dict) -> list[dict]:
     rows = []
     for row in sorted(portfolio.get("rows", []), key=lambda x: x.get("value", 0), reverse=True):
@@ -354,7 +426,8 @@ def _build_ai_daily_brief(email: str) -> str:
         sim = _sim_state(email)
         ledger = _portfolio_ledger_for_sim(sim)
         portfolio = _portfolio_market_data(sim, ledger)
-        nc = _latest_nc_for_email(email)
+        # Refresh NC first so the brief never mixes current portfolio prices with a stale NC snapshot.
+        nc = _refresh_live_nc_snapshot(email, sim)
         market_rows = _brief_market_rows(portfolio)
 
         payload = {
@@ -378,14 +451,13 @@ def _build_ai_daily_brief(email: str) -> str:
             "สร้าง AI Daily Portfolio Brief จากข้อมูล JSON ต่อไปนี้เท่านั้น\n"
             "รูปแบบ:\n"
             "🌅 สวัสดีครับคุณ Nobody\n"
-            "วันนี้ Portfolio มีมูลค่า ...\n"
-            "เงินสด ...\n"
-            "Unrealized P&L ...\n"
-            "NC Buffer ...\n"
-            "วันนี้สิ่งที่ควรติดตามคือ ...\n"
-            "หากมี BTC ให้กล่าวถึงราคา/การเปลี่ยนแปลง 24h ตามข้อมูลที่ให้มา\n"
-            "หากไม่มีข้อมูล NC ให้ระบุว่าไม่มี NC Snapshot ล่าสุด แทนการเดา\n"
-            "อย่าเพิ่มตัวเลขที่ไม่มีใน JSON และอย่าใช้คำสั่งซื้อ/ขาย\n\n"
+            "เขียนเป็น Morning Brief สั้น กระชับ อ่านเป็นธรรมชาติ ไม่ใช่การคัดลอก JSON\n"
+            "ย่อหน้า 1: สรุปมูลค่า Portfolio เงินสด และ Unrealized P&L\n"
+            "ย่อหน้า 2: สรุป NC Buffer และสถานะความพร้อมของ NC\n"
+            "ย่อหน้า 3: ระบุสิ่งที่ควรติดตามวันนี้ โดยอ้างเฉพาะข้อมูลราคา/การเปลี่ยนแปลง 24h ที่มีจริง\n"
+            "หากมี BTC ให้กล่าวถึง BTC ก่อน และกล่าวถึงสินทรัพย์อื่นที่มีข้อมูล 24h ชัดเจนได้ไม่เกิน 3 รายการ\n"
+            "ใช้ตัวเลขตาม JSON เท่านั้น ห้ามเดา ห้ามสร้างราคา/เปอร์เซ็นต์/NC ใหม่ และห้ามออกคำสั่งซื้อหรือขาย\n"
+            "หากข้อมูล NC ไม่มีจริง ให้เขียนว่าไม่มี NC Snapshot ล่าสุด แทนการเดา\n\n"
             + json.dumps(payload, ensure_ascii=False, indent=2)
         )
         text = _gemini_text(prompt) if AI_DAILY_BRIEF_ENABLED else ""
