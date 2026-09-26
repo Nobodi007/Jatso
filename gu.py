@@ -11646,58 +11646,60 @@ def render_cash_flow_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_d
 
 @_cache_data(ttl=900, show_spinner=False)
 def _fetch_institutional_benchmarks(start: Any, end: Any) -> pd.DataFrame:
-    """โหลด benchmark daily closes จาก Yahoo Finance สำหรับ Institutional Analytics.
-    BTC ใช้ BTC-USD, SET ใช้ ^SET.BK และ S&P 500 ใช้ ^GSPC.
-    คืนค่าเป็น DataFrame index=date; columns=BTC, SET, SP500.
+    """โหลด benchmark แบบแยก ticker เพื่อไม่ให้ ticker ตัวหนึ่งล้มแล้วทำให้ตัวอื่นหายไป.
+    BTC = BTC-USD, SET = ^SET.BK, S&P 500 = ^GSPC.
     """
     if "yf" not in globals() or yf is None:
         return pd.DataFrame()
-    try:
-        # Fetch a buffer before the first snapshot so weekend/holiday
-        # snapshots can still resolve to the latest prior trading session.
-        start_ts = pd.Timestamp(start).normalize() - pd.Timedelta(days=14)
-        end_ts = pd.Timestamp(end).normalize() + pd.Timedelta(days=2)
-        tickers = ["BTC-USD", "^SET.BK", "^GSPC"]
-        raw = yf.download(
-            tickers,
-            start=start_ts,
-            end=end_ts,
-            auto_adjust=False,
-            progress=False,
-            group_by="column",
-        )
-        if raw is None or raw.empty:
-            return pd.DataFrame()
 
-        if isinstance(raw.columns, pd.MultiIndex):
-            # yfinance may return either (Price, Ticker) or (Ticker, Price).
-            if "Close" in raw.columns.get_level_values(0):
-                close = raw["Close"].copy()
-            elif "Close" in raw.columns.get_level_values(1):
-                close = raw.xs("Close", axis=1, level=1).copy()
-            else:
-                return pd.DataFrame()
-        else:
-            if "Close" not in raw.columns:
-                return pd.DataFrame()
-            close = raw[["Close"]].copy()
-            close.columns = [tickers[0]]
+    start_ts = pd.Timestamp(start).normalize() - pd.Timedelta(days=30)
+    end_ts = pd.Timestamp(end).normalize() + pd.Timedelta(days=3)
+    ticker_map = {
+        "BTC": "BTC-USD",
+        "SET Index": "^SET.BK",
+        "S&P 500": "^GSPC",
+    }
 
-        rename = {
-            "BTC-USD": "BTC",
-            "^SET.BK": "SET Index",
-            "^GSPC": "S&P 500",
-        }
-        close = close.rename(columns=rename)
-        keep = [c for c in ["BTC", "SET Index", "S&P 500"] if c in close.columns]
-        if not keep:
-            return pd.DataFrame()
-        close = close[keep]
-        close.index = pd.to_datetime(close.index).tz_localize(None).normalize()
-        close = close[~close.index.duplicated(keep="last")].sort_index()
-        return close.dropna(how="all")
-    except Exception:
+    series = {}
+    for label, ticker in ticker_map.items():
+        try:
+            raw = yf.download(
+                ticker,
+                start=start_ts,
+                end=end_ts,
+                auto_adjust=False,
+                progress=False,
+                group_by="column",
+                threads=False,
+            )
+            if raw is None or raw.empty:
+                continue
+
+            close = raw["Close"] if "Close" in raw.columns else None
+            if close is None:
+                continue
+            if isinstance(close, pd.DataFrame):
+                close = close.iloc[:, 0]
+
+            close = pd.to_numeric(close, errors="coerce")
+            close.index = pd.to_datetime(close.index, errors="coerce")
+            if getattr(close.index, "tz", None) is not None:
+                close.index = close.index.tz_localize(None)
+            close.index = close.index.normalize()
+            close = close[~close.index.duplicated(keep="last")].dropna().sort_index()
+
+            if not close.empty:
+                series[label] = close
+        except Exception:
+            # One unavailable benchmark must not remove the others.
+            continue
+
+    if not series:
         return pd.DataFrame()
+
+    out = pd.concat(series, axis=1).sort_index()
+    out.columns = [str(c) for c in out.columns]
+    return out.dropna(how="all")
 
 
 def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, float]]:
