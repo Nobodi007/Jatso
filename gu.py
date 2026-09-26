@@ -2989,6 +2989,332 @@ def render_role_admin_panel() -> None:
 
 
 # =========================================================================
+# SCENARIO VERSIONING / DIFF — บันทึกชุดพารามิเตอร์เป็น Scenario ตั้งชื่อได้
+# แล้วโหลดกลับมา หรือเทียบ 2 Scenario (หรือกับค่าปัจจุบัน) ข้างกัน
+# =========================================================================
+
+# widget keys ทั้งหมดใน build_sidebar ที่กำหนด key= ไว้ตรงๆ (ใช้ restore กลับ
+# session_state ตอนโหลด Scenario) — วันที่ start/end ไม่มี key ตรงๆ จึงไม่รวม
+# (ถ้าใช้ preset ที่ไม่ใช่ "กำหนดเอง" การโหลด bt_preset ก็คำนวณวันที่ใหม่ให้เองอยู่แล้ว)
+SCENARIO_WIDGET_KEYS = [
+    "bt_asset", "bt_bank", "bt_carry", "bt_depeg", "bt_depth", "bt_fx_limit",
+    "bt_global_exchange", "bt_hedge_fee", "bt_hedge_fee_maker", "bt_hedge_trigger",
+    "bt_hedge_volblock", "bt_impact_pen", "bt_inc_fee", "bt_ktb_bps", "bt_ktb_wd",
+    "bt_local_exchange", "bt_local_premium", "bt_maker_ratio", "bt_peg", "bt_preset",
+    "bt_settle_per_day", "bt_slip", "bt_spread", "bt_trade_vol", "bt_use_fx_proxy",
+    "bt_use_ktb", "bt_wd_markup", "cp_cex_margin", "cp_cp_haircut", "cp_liab",
+    "cp_margin_asset", "cp_total_capital", "fl_bias", "fl_conf", "fl_cv", "fl_lag",
+    "fl_monthly_vol", "nc_cold_dom", "nc_cold_foreign", "nc_custodian", "nc_hot",
+    "nc_trading_rate",
+]
+
+SCENARIO_LIVE_LABEL = "🔴 ปัจจุบัน (Live)"
+SCENARIOS_ENV_VAR = "XSPRING_SCENARIOS_STATE"
+
+SCENARIO_PARAM_LABELS = {
+    "asset": "สินทรัพย์",
+    "global_exchange": "กระดาน Global สำหรับ Hedge",
+    "start_date": "วันเริ่มต้น Backtest",
+    "end_date": "วันสิ้นสุด Backtest",
+    "trade_vol": "ปริมาณซื้อขายลูกค้า/วัน",
+    "dealer_spread": "Dealer Spread",
+    "hedge_fee": "ค่าธรรมเนียม Hedge เฉลี่ย",
+    "hedge_fee_taker": "ค่าธรรมเนียม Global CEX — Taker",
+    "hedge_fee_maker": "ค่าธรรมเนียม Global CEX — Maker",
+    "maker_ratio": "สัดส่วน Hedge แบบ Maker",
+    "market_depth_usd": "Market Depth",
+    "impact_penalty": "Impact Penalty",
+    "use_fx_proxy": "ใช้ FX Proxy",
+    "fx_limit_max": "FX Limit ต่อเดือน",
+    "local_premium": "Local Premium / Discount",
+    "include_trading_fee_revenue": "รวมรายได้ Trading Fee",
+    "withdrawal_fee_markup_pct": "Markup ค่าธรรมเนียมถอน",
+    "bank_type": "ธนาคารปลายทาง",
+    "use_ktb_fx": "ใช้ KTB FX",
+    "ktb_fx_spread_bps": "KTB FX Spread",
+    "ktb_wd_fee_thb": "KTB Withdrawal Fee",
+    "slippage_sensitivity": "Slippage Sensitivity",
+    "monthly_volume_thb": "ปริมาณธุรกรรม/เดือน",
+    "net_bias_pct": "Net Flow Bias",
+    "flow_cv_pct": "Flow CV",
+    "settlement_days": "Settlement Lag",
+    "confidence": "Confidence Level",
+    "total_capital_thb": "เงินทุนสภาพคล่องรวม",
+    "cex_margin_thb": "CEX Margin",
+    "liab_thb": "หนี้สินต่อลูกค้า",
+    "cex_margin_asset": "สินทรัพย์ Margin",
+    "cex_counterparty_haircut": "Counterparty Haircut",
+    "is_custodian": "เก็บรักษาทรัพย์สินลูกค้า",
+    "trading_risk_rate": "อัตรา NC ความเสี่ยงซื้อขาย",
+    "cold_foreign_rate": "อัตรา NC Cold Wallet ต่างประเทศ",
+    "hot_wallet_pct": "สัดส่วน Hot Wallet",
+    "cold_domestic_split_pct": "สัดส่วน Cold Wallet ในประเทศ",
+    "hedge_trigger_pct": "Hedge Trigger",
+    "hedge_vol_block_pct": "Hedge Volatility Block",
+}
+
+SCENARIO_METRIC_LABELS = {
+    "Backtest: กำไร/ขาดทุนสุทธิ (THB)": "กำไร/ขาดทุนสุทธิ",
+    "Backtest: Margin (bps)": "Margin",
+    "Backtest: Win Rate (%)": "Win Rate",
+    "Backtest: Max Drawdown (THB)": "Max Drawdown",
+    "Backtest: Max Drawdown (%)": "Max Drawdown (%)",
+    "Planner: NC Buffer (THB)": "NC Buffer",
+    "Planner: NLC จริง (THB)": "NLC จริง",
+    "Planner: NC ที่ต้องมี (THB)": "NC ที่ต้องมี",
+    "Planner: เงินสดหลังกันสต็อก (THB)": "เงินสดหลังกันสต็อก",
+}
+
+def _scenario_param_label(key: str) -> str:
+    return SCENARIO_PARAM_LABELS.get(key, key.replace("_", " ").strip().title())
+
+def _scenario_metric_label(key: str) -> str:
+    return SCENARIO_METRIC_LABELS.get(key, key)
+
+def _scenario_display_value(key: str, value: Any) -> Any:
+    if value is None:
+        return "—"
+    if isinstance(value, bool):
+        return "เปิด" if value else "ปิด"
+
+    pct_keys = {
+        "dealer_spread", "hedge_fee", "hedge_fee_taker", "hedge_fee_maker",
+        "maker_ratio", "local_premium", "withdrawal_fee_markup_pct",
+        "slippage_sensitivity", "net_bias_pct", "flow_cv_pct",
+        "cex_counterparty_haircut", "trading_risk_rate", "cold_foreign_rate",
+        "hot_wallet_pct", "cold_domestic_split_pct", "hedge_trigger_pct",
+        "hedge_vol_block_pct",
+    }
+    thb_keys = {
+        "trade_vol", "monthly_volume_thb", "total_capital_thb", "cex_margin_thb",
+        "liab_thb", "ktb_wd_fee_thb",
+    }
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        num = float(value)
+        if key in pct_keys:
+            return f"{num * 100:.4f}%"
+        if key in thb_keys:
+            return f"฿{num:,.2f}"
+        if key == "fx_limit_max":
+            return f"${num:,.0f} USD"
+        if key == "ktb_fx_spread_bps":
+            return f"{num:,.2f} bps"
+        if key == "market_depth_usd":
+            return f"${num:,.0f} USD"
+        if key == "impact_penalty":
+            return f"{num * 100:.4f}%"
+        if key == "settlement_days":
+            return f"{num:.0f} วัน"
+        if key == "confidence":
+            return f"{num:g}%"
+        return round(num, 6)
+    return value
+
+
+def _capture_widget_snapshot() -> dict[str, Any]:
+    return {k: st.session_state.get(k) for k in SCENARIO_WIDGET_KEYS if k in st.session_state}
+
+
+def _restore_widget_snapshot(widget_vals: Mapping[str, Any]) -> None:
+    for k, v in widget_vals.items():
+        if k in SCENARIO_WIDGET_KEYS:
+            st.session_state[k] = v
+
+
+def scenarios_state_path() -> Path:
+    return Path(os.environ.get(SCENARIOS_ENV_VAR) or (_HERE / "scenarios_state.json"))
+
+
+def load_scenarios() -> dict[str, Any]:
+    if is_guest_mode():
+        return dict(st.session_state.get("scenarios_local", {}))
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            res = (sb.table("scenarios_state")
+                     .select("data")
+                     .eq("actor", _current_actor())
+                     .limit(1)
+                     .execute())
+            if res.data:
+                d = res.data[0]["data"]
+                if isinstance(d, dict):
+                    return d
+        except Exception:
+            pass  # ตกไป fallback local
+    p = scenarios_state_path()
+    if not p.is_file():
+        return {}
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def save_scenarios(scenarios: dict[str, Any]) -> None:
+    if is_guest_mode():
+        st.session_state["scenarios_local"] = scenarios
+        return
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            sb.table("scenarios_state").upsert({
+                "actor": _current_actor(),
+                "data": _json_safe(scenarios),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).execute()
+            return
+        except Exception:
+            pass  # ตกไป fallback local
+    p = scenarios_state_path()
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(_json_safe(scenarios), ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def _current_live_metrics() -> dict[str, Any]:
+    """รวมตัวชี้วัดล่าสุดที่แคชไว้จาก Backtest (tab1) + Planner (tab2) ของรอบนี้."""
+    merged: dict[str, Any] = {}
+    merged.update(st.session_state.get("scn_metrics_backtest") or {})
+    merged.update(st.session_state.get("scn_metrics_planner") or {})
+    return merged
+
+
+def render_scenario_manager(current_params: Mapping[str, Any]) -> None:
+    """UI จัดการ Scenario: บันทึก / โหลด / ลบ / เทียบ 2 Scenario (หรือกับปัจจุบัน)."""
+    RO = not can_edit_config()
+    if "scenarios_cache" not in st.session_state:
+        st.session_state["scenarios_cache"] = load_scenarios()
+    scenarios: dict[str, Any] = st.session_state["scenarios_cache"]
+
+    with st.expander(f"🗂️ Scenario Versioning ({len(scenarios)})", expanded=False):
+        st.caption(
+            "บันทึกชุดพารามิเตอร์ปัจจุบันเป็น Scenario ตั้งชื่อได้ (เช่น 'แผน Q1 เข้มงวด' "
+            "vs 'แผน Q2 ขยาย') แล้วโหลดกลับมาใช้ หรือเทียบ 2 Scenario ข้างกันได้ทุกเมื่อ"
+        )
+
+        if not RO:
+            c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
+            new_name = c1.text_input(
+                "ชื่อ Scenario ใหม่", key="scn_new_name",
+                placeholder="เช่น แผน Q1 เข้มงวด")
+            save_clicked = c2.button("💾 บันทึก", key="scn_save_btn", **WIDE)
+            if save_clicked:
+                nm = (new_name or "").strip()
+                if not nm:
+                    st.session_state["scn_save_err"] = "กรุณาตั้งชื่อ Scenario ก่อนบันทึก"
+                elif nm == SCENARIO_LIVE_LABEL:
+                    st.session_state["scn_save_err"] = "ชื่อนี้สงวนไว้ ใช้ชื่ออื่นแทน"
+                else:
+                    scenarios[nm] = {
+                        "params": dict(current_params),
+                        "widget_values": _capture_widget_snapshot(),
+                        "output_metrics": _current_live_metrics(),
+                        "saved_at": datetime.now(timezone.utc).isoformat(),
+                        "saved_by": _current_actor(),
+                    }
+                    save_scenarios(scenarios)
+                    st.session_state["scenarios_cache"] = scenarios
+                    st.session_state["scn_save_err"] = None
+                    st.session_state["scn_saved_toast"] = nm
+                    st.rerun()
+            err = st.session_state.pop("scn_save_err", None)
+            if err:
+                st.error(err)
+
+        toast = st.session_state.pop("scn_saved_toast", None)
+        if toast:
+            st.toast(f"บันทึก Scenario '{toast}' แล้ว", icon="💾")
+        loaded_toast = st.session_state.pop("scn_loaded_toast", None)
+        if loaded_toast:
+            st.toast(f"โหลด Scenario '{loaded_toast}' แล้ว", icon="📂")
+
+        if not scenarios:
+            st.caption("ยังไม่มี Scenario ที่บันทึกไว้")
+            return
+
+        st.markdown("**Scenario ที่บันทึกไว้**")
+        for nm in sorted(scenarios.keys()):
+            sc = scenarios[nm]
+            saved_at = str(sc.get("saved_at", ""))[:16].replace("T", " ")
+            r1, r2, r3 = st.columns([3, 1, 1], vertical_alignment="center")
+            r1.markdown(
+                f"**{nm}**<br><span style='font-size:.72rem;color:#848e9c'>"
+                f"{saved_at} UTC · {sc.get('saved_by', '')}</span>",
+                unsafe_allow_html=True)
+            if r2.button("📂 โหลด", key=f"scn_load_{nm}", disabled=RO, **WIDE):
+                _restore_widget_snapshot(sc.get("widget_values", {}))
+                st.session_state["scn_loaded_toast"] = nm
+                st.rerun()
+            if r3.button("🗑️ ลบ", key=f"scn_del_{nm}", disabled=RO, **WIDE):
+                scenarios.pop(nm, None)
+                save_scenarios(scenarios)
+                st.session_state["scenarios_cache"] = scenarios
+                st.rerun()
+
+        st.divider()
+        st.markdown("**🔍 เทียบ Scenario**")
+        options = [SCENARIO_LIVE_LABEL] + sorted(scenarios.keys())
+        c_a, c_b = st.columns(2)
+        pick_a = c_a.selectbox("Scenario A", options, index=0, key="scn_cmp_a")
+        default_b_idx = 1 if len(options) > 1 else 0
+        pick_b = c_b.selectbox("Scenario B", options, index=default_b_idx, key="scn_cmp_b")
+        if st.button("⚖️ เทียบ", key="scn_compare_btn", **WIDE):
+            st.session_state["scn_compare_pair"] = (pick_a, pick_b)
+
+        pair = st.session_state.get("scn_compare_pair")
+        if pair:
+            a_name, b_name = pair
+
+            def _resolve(nm_: str) -> tuple[dict[str, Any], dict[str, Any]]:
+                if nm_ == SCENARIO_LIVE_LABEL:
+                    return dict(current_params), _current_live_metrics()
+                sc_ = scenarios.get(nm_, {})
+                return dict(sc_.get("params", {})), dict(sc_.get("output_metrics", {}))
+
+            a_params, a_metrics = _resolve(a_name)
+            b_params, b_metrics = _resolve(b_name)
+
+            all_keys = sorted(set(a_params) | set(b_params))
+            diff_rows = [
+                {
+                    "พารามิเตอร์": _scenario_param_label(k),
+                    a_name: _scenario_display_value(k, a_params.get(k)),
+                    b_name: _scenario_display_value(k, b_params.get(k)),
+                }
+                for k in all_keys if a_params.get(k) != b_params.get(k)
+            ]
+            st.caption(f"ต่างกัน {len(diff_rows)} พารามิเตอร์ (จากทั้งหมด {len(all_keys)})")
+            if diff_rows:
+                st.dataframe(pd.DataFrame(diff_rows),
+                            height=min(320, 40 + 35 * len(diff_rows)), **WIDE)
+            else:
+                st.caption("พารามิเตอร์เหมือนกันทุกตัว")
+
+            metric_keys = sorted(set(a_metrics) | set(b_metrics))
+            if metric_keys:
+                st.markdown("**ผลลัพธ์ (ค่า ณ ตอนบันทึก / ค่าล่าสุดของ Live)**")
+                mrows = [
+                    {
+                        "ตัวชี้วัด": _scenario_metric_label(k),
+                        a_name: _scenario_display_value(k, a_metrics.get(k)),
+                        b_name: _scenario_display_value(k, b_metrics.get(k)),
+                    }
+                    for k in metric_keys
+                ]
+                st.dataframe(pd.DataFrame(mrows),
+                            height=min(260, 40 + 35 * len(mrows)), **WIDE)
+                st.caption(
+                    "⚠️ ตัวชี้วัดของ Scenario ที่บันทึกไว้คือค่า ณ ตอนกดบันทึกเท่านั้น "
+                    "(ไม่ได้คำนวณใหม่ย้อนหลัง) — ส่วน Live คือค่าล่าสุดที่หน้า Backtest/Planner คำนวณในเซสชันนี้"
+                )
+            else:
+                st.caption("ยังไม่มีตัวชี้วัดที่แคชไว้ — เปิดแท็บ Backtest/Planner อย่างน้อย 1 ครั้งก่อนบันทึก Scenario เพื่อแนบผลลัพธ์ไปด้วย")
+
+
+# =========================================================================
+
 # UNDO / ROLLBACK ออเดอร์ล่าสุด
 # =========================================================================
 
@@ -3327,6 +3653,35 @@ def build_sidebar() -> dict[str, Any]:
         ))
         render_audit_log_sidebar()
         render_role_admin_panel()
+
+        current_params = {
+            "asset": asset,
+            "global_exchange": global_exchange,
+            "start_date": str(start_date), "end_date": str(end_date),
+            "trade_vol": trade_vol, "dealer_spread": dealer_spread,
+            "hedge_fee": hedge_fee, "hedge_fee_taker": hedge_fee_taker,
+            "hedge_fee_maker": hedge_fee_maker, "maker_ratio": maker_ratio,
+            "market_depth_usd": market_depth_usd, "impact_penalty": impact_penalty,
+            "use_fx_proxy": use_fx_proxy, "fx_limit_max": fx_limit_max,
+            "local_premium": local_premium,
+            "include_trading_fee_revenue": include_trading_fee_revenue,
+            "withdrawal_fee_markup_pct": withdrawal_fee_markup_pct,
+            "bank_type": bank_type, "use_ktb_fx": use_ktb_fx,
+            "ktb_fx_spread_bps": ktb_fx_spread_bps, "ktb_wd_fee_thb": ktb_wd_fee_thb,
+            "slippage_sensitivity": slippage_sensitivity,
+            "monthly_volume_thb": monthly_volume_thb, "net_bias_pct": net_bias_pct,
+            "flow_cv_pct": flow_cv_pct, "settlement_days": settlement_days,
+            "confidence": confidence, "total_capital_thb": total_capital_thb,
+            "cex_margin_thb": cex_margin_thb, "liab_thb": liab_thb,
+            "cex_margin_asset": cex_margin_asset,
+            "cex_counterparty_haircut": cex_counterparty_haircut,
+            "is_custodian": is_custodian, "trading_risk_rate": trading_risk_rate,
+            "cold_foreign_rate": cold_foreign_rate, "hot_wallet_pct": hot_wallet_pct,
+            "cold_domestic_split_pct": cold_domestic_split_pct,
+            "hedge_trigger_pct": hedge_trigger_pct,
+            "hedge_vol_block_pct": hedge_vol_block_pct,
+        }
+        render_scenario_manager(current_params)
 
     daily_volume_thb = monthly_volume_thb / 30.0
     custody_rate_blended = blended_custody_rate(
@@ -4509,6 +4864,14 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     dd_series = (bt["Actual_Cum_PnL"] - running_max) / running_max.where(running_max > 0)
     dd_pct = dd_series.min() * 100
     dd_pct = 0.0 if pd.isna(dd_pct) else dd_pct
+
+    st.session_state["scn_metrics_backtest"] = {
+        "Backtest: กำไร/ขาดทุนสุทธิ (THB)": round(float(net_pnl_thb), 2),
+        "Backtest: Margin (bps)": round(float(margin_bps), 2),
+        "Backtest: Win Rate (%)": round(float(win_rate), 2),
+        "Backtest: Max Drawdown (THB)": round(float(max_drawdown), 2),
+        "Backtest: Max Drawdown (%)": round(float(dd_pct), 2),
+    }
 
     st.success(f"✅ โหลดข้อมูล **{asset}** สำเร็จ ({total_days} วัน | เทรดได้จริง {traded_days} วัน)")
 
@@ -5827,6 +6190,13 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     nlc_thb = nc["actual"]
     required_nc_total = nc["required"]
     nc_buffer_thb = nc["buffer"]
+
+    st.session_state["scn_metrics_planner"] = {
+        "Planner: NC Buffer (THB)": round(float(nc_buffer_thb), 2),
+        "Planner: NLC จริง (THB)": round(float(nlc_thb), 2),
+        "Planner: NC ที่ต้องมี (THB)": round(float(required_nc_total), 2),
+        "Planner: เงินสดหลังกันสต็อก (THB)": round(float(cash_after_stock_thb), 2),
+    }
 
     slope = (a_factor * (h_crypto + cfg["custody_rate_blended"]) + cfg["trading_risk_rate"] / 30.0)
     v_nc_thb = max(0.0, (cfg["total_capital_thb"] + cfg["cex_margin_thb"] * (1 - h_cex) - cfg["liab_thb"] - cfg["fixed_min_nc"]) / slope) if slope > 0 else float("inf")
