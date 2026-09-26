@@ -17,6 +17,8 @@ Environment variables:
     DAILY_GREETING_NAME     - ชื่อในข้อความ (default Nobody)
     DAILY_GREETING_CHAT_ID  - optional; ถ้าไม่ใส่จะส่งให้ทุก Telegram ที่ /link ไว้
     DAILY_GREETING_EMAIL_TO - optional; ถ้าไม่ใส่จะส่งให้ทุก email ที่ /link ไว้
+    GEMINI_API_KEY         - Gemini API key สำหรับสร้าง AI Daily Portfolio Brief
+    AI_DAILY_BRIEF_MODEL   - default gemini-3-flash-preview
     DAILY_GREETING_TZ       - default Asia/Bangkok
     DAILY_GREETING_HOUR     - default 8
     DAILY_GREETING_MINUTE   - default 0
@@ -67,7 +69,7 @@ API_BASE = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
 
-BOT_BUILD = "2026-09-26-stable-v4-daily-greeting"
+BOT_BUILD = "2026-09-26-stable-v5-ai-daily-portfolio-brief"
 
 # Daily greeting: 08:00 Asia/Bangkok, Monday-Friday
 DAILY_GREETING_ENABLED = os.environ.get("DAILY_GREETING_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
@@ -91,6 +93,9 @@ except Exception:
 SMTP_USER = os.environ.get("SMTP_USER", "").strip()
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "").strip()
 SMTP_FROM = os.environ.get("SMTP_FROM", "").strip() or SMTP_USER
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+AI_DAILY_BRIEF_MODEL = os.environ.get("AI_DAILY_BRIEF_MODEL", "gemini-3-flash-preview").strip() or "gemini-3-flash-preview"
+AI_DAILY_BRIEF_ENABLED = os.environ.get("AI_DAILY_BRIEF_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
 _DAILY_GREETING_SENT_MEM: set[str] = set()
 
 ALLOWED_EMAILS = {
@@ -228,20 +233,170 @@ def send_message(chat_id: int, text: str) -> None:
 
 
 # =========================================================
-# Daily greeting — Telegram + Email
+# AI Daily Portfolio Brief — Telegram + Email
 # =========================================================
 
-def _daily_greeting_text() -> str:
+AI_DAILY_BRIEF_SYSTEM = (
+    "คุณคือผู้ช่วยสรุปพอร์ตประจำวันของ XSpring Dealer Suite "
+    "คุณได้รับข้อมูล Portfolio, Wallet, NC และราคาตลาดที่เป็นข้อมูลจริง ณ เวลาที่สร้างรายงาน "
+    "หน้าที่คือสรุปข้อเท็จจริงให้เข้าใจง่ายเป็นภาษาไทย ห้ามแต่งตัวเลข ห้ามสร้างข้อมูลที่ไม่มีใน input "
+    "ห้ามสั่งซื้อ/ขาย ห้ามให้คำแนะนำการลงทุน และห้ามคาดการณ์ราคาว่าจะขึ้นหรือลง "
+    "คำว่า 'สิ่งที่ควรติดตาม' ให้หมายถึงตัวเลข/เหตุการณ์ที่ควรเฝ้าดูจากข้อมูลเท่านั้น "
+    "ตอบสั้น กระชับ ในรูปแบบ daily brief ไม่เกิน 8 บรรทัด"
+)
+
+
+def _gemini_text(prompt: str) -> str:
+    if not GEMINI_API_KEY:
+        return ""
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{AI_DAILY_BRIEF_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    )
+    payload = {
+        "systemInstruction": {"parts": [{"text": AI_DAILY_BRIEF_SYSTEM}]},
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "maxOutputTokens": 900,
+            "temperature": 0.2,
+            "thinkingConfig": {"thinkingLevel": "low"},
+        },
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=45) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        return str(
+            result.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "")
+        ).strip()
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.loads(exc.read().decode("utf-8")).get("error", {}).get("message", "")
+        except Exception:
+            detail = ""
+        print(f"[ai-brief] Gemini HTTP {exc.code}: {detail}")
+        return ""
+    except Exception as exc:
+        print(f"[ai-brief] Gemini error: {exc}")
+        return ""
+
+
+def _latest_nc_for_email(email: str) -> dict:
+    if sb is None:
+        return {}
+    try:
+        res = (
+            sb.table("nc_snapshots")
+            .select("*")
+            .eq("actor", email)
+            .order("snapshot_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return (res.data or [{}])[0] or {}
+    except Exception as exc:
+        print(f"[ai-brief] NC load error for {email}: {exc}")
+        return {}
+
+
+def _brief_market_rows(portfolio: dict) -> list[dict]:
+    rows = []
+    for row in sorted(portfolio.get("rows", []), key=lambda x: x.get("value", 0), reverse=True):
+        asset = str(row.get("asset", "")).upper()
+        ticker = {}
+        try:
+            ticker = _bitkub_ticker(asset)
+        except Exception as exc:
+            print(f"[ai-brief] ticker {asset} unavailable: {exc}")
+        rows.append({
+            "asset": asset,
+            "qty": _to_float(row.get("qty")),
+            "price_thb": _to_float(row.get("price")),
+            "value_thb": _to_float(row.get("value")),
+            "unrealized_pnl_thb": _to_float(row.get("unrealized")),
+            "pct_change_24h": _to_float(ticker.get("percentChange")) if ticker else None,
+        })
+    return rows
+
+
+def _fallback_ai_daily_brief(email: str, portfolio: dict, nc: dict, market_rows: list[dict]) -> str:
+    name = DAILY_GREETING_NAME
+    total = _to_float(portfolio.get("total_value"))
+    cash = _to_float(portfolio.get("cash"))
+    unreal = _to_float(portfolio.get("unrealized"))
+    buf = _to_float(nc.get("nc_buffer")) if nc else 0.0
+    top = market_rows[0] if market_rows else None
+    top_text = top["asset"] if top else "ไม่มีสินทรัพย์"
+    btc = next((r for r in market_rows if r.get("asset") == "BTC"), None)
+    btc_text = "BTC ไม่มีข้อมูลราคา" if not btc else f"BTC ฿{btc['price_thb']:,.0f}" + (
+        f" ({btc['pct_change_24h']:+.2f}% 24h)" if btc.get("pct_change_24h") is not None else ""
+    )
     return (
-        f"🌅 สวัสดีครับคุณ {DAILY_GREETING_NAME}\n"
-        "ยินดีต้อนรับครับ\n"
-        "ระบบแจ้งเตือนประจำวันของ XSpring พร้อมทำงานแล้ว\n"
-        "📅 ระบบจะแจ้งเตือนทุกวันจันทร์–ศุกร์ เวลา 08:00 น. (เวลาไทย)"
+        f"🌅 สวัสดีครับคุณ {name}\n"
+        f"วันนี้ Portfolio มีมูลค่า ฿{total:,.2f}\n"
+        f"เงินสด ฿{cash:,.2f}\n"
+        f"Unrealized P&L ฿{unreal:+,.2f}\n"
+        f"NC Buffer ฿{buf:+,.2f}\n"
+        f"สิ่งที่ควรติดตาม: {top_text} และระดับ NC\n"
+        f"{btc_text}"
     )
 
 
+def _build_ai_daily_brief(email: str) -> str:
+    try:
+        sim = _sim_state(email)
+        ledger = _portfolio_ledger_for_sim(sim)
+        portfolio = _portfolio_market_data(sim, ledger)
+        nc = _latest_nc_for_email(email)
+        market_rows = _brief_market_rows(portfolio)
+
+        payload = {
+            "date_thailand": datetime.now(ZoneInfo(DAILY_GREETING_TZ)).strftime("%Y-%m-%d"),
+            "portfolio_value_thb": round(_to_float(portfolio.get("total_value")), 2),
+            "cash_thb": round(_to_float(portfolio.get("cash")), 2),
+            "invested_cost_thb": round(_to_float(portfolio.get("invested")), 2),
+            "unrealized_pnl_thb": round(_to_float(portfolio.get("unrealized")), 2),
+            "realized_pnl_thb": round(_to_float(portfolio.get("realized")), 2),
+            "fees_thb": round(_to_float(portfolio.get("fees")), 2),
+            "holdings": market_rows[:8],
+            "nc": {
+                "actual_thb": round(_to_float(nc.get("nc_actual")), 2),
+                "required_thb": round(_to_float(nc.get("nc_required")), 2),
+                "buffer_thb": round(_to_float(nc.get("nc_buffer")), 2),
+                "asset": nc.get("asset"),
+                "snapshot_at": nc.get("snapshot_at"),
+            },
+        }
+        prompt = (
+            "สร้าง AI Daily Portfolio Brief จากข้อมูล JSON ต่อไปนี้เท่านั้น\n"
+            "รูปแบบ:\n"
+            "🌅 สวัสดีครับคุณ Nobody\n"
+            "วันนี้ Portfolio มีมูลค่า ...\n"
+            "เงินสด ...\n"
+            "Unrealized P&L ...\n"
+            "NC Buffer ...\n"
+            "วันนี้สิ่งที่ควรติดตามคือ ...\n"
+            "หากมี BTC ให้กล่าวถึงราคา/การเปลี่ยนแปลง 24h ตามข้อมูลที่ให้มา\n"
+            "หากไม่มีข้อมูล NC ให้ระบุว่าไม่มี NC Snapshot ล่าสุด แทนการเดา\n"
+            "อย่าเพิ่มตัวเลขที่ไม่มีใน JSON และอย่าใช้คำสั่งซื้อ/ขาย\n\n"
+            + json.dumps(payload, ensure_ascii=False, indent=2)
+        )
+        text = _gemini_text(prompt) if AI_DAILY_BRIEF_ENABLED else ""
+        return text or _fallback_ai_daily_brief(email, portfolio, nc, market_rows)
+    except Exception as exc:
+        print(f"[ai-brief] build error for {email}: {exc}")
+        return f"🌅 สวัสดีครับคุณ {DAILY_GREETING_NAME}\nไม่สามารถสร้าง AI Brief ได้ในขณะนี้ กรุณาตรวจสอบข้อมูล Portfolio ในระบบ"
+
+
 def _daily_greeting_email_subject() -> str:
-    return f"🌅 สวัสดีครับคุณ {DAILY_GREETING_NAME} — XSpring Daily Greeting"
+    return f"🧠 AI Daily Portfolio Brief — {DAILY_GREETING_NAME}"
 
 
 def _daily_greeting_recipient_chats() -> list[int]:
@@ -299,7 +454,7 @@ def _daily_greeting_recipient_emails() -> list[str]:
         return []
 
 
-def _daily_greeting_send_email(to_email: str) -> bool:
+def _daily_greeting_send_email(to_email: str, text: Optional[str] = None) -> bool:
     if not SMTP_USER or not SMTP_PASSWORD or not SMTP_FROM:
         print("[daily-greeting] SMTP not configured; email skipped")
         return False
@@ -308,7 +463,7 @@ def _daily_greeting_send_email(to_email: str) -> bool:
     msg["Subject"] = _daily_greeting_email_subject()
     msg["From"] = SMTP_FROM
     msg["To"] = to_email
-    msg.set_content(_daily_greeting_text())
+    msg.set_content(text or _fallback_ai_daily_brief(to_email, {}, {}, []))
 
     try:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
@@ -333,7 +488,7 @@ def _daily_greeting_already_sent(run_key: str) -> bool:
             res = (
                 sb.table("telegram_scheduled_notifications")
                 .select("id")
-                .eq("job_key", "daily_greeting")
+                .eq("job_key", "ai_daily_portfolio_brief")
                 .eq("run_key", run_key)
                 .limit(1)
                 .execute()
@@ -342,7 +497,6 @@ def _daily_greeting_already_sent(run_key: str) -> bool:
                 _DAILY_GREETING_SENT_MEM.add(run_key)
                 return True
         except Exception:
-            # Table is optional. The scheduler still works with memory dedup.
             pass
     return False
 
@@ -352,7 +506,7 @@ def _daily_greeting_mark_sent(run_key: str) -> None:
     if sb is not None:
         try:
             sb.table("telegram_scheduled_notifications").insert({
-                "job_key": "daily_greeting",
+                "job_key": "ai_daily_portfolio_brief",
                 "run_key": run_key,
                 "sent_at": datetime.now(timezone.utc).isoformat(),
             }).execute()
@@ -361,7 +515,7 @@ def _daily_greeting_mark_sent(run_key: str) -> None:
 
 
 def run_daily_greeting_if_due() -> None:
-    """Send the greeting once per weekday at/after the configured 08:00 Thai time."""
+    """Send AI Daily Portfolio Brief once per weekday at/after 08:00 Thai time."""
     if not DAILY_GREETING_ENABLED:
         return
 
@@ -369,10 +523,9 @@ def run_daily_greeting_if_due() -> None:
         tz = ZoneInfo(DAILY_GREETING_TZ)
     except Exception:
         tz = timezone.utc
-        print(f"[daily-greeting] invalid timezone {DAILY_GREETING_TZ!r}; using UTC")
+        print(f"[ai-brief] invalid timezone {DAILY_GREETING_TZ!r}; using UTC")
 
     now = datetime.now(tz)
-    # Monday=0 ... Friday=4. Weekend is intentionally skipped.
     if now.weekday() >= 5:
         return
 
@@ -382,30 +535,43 @@ def run_daily_greeting_if_due() -> None:
         return
 
     date_key = now.strftime("%Y-%m-%d")
-    text = _daily_greeting_text()
 
-    # Telegram: each chat has its own sent marker, so one failed recipient
-    # does not block retries for the others.
+    # Telegram: build the brief from the account linked to each chat.
     for chat_id in _daily_greeting_recipient_chats():
         run_key = f"{date_key}|telegram|{chat_id}"
         if _daily_greeting_already_sent(run_key):
             continue
         try:
+            email = email_for_chat(chat_id)
+            if not email:
+                print(f"[ai-brief] Telegram {chat_id} has no linked email; skipped")
+                continue
+            text = _build_ai_daily_brief(email)
             send_message(chat_id, text)
             _daily_greeting_mark_sent(run_key)
-            print(f"[daily-greeting] Telegram sent -> {chat_id}")
+            print(f"[ai-brief] Telegram sent -> {chat_id} ({email})")
         except Exception as exc:
-            print(f"[daily-greeting] Telegram failed -> {chat_id}: {exc}")
+            print(f"[ai-brief] Telegram failed -> {chat_id}: {exc}")
 
-    # Email: each email has its own sent marker, so failed SMTP delivery
-    # can be retried on the next 30-second scheduler tick.
+    # Email: each email gets its own portfolio-specific brief.
     for email in _daily_greeting_recipient_emails():
         run_key = f"{date_key}|email|{email}"
         if _daily_greeting_already_sent(run_key):
             continue
-        if _daily_greeting_send_email(email):
-            _daily_greeting_mark_sent(run_key)
+        try:
+            text = _build_ai_daily_brief(email)
+            if _daily_greeting_send_email(email, text):
+                _daily_greeting_mark_sent(run_key)
+        except Exception as exc:
+            print(f"[ai-brief] Email failed -> {email}: {exc}")
 
+
+def cmd_daily_brief(chat_id: int) -> str:
+    """Manual test/preview of the same brief sent at 08:00."""
+    email = email_for_chat(chat_id)
+    if not email:
+        return "ยังไม่ได้เชื่อมบัญชี\nพิมพ์ /link your@email.com ก่อน"
+    return _build_ai_daily_brief(email)
 
 
 def get_updates(offset: Optional[int] = None) -> list[dict]:
@@ -427,6 +593,7 @@ def set_bot_commands() -> None:
         {"command": "wallet", "description": "ดูเงินและเหรียญในกระเป๋าจำลอง"},
         {"command": "portfolio", "description": "ดู Portfolio แบบสรุป"},
         {"command": "summary", "description": "สรุป Portfolio ทั้งพอร์ต"},
+        {"command": "brief", "description": "ดู AI Daily Portfolio Brief"},
         {"command": "today", "description": "สรุปกิจกรรมวันนี้"},
         {"command": "risk", "description": "ตรวจความเสี่ยง Portfolio"},
         {"command": "config", "description": "ดูค่าพารามิเตอร์เว็บล่าสุด"},
@@ -2826,6 +2993,8 @@ def handle_command(chat_id: int, text: str) -> str:
 
     if cmd == "/summary":
         return cmd_summary(chat_id)
+    if cmd == "/brief":
+        return cmd_daily_brief(chat_id)
 
     if cmd == "/today":
         return cmd_today(chat_id)
