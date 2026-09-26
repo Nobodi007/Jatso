@@ -32,6 +32,8 @@ import copy
 import xml.etree.ElementTree as ET
 import html as _html
 from datetime import datetime, timezone
+from dataclasses import dataclass
+from itertools import product
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -1428,6 +1430,7 @@ NAV_LABELS = [
     "⚖️ Rebalance Simulator",
     "📈 Performance Analytics",
     "💰 Cash Flow Analytics",
+    "🧪 Quant Research Lab",
     "🕒 Customer Timeline",
     "🖨️ Fund Fact Sheet (Print)",
 ]
@@ -1446,8 +1449,9 @@ NAV_ALERTS = NAV_LABELS[13]
 NAV_REBALANCE = NAV_LABELS[14]
 NAV_PERFORMANCE = NAV_LABELS[15]
 NAV_CASHFLOW = NAV_LABELS[16]
-NAV_TIMELINE = NAV_LABELS[17]
-NAV_FACTSHEET_PRINT = NAV_LABELS[18]
+NAV_QUANT = NAV_LABELS[17]
+NAV_TIMELINE = NAV_LABELS[18]
+NAV_FACTSHEET_PRINT = NAV_LABELS[19]
 
 def _go_to_exchange(sym: str) -> None:
     st.session_state["bt_asset"] = sym
@@ -3532,436 +3536,6 @@ def load_nc_snapshots(limit: int = 100) -> list[dict[str, Any]]:
     return list(st.session_state.get("nc_snapshots", []))[-limit:]
 
 
-# =========================================================================
-# PORTFOLIO VALUE SNAPSHOTS · GOAL TRACKER · CONTRIBUTION BREAKDOWN
-# =========================================================================
-
-def _portfolio_value_snapshot_payload(sim: dict, price_thb_map: Mapping[str, float]) -> dict:
-    snap = portfolio_snapshot(sim, price_thb_map)
-    return {
-        "snapshot_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "actor": _current_actor(),
-        "total_value_thb": float(snap["total_value_thb"]),
-        "cash_thb": float(snap["cash_thb"]),
-        "invested_cost_thb": float(snap["invested_cost_thb"]),
-        "realized_pnl_thb": float(snap["realized_pnl_thb"]),
-        "unrealized_pnl_thb": float(snap["unrealized_pnl_thb"]),
-    }
-
-
-def save_portfolio_value_snapshot(sim: dict, price_thb_map: Mapping[str, float]) -> bool:
-    """บันทึกมูลค่าพอร์ต 1 snapshot; persistence ใช้ pattern เดียวกับ nc_snapshots."""
-    payload = _portfolio_value_snapshot_payload(sim, price_thb_map)
-    st.session_state.setdefault("portfolio_value_snapshots", []).append(payload)
-    st.session_state["portfolio_value_snapshots"] = st.session_state["portfolio_value_snapshots"][-2000:]
-
-    if is_guest_mode():
-        return False
-
-    sb = _get_supabase()
-    if sb is not None:
-        try:
-            sb.table("portfolio_value_snapshots").insert(payload).execute()
-            return True
-        except Exception:
-            pass
-
-    p = _HERE / "portfolio_value_snapshots.json"
-    try:
-        old = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else []
-        old = old if isinstance(old, list) else []
-        old.append(payload)
-        p.write_text(json.dumps(old[-5000:], ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        pass
-    return False
-
-
-def load_portfolio_value_snapshots(limit: int = 2000) -> list[dict]:
-    if is_guest_mode():
-        return list(st.session_state.get("portfolio_value_snapshots", []))[-limit:]
-
-    sb = _get_supabase()
-    if sb is not None:
-        try:
-            res = (
-                sb.table("portfolio_value_snapshots")
-                .select("*")
-                .eq("actor", _current_actor())
-                .order("snapshot_at", desc=True)
-                .limit(limit)
-                .execute()
-            )
-            return list(reversed(res.data or []))
-        except Exception:
-            pass
-
-    p = _HERE / "portfolio_value_snapshots.json"
-    if p.is_file():
-        try:
-            rows = json.loads(p.read_text(encoding="utf-8"))
-            return rows[-limit:] if isinstance(rows, list) else []
-        except Exception:
-            pass
-    return list(st.session_state.get("portfolio_value_snapshots", []))[-limit:]
-
-
-def maybe_autosnapshot_portfolio(sim: dict, price_thb_map: Mapping[str, float]) -> None:
-    """บันทึก snapshot วันละ 1 ครั้งต่อ actor/session เมื่อเข้า Portfolio."""
-    today = pd.Timestamp.now(tz="Asia/Bangkok").strftime("%Y-%m-%d")
-    key = f"pv_snap_done_{_current_actor()}_{today}"
-    if st.session_state.get(key):
-        return
-
-    # กันซ้ำข้าม browser session: ถ้ามี snapshot ของ actor วันนี้แล้ว ไม่ต้อง insert ใหม่
-    try:
-        existing = load_portfolio_value_snapshots(limit=5)
-        for row in reversed(existing):
-            ts = pd.to_datetime(row.get("snapshot_at"), errors="coerce")
-            if pd.notna(ts):
-                if getattr(ts, "tzinfo", None) is not None:
-                    local_date = ts.tz_convert("Asia/Bangkok").strftime("%Y-%m-%d")
-                else:
-                    local_date = ts.strftime("%Y-%m-%d")
-                if local_date == today and str(row.get("actor", _current_actor())) == _current_actor():
-                    st.session_state[key] = True
-                    return
-    except Exception:
-        pass
-
-    save_portfolio_value_snapshot(sim, price_thb_map)
-    st.session_state[key] = True
-
-
-def save_goals(goals: list[dict]) -> None:
-    st.session_state["portfolio_goals"] = goals
-    if is_guest_mode():
-        return
-    sb = _get_supabase()
-    if sb is not None:
-        try:
-            sb.table("portfolio_goals").upsert({
-                "actor": _current_actor(),
-                "goals": goals,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }).execute()
-            return
-        except Exception:
-            pass
-    p = _HERE / "portfolio_goals.json"
-    tmp = p.with_suffix(".tmp")
-    try:
-        tmp.write_text(json.dumps(goals, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, p)
-    except Exception:
-        pass
-
-
-def load_goals() -> list[dict]:
-    if "portfolio_goals" in st.session_state:
-        return list(st.session_state["portfolio_goals"] or [])
-    if not is_guest_mode():
-        sb = _get_supabase()
-        if sb is not None:
-            try:
-                res = (
-                    sb.table("portfolio_goals")
-                    .select("goals")
-                    .eq("actor", _current_actor())
-                    .limit(1)
-                    .execute()
-                )
-                if res.data:
-                    goals = res.data[0].get("goals") or []
-                    st.session_state["portfolio_goals"] = goals
-                    return goals
-            except Exception:
-                pass
-        p = _HERE / "portfolio_goals.json"
-        if p.is_file():
-            try:
-                goals = json.loads(p.read_text(encoding="utf-8"))
-                if isinstance(goals, list):
-                    st.session_state["portfolio_goals"] = goals
-                    return goals
-            except Exception:
-                pass
-    return []
-
-
-def _goal_ts(value: Any) -> pd.Timestamp:
-    ts = pd.to_datetime(value, errors="coerce")
-    if pd.isna(ts):
-        return pd.Timestamp.now()
-    if getattr(ts, "tzinfo", None) is not None:
-        ts = ts.tz_convert("Asia/Bangkok").tz_localize(None)
-    return ts
-
-
-def goal_progress(goal: dict, sim: dict, price_thb_map: Mapping[str, float],
-                  snapshots: list[dict]) -> dict:
-    snap = portfolio_snapshot(sim, price_thb_map)
-    current_value = float(snap["total_value_thb"])
-    created = _goal_ts(goal.get("created_at"))
-    target_date = _goal_ts(goal.get("target_date"))
-    now = pd.Timestamp.now().tz_localize(None)
-
-    days_total = max((target_date - created).days, 1)
-    days_remaining = max((target_date - now).days, 0)
-    years_remaining = days_remaining / 365.0
-
-    start_value = float(goal.get("start_value_thb") or current_value)
-    target_amount = float(goal.get("target_amount_thb") or 0.0)
-
-    hist = []
-    for item in snapshots:
-        ts = _goal_ts(item.get("snapshot_at"))
-        if ts >= created:
-            try:
-                val = float(item.get("total_value_thb") or 0.0)
-            except (TypeError, ValueError):
-                continue
-            hist.append((ts, val))
-    hist.sort(key=lambda x: x[0])
-
-    if len(hist) >= 2:
-        t0, v0 = hist[0]
-        t1, v1 = hist[-1]
-        elapsed_yrs = max((t1 - t0).days / 365.0, 1 / 365)
-        actual_cagr = (v1 / v0) ** (1 / elapsed_yrs) - 1 if v0 > 0 and v1 >= 0 else 0.0
-    else:
-        actual_cagr = 0.0
-
-    if start_value > 0 and target_amount > 0:
-        required_cagr = (target_amount / start_value) ** (365.0 / days_total) - 1
-    else:
-        required_cagr = None
-
-    if years_remaining > 0:
-        projected_value = current_value * ((1 + actual_cagr) ** years_remaining) if actual_cagr > -1 else 0.0
-    else:
-        projected_value = current_value
-
-    on_track = projected_value >= target_amount if target_amount > 0 else False
-    return dict(
-        current_value=current_value,
-        start_value=start_value,
-        target_amount=target_amount,
-        days_remaining=days_remaining,
-        required_cagr=required_cagr,
-        actual_cagr=actual_cagr,
-        projected_value=projected_value,
-        on_track=on_track,
-        progress_pct=min(100.0, current_value / target_amount * 100) if target_amount > 0 else 0.0,
-        history=hist,
-    )
-
-
-def render_goal_tracker(sim: dict, price_thb_map: Mapping[str, float]) -> None:
-    section("🎯 Goal Tracker")
-    maybe_autosnapshot_portfolio(sim, price_thb_map)
-    goals = load_goals()
-
-    with st.expander("➕ ตั้งเป้าหมายใหม่", expanded=not goals):
-        c1, c2, c3 = st.columns(3)
-        target_amt = c1.number_input(
-            "เป้าหมาย (THB)", value=5_000_000.0, min_value=1000.0,
-            step=100000.0, key="goal_new_amt"
-        )
-        target_date = c2.date_input(
-            "ภายในวันที่",
-            value=(pd.Timestamp.now() + pd.DateOffset(years=3)).date(),
-            key="goal_new_date"
-        )
-        note = c3.text_input(
-            "ชื่อเป้าหมาย", value="ดาวน์บ้าน / เกษียณ", key="goal_new_note"
-        )
-        if st.button("💾 บันทึกเป้าหมาย", key="goal_new_save", use_container_width=True):
-            snap_now = portfolio_snapshot(sim, price_thb_map)
-            goals.append({
-                "id": uuid.uuid4().hex[:8],
-                "note": note.strip() or "เป้าหมายพอร์ต",
-                "target_amount_thb": float(target_amt),
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "target_date": pd.Timestamp(target_date).isoformat(),
-                "start_value_thb": float(snap_now["total_value_thb"]),
-            })
-            save_goals(goals)
-            st.rerun()
-
-    if not goals:
-        st.info("ยังไม่มีเป้าหมาย — เพิ่มเป้าหมายแรกด้านบน")
-        return
-
-    snapshots = load_portfolio_value_snapshots()
-    for g in goals:
-        prog = goal_progress(g, sim, price_thb_map, snapshots)
-        with st.container(border=True):
-            top = st.columns([3, 1])
-            top[0].markdown(
-                f"**{_html.escape(str(g.get('note', 'เป้าหมายพอร์ต')))}** — "
-                f"เป้า {fmt_baht(prog['target_amount'])} "
-                f"ภายใน {_goal_ts(g.get('target_date')).strftime('%Y-%m-%d')}"
-            )
-            if top[1].button("🗑️ ลบ", key=f"goal_del_{g['id']}", use_container_width=True):
-                save_goals([x for x in goals if x.get("id") != g.get("id")])
-                st.rerun()
-
-            if prog["required_cagr"] is None:
-                detail = (
-                    f"ตอนนี้ {fmt_baht(prog['current_value'])} ({prog['progress_pct']:.1f}%) · "
-                    "ยังคำนวณ Required CAGR ไม่ได้ เพราะมูลค่าเริ่มต้นหรือเป้าหมายเป็นศูนย์"
-                )
-                verdict_box(False, "ต้องมีมูลค่าเริ่มต้นเพื่อคำนวณเส้นทาง", detail, warn=True)
-            else:
-                verdict_box(
-                    prog["on_track"],
-                    "ตามเป้าอยู่ 🎉" if prog["on_track"] else "ต่ำกว่าเส้นทางเป้าหมาย",
-                    f"ตอนนี้ {fmt_baht(prog['current_value'])} ({prog['progress_pct']:.1f}%) · "
-                    f"ทำได้จริง {prog['actual_cagr']*100:.1f}%/ปี · "
-                    f"ต้องการ {prog['required_cagr']*100:.1f}%/ปี · "
-                    f"คาดว่าจะได้ {fmt_baht(prog['projected_value'])} เมื่อถึงกำหนด",
-                    warn=not prog["on_track"],
-                )
-
-            k = st.columns(4)
-            metric_card(k[0], "มูลค่าปัจจุบัน", fmt_baht(prog["current_value"]))
-            metric_card(
-                k[1], "Required CAGR",
-                f"{prog['required_cagr']*100:.1f}%/ปี" if prog["required_cagr"] is not None else "—"
-            )
-            metric_card(
-                k[2], "Actual CAGR", f"{prog['actual_cagr']*100:.1f}%/ปี",
-                (prog["actual_cagr"] - prog["required_cagr"])
-                if prog["required_cagr"] is not None else None,
-            )
-            metric_card(
-                k[3], "คาดการณ์ ณ วันเป้าหมาย", fmt_baht(prog["projected_value"]),
-                prog["projected_value"] - prog["target_amount"],
-            )
-
-            created = _goal_ts(g.get("created_at"))
-            target_ts = _goal_ts(g.get("target_date"))
-            hist = prog["history"]
-            fig = go.Figure()
-            if hist:
-                fig.add_trace(go.Scatter(
-                    x=[x[0] for x in hist],
-                    y=[x[1] for x in hist],
-                    name="มูลค่าจริง",
-                    line=dict(color="#0ecb81", width=2.4),
-                ))
-            fig.add_trace(go.Scatter(
-                x=[created, target_ts],
-                y=[prog["start_value"], prog["target_amount"]],
-                name="เส้นทางที่ต้องไปให้ถึง",
-                line=dict(color="#fcd535", dash="dash"),
-            ))
-            fig.add_trace(go.Scatter(
-                x=[pd.Timestamp.now(), target_ts],
-                y=[prog["current_value"], prog["projected_value"]],
-                name="คาดการณ์ตามอัตราปัจจุบัน",
-                line=dict(color="#3B82F6", dash="dot"),
-            ))
-            fig.update_layout(
-                template="plotly_dark", height=320, margin=dict(t=20, b=20),
-                yaxis_title="THB", paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                legend=dict(orientation="h", y=1.12, yanchor="bottom"),
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-
-def contribution_vs_market_breakdown(sim: dict, snapshots: list[dict]) -> dict:
-    ensure_portfolio_ledger(sim)
-    txs = [t for t in (sim.get("portfolio_ledger", []) or []) if isinstance(t, dict)]
-    if not snapshots:
-        return dict(net_contribution=0.0, market_return=0.0, total_growth=0.0, timeline=pd.DataFrame())
-
-    clean = []
-    for s in snapshots:
-        ts = _goal_ts(s.get("snapshot_at"))
-        try:
-            val = float(s.get("total_value_thb") or 0.0)
-        except (TypeError, ValueError):
-            continue
-        clean.append((ts, val))
-    clean.sort(key=lambda x: x[0])
-    if not clean:
-        return dict(net_contribution=0.0, market_return=0.0, total_growth=0.0, timeline=pd.DataFrame())
-
-    start_ts, start_val = clean[0]
-    end_ts, end_val = clean[-1]
-
-    def _cash_flow_between(lo: pd.Timestamp, hi: pd.Timestamp) -> float:
-        total = 0.0
-        for t in txs:
-            typ = str(t.get("type", "")).upper()
-            if typ not in {"DEPOSIT", "WITHDRAWAL", "WITHDRAW"}:
-                continue
-            ts = _goal_ts(t.get("timestamp"))
-            if lo < ts <= hi:
-                amount = float(t.get("gross_thb", 0.0) or 0.0)
-                total += amount if typ == "DEPOSIT" else -amount
-        return total
-
-    # Contribution is measured only after the first snapshot so that an old
-    # deposit used to create the opening portfolio is not counted as growth.
-    net_contribution = _cash_flow_between(start_ts, end_ts)
-    total_growth = end_val - start_val
-    market_return = total_growth - net_contribution
-
-    rows = []
-    prev_ts, prev_val = start_ts, start_val
-    for ts, val in clean[1:]:
-        period_contrib = _cash_flow_between(prev_ts, ts)
-        rows.append({
-            "date": ts,
-            "contribution": period_contrib,
-            "market_return": (val - prev_val) - period_contrib,
-        })
-        prev_ts, prev_val = ts, val
-
-    return {
-        "net_contribution": net_contribution,
-        "market_return": market_return,
-        "total_growth": total_growth,
-        "timeline": pd.DataFrame(rows),
-    }
-
-
-def render_contribution_breakdown(sim: dict, price_thb_map: Mapping[str, float]) -> None:
-    section("🧩 Contribution vs Market Return")
-    maybe_autosnapshot_portfolio(sim, price_thb_map)
-    snapshots = load_portfolio_value_snapshots()
-    r = contribution_vs_market_breakdown(sim, snapshots)
-
-    k = st.columns(3)
-    metric_card(k[0], "กำไร/ขาดทุนรวม", fmt_baht(r["total_growth"], True), r["total_growth"])
-    metric_card(k[1], "มาจากเงินที่เติมเอง", fmt_baht(r["net_contribution"], True), r["net_contribution"])
-    metric_card(k[2], "มาจากผลตอบแทนตลาด", fmt_baht(r["market_return"], True), r["market_return"])
-
-    if not r["timeline"].empty:
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            x=r["timeline"]["date"], y=r["timeline"]["contribution"],
-            name="เงินที่เติมเอง", marker_color="#3B82F6"
-        ))
-        fig.add_trace(go.Bar(
-            x=r["timeline"]["date"], y=r["timeline"]["market_return"],
-            name="ผลตอบแทนตลาด", marker_color="#0ecb81"
-        ))
-        fig.update_layout(
-            barmode="relative", template="plotly_dark", height=300,
-            margin=dict(t=20, b=20), paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            legend=dict(orientation="h", y=1.12, yanchor="bottom"),
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.caption("ต้องมี snapshot อย่างน้อย 2 จุด (เข้าเว็บอีกวันถัดไป) ถึงจะเห็น timeline นี้")
-
-
 def _config_for_compare(cfg: dict[str, Any]) -> dict[str, Any]:
     keys = ["asset", "dealer_spread", "hedge_fee", "local_premium", "fx_limit_max",
             "trade_vol", "slippage_sensitivity", "market_depth_usd", "impact_penalty",
@@ -4666,6 +4240,15 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     asset = cfg["asset"]
     trade_vol = cfg["trade_vol"]
     hedge_fee = cfg["hedge_fee"]
+
+    ps = cfg.get("portfolio_snapshot", {})
+    if ps:
+        pc1, pc2, pc3, pc4 = st.columns(4)
+        pc1.metric("Portfolio ปัจจุบัน", fmt_baht(ps.get("total_value_thb", 0)))
+        pc2.metric("เงินสด", fmt_baht(ps.get("cash_thb", 0)))
+        pc3.metric("Realized P&L", fmt_baht(ps.get("realized_pnl_thb", 0), True))
+        pc4.metric("Unrealized P&L", fmt_baht(ps.get("unrealized_pnl_thb", 0), True))
+        st.caption("Backtest ใช้ Portfolio ปัจจุบันเป็น context สำหรับเงินทุน/สถานะจริงของผู้ใช้; ผล Backtest ยังคงคำนวณจากช่วงราคาที่เลือก")
 
     bt = data.copy()
     bt["Local_THB"] = bt["Global_USD"] * bt["USDTHB"] * (1 + cfg["local_premium"])
@@ -8592,9 +8175,6 @@ def render_portfolio_calendar(cfg: dict[str, Any], data: pd.DataFrame, market_df
         if selected:
             st.markdown(f'<div class="cal-card"><h4 style="margin:0;color:#eaecef">Snapshot · {selected_day}</h4><div class="cal-detail"><span>Portfolio Value</span><b>฿{float(selected.get("total_value_thb",0) or 0):,.2f}</b></div><div class="cal-detail"><span>Cash</span><b>฿{float(selected.get("cash_thb",0) or 0):,.2f}</b></div><div class="cal-detail"><span>Invested Cost</span><b>฿{float(selected.get("invested_cost_thb",0) or 0):,.2f}</b></div><div class="cal-detail"><span>Unrealized P&L</span><b>฿{float(selected.get("unrealized_pnl_thb",0) or 0):+,.2f}</b></div><div class="cal-detail"><span>Realized P&L</span><b>฿{float(selected.get("realized_pnl_thb",0) or 0):+,.2f}</b></div><div class="cal-detail"><span>Fees</span><b>฿{float(selected.get("fees_thb",0) or 0):,.2f}</b></div></div>', unsafe_allow_html=True)
 
-    with st.expander("📬 AI Weekly / Monthly Digest", expanded=False):
-        render_ai_weekly_digest(sim)
-
     with st.expander("📄 Fund Fact Sheet — PDF", expanded=False):
         render_fund_factsheet_panel(cfg, sim, snap, fetch_price_data, fund_name="XSpring Digital Asset Fund")
 
@@ -8653,8 +8233,6 @@ def render_trading_journal(cfg: dict[str, Any], data: pd.DataFrame, market_df: p
         st.markdown(row,unsafe_allow_html=True)
     st.markdown('</div>',unsafe_allow_html=True)
 
-    st.divider()
-    render_ai_trade_coach(sim)
 
 
 @_cache_data(ttl=300, show_spinner="กำลังคำนวณ Correlation…")
@@ -9049,9 +8627,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         unsafe_allow_html=True,
     )
 
-    t_port, t_watch, t_tx, t_goal, t_contrib = st.tabs([
-        "📊 Portfolio", "⭐ Watchlist", "🧾 Transaction History", "🎯 Goal", "🧩 Contribution"
-    ])
+    t_port, t_watch, t_tx = st.tabs(["📊 Portfolio", "⭐ Watchlist", "🧾 Transaction History"])
 
     with t_port:
         st.markdown(
@@ -9067,8 +8643,6 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
 
         _portfolio_cash_card(snap["cash_thb"], snap["total_value_thb"])
 
-        # เก็บฐานข้อมูลมูลค่าพอร์ตวันละ 1 ครั้งสำหรับ Goal/Contribution
-        maybe_autosnapshot_portfolio(sim, price_thb_map)
         st.markdown('<div class="portfolio-allocation-title">Allocation</div>', unsafe_allow_html=True)
         alloc_items = [{
             "asset": "THB",
@@ -9178,12 +8752,6 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
             "Average cost ใช้วิธีต้นทุนเฉลี่ยถ่วงน้ำหนัก · Unrealized P&L คำนวณจากราคาปัจจุบัน · "
             "Realized P&L เกิดเมื่อขาย โดยหักค่าธรรมเนียมแล้ว"
         )
-
-    with t_goal:
-        render_goal_tracker(sim, price_thb_map)
-
-    with t_contrib:
-        render_contribution_breakdown(sim, price_thb_map)
 # ---------------- ฟังก์ชัน AI ----------------
 
 AI_SYSTEM = (
@@ -12263,6 +11831,706 @@ def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str
     return levels, metrics
 
 
+# =========================================================================
+# QUANT RESEARCH LAB — HMM / FEATURE STORE / WALK-FORWARD / SYNTHETIC / EVAL
+# =========================================================================
+
+@dataclass(frozen=True)
+class FeatureSpec:
+    name: str
+    fn_version: str
+    params: dict[str, Any]
+    lag_days: int = 1
+    description: str = ""
+    expected_range: tuple[float, float] | None = None
+
+    def cache_key(self, asset: str, data_hash: str) -> str:
+        payload = json.dumps({
+            "name": self.name,
+            "version": self.fn_version,
+            "params": self.params,
+            "asset": asset,
+            "data_hash": data_hash,
+        }, sort_keys=True, default=str)
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _feature_data_hash(raw_df: pd.DataFrame) -> str:
+    if raw_df is None or raw_df.empty:
+        return "empty"
+    try:
+        h = pd.util.hash_pandas_object(raw_df, index=True).values.tobytes()
+        return hashlib.sha256(h).hexdigest()
+    except Exception:
+        return hashlib.sha256(raw_df.to_json(date_format="iso", default_handler=str).encode()).hexdigest()
+
+
+def compute_rolling_vol(prices: pd.Series, window: int, as_of_idx: int) -> float:
+    # Strict t-1 lag: feature at i can only use prices[:i].
+    if as_of_idx <= 1:
+        return float("nan")
+    window_data = pd.to_numeric(prices.iloc[max(0, as_of_idx - window):as_of_idx], errors="coerce")
+    return float(window_data.pct_change().std() * np.sqrt(365)) if len(window_data) >= 3 else float("nan")
+
+
+def _feature_momentum(prices: pd.Series, window: int, i: int) -> float:
+    if i <= 0 or i < window:
+        return float("nan")
+    p_now = float(prices.iloc[i - 1])
+    p_old = float(prices.iloc[max(0, i - window)])
+    return p_now / p_old - 1.0 if p_old > 0 else float("nan")
+
+
+FEATURE_REGISTRY: dict[str, callable] = {
+    "rolling_vol_20d": lambda df, i: compute_rolling_vol(df["price"], 20, i),
+    "rolling_vol_60d": lambda df, i: compute_rolling_vol(df["price"], 60, i),
+    "momentum_10d": lambda df, i: _feature_momentum(df["price"], 10, i),
+    "momentum_30d": lambda df, i: _feature_momentum(df["price"], 30, i),
+}
+
+FEATURE_SPECS: dict[str, FeatureSpec] = {
+    "rolling_vol_20d": FeatureSpec("rolling_vol_20d", "1.0.0", {"window": 20}, 1,
+                                    "Annualized rolling volatility using data through t-1", (0.0, 5.0)),
+    "rolling_vol_60d": FeatureSpec("rolling_vol_60d", "1.0.0", {"window": 60}, 1,
+                                    "Annualized rolling volatility using data through t-1", (0.0, 5.0)),
+    "momentum_10d": FeatureSpec("momentum_10d", "1.0.0", {"window": 10}, 1,
+                                 "10-day price momentum, lagged one observation", (-10.0, 10.0)),
+    "momentum_30d": FeatureSpec("momentum_30d", "1.0.0", {"window": 30}, 1,
+                                 "30-day price momentum, lagged one observation", (-10.0, 10.0)),
+}
+
+
+class FeatureStore:
+    """Small production-friendly feature cache.
+
+    Primary backend is Streamlit session state; an optional local pickle file
+    can persist computed Series between runs. Cache keys include a raw-data hash
+    and feature version, so corrected market data invalidates stale features.
+    """
+    def __init__(self, backend_path: Optional[Path] = None):
+        self.backend_path = backend_path or (_HERE / ".feature_store_cache.pkl")
+        self.mem = st.session_state.setdefault("quant_feature_cache", {}) if HAS_UI else {}
+
+    def _disk_get(self, key: str):
+        try:
+            if not self.backend_path.is_file():
+                return None
+            import pickle
+            with self.backend_path.open("rb") as f:
+                obj = pickle.load(f)
+            return obj.get(key) if isinstance(obj, dict) else None
+        except Exception:
+            return None
+
+    def _disk_set(self, key: str, value: pd.Series) -> None:
+        try:
+            import pickle
+            obj = {}
+            if self.backend_path.is_file():
+                with self.backend_path.open("rb") as f:
+                    old = pickle.load(f)
+                    obj = old if isinstance(old, dict) else {}
+            obj[key] = value
+            # Keep cache bounded.
+            if len(obj) > 64:
+                obj = dict(list(obj.items())[-64:])
+            tmp = self.backend_path.with_suffix(".tmp")
+            with tmp.open("wb") as f:
+                pickle.dump(obj, f, protocol=pickle.HIGHEST_PROTOCOL)
+            os.replace(tmp, self.backend_path)
+        except Exception:
+            pass
+
+    def get_or_compute(self, spec: FeatureSpec, asset: str, raw_df: pd.DataFrame) -> pd.Series:
+        data_hash = _feature_data_hash(raw_df)
+        key = spec.cache_key(asset, data_hash)
+        if key in self.mem:
+            return self.mem[key].copy()
+        cached = self._disk_get(key)
+        if isinstance(cached, pd.Series):
+            self.mem[key] = cached
+            return cached.copy()
+        fn = FEATURE_REGISTRY.get(spec.name)
+        if fn is None:
+            raise KeyError(f"Unknown feature: {spec.name}")
+        result = pd.Series([fn(raw_df, i) for i in range(len(raw_df))], index=raw_df.index, dtype=float)
+        self.mem[key] = result
+        self._disk_set(key, result)
+        return result.copy()
+
+
+def build_feature_matrix(asset: str, raw_df: pd.DataFrame,
+                         specs: list[FeatureSpec], store: FeatureStore) -> pd.DataFrame:
+    cols = {spec.name: store.get_or_compute(spec, asset, raw_df) for spec in specs}
+    return pd.DataFrame(cols, index=raw_df.index)
+
+
+def _fit_gaussian_hmm(returns: np.ndarray, n_states: int, max_iter: int = 120,
+                      tol: float = 1e-6, seed: int = 42) -> dict[str, Any]:
+    """Scaled Gaussian HMM with Baum-Welch EM, no hmmlearn dependency."""
+    x = np.asarray(returns, dtype=float)
+    x = x[np.isfinite(x)]
+    n = len(x)
+    k = int(n_states)
+    if n < max(40, k * 12) or k < 2:
+        raise ValueError("ข้อมูลผลตอบแทนน้อยเกินไปสำหรับ HMM")
+    rng = np.random.default_rng(seed)
+    qs = np.linspace(0.10, 0.90, k)
+    mu = np.quantile(x, qs)
+    mu = np.sort(mu)
+    sigma0 = max(float(np.std(x)), 1e-5)
+    var = np.full(k, sigma0 ** 2, dtype=float)
+    # Start sticky to avoid implausible one-day switching.
+    A = np.full((k, k), 0.15 / max(k - 1, 1))
+    np.fill_diagonal(A, 0.85)
+    pi = np.full(k, 1.0 / k)
+    prev_ll = -np.inf
+
+    def emit(z):
+        vv = np.maximum(var, 1e-10)
+        return np.exp(-0.5 * ((z[:, None] - mu[None, :]) ** 2) / vv[None, :]) / np.sqrt(2 * np.pi * vv[None, :])
+
+    for _ in range(max_iter):
+        B = np.maximum(emit(x), 1e-300)
+        alpha = np.zeros((n, k)); scales = np.zeros(n)
+        alpha[0] = pi * B[0]
+        scales[0] = max(alpha[0].sum(), 1e-300)
+        alpha[0] /= scales[0]
+        for t in range(1, n):
+            alpha[t] = (alpha[t - 1] @ A) * B[t]
+            scales[t] = max(alpha[t].sum(), 1e-300)
+            alpha[t] /= scales[t]
+        ll = float(np.log(scales).sum())
+
+        beta = np.zeros((n, k)); beta[-1] = 1.0
+        for t in range(n - 2, -1, -1):
+            beta[t] = A @ (B[t + 1] * beta[t + 1])
+            beta[t] /= max(scales[t + 1], 1e-300)
+        gamma = alpha * beta
+        gamma /= np.maximum(gamma.sum(axis=1, keepdims=True), 1e-300)
+
+        xi_sum = np.zeros((k, k))
+        for t in range(n - 1):
+            xij = alpha[t][:, None] * A * (B[t + 1] * beta[t + 1])[None, :]
+            denom = max(float(xij.sum()), 1e-300)
+            xi_sum += xij / denom
+
+        pi = np.clip(gamma[0], 1e-10, None); pi /= pi.sum()
+        A = np.maximum(xi_sum, 1e-12)
+        A /= A.sum(axis=1, keepdims=True)
+        weights = np.maximum(gamma.sum(axis=0), 1e-10)
+        mu = (gamma * x[:, None]).sum(axis=0) / weights
+        var = (gamma * (x[:, None] - mu[None, :]) ** 2).sum(axis=0) / weights
+        var = np.maximum(var, 1e-8)
+        if ll - prev_ll < tol and np.isfinite(prev_ll):
+            break
+        prev_ll = ll
+
+    # Final filtered probabilities using only data through each t.
+    B = np.maximum(emit(x), 1e-300)
+    alpha = np.zeros((n, k)); scales = np.zeros(n)
+    alpha[0] = pi * B[0]; scales[0] = max(alpha[0].sum(), 1e-300); alpha[0] /= scales[0]
+    for t in range(1, n):
+        alpha[t] = (alpha[t - 1] @ A) * B[t]
+        scales[t] = max(alpha[t].sum(), 1e-300); alpha[t] /= scales[t]
+    filtered = alpha / np.maximum(alpha.sum(axis=1, keepdims=True), 1e-300)
+
+    # Smoothed probabilities are for research/backtest only.
+    beta = np.zeros((n, k)); beta[-1] = 1.0
+    for t in range(n - 2, -1, -1):
+        beta[t] = A @ (B[t + 1] * beta[t + 1])
+        beta[t] /= max(scales[t + 1], 1e-300)
+    smoothed = alpha * beta
+    smoothed /= np.maximum(smoothed.sum(axis=1, keepdims=True), 1e-300)
+    p = k + k + k * (k - 1) + (k - 1)
+    bic = -2.0 * ll + p * np.log(n)
+    return {"mu": mu, "sigma": np.sqrt(var), "A": A, "pi": pi, "loglik": ll,
+            "bic": float(bic), "filtered": filtered, "smoothed": smoothed, "returns": x}
+
+
+def fit_hmm_bic(returns: pd.Series, k_values=(2, 3, 4, 5), seed: int = 42) -> dict[str, Any]:
+    clean = pd.to_numeric(returns, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    fits = []
+    for k in k_values:
+        try:
+            fits.append((k, _fit_gaussian_hmm(clean.to_numpy(), k, seed=seed + k)))
+        except Exception:
+            continue
+    if not fits:
+        raise ValueError("HMM fit ไม่สำเร็จ")
+    best_k, best = min(fits, key=lambda kv: kv[1]["bic"])
+    return {"best_k": best_k, "best": best, "fits": fits, "index": clean.index}
+
+
+def apply_regime_hysteresis(prob: pd.DataFrame, threshold: float = 0.65, min_days: int = 2) -> pd.Series:
+    labels = []
+    current = None; streak = 0; candidate = None
+    for _, row in prob.iterrows():
+        top = str(row.idxmax())
+        top_p = float(row.max())
+        if top == current:
+            candidate = None; streak = 0
+        elif top_p >= threshold:
+            if candidate == top: streak += 1
+            else: candidate, streak = top, 1
+            if streak >= min_days:
+                current = top; candidate = None; streak = 0
+        labels.append(current if current is not None else (labels[-1] if labels else top))
+    return pd.Series(labels, index=prob.index, name="regime")
+
+
+def regime_spread_blend(filtered: np.ndarray, base_spreads: np.ndarray) -> np.ndarray:
+    p = np.asarray(filtered, dtype=float)
+    b = np.asarray(base_spreads, dtype=float)
+    return p @ b
+
+
+@dataclass
+class WFWindow:
+    train_start: pd.Timestamp
+    train_end: pd.Timestamp
+    purge_end: pd.Timestamp
+    test_start: pd.Timestamp
+    test_end: pd.Timestamp
+
+
+def generate_walk_forward_windows(data_start, data_end, train_days=180, test_days=30,
+                                  purge_days=3, mode="rolling") -> list[WFWindow]:
+    windows = []
+    cursor = pd.Timestamp(data_start)
+    end = pd.Timestamp(data_end)
+    while True:
+        train_start = pd.Timestamp(data_start) if mode == "anchored" else cursor
+        train_end = cursor + pd.Timedelta(days=train_days)
+        purge_end = train_end + pd.Timedelta(days=purge_days)
+        test_start = purge_end
+        test_end = test_start + pd.Timedelta(days=test_days)
+        if test_end > end: break
+        windows.append(WFWindow(train_start, train_end, purge_end, test_start, test_end))
+        cursor = cursor + pd.Timedelta(days=test_days)
+    return windows
+
+
+def walk_forward_efficiency(wf_results: pd.DataFrame) -> dict[str, float]:
+    if wf_results is None or wf_results.empty:
+        return {"wfe": float("nan"), "is_mean": float("nan"), "oos_mean": float("nan"),
+                "param_stability_cv": float("nan"), "pct_windows_profitable": 0.0}
+    is_mean = float(wf_results["in_sample_score"].mean())
+    oos_mean = float(wf_results["out_of_sample_score"].mean())
+    spreads = []
+    for p in wf_results.get("chosen_params", []):
+        if isinstance(p, dict) and "dealer_spread" in p:
+            spreads.append(float(p["dealer_spread"]))
+    cv = float(np.std(spreads) / np.mean(spreads)) if spreads and np.mean(spreads) else float("inf")
+    return {"wfe": oos_mean / is_mean if is_mean else float("nan"), "is_mean": is_mean,
+            "oos_mean": oos_mean, "param_stability_cv": cv,
+            "pct_windows_profitable": float((wf_results["out_of_sample_score"] > 0).mean())}
+
+
+def _wf_objective(bt: pd.DataFrame) -> float:
+    m = _backtest_metrics(bt)
+    s = float(m.get("sharpe", 0.0) or 0.0)
+    # Avoid selecting a high-Sharpe result with catastrophic drawdown.
+    dd = abs(float(m.get("max_drawdown", 0.0) or 0.0))
+    return s - 0.02 * dd
+
+
+def run_walk_forward(data: pd.DataFrame, param_grid: list[dict[str, Any]],
+                     backtest_fn, objective_fn=_wf_objective,
+                     train_days=180, test_days=30, purge_days=3, mode="rolling") -> pd.DataFrame:
+    windows = generate_walk_forward_windows(data.index.min(), data.index.max(), train_days, test_days, purge_days, mode)
+    rows = []
+    for w in windows:
+        train = data.loc[w.train_start:w.train_end]
+        test = data.loc[w.test_start:w.test_end]
+        if len(train) < 30 or len(test) < 5:
+            continue
+        is_scores: dict[str, float] = {}
+        oos_scores: dict[str, float] = {}
+        oos_returns: dict[str, list[float]] = {}
+        best_params = None; best_score = -float("inf")
+        for params in param_grid:
+            key = json.dumps(params, sort_keys=True, default=str)
+            try:
+                is_bt = backtest_fn(train, **params)
+                is_score = float(objective_fn(is_bt))
+                is_scores[key] = is_score
+                if is_score > best_score:
+                    best_score, best_params = is_score, params
+                oos_bt = backtest_fn(test, **params)
+                oos_scores[key] = float(objective_fn(oos_bt))
+                if "Actual_Daily_PnL" in oos_bt:
+                    oos_returns[key] = pd.to_numeric(oos_bt["Actual_Daily_PnL"], errors="coerce").fillna(0.0).tolist()
+            except Exception:
+                continue
+        if best_params is None:
+            continue
+        best_key = json.dumps(best_params, sort_keys=True, default=str)
+        rows.append({
+            "window_start": w.test_start, "window_end": w.test_end,
+            "chosen_params": best_params, "in_sample_score": best_score,
+            "out_of_sample_score": oos_scores.get(best_key, float("nan")),
+            "candidate_is_scores": is_scores, "candidate_oos_scores": oos_scores,
+            "chosen_oos_returns": oos_returns.get(best_key, []),
+        })
+    return pd.DataFrame(rows)
+
+
+def pbo_from_wf_results(wf_results: pd.DataFrame) -> float:
+    """PBO-style estimate: how often the IS winner falls below OOS median."""
+    if wf_results is None or wf_results.empty:
+        return float("nan")
+    bad = 0; total = 0
+    for _, row in wf_results.iterrows():
+        is_scores = row.get("candidate_is_scores", {})
+        oos_scores = row.get("candidate_oos_scores", {})
+        if not isinstance(is_scores, dict) or not isinstance(oos_scores, dict) or len(is_scores) < 4:
+            continue
+        winner = max(is_scores, key=lambda k: is_scores.get(k, -float("inf")))
+        vals = pd.Series(oos_scores, dtype=float).dropna()
+        if winner not in vals.index or vals.empty:
+            continue
+        total += 1
+        bad += int(float(vals.rank(pct=True).get(winner, 1.0)) < 0.5)
+    return float(bad / total) if total else float("nan")
+
+
+def wf_oos_return_series(wf_results: pd.DataFrame) -> pd.Series:
+    if wf_results is None or wf_results.empty:
+        return pd.Series(dtype=float)
+    chunks = []
+    for x in wf_results.get("chosen_oos_returns", []):
+        if isinstance(x, list):
+            chunks.extend(x)
+    return pd.Series(chunks, dtype=float).replace([np.inf, -np.inf], np.nan).dropna()
+
+
+def purged_kfold_splits(n_samples: int, n_splits: int = 5, embargo_frac: float = 0.01):
+    fold_size = max(n_samples // n_splits, 1)
+    embargo = int(n_samples * embargo_frac)
+    for k in range(n_splits):
+        test_start = k * fold_size
+        test_end = min(test_start + fold_size, n_samples)
+        train_idx = list(range(0, max(0, test_start - embargo))) + list(range(min(n_samples, test_end + embargo), n_samples))
+        yield train_idx, list(range(test_start, test_end))
+
+
+def simulate_garch(n_days: int, mu: float, omega: float, alpha: float, beta: float,
+                   sigma0: float, seed: int) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    returns = np.zeros(n_days); sigma2 = np.zeros(n_days); sigma2[0] = sigma0 ** 2
+    for t in range(1, n_days):
+        z = rng.standard_normal()
+        returns[t] = mu + np.sqrt(max(sigma2[t - 1], 1e-12)) * z
+        sigma2[t] = max(omega + alpha * (returns[t] - mu) ** 2 + beta * sigma2[t - 1], 1e-12)
+    return returns
+
+
+def simulate_egarch(n_days: int, mu: float, omega: float, alpha: float, beta: float,
+                    gamma: float, sigma0: float, seed: int) -> np.ndarray:
+    rng = np.random.default_rng(seed); out = np.zeros(n_days); logv = np.zeros(n_days)
+    logv[0] = np.log(max(sigma0 ** 2, 1e-10)); ez = np.sqrt(2 / np.pi)
+    for t in range(1, n_days):
+        sigma = np.sqrt(np.exp(logv[t - 1])); z = rng.standard_normal(); out[t] = mu + sigma * z
+        prev_z = (out[t] - mu) / max(sigma, 1e-10)
+        logv[t] = omega + beta * logv[t - 1] + alpha * (abs(prev_z) - ez) + gamma * prev_z
+    return out
+
+
+def simulate_jump_diffusion(n_days: int, s0: float, mu: float, sigma: float,
+                            jump_lambda: float, jump_mu: float, jump_sigma: float,
+                            seed: int) -> np.ndarray:
+    rng = np.random.default_rng(seed); dt = 1 / 365; prices = np.zeros(n_days); prices[0] = s0
+    for t in range(1, n_days):
+        z = rng.standard_normal(); diffusion = (mu - 0.5 * sigma ** 2) * dt + sigma * np.sqrt(dt) * z
+        n_jumps = rng.poisson(max(jump_lambda, 0) * dt)
+        jump = float(rng.normal(jump_mu, jump_sigma, n_jumps).sum()) if n_jumps else 0.0
+        prices[t] = max(prices[t - 1] * np.exp(diffusion + jump), 1e-12)
+    return prices
+
+
+def simulate_t_copula(n_days: int, corr_matrix: np.ndarray, dof: int, seed: int) -> np.ndarray:
+    try:
+        from scipy.stats import t as student_t
+    except Exception as exc:
+        raise RuntimeError("ต้องมี scipy สำหรับ t-copula") from exc
+    rng = np.random.default_rng(seed); corr = np.asarray(corr_matrix, dtype=float)
+    corr = (corr + corr.T) / 2; np.fill_diagonal(corr, 1.0)
+    L = np.linalg.cholesky(corr + np.eye(corr.shape[0]) * 1e-8)
+    z = rng.standard_normal((n_days, corr.shape[0])) @ L.T
+    chi2 = rng.chisquare(max(int(dof), 2), size=n_days)
+    t_samples = z / np.sqrt(chi2 / max(int(dof), 2))[:, None]
+    return student_t.cdf(t_samples, df=max(int(dof), 2))
+
+
+def validate_synthetic_data(real: np.ndarray, synthetic: np.ndarray) -> dict[str, Any]:
+    real = np.asarray(real, dtype=float); synthetic = np.asarray(synthetic, dtype=float)
+    real = real[np.isfinite(real)]; synthetic = synthetic[np.isfinite(synthetic)]
+    out = {
+        "n_real": int(len(real)), "n_synthetic": int(len(synthetic)),
+        "mean_diff": float(abs(real.mean() - synthetic.mean())) if len(real) else float("nan"),
+        "vol_diff": float(abs(real.std() - synthetic.std())) if len(real) else float("nan"),
+        "skew_diff": float(abs(pd.Series(real).skew() - pd.Series(synthetic).skew())) if len(real) > 2 and len(synthetic) > 2 else float("nan"),
+        "kurtosis_diff": float(abs(pd.Series(real).kurt() - pd.Series(synthetic).kurt())) if len(real) > 3 and len(synthetic) > 3 else float("nan"),
+        "autocorr_lag1_real": float(pd.Series(real).autocorr(1)) if len(real) > 2 else float("nan"),
+        "autocorr_lag1_synth": float(pd.Series(synthetic).autocorr(1)) if len(synthetic) > 2 else float("nan"),
+    }
+    try:
+        from scipy.stats import ks_2samp
+        out["ks_test_pvalue"] = float(ks_2samp(real, synthetic).pvalue)
+    except Exception:
+        out["ks_test_pvalue"] = float("nan")
+    return out
+
+
+def information_coefficient(feature: pd.Series, forward_return: pd.Series) -> float:
+    aligned = pd.concat([feature, forward_return], axis=1).replace([np.inf, -np.inf], np.nan).dropna()
+    if len(aligned) < 8: return float("nan")
+    return float(aligned.iloc[:, 0].rank().corr(aligned.iloc[:, 1].rank()))
+
+
+def _approx_dsr(sharpe_annualized: float, returns: pd.Series, n_trials: int) -> float:
+    try:
+        from scipy.stats import norm
+        r = pd.to_numeric(returns, errors="coerce").dropna().to_numpy()
+        n = len(r)
+        if n < 10: return float("nan")
+        daily_sr = float(np.mean(r) / np.std(r, ddof=1)) if np.std(r, ddof=1) > 0 else 0.0
+        skew = float(pd.Series(r).skew()); kurt_raw = float(pd.Series(r).kurt() + 3.0)
+        trials = max(int(n_trials), 1)
+        gamma_e = 0.5772156649
+        var_sr = max((1 - skew * daily_sr + ((kurt_raw - 1) / 4.0) * daily_sr ** 2) / max(n - 1, 1), 1e-12)
+        sr0 = np.sqrt(var_sr) * ((1 - gamma_e) * norm.ppf(1 - 1 / trials) + gamma_e * norm.ppf(1 - 1 / (trials * np.e))) if trials > 1 else 0.0
+        z = (daily_sr - sr0) / np.sqrt(var_sr)
+        return float(norm.cdf(z))
+    except Exception:
+        return float("nan")
+
+
+def estimate_pbo(score_matrix: pd.DataFrame) -> float:
+    """PBO approximation: probability that IS winner ranks below OOS median."""
+    if score_matrix is None or score_matrix.empty or score_matrix.shape[1] < 2: return float("nan")
+    bad = 0; total = 0
+    for _, row in score_matrix.iterrows():
+        vals = pd.to_numeric(row, errors="coerce").dropna()
+        if len(vals) < 4: continue
+        split = len(vals) // 2
+        is_scores = vals.iloc[:split]; oos_scores = vals.iloc[split:]
+        if is_scores.empty or oos_scores.empty: continue
+        winner = is_scores.idxmax()
+        rank = oos_scores.rank(pct=True).get(winner, np.nan)
+        if pd.notna(rank):
+            total += 1
+            bad += int(float(rank) < 0.5)
+    return float(bad / total) if total else float("nan")
+
+
+def _quant_readiness_rows(ic: float, wfe: float, stability: float, dsr: float, pbo: float,
+                          synth: dict[str, Any], shadow_weeks: int) -> list[tuple[str, bool, str]]:
+    ks = float(synth.get("ks_test_pvalue", np.nan)) if synth else np.nan
+    return [
+        ("Feature IC |IC| > 0.05", bool(np.isfinite(ic) and abs(ic) > 0.05), f"IC={ic:+.3f}"),
+        ("Regime ใช้ filtered probability", True, "Live inference ไม่ใช้ smoothed"),
+        ("WFE > 0.50", bool(np.isfinite(wfe) and wfe > 0.50), f"WFE={wfe:.2f}" if np.isfinite(wfe) else "ยังคำนวณไม่ได้"),
+        ("Parameter stability CV < 0.30", bool(np.isfinite(stability) and stability < 0.30), f"CV={stability:.2f}" if np.isfinite(stability) else "ยังคำนวณไม่ได้"),
+        ("Deflated Sharpe ผ่าน threshold", bool(np.isfinite(dsr) and dsr >= 0.95), f"DSR={dsr:.3f}" if np.isfinite(dsr) else "ยังคำนวณไม่ได้"),
+        ("PBO < 50%", bool(np.isfinite(pbo) and pbo < 0.50), f"PBO={pbo:.1%}" if np.isfinite(pbo) else "ยังคำนวณไม่ได้"),
+        ("Synthetic KS p-value > 0.05", bool(np.isfinite(ks) and ks > 0.05), f"KS p={ks:.3f}" if np.isfinite(ks) else "ยังคำนวณไม่ได้"),
+        ("Shadow mode ก่อน cutover", shadow_weeks >= 2, f"เก็บ shadow {shadow_weeks} สัปดาห์"),
+    ]
+
+
+def _quant_asset_frame(data: pd.DataFrame, cfg: dict[str, Any]) -> pd.DataFrame:
+    if data is None or data.empty: return pd.DataFrame()
+    asset = str(cfg.get("asset", "BTC")).upper()
+    if "Global_USD" not in data.columns: return pd.DataFrame()
+    out = pd.DataFrame({"price": pd.to_numeric(data["Global_USD"], errors="coerce")}, index=pd.to_datetime(data.index))
+    out = out.replace([np.inf, -np.inf], np.nan).dropna()
+    out = out[out["price"] > 0].sort_index()
+    out.attrs["asset"] = asset
+    return out
+
+
+def render_quant_research_lab(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
+    """Institutional-style research lab. Research only; no live order execution."""
+    st.markdown("## 🧪 Quant Research Lab")
+    st.caption("HMM Regime · Point-in-Time Feature Store · Walk-Forward · Synthetic Stress · Evaluation Framework")
+    qdf = _quant_asset_frame(data, cfg)
+    if qdf.empty or len(qdf) < 80:
+        st.info("ต้องมีราคาย้อนหลังอย่างน้อย ~80 จุดเพื่อเปิด Quant Research Lab")
+        return
+    asset = str(qdf.attrs.get("asset", cfg.get("asset", "BTC"))).upper()
+    returns = np.log(qdf["price"] / qdf["price"].shift(1)).replace([np.inf, -np.inf], np.nan).dropna()
+
+    qtabs = st.tabs(["🌡️ Regime HMM", "🧱 Feature Store", "🔄 Walk-Forward", "🧬 Synthetic Stress", "🧪 Evaluation"])
+
+    with qtabs[0]:
+        st.markdown("### Gaussian HMM — filtered probability สำหรับ live")
+        c1, c2, c3 = st.columns(3)
+        k_range = c1.multiselect("K ที่จะทดสอบ (BIC)", [2, 3, 4, 5], default=[2, 3, 4], key="quant_hmm_ks")
+        threshold = c2.slider("Hysteresis probability", 0.50, 0.90, 0.65, 0.01, key="quant_hmm_thr")
+        min_days = c3.number_input("ยืนยัน label ติดต่อกัน (วัน)", 1, 5, 2, key="quant_hmm_days")
+        if st.button("▶️ Fit HMM + BIC", key="quant_hmm_fit", use_container_width=True):
+            try:
+                fit = fit_hmm_bic(returns, tuple(k_range or [2, 3, 4]))
+                st.session_state["quant_hmm_fit"] = fit
+            except Exception as exc:
+                st.error(f"HMM fit ไม่สำเร็จ: {exc}")
+        fit = st.session_state.get("quant_hmm_fit")
+        if fit:
+            rows = [{"K": k, "BIC": round(float(m["bic"]), 2), "Log-Likelihood": round(float(m["loglik"]), 2)} for k, m in fit["fits"]]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            best = fit["best"]
+            prob = pd.DataFrame(best["filtered"], index=fit["index"], columns=[f"State {i+1}" for i in range(fit["best_k"])])
+            labels = apply_regime_hysteresis(prob, threshold, int(min_days))
+            # Sort state descriptions by volatility for readable labels.
+            order = np.argsort(best["sigma"])
+            desc = {int(state): ("Low-vol" if rank == 0 else "High-vol" if rank == len(order)-1 else "Mid-vol") for rank, state in enumerate(order)}
+            final_state = int(np.argmax(best["filtered"][-1]))
+            st.success(f"Best K = {fit['best_k']} · BIC ต่ำสุด · Live filtered state = State {final_state+1} ({desc.get(final_state, 'Regime')}) · probability {best['filtered'][-1].max():.1%}")
+            mcols = st.columns(fit["best_k"])
+            for i, col in enumerate(mcols):
+                col.metric(f"State {i+1}", f"μ {best['mu'][i]*100:+.2f}%", f"σ {best['sigma'][i]*100:.2f}%/day")
+            chart = go.Figure()
+            for col in prob.columns:
+                chart.add_trace(go.Scatter(x=prob.index, y=prob[col], name=col, mode="lines"))
+            chart.update_layout(template="plotly_dark", height=320, yaxis_title="Filtered P(state)", margin=dict(t=20,b=20), legend=dict(orientation="h", y=1.12))
+            st.plotly_chart(chart, **WIDE)
+            with st.expander("Transition matrix / parameter details"):
+                st.dataframe(pd.DataFrame(best["A"], index=[f"S{i+1}" for i in range(fit['best_k'])], columns=[f"S{i+1}" for i in range(fit['best_k'])]).round(3), use_container_width=True)
+                st.caption("Smoothed probabilityมีไว้สำหรับ backtest/research เท่านั้น; live decision ใช้ filtered probability จากข้อมูลถึง t เท่านั้น")
+
+    with qtabs[1]:
+        st.markdown("### Point-in-Time Feature Store")
+        store = FeatureStore()
+        selected = st.multiselect("Features", list(FEATURE_SPECS.keys()), default=["rolling_vol_20d", "momentum_10d"], key="quant_features")
+        specs = [FEATURE_SPECS[x] for x in selected]
+        raw = qdf[["price"]].copy()
+        if specs:
+            fm = build_feature_matrix(asset, raw, specs, store)
+            st.dataframe(fm.tail(20).round(6), use_container_width=True)
+            ic_rows = []
+            fwd1 = qdf["price"].pct_change(1).shift(-1)
+            for s in specs:
+                ic_rows.append({"feature": s.name, "version": s.fn_version, "lag_days": s.lag_days,
+                                "IC_1d_spearman": information_coefficient(fm[s.name], fwd1),
+                                "expected_range": str(s.expected_range)})
+            st.dataframe(pd.DataFrame(ic_rows).round(4), use_container_width=True, hide_index=True)
+            st.caption("Cache key = feature version + params + asset + hash ของ raw price; แก้ข้อมูลย้อนหลังแล้ว cache จะ invalidate")
+        else:
+            st.info("เลือก feature อย่างน้อย 1 ตัว")
+
+    with qtabs[2]:
+        st.markdown("### Walk-Forward Optimization")
+        c1,c2,c3,c4 = st.columns(4)
+        train_days = c1.number_input("Train days", 90, 720, 180, 30, key="quant_wf_train")
+        test_days = c2.number_input("Test days", 7, 120, 30, 7, key="quant_wf_test")
+        purge_days = c3.number_input("Purge days", 1, 30, 3, 1, key="quant_wf_purge")
+        mode = c4.selectbox("Window", ["rolling", "anchored"], key="quant_wf_mode")
+        spread0 = float(cfg.get("dealer_spread", 0.5) or 0.5)
+        prem0 = float(cfg.get("local_premium", 0.0) or 0.0)
+        grid_spreads = st.multiselect("Dealer spread grid", sorted(set([max(0.01, spread0*0.5), spread0, spread0*1.5])), default=[max(0.01, spread0*0.5), spread0], key="quant_wf_spreads")
+        grid_prem = st.multiselect("Local premium grid", sorted(set([prem0-0.25, prem0, prem0+0.25])), default=[prem0], key="quant_wf_prem")
+        grid_vol = st.multiselect("Trade volume grid", sorted(set([0.5, 1.0, 1.5])), default=[1.0], key="quant_wf_vol")
+        param_grid = [{"dealer_spread": s, "local_premium": p, "trade_vol": v} for s,p,v in product(grid_spreads, grid_prem, grid_vol)]
+        st.caption(f"Candidates: {len(param_grid)} configs · optimize train only · purge {purge_days}d · test OOS")
+        if st.button("▶️ Run Walk-Forward", key="quant_wf_run", use_container_width=True):
+            base = copy.deepcopy(cfg)
+            def _bt(frame, **params):
+                c = copy.deepcopy(base); c.update(params); return _backtest_frame(c, frame)
+            try:
+                wf = run_walk_forward(data, param_grid, _bt,
+                                      train_days=int(train_days), test_days=int(test_days), purge_days=int(purge_days), mode=mode)
+                st.session_state["quant_wf_results"] = wf
+            except Exception as exc:
+                st.error(f"Walk-Forward ล้มเหลว: {exc}")
+        wf = st.session_state.get("quant_wf_results")
+        if isinstance(wf, pd.DataFrame) and not wf.empty:
+            wfm = walk_forward_efficiency(wf)
+            k = st.columns(4)
+            k[0].metric("WFE", f"{wfm['wfe']:.2f}" if np.isfinite(wfm['wfe']) else "—")
+            k[1].metric("IS mean", f"{wfm['is_mean']:.3f}")
+            k[2].metric("OOS mean", f"{wfm['oos_mean']:.3f}")
+            k[3].metric("Parameter CV", f"{wfm['param_stability_cv']:.2f}" if np.isfinite(wfm['param_stability_cv']) else "—")
+            st.dataframe(wf.assign(chosen_params=wf["chosen_params"].astype(str)).round(4), use_container_width=True, hide_index=True)
+        else:
+            st.info("ยังไม่มีผล Walk-Forward")
+
+    with qtabs[3]:
+        st.markdown("### Synthetic Market Stress")
+        c1,c2,c3 = st.columns(3)
+        synth_model = c1.selectbox("Model", ["GARCH(1,1)", "EGARCH", "Merton Jump-Diffusion", "t-Copula"], key="quant_synth_model")
+        n_days = c2.number_input("Days", 250, 5000, 1000, 100, key="quant_synth_days")
+        seed = c3.number_input("Seed", 1, 999999, 42, key="quant_synth_seed")
+        if st.button("🧬 Generate + Validate", key="quant_synth_run", use_container_width=True):
+            try:
+                real_ret = returns.to_numpy()
+                if synth_model == "GARCH(1,1)":
+                    synth = simulate_garch(int(n_days), float(real_ret.mean()), 1e-6, 0.08, 0.90, max(float(real_ret.std()),1e-4), int(seed))
+                elif synth_model == "EGARCH":
+                    synth = simulate_egarch(int(n_days), float(real_ret.mean()), -0.15, 0.12, 0.96, -0.08, max(float(real_ret.std()),1e-4), int(seed))
+                elif synth_model == "Merton Jump-Diffusion":
+                    prices = simulate_jump_diffusion(int(n_days), float(qdf["price"].iloc[-1]), float(real_ret.mean()*365), float(real_ret.std()*np.sqrt(365)), 6.0, -0.04, 0.08, int(seed))
+                    synth = np.diff(np.log(prices), prepend=np.log(prices[0]))
+                else:
+                    corr = np.array([[1.0, 0.65],[0.65,1.0]])
+                    u = simulate_t_copula(int(n_days), corr, 5, int(seed))
+                    from scipy.stats import norm
+                    synth = norm.ppf(u[:,0]) * max(float(real_ret.std()),1e-4) + float(real_ret.mean())
+                validation = validate_synthetic_data(real_ret, synth)
+                st.session_state["quant_synth"] = (synth, validation)
+            except Exception as exc:
+                st.error(f"Synthetic generation ล้มเหลว: {exc}")
+        if "quant_synth" in st.session_state:
+            synth, val = st.session_state["quant_synth"]
+            kc = st.columns(5)
+            kc[0].metric("KS p-value", f"{val['ks_test_pvalue']:.3f}" if np.isfinite(val['ks_test_pvalue']) else "—")
+            kc[1].metric("Mean diff", f"{val['mean_diff']:.4f}")
+            kc[2].metric("Vol diff", f"{val['vol_diff']:.4f}")
+            kc[3].metric("Skew diff", f"{val['skew_diff']:.3f}")
+            kc[4].metric("Kurtosis diff", f"{val['kurtosis_diff']:.3f}")
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(y=real_ret[-min(len(real_ret), len(synth)):], name="Real", mode="lines"))
+            fig.add_trace(go.Scatter(y=synth[-min(len(real_ret), len(synth)):], name="Synthetic", mode="lines"))
+            fig.update_layout(template="plotly_dark", height=300, margin=dict(t=20,b=20), legend=dict(orientation="h", y=1.12))
+            st.plotly_chart(fig, **WIDE)
+            st.caption("Validation นี้เป็น distribution/moment check; ไม่ได้พิสูจน์ว่า synthetic market มี microstructure เหมือนตลาดจริง")
+
+    with qtabs[4]:
+        st.markdown("### Evaluation Framework — ก่อน production")
+        feature = pd.Series(dtype=float)
+        try:
+            feature = FeatureStore().get_or_compute(FEATURE_SPECS["rolling_vol_20d"], asset, qdf[["price"]])
+        except Exception:
+            pass
+        fwd = qdf["price"].pct_change().shift(-1)
+        ic = information_coefficient(feature, fwd) if not feature.empty else float("nan")
+        wf = st.session_state.get("quant_wf_results")
+        wfm = walk_forward_efficiency(wf) if isinstance(wf, pd.DataFrame) and not wf.empty else {}
+        dsr = float("nan"); pbo = float("nan")
+        if isinstance(wf, pd.DataFrame) and not wf.empty:
+            oos_returns = wf_oos_return_series(wf)
+            if len(oos_returns) >= 20:
+                daily_sr = float(oos_returns.mean() / oos_returns.std(ddof=1)) if oos_returns.std(ddof=1) > 0 else 0.0
+                dsr = _approx_dsr(daily_sr * np.sqrt(252.0), oos_returns, max(len(wf), 2))
+            pbo = pbo_from_wf_results(wf)
+        synth_val = st.session_state.get("quant_synth", (None, {}))[1]
+        shadow_weeks = int(st.number_input("Shadow-mode ที่เก็บจริง (สัปดาห์)", 0, 104, 0, key="quant_shadow_weeks"))
+        checks = _quant_readiness_rows(ic, float(wfm.get("wfe", np.nan)), float(wfm.get("param_stability_cv", np.nan)), dsr, pbo, synth_val, shadow_weeks)
+        ec = st.columns(4)
+        ec[0].metric("Feature IC", f"{ic:+.3f}" if np.isfinite(ic) else "—")
+        ec[1].metric("WFE", f"{float(wfm.get('wfe')):.2f}" if np.isfinite(float(wfm.get('wfe', np.nan))) else "—")
+        ec[2].metric("Deflated Sharpe", f"{dsr:.3f}" if np.isfinite(dsr) else "—")
+        ec[3].metric("PBO", f"{pbo:.1%}" if np.isfinite(pbo) else "—")
+        st.dataframe(pd.DataFrame([{"check": a, "pass": b, "evidence": c} for a,b,c in checks]), use_container_width=True, hide_index=True)
+        st.markdown("#### IC decay")
+        ic_rows = []
+        for h in [1, 3, 5, 10, 20, 30]:
+            ic_rows.append({"horizon_days": h, "IC": information_coefficient(feature, qdf["price"].pct_change(h).shift(-h))})
+        st.dataframe(pd.DataFrame(ic_rows).round(4), use_container_width=True, hide_index=True)
+        st.warning("Production gate: ใช้ OOS metrics, filtered regime probabilities และ shadow mode ก่อน execute จริงเสมอ")
+
+
 def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
     """Portfolio performance analytics derived from stored portfolio snapshots."""
     sim = st.session_state.get("sim", {})
@@ -13323,405 +13591,6 @@ def _render_ai_portfolio_narrator(sim: dict[str, Any], snap: dict[str, Any],
         unsafe_allow_html=True,
     )
 
-
-# =========================================================================
-# AI WEEKLY / MONTHLY DIGEST
-# =========================================================================
-
-DIGEST_AI_SYSTEM = (
-    "คุณคือนักวิเคราะห์ที่เขียนจดหมายสรุปผลงานพอร์ตให้นักลงทุน (Investor Letter) "
-    "โทนมืออาชีพแต่อ่านง่าย ภาษาไทย ความยาว 150-220 คำ แบ่งเป็นย่อหน้าสั้นๆ 3-4 ย่อหน้า "
-    "(1. ภาพรวมผลตอบแทนช่วงนี้ 2. จุดที่น่าสนใจ/ความผันผวนระหว่างทาง 3. กิจกรรมการเทรดและค่าธรรมเนียม "
-    "4. ข้อสังเกตด้านความเสี่ยงปิดท้าย) ใช้เฉพาะตัวเลขที่ได้รับเท่านั้น ห้ามสมมติหรือทำนายอนาคต "
-    "ห้ามแนะนำซื้อขายหรือถือเหรียญใด หากตัวเลขติดลบให้รายงานตามจริงอย่างเป็นกลาง ไม่ปลอบใจเกินจริง"
-)
-
-
-def compute_digest_period_stats(sim: dict[str, Any], period: str) -> Optional[dict[str, Any]]:
-    """คำนวณสถิติสำหรับ digest จาก Portfolio Snapshot History จริง (period = weekly/monthly)."""
-    period = str(period or "weekly").lower().strip()
-    if period not in {"weekly", "monthly"}:
-        period = "weekly"
-    snapshots = _portfolio_snapshots_init(sim)
-    if len(snapshots) < 2:
-        return None
-    df = pd.DataFrame(snapshots)
-    if "date" not in df.columns or "total_value_thb" not in df.columns:
-        return None
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df["total_value_thb"] = pd.to_numeric(df["total_value_thb"], errors="coerce")
-    df = df.dropna(subset=["date", "total_value_thb"]).sort_values("date").reset_index(drop=True)
-    if len(df) < 2:
-        return None
-
-    end_date = df["date"].max()
-    if period == "weekly":
-        start_date = end_date - pd.Timedelta(days=7)
-        label = (
-            f"สัปดาห์ {(end_date - pd.Timedelta(days=6)).strftime('%d %b')} – "
-            f"{end_date.strftime('%d %b %Y')}"
-        )
-    else:
-        start_date = end_date - pd.Timedelta(days=30)
-        label = (
-            f"{(end_date - pd.Timedelta(days=29)).strftime('%d %b')} – "
-            f"{end_date.strftime('%d %b %Y')}"
-        )
-
-    window = df[df["date"] >= start_date].copy()
-    if len(window) < 2:
-        window = df.tail(2).copy()
-
-    start_row, end_row = window.iloc[0], window.iloc[-1]
-    start_val = float(start_row["total_value_thb"] or 0.0)
-    end_val = float(end_row["total_value_thb"] or 0.0)
-    period_return_pct = ((end_val / start_val) - 1.0) * 100.0 if start_val else 0.0
-
-    vals = window["total_value_thb"].astype(float)
-    rets = vals.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
-    best_day = float(rets.max() * 100.0) if len(rets) else 0.0
-    worst_day = float(rets.min() * 100.0) if len(rets) else 0.0
-    volatility = float(rets.std(ddof=1) * 100.0) if len(rets) >= 2 else 0.0
-
-    def _num(row: pd.Series, key: str) -> float:
-        try:
-            return float(row.get(key, 0) or 0)
-        except (TypeError, ValueError):
-            return 0.0
-
-    fees_period = _num(end_row, "fees_thb") - _num(start_row, "fees_thb")
-    realized_period = _num(end_row, "realized_pnl_thb") - _num(start_row, "realized_pnl_thb")
-
-    start_assets = {
-        str(a.get("asset", "")).upper(): float(a.get("allocation_pct", 0) or 0)
-        for a in (start_row.get("assets") or []) if isinstance(a, dict)
-    }
-    end_assets = {
-        str(a.get("asset", "")).upper(): float(a.get("allocation_pct", 0) or 0)
-        for a in (end_row.get("assets") or []) if isinstance(a, dict)
-    }
-    drift = []
-    for sym in set(start_assets) | set(end_assets):
-        s0, s1 = start_assets.get(sym, 0.0), end_assets.get(sym, 0.0)
-        if abs(s1 - s0) >= 1.0:
-            drift.append({"asset": sym, "from_pct": round(s0, 1), "to_pct": round(s1, 1)})
-    drift.sort(key=lambda x: abs(x["to_pct"] - x["from_pct"]), reverse=True)
-
-    ledger = sim.get("portfolio_ledger", []) or []
-    n_buy = n_sell = 0
-    volume = 0.0
-    for t in ledger:
-        if not isinstance(t, dict):
-            continue
-        ts = pd.to_datetime(t.get("timestamp", ""), errors="coerce")
-        if pd.isna(ts) or ts < start_date or ts > end_date + pd.Timedelta(days=1):
-            continue
-        typ = str(t.get("type", "")).upper()
-        if typ in {"BUY", "SELL"}:
-            volume += float(t.get("gross_thb", 0) or 0)
-            if typ == "BUY":
-                n_buy += 1
-            else:
-                n_sell += 1
-
-    return {
-        "period_label": label,
-        "start_date": start_row["date"].strftime("%Y-%m-%d"),
-        "end_date": end_row["date"].strftime("%Y-%m-%d"),
-        "start_value_thb": round(start_val, 2),
-        "end_value_thb": round(end_val, 2),
-        "period_return_pct": round(period_return_pct, 2),
-        "best_day_pct": round(best_day, 2),
-        "worst_day_pct": round(worst_day, 2),
-        "volatility_pct": round(volatility, 2),
-        "fees_paid_thb": round(fees_period, 2),
-        "realized_pnl_thb": round(realized_period, 2),
-        "allocation_drift": drift[:5],
-        "n_buy": n_buy,
-        "n_sell": n_sell,
-        "trading_volume_thb": round(volume, 2),
-    }
-
-
-def _digest_cache_key(period: str, stats: dict[str, Any]) -> str:
-    return f"{period}:{stats['start_date']}_{stats['end_date']}"
-
-
-def generate_ai_weekly_digest(
-    sim: dict[str, Any], period: str, api_key: str, force: bool = False
-) -> tuple[Optional[str], Optional[dict[str, Any]]]:
-    stats = compute_digest_period_stats(sim, period)
-    if stats is None:
-        return None, None
-    cache = sim.setdefault("ai_digest_cache", {})
-    key = _digest_cache_key(period, stats)
-    if not force and key in cache:
-        return str(cache[key].get("text", "")), stats
-
-    prompt = (
-        f"เขียนสรุปผลงานพอร์ตช่วง {stats['period_label']} จากข้อมูลนี้:\n"
-        + json.dumps(stats, ensure_ascii=False)
-    )
-    text = ask_ai([{"role": "user", "content": prompt}], api_key, DIGEST_AI_SYSTEM)
-    cache[key] = {
-        "text": str(text),
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-    }
-    st.session_state["sim"] = sim
-    save_sim_state(sim)
-    return str(text), stats
-
-
-def render_ai_weekly_digest(sim: dict[str, Any]) -> None:
-    st.markdown("#### 📬 AI Weekly / Monthly Digest")
-    st.caption(
-        "สรุปผลงานพอร์ตแบบยาวจาก Portfolio Snapshot History จริง · "
-        "แคชแยกตามสัปดาห์/เดือน ไม่ยิง AI ซ้ำทุกครั้งที่เปิดหน้า · "
-        "แอปยังไม่มีระบบส่งอีเมลอัตโนมัติ จึงต้องเปิดแอปเพื่อสร้าง/ดู Digest"
-    )
-    try:
-        api_key = st.secrets["gemini_api_key"]
-    except Exception:
-        api_key = os.environ.get("GEMINI_API_KEY", "")
-    if not api_key:
-        st.caption("🔒 ยังไม่ได้ตั้งค่า `gemini_api_key`")
-        return
-
-    now_th = pd.Timestamp.now(tz="Asia/Bangkok")
-    if now_th.weekday() == 0:
-        stats_check = compute_digest_period_stats(sim, "weekly")
-        if stats_check and _digest_cache_key("weekly", stats_check) not in sim.get("ai_digest_cache", {}):
-            st.info("📅 วันนี้วันจันทร์ — ยังไม่ได้สร้างสรุปผลงานประจำสัปดาห์ กดสร้างด้านล่างได้เลย")
-
-    period_label = st.radio(
-        "ช่วงเวลา", ["รายสัปดาห์", "รายเดือน"], horizontal=True, key="digest_period"
-    )
-    period = "weekly" if period_label == "รายสัปดาห์" else "monthly"
-
-    c1, c2 = st.columns([1, 1])
-    gen_clicked = c1.button("📬 สร้าง / ดู Digest", key="digest_gen", **WIDE)
-    force_clicked = c2.button("🔄 สร้างใหม่ (ข้าม cache)", key="digest_force", **WIDE)
-
-    if gen_clicked or force_clicked:
-        with st.spinner("กำลังสรุปผลงาน…"):
-            text, stats = generate_ai_weekly_digest(sim, period, api_key, force=force_clicked)
-        if text is None or stats is None:
-            st.warning(
-                "ต้องมี Portfolio Snapshot อย่างน้อย 2 จุดก่อน — "
-                "ไปที่ Portfolio Calendar แล้วกด '📸 บันทึก Snapshot'"
-            )
-        else:
-            st.session_state["digest_last"] = {
-                "text": text,
-                "stats": stats,
-                "period": period,
-            }
-
-    last = st.session_state.get("digest_last")
-    if not last:
-        # ถ้ามี cache อยู่แล้ว ให้แสดงได้ทันทีโดยไม่ต้องยิง Gemini ใหม่
-        cache = sim.get("ai_digest_cache", {}) or {}
-        stats_cached = compute_digest_period_stats(sim, period)
-        if stats_cached:
-            cached = cache.get(_digest_cache_key(period, stats_cached))
-            if cached and cached.get("text"):
-                last = {
-                    "text": str(cached["text"]),
-                    "stats": stats_cached,
-                    "period": period,
-                }
-
-    if last:
-        s = last["stats"]
-        k = st.columns(4)
-        metric_card(k[0], "Period Return", f"{s['period_return_pct']:+.2f}%", s["period_return_pct"])
-        metric_card(k[1], "Best / Worst Day", f"{s['best_day_pct']:+.2f}% / {s['worst_day_pct']:+.2f}%")
-        metric_card(
-            k[2], "Trading Volume", fmt_baht(s["trading_volume_thb"]), None,
-            f"{s['n_buy']} Buy · {s['n_sell']} Sell"
-        )
-        metric_card(k[3], "Fees ช่วงนี้", fmt_baht(s["fees_paid_thb"]))
-
-        safe_text = _html.escape(str(last["text"])).replace("\n", "<br>")
-        st.markdown(
-            '<div style="background:rgba(14,203,129,.06);border-left:3px solid #0ecb81;'
-            'border-radius:8px;padding:16px 20px;margin-top:10px;color:#EAECEF;'
-            'font-size:.9rem;line-height:1.85;">'
-            f'<div style="color:#848e9c;font-size:.72rem;margin-bottom:8px;">'
-            f'INVESTOR LETTER · {_html.escape(str(s["period_label"]))}</div>{safe_text}</div>',
-            unsafe_allow_html=True,
-        )
-        if s["allocation_drift"]:
-            with st.expander("📊 Allocation ที่เปลี่ยนไปในช่วงนี้"):
-                st.dataframe(
-                    pd.DataFrame(s["allocation_drift"]).rename(columns={
-                        "asset": "เหรียญ",
-                        "from_pct": "สัดส่วนเริ่มต้น (%)",
-                        "to_pct": "สัดส่วนล่าสุด (%)",
-                    }),
-                    hide_index=True,
-                    **WIDE,
-                )
-
-
-# =========================================================================
-# AI TRADE COACH
-# =========================================================================
-
-TRADE_COACH_AI_SYSTEM = (
-    "คุณคือโค้ชด้านจิตวิทยาการเทรด วิเคราะห์ Trading Journal ของผู้ใช้ "
-    "(เหตุผลตอนเข้า/ปิดสถานะ, tags ที่ผู้ใช้ติดเอง, ผลกำไรขาดทุนจริงที่เกิดขึ้นแล้วจาก transaction ที่ปิดแล้ว) "
-    "เพื่อหา pattern เชิงพฤติกรรม เช่น กลยุทธ์ไหนชนะบ่อยแต่เก็บกำไรเร็วเกินไป, "
-    "คำในเหตุผลที่มักปรากฏตอนขาดทุน, tag ไหนสัมพันธ์กับผลลัพธ์ที่ไม่ดี ตอบเป็นภาษาไทย 5-8 ประโยค "
-    "กระชับ เป็นกันเอง ตรงประเด็น ห้ามแนะนำว่าควรซื้อ/ขาย/ถือเหรียญไหน ห้ามทำนายราคา "
-    "เน้นเฉพาะข้อสังเกตเชิงพฤติกรรมและวินัยการเทรดจากข้อมูลที่ให้เท่านั้น "
-    "ห้ามสมมติข้อมูลที่ไม่มี ถ้าข้อมูลน้อยเกินไปให้บอกตรงๆ ว่ายังสรุป pattern ชัดเจนไม่ได้"
-)
-
-
-def build_trade_coach_dataset(sim: dict[str, Any]) -> dict[str, Any]:
-    """รวม Trading Journal เข้ากับผลจริงจาก Portfolio Ledger."""
-    ensure_portfolio_ledger(sim)
-    journal = _journal_init(sim)
-    journal_by_id = {
-        str(j.get("tx_id", "")): j
-        for j in journal
-        if isinstance(j, dict)
-    }
-    txs = [
-        t for t in sim.get("portfolio_ledger", [])
-        if isinstance(t, dict) and str(t.get("type", "")).upper() in {"BUY", "SELL"}
-    ]
-
-    rows = []
-    for t in txs:
-        tid = str(t.get("id", ""))
-        j = journal_by_id.get(tid)
-        if not j or not (j.get("reason") or j.get("review") or j.get("tags")):
-            continue
-        typ = str(t.get("type", "")).upper()
-        rows.append({
-            "tx_id": tid,
-            "type": typ,
-            "asset": str(t.get("asset", "")).upper(),
-            "timestamp": str(t.get("timestamp", ""))[:16].replace("T", " "),
-            "gross_thb": round(float(t.get("gross_thb", 0) or 0), 2),
-            "realized_pnl_thb": (
-                round(float(t.get("realized_pnl_thb", 0) or 0), 2)
-                if typ == "SELL" else None
-            ),
-            "tags": j.get("tags", []),
-            "reason": j.get("reason", ""),
-            "review": j.get("review", ""),
-        })
-    rows.sort(key=lambda r: r["timestamp"], reverse=True)
-
-    tag_stats: dict[str, dict[str, float]] = {}
-    for r in rows:
-        if r["type"] != "SELL" or r["realized_pnl_thb"] is None:
-            continue
-        tags = r["tags"] or ["(ไม่ติด tag)"]
-        for tag in tags:
-            tag = str(tag)
-            s = tag_stats.setdefault(tag, {"count": 0, "wins": 0, "total_pnl": 0.0})
-            s["count"] += 1
-            s["total_pnl"] += float(r["realized_pnl_thb"])
-            if float(r["realized_pnl_thb"]) > 0:
-                s["wins"] += 1
-
-    tag_summary = []
-    for tag, stat in tag_stats.items():
-        count = int(stat["count"])
-        total_pnl = float(stat["total_pnl"])
-        win_rate = (stat["wins"] / count * 100.0) if count else 0.0
-        tag_summary.append({
-            "tag": tag,
-            "closed_trades": count,
-            "win_rate_pct": round(win_rate, 1),
-            "total_realized_pnl": round(total_pnl, 2),
-            "avg_realized_pnl": round(total_pnl / count, 2) if count else 0.0,
-        })
-    tag_summary.sort(key=lambda x: x["closed_trades"], reverse=True)
-
-    return {"rows": rows, "tag_summary": tag_summary, "n_journaled": len(rows)}
-
-
-def render_ai_trade_coach(sim: dict[str, Any]) -> None:
-    st.markdown("#### 🧑‍🏫 AI Trade Coach")
-    st.caption(
-        "วิเคราะห์ Trading Journal ที่บันทึกไว้ (เหตุผล / tags / review) "
-        "แล้วเทียบกับ Realized P&L จริงจาก SELL transaction — เป็น insight เพื่อทบทวนวินัย ไม่ใช่คำแนะนำลงทุน"
-    )
-    dataset = build_trade_coach_dataset(sim)
-    min_entries = 5
-    if dataset["n_journaled"] < min_entries:
-        st.info(
-            f"มี Journal ที่บันทึกเหตุผล/tags/review ไว้ {dataset['n_journaled']} รายการ "
-            f"— ต้องมีอย่างน้อย {min_entries} รายการก่อนให้ AI วิเคราะห์ pattern ได้อย่างมีความหมาย"
-        )
-        return
-
-    try:
-        api_key = st.secrets["gemini_api_key"]
-    except Exception:
-        api_key = os.environ.get("GEMINI_API_KEY", "")
-
-    if dataset["tag_summary"]:
-        st.markdown("##### 📊 สถิติตาม Tag (จาก Transaction ที่ปิดแล้ว)")
-        st.dataframe(
-            pd.DataFrame(dataset["tag_summary"]).rename(columns={
-                "tag": "Tag",
-                "closed_trades": "ปิดแล้ว (ครั้ง)",
-                "win_rate_pct": "Win Rate (%)",
-                "total_realized_pnl": "Realized P&L รวม",
-                "avg_realized_pnl": "P&L เฉลี่ย/ครั้ง",
-            }),
-            hide_index=True,
-            **WIDE,
-        )
-
-    if not api_key:
-        st.caption("🔒 ยังไม่ได้ตั้งค่า `gemini_api_key` — ใช้ได้เฉพาะตารางสถิติด้านบน")
-        return
-
-    today_key = pd.Timestamp.now(tz="Asia/Bangkok").strftime("%Y-%m-%d")
-    cache_sig = f"{today_key}:{dataset['n_journaled']}"
-    coach_cache = sim.setdefault("trade_coach_cache", {})
-
-    c1, c2 = st.columns(2)
-    gen = c1.button("🧑‍🏫 วิเคราะห์ Pattern", key="coach_gen", **WIDE)
-    force = c2.button("🔄 วิเคราะห์ใหม่", key="coach_force", **WIDE)
-
-    if gen or force:
-        if not force and coach_cache.get("sig") == cache_sig:
-            text = str(coach_cache.get("text", ""))
-        else:
-            prompt = (
-                "วิเคราะห์ pattern เชิงพฤติกรรมจาก Trading Journal นี้:\n"
-                f"สรุปตาม Tag: {json.dumps(dataset['tag_summary'], ensure_ascii=False)}\n\n"
-                f"รายการล่าสุด 20 รายการ: {json.dumps(dataset['rows'][:20], ensure_ascii=False)}"
-            )
-            with st.spinner("🧑‍🏫 โค้ชกำลังอ่าน Journal…"):
-                text = ask_ai([{"role": "user", "content": prompt}], api_key, TRADE_COACH_AI_SYSTEM)
-            coach_cache.update(
-                sig=cache_sig,
-                text=str(text),
-                generated_at=datetime.now(timezone.utc).isoformat(),
-            )
-            st.session_state["sim"] = sim
-            save_sim_state(sim)
-        st.session_state["coach_last_text"] = str(text)
-
-    last_text = st.session_state.get("coach_last_text") or coach_cache.get("text")
-    if last_text:
-        st.markdown(
-            '<div style="background:rgba(255,255,255,.03);border-left:3px solid #fcd535;'
-            'border-radius:8px;padding:15px 18px;margin-top:10px;color:#EAECEF;'
-            'font-size:.88rem;line-height:1.8;white-space:pre-wrap;">'
-            f'🧑‍🏫 {_html.escape(str(last_text))}</div>',
-            unsafe_allow_html=True,
-        )
-
 def render_dashboard(cfg: dict[str, Any], data: pd.DataFrame,
                      market_df: Optional[pd.DataFrame] = None) -> None:
     st.markdown(DASHBOARD_CSS, unsafe_allow_html=True)
@@ -14231,6 +14100,8 @@ def _main_body() -> None:
             render_performance_analytics(cfg, data, market_df)
         elif nav == NAV_CASHFLOW:
             render_cash_flow_analytics(cfg, data, market_df)
+        elif nav == NAV_QUANT:
+            render_quant_research_lab(cfg, data, market_df)
         elif nav == NAV_TIMELINE:
             render_customer_timeline(cfg, data, market_df)
         elif nav == NAV_FACTSHEET_PRINT:
