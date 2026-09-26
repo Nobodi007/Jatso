@@ -11699,58 +11699,129 @@ def _fetch_institutional_benchmarks(start: Any, end: Any) -> pd.DataFrame:
 
 
 def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, float]]:
-    """สร้างดัชนีผลตอบแทนและ Alpha/Beta ต่อ BTC จาก snapshot returns."""
+    """สร้าง Institutional Benchmark Comparison จากวันของ Portfolio Snapshot จริง
+
+    สำคัญ: ไม่บังคับให้วัน Snapshot ตรงกับวันตลาดแบบ exact match
+    เพราะ SET/S&P500 ไม่มีข้อมูลเสาร์-อาทิตย์/วันหยุดตลาด ขณะที่ Portfolio
+    Snapshot อาจถูกบันทึกวันหยุดได้ จึงใช้ราคาตลาดล่าสุดที่มี ณ หรือก่อน
+    วัน Snapshot (forward-fill จาก benchmark) เพื่อให้เปรียบเทียบได้จริง
+    """
     empty_metrics = {
         "beta_btc": 0.0,
         "alpha_btc_annual": 0.0,
         "corr_btc": 0.0,
         "obs": 0.0,
     }
+
     if hist is None or hist.empty or len(hist) < 2:
         return pd.DataFrame(), empty_metrics
 
-    bench = _fetch_institutional_benchmarks(hist["date"].min(), hist["date"].max())
-    if bench.empty:
-        return pd.DataFrame(), empty_metrics
-
+    # --- Normalize portfolio snapshot dates ---
     port = hist[["date", "value"]].copy()
-    port["date"] = pd.to_datetime(port["date"]).dt.normalize()
-    port = port.drop_duplicates("date").sort_values("date").set_index("date")
-    port_ret = port["value"].pct_change().rename("Portfolio")
+    port["date"] = pd.to_datetime(port["date"], errors="coerce").dt.tz_localize(None).dt.normalize()
+    port["value"] = pd.to_numeric(port["value"], errors="coerce")
+    port = (
+        port.dropna(subset=["date", "value"])
+            .drop_duplicates("date", keep="last")
+            .sort_values("date")
+            .set_index("date")
+    )
 
-    common = pd.concat([port_ret, bench.pct_change()], axis=1, join="inner").dropna()
-    if common.empty:
+    if len(port) < 2:
         return pd.DataFrame(), empty_metrics
 
-    # Performance chart: each series starts at 100 on its first common date.
-    levels = pd.concat([port["value"].rename("Portfolio") / port["value"].iloc[0] * 100,
-                        bench], axis=1).dropna(how="all")
-    levels = levels.ffill()
-    for col in [c for c in levels.columns if c in bench.columns]:
-        first = levels[col].dropna()
-        if not first.empty and first.iloc[0] != 0:
-            levels[col] = levels[col] / first.iloc[0] * 100
-    # Use a common visible window so all four lines start together.
-    common_levels = levels.dropna(subset=["Portfolio"], how="any")
-    if not common_levels.empty:
-        first_valid = common_levels[[c for c in ["Portfolio", "BTC", "SET Index", "S&P 500"] if c in common_levels.columns]].dropna(how="all").index.min()
-        if first_valid is not None:
-            common_levels = common_levels.loc[first_valid:]
+    # --- Download benchmark data ---
+    bench = _fetch_institutional_benchmarks(port.index.min(), port.index.max())
+    if bench is None or bench.empty:
+        return pd.DataFrame(), empty_metrics
+
+    bench = bench.copy()
+    bench.index = pd.to_datetime(bench.index, errors="coerce").tz_localize(None).normalize()
+    bench = bench[~bench.index.duplicated(keep="last")].sort_index()
+    bench = bench.apply(pd.to_numeric, errors="coerce")
+
+    # Reindex benchmark onto the EXACT portfolio snapshot dates.
+    # method='ffill' means:
+    #   - weekday snapshot -> same-day market close when available
+    #   - weekend/holiday snapshot -> latest market close before that date
+    # This fixes the previous exact-date intersection failure.
+    aligned = bench.reindex(port.index, method="ffill")
+
+    # A benchmark may still be NaN for the first snapshot if the provider
+    # returned no usable value before that date. Drop only those rows.
+    aligned = aligned.dropna(how="all")
+
+    if aligned.empty:
+        return pd.DataFrame(), empty_metrics
+
+    comparison = pd.concat(
+        [
+            port["value"].rename("Portfolio"),
+            aligned,
+        ],
+        axis=1,
+    ).dropna(subset=["Portfolio"])
+
+    # Keep rows where at least one benchmark exists.
+    benchmark_cols = [c for c in ["BTC", "SET Index", "S&P 500"] if c in comparison.columns]
+    if not benchmark_cols:
+        return pd.DataFrame(), empty_metrics
+
+    comparison = comparison.dropna(subset=benchmark_cols, how="all")
+
+    if len(comparison) < 2:
+        return pd.DataFrame(), empty_metrics
+
+    # --- Normalize all series to 100 on the first common usable snapshot ---
+    levels = pd.DataFrame(index=comparison.index)
+    portfolio_base = float(comparison["Portfolio"].iloc[0])
+
+    if portfolio_base > 0:
+        levels["Portfolio"] = comparison["Portfolio"] / portfolio_base * 100.0
+
+    for col in benchmark_cols:
+        s = comparison[col].dropna()
+        if not s.empty and float(s.iloc[0]) != 0:
+            # Use the first benchmark value available in the comparison window.
+            base = float(s.iloc[0])
+            levels[col] = comparison[col] / base * 100.0
+
+    # For a clean institutional chart, only show the period where Portfolio
+    # and at least one benchmark are both available.
+    levels = levels.dropna(subset=["Portfolio"])
+    if levels.empty:
+        return pd.DataFrame(), empty_metrics
+
+    # --- Daily snapshot returns for Alpha/Beta vs BTC ---
+    returns = comparison.pct_change().replace([np.inf, -np.inf], np.nan)
 
     metrics = dict(empty_metrics)
-    if "BTC" in common.columns and len(common) >= 2:
-        x = common["BTC"].astype(float)
-        y = common["Portfolio"].astype(float)
-        var_x = float(x.var(ddof=1))
-        if var_x > 0:
-            beta = float(y.cov(x) / var_x)
-            # Annualized alpha with rf=0, based on mean daily returns.
-            alpha = float((y.mean() - beta * x.mean()) * 252 * 100)
-            corr = float(y.corr(x)) if x.std(ddof=1) > 0 and y.std(ddof=1) > 0 else 0.0
-            metrics.update({"beta_btc": beta, "alpha_btc_annual": alpha, "corr_btc": corr,
-                            "obs": float(len(common))})
 
-    return common_levels, metrics
+    if "BTC" in returns.columns:
+        btc_pair = returns[["Portfolio", "BTC"]].dropna()
+
+        if len(btc_pair) >= 2:
+            x = btc_pair["BTC"].astype(float)
+            y = btc_pair["Portfolio"].astype(float)
+
+            var_x = float(x.var(ddof=1))
+
+            if var_x > 0 and x.std(ddof=1) > 0 and y.std(ddof=1) > 0:
+                beta = float(y.cov(x) / var_x)
+                corr = float(y.corr(x))
+
+                # Annualized alpha estimate, rf = 0%.
+                # Snapshot frequency is daily in normal use.
+                alpha = float((y.mean() - beta * x.mean()) * 252 * 100)
+
+                metrics.update({
+                    "beta_btc": beta,
+                    "alpha_btc_annual": alpha,
+                    "corr_btc": corr,
+                    "obs": float(len(btc_pair)),
+                })
+
+    return levels, metrics
 
 
 def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
