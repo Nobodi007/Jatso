@@ -13,6 +13,18 @@ Environment variables:
     XSPRING_ALLOWED_EMAIL  - optional, comma-separated emails
                              เช่น user1@gmail.com,user2@gmail.com
                              ใช้ "*" เพื่ออนุญาตทุก email
+    DAILY_GREETING_ENABLED  - true/false (default true)
+    DAILY_GREETING_NAME     - ชื่อในข้อความ (default Nobody)
+    DAILY_GREETING_CHAT_ID  - optional; ถ้าไม่ใส่จะส่งให้ทุก Telegram ที่ /link ไว้
+    DAILY_GREETING_EMAIL_TO - optional; ถ้าไม่ใส่จะส่งให้ทุก email ที่ /link ไว้
+    DAILY_GREETING_TZ       - default Asia/Bangkok
+    DAILY_GREETING_HOUR     - default 8
+    DAILY_GREETING_MINUTE   - default 0
+    SMTP_HOST               - default smtp.gmail.com
+    SMTP_PORT               - default 587
+    SMTP_USER               - Gmail/SMTP username
+    SMTP_PASSWORD           - Gmail App Password / SMTP password
+    SMTP_FROM               - optional sender; defaults to SMTP_USER
 
 คำสั่ง:
     /start
@@ -43,6 +55,8 @@ import urllib.request
 import xml.etree.ElementTree as ET
 import uuid
 from email.utils import parsedate_to_datetime
+from email.message import EmailMessage
+import smtplib
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional
@@ -53,7 +67,31 @@ API_BASE = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
 
-BOT_BUILD = "2026-09-26-stable-v4-command-stable"
+BOT_BUILD = "2026-09-26-stable-v4-daily-greeting"
+
+# Daily greeting: 08:00 Asia/Bangkok, Monday-Friday
+DAILY_GREETING_ENABLED = os.environ.get("DAILY_GREETING_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+DAILY_GREETING_NAME = os.environ.get("DAILY_GREETING_NAME", "Nobody").strip() or "Nobody"
+DAILY_GREETING_TZ = os.environ.get("DAILY_GREETING_TZ", "Asia/Bangkok").strip() or "Asia/Bangkok"
+try:
+    DAILY_GREETING_HOUR = int(os.environ.get("DAILY_GREETING_HOUR", "8"))
+except Exception:
+    DAILY_GREETING_HOUR = 8
+try:
+    DAILY_GREETING_MINUTE = int(os.environ.get("DAILY_GREETING_MINUTE", "0"))
+except Exception:
+    DAILY_GREETING_MINUTE = 0
+DAILY_GREETING_CHAT_ID = os.environ.get("DAILY_GREETING_CHAT_ID", "").strip()
+DAILY_GREETING_EMAIL_TO = os.environ.get("DAILY_GREETING_EMAIL_TO", "").strip()
+SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com").strip()
+try:
+    SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+except Exception:
+    SMTP_PORT = 587
+SMTP_USER = os.environ.get("SMTP_USER", "").strip()
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "").strip()
+SMTP_FROM = os.environ.get("SMTP_FROM", "").strip() or SMTP_USER
+_DAILY_GREETING_SENT_MEM: set[str] = set()
 
 ALLOWED_EMAILS = {
     e.strip().lower()
@@ -186,6 +224,188 @@ def send_message(chat_id: int, text: str) -> None:
             "text": text,
         },
     )
+
+
+
+# =========================================================
+# Daily greeting — Telegram + Email
+# =========================================================
+
+def _daily_greeting_text() -> str:
+    return (
+        f"🌅 สวัสดีครับคุณ {DAILY_GREETING_NAME}\n"
+        "ยินดีต้อนรับครับ\n"
+        "ระบบแจ้งเตือนประจำวันของ XSpring พร้อมทำงานแล้ว\n"
+        "📅 ระบบจะแจ้งเตือนทุกวันจันทร์–ศุกร์ เวลา 08:00 น. (เวลาไทย)"
+    )
+
+
+def _daily_greeting_email_subject() -> str:
+    return f"🌅 สวัสดีครับคุณ {DAILY_GREETING_NAME} — XSpring Daily Greeting"
+
+
+def _daily_greeting_recipient_chats() -> list[int]:
+    """Return explicit chat id, or all currently linked Telegram chats."""
+    if DAILY_GREETING_CHAT_ID:
+        try:
+            return [int(DAILY_GREETING_CHAT_ID)]
+        except Exception:
+            print(f"[daily-greeting] invalid DAILY_GREETING_CHAT_ID={DAILY_GREETING_CHAT_ID!r}")
+
+    if sb is None:
+        return []
+
+    try:
+        res = sb.table("telegram_links").select("chat_id").limit(500).execute()
+        seen = set()
+        out = []
+        for row in (res.data or []):
+            try:
+                cid = int(row.get("chat_id"))
+            except Exception:
+                continue
+            if cid not in seen:
+                seen.add(cid)
+                out.append(cid)
+        return out
+    except Exception as exc:
+        print(f"[daily-greeting] load Telegram recipients error: {exc}")
+        return []
+
+
+def _daily_greeting_recipient_emails() -> list[str]:
+    """Return explicit email(s), or all emails linked to Telegram."""
+    raw = DAILY_GREETING_EMAIL_TO
+    if raw:
+        values = [x.strip().lower() for x in raw.replace(";", ",").split(",") if x.strip()]
+        return list(dict.fromkeys(values))
+
+    if sb is None:
+        return []
+
+    try:
+        res = sb.table("telegram_links").select("email").limit(500).execute()
+        seen = set()
+        out = []
+        for row in (res.data or []):
+            email = str(row.get("email") or "").strip().lower()
+            if "@" not in email or email in seen:
+                continue
+            seen.add(email)
+            out.append(email)
+        return out
+    except Exception as exc:
+        print(f"[daily-greeting] load email recipients error: {exc}")
+        return []
+
+
+def _daily_greeting_send_email(to_email: str) -> bool:
+    if not SMTP_USER or not SMTP_PASSWORD or not SMTP_FROM:
+        print("[daily-greeting] SMTP not configured; email skipped")
+        return False
+
+    msg = EmailMessage()
+    msg["Subject"] = _daily_greeting_email_subject()
+    msg["From"] = SMTP_FROM
+    msg["To"] = to_email
+    msg.set_content(_daily_greeting_text())
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(msg)
+        print(f"[daily-greeting] email sent -> {to_email}")
+        return True
+    except Exception as exc:
+        print(f"[daily-greeting] email failed -> {to_email}: {exc}")
+        return False
+
+
+def _daily_greeting_already_sent(run_key: str) -> bool:
+    """Persistent dedup per date + channel + recipient."""
+    if run_key in _DAILY_GREETING_SENT_MEM:
+        return True
+    if sb is not None:
+        try:
+            res = (
+                sb.table("telegram_scheduled_notifications")
+                .select("id")
+                .eq("job_key", "daily_greeting")
+                .eq("run_key", run_key)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                _DAILY_GREETING_SENT_MEM.add(run_key)
+                return True
+        except Exception:
+            # Table is optional. The scheduler still works with memory dedup.
+            pass
+    return False
+
+
+def _daily_greeting_mark_sent(run_key: str) -> None:
+    _DAILY_GREETING_SENT_MEM.add(run_key)
+    if sb is not None:
+        try:
+            sb.table("telegram_scheduled_notifications").insert({
+                "job_key": "daily_greeting",
+                "run_key": run_key,
+                "sent_at": datetime.now(timezone.utc).isoformat(),
+            }).execute()
+        except Exception:
+            pass
+
+
+def run_daily_greeting_if_due() -> None:
+    """Send the greeting once per weekday at/after the configured 08:00 Thai time."""
+    if not DAILY_GREETING_ENABLED:
+        return
+
+    try:
+        tz = ZoneInfo(DAILY_GREETING_TZ)
+    except Exception:
+        tz = timezone.utc
+        print(f"[daily-greeting] invalid timezone {DAILY_GREETING_TZ!r}; using UTC")
+
+    now = datetime.now(tz)
+    # Monday=0 ... Friday=4. Weekend is intentionally skipped.
+    if now.weekday() >= 5:
+        return
+
+    due_minutes = DAILY_GREETING_HOUR * 60 + DAILY_GREETING_MINUTE
+    now_minutes = now.hour * 60 + now.minute
+    if now_minutes < due_minutes:
+        return
+
+    date_key = now.strftime("%Y-%m-%d")
+    text = _daily_greeting_text()
+
+    # Telegram: each chat has its own sent marker, so one failed recipient
+    # does not block retries for the others.
+    for chat_id in _daily_greeting_recipient_chats():
+        run_key = f"{date_key}|telegram|{chat_id}"
+        if _daily_greeting_already_sent(run_key):
+            continue
+        try:
+            send_message(chat_id, text)
+            _daily_greeting_mark_sent(run_key)
+            print(f"[daily-greeting] Telegram sent -> {chat_id}")
+        except Exception as exc:
+            print(f"[daily-greeting] Telegram failed -> {chat_id}: {exc}")
+
+    # Email: each email has its own sent marker, so failed SMTP delivery
+    # can be retried on the next 30-second scheduler tick.
+    for email in _daily_greeting_recipient_emails():
+        run_key = f"{date_key}|email|{email}"
+        if _daily_greeting_already_sent(run_key):
+            continue
+        if _daily_greeting_send_email(email):
+            _daily_greeting_mark_sent(run_key)
+
 
 
 def get_updates(offset: Optional[int] = None) -> list[dict]:
@@ -2718,6 +2938,7 @@ def main_loop() -> None:
             now = time.monotonic()
             if now >= next_alert_check:
                 check_price_alerts()
+                run_daily_greeting_if_due()
                 next_alert_check = time.monotonic() + ALERT_INTERVAL
 
             updates = get_updates(offset)
