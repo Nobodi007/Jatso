@@ -11905,9 +11905,8 @@ def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market
     if not inst_chart.empty:
         chart_cols = [c for c in ["Portfolio", "BTC", "SET Index", "S&P 500"] if c in inst_chart.columns]
 
-        # ใช้ Altair แทน st.line_chart เพื่อไม่ให้แกน Y เริ่มที่ 0
-        # เพราะการ normalize เป็น 100 + ช่วงข้อมูลสั้นอาจทำให้เส้นอื่น
-        # ดูเหมือนหายไป ทั้งที่จริงอยู่ใกล้กันมาก
+        # ใช้ Altair และแยกเส้นด้วย dash + รูป marker เพื่อให้เส้นที่ค่าเท่ากัน
+        # (เช่น SET/S&P ที่ยังมีข้อมูลตลาดเพียงวันเดียว) ไม่ถูกเส้นอื่นกลบทับจนมองไม่เห็น
         try:
             import altair as alt
             chart_df = (
@@ -11916,23 +11915,70 @@ def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market
                 .melt("date", var_name="Series", value_name="Index")
                 .dropna(subset=["Index"])
             )
-            chart = (
-                alt.Chart(chart_df)
-                .mark_line(point=alt.OverlayMarkDef(size=45), strokeWidth=2.5)
-                .encode(
-                    x=alt.X("date:T", title=None, axis=alt.Axis(format="%d %b", labelAngle=0)),
-                    y=alt.Y("Index:Q", title="Index (Start = 100)", scale=alt.Scale(zero=False)),
-                    color=alt.Color("Series:N", title=None),
-                    tooltip=[
-                        alt.Tooltip("date:T", title="Date", format="%d %b %Y"),
-                        alt.Tooltip("Series:N", title="Series"),
-                        alt.Tooltip("Index:Q", title="Index", format=".2f"),
-                    ],
-                )
-                .properties(height=360)
-                .interactive()
+
+            # ลำดับคงที่ + dash ต่างกัน ทำให้ series ที่ซ้อนกันยังแยกออกจากกันได้
+            series_order = [c for c in ["Portfolio", "BTC", "SET Index", "S&P 500"] if c in chart_cols]
+            dash_range = [[1, 0], [8, 4], [3, 3], [12, 4]]
+            shape_range = ["circle", "diamond", "square", "triangle-up"]
+
+            base = alt.Chart(chart_df).encode(
+                x=alt.X(
+                    "date:T",
+                    title=None,
+                    axis=alt.Axis(
+                        format="%d %b",
+                        labelAngle=0,
+                        tickCount=min(6, max(2, len(chart_df["date"].unique()))),
+                        grid=False,
+                    ),
+                ),
+                y=alt.Y(
+                    "Index:Q",
+                    title="Index (Start = 100)",
+                    scale=alt.Scale(zero=False, padding=12),
+                ),
+                color=alt.Color(
+                    "Series:N",
+                    title=None,
+                    sort=series_order,
+                    legend=alt.Legend(orient="right"),
+                ),
+                detail="Series:N",
+                tooltip=[
+                    alt.Tooltip("date:T", title="Date", format="%d %b %Y"),
+                    alt.Tooltip("Series:N", title="Series"),
+                    alt.Tooltip("Index:Q", title="Index", format=".2f"),
+                ],
             )
+
+            lines = base.mark_line(strokeWidth=2.5).encode(
+                strokeDash=alt.StrokeDash(
+                    "Series:N",
+                    sort=series_order,
+                    scale=alt.Scale(domain=series_order, range=dash_range),
+                    legend=None,
+                )
+            )
+            points = base.mark_point(size=75, filled=True).encode(
+                shape=alt.Shape(
+                    "Series:N",
+                    sort=series_order,
+                    scale=alt.Scale(domain=series_order, range=shape_range),
+                    legend=None,
+                )
+            )
+
+            chart = (lines + points).properties(height=360).interactive()
             st.altair_chart(chart, use_container_width=True)
+
+            # ถ้าหลาย series มีค่าเดียวกันจริง ให้บอกผู้ใช้ตรง ๆ ว่าเป็นการซ้อนกัน
+            latest = chart_df.sort_values("date").groupby("Series", as_index=False).tail(1)
+            if len(latest) >= 2:
+                duplicated = latest.groupby("Index")["Series"].apply(list)
+                overlap_groups = [names for names in duplicated if len(names) > 1]
+                if overlap_groups:
+                    overlap_text = " · ".join(", ".join(names) for names in overlap_groups)
+                    st.caption(f"ℹ️ บางเส้นมีค่าเดียวกัน ณ จุดล่าสุดจึงซ้อนกันจริง: {overlap_text} — ใช้รูป marker และเส้นประแยกให้แล้ว")
         except Exception:
             # Fallback ถ้า Altair ใช้งานไม่ได้
             st.line_chart(inst_chart[chart_cols], height=360, use_container_width=True)
