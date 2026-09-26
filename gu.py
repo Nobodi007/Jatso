@@ -3532,189 +3532,434 @@ def load_nc_snapshots(limit: int = 100) -> list[dict[str, Any]]:
     return list(st.session_state.get("nc_snapshots", []))[-limit:]
 
 
-
-
 # =========================================================================
-# INVESTOR SHARE — Read-only public link + QR code
+# PORTFOLIO VALUE SNAPSHOTS · GOAL TRACKER · CONTRIBUTION BREAKDOWN
 # =========================================================================
 
-INVESTOR_SHARE_TABLE = "investor_shares"
-
-
-def build_investor_share_payload(cfg: dict[str, Any], sim: dict[str, Any],
-                                 snap: dict[str, Any], fund_name: str,
-                                 show_amounts: bool) -> dict[str, Any]:
-    metrics = compute_factsheet_metrics(sim, snap)
-    hist = metrics["history"]
-    if hist.empty:
-        history_points = []
-    elif show_amounts:
-        history_points = [{"date": d.strftime("%Y-%m-%d"), "value": float(v)}
-                          for d, v in zip(hist["date"], hist["value"])]
-    else:
-        norm = _normalize_to_100(hist.set_index("date")["value"])
-        history_points = [{"date": d.strftime("%Y-%m-%d"), "value": float(v)}
-                          for d, v in norm.items()]
-
-    allocation = []
-    for r in snap.get("rows", []) or []:
-        item = {
-            "asset": r.get("asset", ""),
-            "allocation_pct": round(float(r.get("allocation_pct", 0) or 0), 2),
-        }
-        if show_amounts:
-            item["value_thb"] = round(float(r.get("market_value", 0) or 0), 2)
-        allocation.append(item)
-
-    total_val = float(snap.get("total_value_thb", 0) or 0)
-    cash_pct = (float(snap.get("cash_thb", 0) or 0) / total_val * 100.0) if total_val else 0.0
-
-    payload = {
-        "fund_name": fund_name,
-        "asset": cfg.get("asset", ""),
-        "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "show_amounts": bool(show_amounts),
-        "period_return_pct": round(metrics["period_return_pct"], 2),
-        "sharpe": round(metrics["sharpe"], 2),
-        "sortino": round(metrics["sortino"], 2),
-        "max_drawdown_pct": round(metrics["max_drawdown_pct"], 2),
-        "volatility_pct": round(metrics["volatility_pct"], 2),
-        "cash_pct": round(cash_pct, 2),
-        "history": history_points,
-        "allocation": allocation,
+def _portfolio_value_snapshot_payload(sim: dict, price_thb_map: Mapping[str, float]) -> dict:
+    snap = portfolio_snapshot(sim, price_thb_map)
+    return {
+        "snapshot_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "actor": _current_actor(),
+        "total_value_thb": float(snap["total_value_thb"]),
+        "cash_thb": float(snap["cash_thb"]),
+        "invested_cost_thb": float(snap["invested_cost_thb"]),
+        "realized_pnl_thb": float(snap["realized_pnl_thb"]),
+        "unrealized_pnl_thb": float(snap["unrealized_pnl_thb"]),
     }
-    if show_amounts:
-        payload["portfolio_value_thb"] = round(total_val, 2)
-        payload["total_pnl_thb"] = round(float(snap.get("total_pnl_thb", 0) or 0), 2)
-    return payload
 
 
-def create_investor_share(payload: dict[str, Any], expires_days: Optional[int] = 30) -> Optional[str]:
+def save_portfolio_value_snapshot(sim: dict, price_thb_map: Mapping[str, float]) -> bool:
+    """บันทึกมูลค่าพอร์ต 1 snapshot; persistence ใช้ pattern เดียวกับ nc_snapshots."""
+    payload = _portfolio_value_snapshot_payload(sim, price_thb_map)
+    st.session_state.setdefault("portfolio_value_snapshots", []).append(payload)
+    st.session_state["portfolio_value_snapshots"] = st.session_state["portfolio_value_snapshots"][-2000:]
+
     if is_guest_mode():
-        return None
-    token = uuid.uuid4().hex
-    now = datetime.now(timezone.utc)
-    expires_at = (now + pd.Timedelta(days=int(expires_days))).isoformat() if expires_days else None
-    record = {
-        "token": token, "actor": _current_actor(),
-        "created_at": now.isoformat(), "expires_at": expires_at,
-        "revoked": False, "payload": _json_safe(payload),
-    }
+        return False
+
     sb = _get_supabase()
     if sb is not None:
         try:
-            sb.table(INVESTOR_SHARE_TABLE).insert(record).execute()
-            return token
-        except Exception as exc:
-            print(f"[investor_share] save error: {exc}")
-
-    p = _HERE / "investor_shares.json"
-    try:
-        data = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
-        if not isinstance(data, dict):
-            data = {}
-    except (OSError, json.JSONDecodeError):
-        data = {}
-    data[token] = record
-    try:
-        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        return token
-    except OSError:
-        return None
-
-
-def load_investor_share(token: str) -> Optional[dict[str, Any]]:
-    token = str(token or "").strip()
-    if not token:
-        return None
-    sb = _get_supabase()
-    if sb is not None:
-        try:
-            res = sb.table(INVESTOR_SHARE_TABLE).select("*").eq("token", token).limit(1).execute()
-            if res.data:
-                return res.data[0]
-        except Exception as exc:
-            print(f"[investor_share] load error: {exc}")
-    p = _HERE / "investor_shares.json"
-    if p.is_file():
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            return data.get(token) if isinstance(data, dict) else None
-        except (OSError, json.JSONDecodeError):
-            return None
-    return None
-
-
-def list_investor_shares(actor: Optional[str] = None) -> list[dict[str, Any]]:
-    actor = actor or _current_actor()
-    sb = _get_supabase()
-    if sb is not None:
-        try:
-            res = (sb.table(INVESTOR_SHARE_TABLE)
-                     .select("token,created_at,expires_at,revoked,payload")
-                     .eq("actor", actor).order("created_at", desc=True).execute())
-            return res.data or []
-        except Exception as exc:
-            print(f"[investor_share] list error: {exc}")
-    p = _HERE / "investor_shares.json"
-    if p.is_file():
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            return [v for v in data.values() if isinstance(v, dict) and v.get("actor") == actor] if isinstance(data, dict) else []
-        except (OSError, json.JSONDecodeError):
-            return []
-    return []
-
-
-def revoke_investor_share(token: str) -> bool:
-    sb = _get_supabase()
-    if sb is not None:
-        try:
-            sb.table(INVESTOR_SHARE_TABLE).update({"revoked": True}).eq("token", token).execute()
+            sb.table("portfolio_value_snapshots").insert(payload).execute()
             return True
-        except Exception as exc:
-            print(f"[investor_share] revoke error: {exc}")
-    p = _HERE / "investor_shares.json"
-    if p.is_file():
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and token in data:
-                data[token]["revoked"] = True
-                p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-                return True
-        except (OSError, json.JSONDecodeError):
+        except Exception:
             pass
+
+    p = _HERE / "portfolio_value_snapshots.json"
+    try:
+        old = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else []
+        old = old if isinstance(old, list) else []
+        old.append(payload)
+        p.write_text(json.dumps(old[-5000:], ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
     return False
 
 
-def is_share_valid(record: Optional[dict[str, Any]]) -> tuple[bool, str]:
-    if not record:
-        return False, "ไม่พบลิงก์นี้"
-    if record.get("revoked"):
-        return False, "ลิงก์นี้ถูกยกเลิกแล้ว"
-    exp = record.get("expires_at")
-    if exp:
+def load_portfolio_value_snapshots(limit: int = 2000) -> list[dict]:
+    if is_guest_mode():
+        return list(st.session_state.get("portfolio_value_snapshots", []))[-limit:]
+
+    sb = _get_supabase()
+    if sb is not None:
         try:
-            if pd.Timestamp(exp) < pd.Timestamp.now(tz="UTC"):
-                return False, "ลิงก์นี้หมดอายุแล้ว"
+            res = (
+                sb.table("portfolio_value_snapshots")
+                .select("*")
+                .eq("actor", _current_actor())
+                .order("snapshot_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            return list(reversed(res.data or []))
         except Exception:
             pass
-    return True, ""
+
+    p = _HERE / "portfolio_value_snapshots.json"
+    if p.is_file():
+        try:
+            rows = json.loads(p.read_text(encoding="utf-8"))
+            return rows[-limit:] if isinstance(rows, list) else []
+        except Exception:
+            pass
+    return list(st.session_state.get("portfolio_value_snapshots", []))[-limit:]
 
 
-def qr_code_image_url(data: str, size: int = 220) -> str:
-    q = urllib.parse.quote(data, safe="")
-    return f"https://api.qrserver.com/v1/create-qr-code/?size={size}x{size}&data={q}"
+def maybe_autosnapshot_portfolio(sim: dict, price_thb_map: Mapping[str, float]) -> None:
+    """บันทึก snapshot วันละ 1 ครั้งต่อ actor/session เมื่อเข้า Portfolio."""
+    today = pd.Timestamp.now(tz="Asia/Bangkok").strftime("%Y-%m-%d")
+    key = f"pv_snap_done_{_current_actor()}_{today}"
+    if st.session_state.get(key):
+        return
 
-
-def _fetch_qr_png_bytes(data: str, size: int = 260) -> Optional[bytes]:
+    # กันซ้ำข้าม browser session: ถ้ามี snapshot ของ actor วันนี้แล้ว ไม่ต้อง insert ใหม่
     try:
-        req = urllib.request.Request(qr_code_image_url(data, size),
-                                     headers={"User-Agent": "XSpringDealerSuite"})
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            return resp.read()
+        existing = load_portfolio_value_snapshots(limit=5)
+        for row in reversed(existing):
+            ts = pd.to_datetime(row.get("snapshot_at"), errors="coerce")
+            if pd.notna(ts):
+                if getattr(ts, "tzinfo", None) is not None:
+                    local_date = ts.tz_convert("Asia/Bangkok").strftime("%Y-%m-%d")
+                else:
+                    local_date = ts.strftime("%Y-%m-%d")
+                if local_date == today and str(row.get("actor", _current_actor())) == _current_actor():
+                    st.session_state[key] = True
+                    return
     except Exception:
-        return None
+        pass
+
+    save_portfolio_value_snapshot(sim, price_thb_map)
+    st.session_state[key] = True
+
+
+def save_goals(goals: list[dict]) -> None:
+    st.session_state["portfolio_goals"] = goals
+    if is_guest_mode():
+        return
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            sb.table("portfolio_goals").upsert({
+                "actor": _current_actor(),
+                "goals": goals,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).execute()
+            return
+        except Exception:
+            pass
+    p = _HERE / "portfolio_goals.json"
+    tmp = p.with_suffix(".tmp")
+    try:
+        tmp.write_text(json.dumps(goals, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, p)
+    except Exception:
+        pass
+
+
+def load_goals() -> list[dict]:
+    if "portfolio_goals" in st.session_state:
+        return list(st.session_state["portfolio_goals"] or [])
+    if not is_guest_mode():
+        sb = _get_supabase()
+        if sb is not None:
+            try:
+                res = (
+                    sb.table("portfolio_goals")
+                    .select("goals")
+                    .eq("actor", _current_actor())
+                    .limit(1)
+                    .execute()
+                )
+                if res.data:
+                    goals = res.data[0].get("goals") or []
+                    st.session_state["portfolio_goals"] = goals
+                    return goals
+            except Exception:
+                pass
+        p = _HERE / "portfolio_goals.json"
+        if p.is_file():
+            try:
+                goals = json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(goals, list):
+                    st.session_state["portfolio_goals"] = goals
+                    return goals
+            except Exception:
+                pass
+    return []
+
+
+def _goal_ts(value: Any) -> pd.Timestamp:
+    ts = pd.to_datetime(value, errors="coerce")
+    if pd.isna(ts):
+        return pd.Timestamp.now()
+    if getattr(ts, "tzinfo", None) is not None:
+        ts = ts.tz_convert("Asia/Bangkok").tz_localize(None)
+    return ts
+
+
+def goal_progress(goal: dict, sim: dict, price_thb_map: Mapping[str, float],
+                  snapshots: list[dict]) -> dict:
+    snap = portfolio_snapshot(sim, price_thb_map)
+    current_value = float(snap["total_value_thb"])
+    created = _goal_ts(goal.get("created_at"))
+    target_date = _goal_ts(goal.get("target_date"))
+    now = pd.Timestamp.now().tz_localize(None)
+
+    days_total = max((target_date - created).days, 1)
+    days_remaining = max((target_date - now).days, 0)
+    years_remaining = days_remaining / 365.0
+
+    start_value = float(goal.get("start_value_thb") or current_value)
+    target_amount = float(goal.get("target_amount_thb") or 0.0)
+
+    hist = []
+    for item in snapshots:
+        ts = _goal_ts(item.get("snapshot_at"))
+        if ts >= created:
+            try:
+                val = float(item.get("total_value_thb") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            hist.append((ts, val))
+    hist.sort(key=lambda x: x[0])
+
+    if len(hist) >= 2:
+        t0, v0 = hist[0]
+        t1, v1 = hist[-1]
+        elapsed_yrs = max((t1 - t0).days / 365.0, 1 / 365)
+        actual_cagr = (v1 / v0) ** (1 / elapsed_yrs) - 1 if v0 > 0 and v1 >= 0 else 0.0
+    else:
+        actual_cagr = 0.0
+
+    if start_value > 0 and target_amount > 0:
+        required_cagr = (target_amount / start_value) ** (365.0 / days_total) - 1
+    else:
+        required_cagr = None
+
+    if years_remaining > 0:
+        projected_value = current_value * ((1 + actual_cagr) ** years_remaining) if actual_cagr > -1 else 0.0
+    else:
+        projected_value = current_value
+
+    on_track = projected_value >= target_amount if target_amount > 0 else False
+    return dict(
+        current_value=current_value,
+        start_value=start_value,
+        target_amount=target_amount,
+        days_remaining=days_remaining,
+        required_cagr=required_cagr,
+        actual_cagr=actual_cagr,
+        projected_value=projected_value,
+        on_track=on_track,
+        progress_pct=min(100.0, current_value / target_amount * 100) if target_amount > 0 else 0.0,
+        history=hist,
+    )
+
+
+def render_goal_tracker(sim: dict, price_thb_map: Mapping[str, float]) -> None:
+    section("🎯 Goal Tracker")
+    maybe_autosnapshot_portfolio(sim, price_thb_map)
+    goals = load_goals()
+
+    with st.expander("➕ ตั้งเป้าหมายใหม่", expanded=not goals):
+        c1, c2, c3 = st.columns(3)
+        target_amt = c1.number_input(
+            "เป้าหมาย (THB)", value=5_000_000.0, min_value=1000.0,
+            step=100000.0, key="goal_new_amt"
+        )
+        target_date = c2.date_input(
+            "ภายในวันที่",
+            value=(pd.Timestamp.now() + pd.DateOffset(years=3)).date(),
+            key="goal_new_date"
+        )
+        note = c3.text_input(
+            "ชื่อเป้าหมาย", value="ดาวน์บ้าน / เกษียณ", key="goal_new_note"
+        )
+        if st.button("💾 บันทึกเป้าหมาย", key="goal_new_save", use_container_width=True):
+            snap_now = portfolio_snapshot(sim, price_thb_map)
+            goals.append({
+                "id": uuid.uuid4().hex[:8],
+                "note": note.strip() or "เป้าหมายพอร์ต",
+                "target_amount_thb": float(target_amt),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "target_date": pd.Timestamp(target_date).isoformat(),
+                "start_value_thb": float(snap_now["total_value_thb"]),
+            })
+            save_goals(goals)
+            st.rerun()
+
+    if not goals:
+        st.info("ยังไม่มีเป้าหมาย — เพิ่มเป้าหมายแรกด้านบน")
+        return
+
+    snapshots = load_portfolio_value_snapshots()
+    for g in goals:
+        prog = goal_progress(g, sim, price_thb_map, snapshots)
+        with st.container(border=True):
+            top = st.columns([3, 1])
+            top[0].markdown(
+                f"**{_html.escape(str(g.get('note', 'เป้าหมายพอร์ต')))}** — "
+                f"เป้า {fmt_baht(prog['target_amount'])} "
+                f"ภายใน {_goal_ts(g.get('target_date')).strftime('%Y-%m-%d')}"
+            )
+            if top[1].button("🗑️ ลบ", key=f"goal_del_{g['id']}", use_container_width=True):
+                save_goals([x for x in goals if x.get("id") != g.get("id")])
+                st.rerun()
+
+            if prog["required_cagr"] is None:
+                detail = (
+                    f"ตอนนี้ {fmt_baht(prog['current_value'])} ({prog['progress_pct']:.1f}%) · "
+                    "ยังคำนวณ Required CAGR ไม่ได้ เพราะมูลค่าเริ่มต้นหรือเป้าหมายเป็นศูนย์"
+                )
+                verdict_box(False, "ต้องมีมูลค่าเริ่มต้นเพื่อคำนวณเส้นทาง", detail, warn=True)
+            else:
+                verdict_box(
+                    prog["on_track"],
+                    "ตามเป้าอยู่ 🎉" if prog["on_track"] else "ต่ำกว่าเส้นทางเป้าหมาย",
+                    f"ตอนนี้ {fmt_baht(prog['current_value'])} ({prog['progress_pct']:.1f}%) · "
+                    f"ทำได้จริง {prog['actual_cagr']*100:.1f}%/ปี · "
+                    f"ต้องการ {prog['required_cagr']*100:.1f}%/ปี · "
+                    f"คาดว่าจะได้ {fmt_baht(prog['projected_value'])} เมื่อถึงกำหนด",
+                    warn=not prog["on_track"],
+                )
+
+            k = st.columns(4)
+            metric_card(k[0], "มูลค่าปัจจุบัน", fmt_baht(prog["current_value"]))
+            metric_card(
+                k[1], "Required CAGR",
+                f"{prog['required_cagr']*100:.1f}%/ปี" if prog["required_cagr"] is not None else "—"
+            )
+            metric_card(
+                k[2], "Actual CAGR", f"{prog['actual_cagr']*100:.1f}%/ปี",
+                (prog["actual_cagr"] - prog["required_cagr"])
+                if prog["required_cagr"] is not None else None,
+            )
+            metric_card(
+                k[3], "คาดการณ์ ณ วันเป้าหมาย", fmt_baht(prog["projected_value"]),
+                prog["projected_value"] - prog["target_amount"],
+            )
+
+            created = _goal_ts(g.get("created_at"))
+            target_ts = _goal_ts(g.get("target_date"))
+            hist = prog["history"]
+            fig = go.Figure()
+            if hist:
+                fig.add_trace(go.Scatter(
+                    x=[x[0] for x in hist],
+                    y=[x[1] for x in hist],
+                    name="มูลค่าจริง",
+                    line=dict(color="#0ecb81", width=2.4),
+                ))
+            fig.add_trace(go.Scatter(
+                x=[created, target_ts],
+                y=[prog["start_value"], prog["target_amount"]],
+                name="เส้นทางที่ต้องไปให้ถึง",
+                line=dict(color="#fcd535", dash="dash"),
+            ))
+            fig.add_trace(go.Scatter(
+                x=[pd.Timestamp.now(), target_ts],
+                y=[prog["current_value"], prog["projected_value"]],
+                name="คาดการณ์ตามอัตราปัจจุบัน",
+                line=dict(color="#3B82F6", dash="dot"),
+            ))
+            fig.update_layout(
+                template="plotly_dark", height=320, margin=dict(t=20, b=20),
+                yaxis_title="THB", paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                legend=dict(orientation="h", y=1.12, yanchor="bottom"),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+
+def contribution_vs_market_breakdown(sim: dict, snapshots: list[dict]) -> dict:
+    ensure_portfolio_ledger(sim)
+    txs = [t for t in (sim.get("portfolio_ledger", []) or []) if isinstance(t, dict)]
+    if not snapshots:
+        return dict(net_contribution=0.0, market_return=0.0, total_growth=0.0, timeline=pd.DataFrame())
+
+    clean = []
+    for s in snapshots:
+        ts = _goal_ts(s.get("snapshot_at"))
+        try:
+            val = float(s.get("total_value_thb") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        clean.append((ts, val))
+    clean.sort(key=lambda x: x[0])
+    if not clean:
+        return dict(net_contribution=0.0, market_return=0.0, total_growth=0.0, timeline=pd.DataFrame())
+
+    start_ts, start_val = clean[0]
+    end_ts, end_val = clean[-1]
+
+    def _cash_flow_between(lo: pd.Timestamp, hi: pd.Timestamp) -> float:
+        total = 0.0
+        for t in txs:
+            typ = str(t.get("type", "")).upper()
+            if typ not in {"DEPOSIT", "WITHDRAWAL", "WITHDRAW"}:
+                continue
+            ts = _goal_ts(t.get("timestamp"))
+            if lo < ts <= hi:
+                amount = float(t.get("gross_thb", 0.0) or 0.0)
+                total += amount if typ == "DEPOSIT" else -amount
+        return total
+
+    # Contribution is measured only after the first snapshot so that an old
+    # deposit used to create the opening portfolio is not counted as growth.
+    net_contribution = _cash_flow_between(start_ts, end_ts)
+    total_growth = end_val - start_val
+    market_return = total_growth - net_contribution
+
+    rows = []
+    prev_ts, prev_val = start_ts, start_val
+    for ts, val in clean[1:]:
+        period_contrib = _cash_flow_between(prev_ts, ts)
+        rows.append({
+            "date": ts,
+            "contribution": period_contrib,
+            "market_return": (val - prev_val) - period_contrib,
+        })
+        prev_ts, prev_val = ts, val
+
+    return {
+        "net_contribution": net_contribution,
+        "market_return": market_return,
+        "total_growth": total_growth,
+        "timeline": pd.DataFrame(rows),
+    }
+
+
+def render_contribution_breakdown(sim: dict, price_thb_map: Mapping[str, float]) -> None:
+    section("🧩 Contribution vs Market Return")
+    maybe_autosnapshot_portfolio(sim, price_thb_map)
+    snapshots = load_portfolio_value_snapshots()
+    r = contribution_vs_market_breakdown(sim, snapshots)
+
+    k = st.columns(3)
+    metric_card(k[0], "กำไร/ขาดทุนรวม", fmt_baht(r["total_growth"], True), r["total_growth"])
+    metric_card(k[1], "มาจากเงินที่เติมเอง", fmt_baht(r["net_contribution"], True), r["net_contribution"])
+    metric_card(k[2], "มาจากผลตอบแทนตลาด", fmt_baht(r["market_return"], True), r["market_return"])
+
+    if not r["timeline"].empty:
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=r["timeline"]["date"], y=r["timeline"]["contribution"],
+            name="เงินที่เติมเอง", marker_color="#3B82F6"
+        ))
+        fig.add_trace(go.Bar(
+            x=r["timeline"]["date"], y=r["timeline"]["market_return"],
+            name="ผลตอบแทนตลาด", marker_color="#0ecb81"
+        ))
+        fig.update_layout(
+            barmode="relative", template="plotly_dark", height=300,
+            margin=dict(t=20, b=20), paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            legend=dict(orientation="h", y=1.12, yanchor="bottom"),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.caption("ต้องมี snapshot อย่างน้อย 2 จุด (เข้าเว็บอีกวันถัดไป) ถึงจะเห็น timeline นี้")
 
 
 def _config_for_compare(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -8356,162 +8601,11 @@ def render_portfolio_calendar(cfg: dict[str, Any], data: pd.DataFrame, market_df
         if selected:
             st.markdown(f'<div class="cal-card"><h4 style="margin:0;color:#eaecef">Snapshot · {selected_day}</h4><div class="cal-detail"><span>Portfolio Value</span><b>฿{float(selected.get("total_value_thb",0) or 0):,.2f}</b></div><div class="cal-detail"><span>Cash</span><b>฿{float(selected.get("cash_thb",0) or 0):,.2f}</b></div><div class="cal-detail"><span>Invested Cost</span><b>฿{float(selected.get("invested_cost_thb",0) or 0):,.2f}</b></div><div class="cal-detail"><span>Unrealized P&L</span><b>฿{float(selected.get("unrealized_pnl_thb",0) or 0):+,.2f}</b></div><div class="cal-detail"><span>Realized P&L</span><b>฿{float(selected.get("realized_pnl_thb",0) or 0):+,.2f}</b></div><div class="cal-detail"><span>Fees</span><b>฿{float(selected.get("fees_thb",0) or 0):,.2f}</b></div></div>', unsafe_allow_html=True)
 
+    with st.expander("📬 AI Weekly / Monthly Digest", expanded=False):
+        render_ai_weekly_digest(sim)
+
     with st.expander("📄 Fund Fact Sheet — PDF", expanded=False):
         render_fund_factsheet_panel(cfg, sim, snap, fetch_price_data, fund_name="XSpring Digital Asset Fund")
-
-    with st.expander("🔗 Shareable Investor View", expanded=False):
-        render_investor_share_manager(cfg, sim, snap)
-
-
-
-
-
-def render_investor_share_manager(cfg: dict[str, Any], sim: dict[str, Any],
-                                  snap: dict[str, Any]) -> None:
-    st.markdown("#### 🔗 Shareable Investor View")
-    st.caption(
-        "สร้างลิงก์ Read-only ให้นักลงทุนดู Performance ได้โดยไม่ต้องล็อกอิน "
-        "เป็นภาพนิ่ง ณ เวลาที่กดสร้าง ไม่ใช่ live data และไม่มีข้อมูลบัญชีจริง"
-    )
-    if is_guest_mode():
-        st.info("โหมด Guest ไม่สามารถสร้างลิงก์แชร์ถาวรได้")
-        return
-
-    try:
-        default_base = st.secrets.get("app_base_url", "")
-    except Exception:
-        default_base = ""
-    base_url = st.text_input(
-        "URL ของแอปนี้ (ใช้ต่อท้าย token)",
-        value=st.session_state.get("investor_base_url", default_base),
-        placeholder="https://your-app.streamlit.app",
-        key="investor_base_url",
-    )
-
-    c1, c2, c3 = st.columns(3)
-    fund_name = c1.text_input("ชื่อที่แสดงบนหน้าแชร์", value="XSpring Portfolio", key="inv_share_name")
-    show_amounts = c2.toggle(
-        "แสดงมูลค่าจริง (THB)", value=False, key="inv_share_amounts",
-        help="ปิด = แชร์เฉพาะ % ผลตอบแทนและสัดส่วน ไม่เปิดเผยมูลค่าเงินจริง",
-    )
-    expiry_label = c3.selectbox(
-        "อายุลิงก์", ["7 วัน", "30 วัน", "90 วัน", "ไม่หมดอายุ"],
-        index=1, key="inv_share_exp",
-    )
-    expiry_days = {"7 วัน": 7, "30 วัน": 30, "90 วัน": 90, "ไม่หมดอายุ": None}[expiry_label]
-
-    if st.button("🔗 สร้างลิงก์แชร์ใหม่", key="inv_share_create", use_container_width=True):
-        payload = build_investor_share_payload(cfg, sim, snap, fund_name, show_amounts)
-        token = create_investor_share(payload, expiry_days)
-        if token:
-            st.session_state["inv_share_last_token"] = token
-            st.success("สร้างลิงก์สำเร็จ")
-        else:
-            st.error("สร้างลิงก์ไม่สำเร็จ — ตรวจสอบ Supabase หรือสิทธิ์เขียนไฟล์")
-
-    last_token = st.session_state.get("inv_share_last_token")
-    if last_token and base_url.strip():
-        link = f"{base_url.rstrip('/')}/?share={last_token}"
-        st.code(link, language=None)
-        qc1, qc2 = st.columns([1, 2])
-        qr_bytes = _fetch_qr_png_bytes(link, 260)
-        if qr_bytes:
-            qc1.image(qr_bytes, caption="QR Code", width=160)
-        else:
-            qc1.image(qr_code_image_url(link), caption="QR Code", width=160)
-        qc2.caption("ให้นักลงทุนสแกน QR หรือกดลิงก์ด้านบนเพื่อดู Performance แบบ Read-only")
-    elif last_token:
-        st.warning("กรอก URL ของแอปด้านบนก่อน เพื่อประกอบเป็นลิงก์ที่กดได้จริง")
-        st.code(last_token, language=None)
-
-    st.markdown("##### ลิงก์ที่เคยสร้างไว้")
-    shares = list_investor_shares()
-    if not shares:
-        st.caption("ยังไม่มีลิงก์ที่สร้างไว้")
-        return
-    for s in shares:
-        token = s.get("token", "")
-        payload = s.get("payload", {}) or {}
-        ok, reason = is_share_valid(s)
-        status = "🟢 ใช้งานได้" if ok else f"🔴 {reason}"
-        cA, cB, cC = st.columns([3, 1.4, 1])
-        cA.markdown(f"**{payload.get('fund_name', 'Investor View')}** · `{token[:10]}…` · {status}")
-        cB.caption(f"สร้างเมื่อ {str(s.get('created_at',''))[:16].replace('T',' ')}")
-        if ok and cC.button("ยกเลิกลิงก์", key=f"inv_share_revoke_{token}"):
-            revoke_investor_share(token)
-            st.rerun()
-
-
-
-
-def render_investor_public_view(token: str) -> None:
-    st.set_page_config(page_title="Investor View — XSpring", page_icon="📈", layout="centered")
-    st.markdown(THEME_CSS, unsafe_allow_html=True)
-    record = load_investor_share(token)
-    ok, reason = is_share_valid(record)
-    if not ok:
-        st.error(f"⚠️ {reason}")
-        st.caption("ลิงก์นี้อาจถูกยกเลิก หมดอายุ หรือพิมพ์ไม่ครบ — ติดต่อผู้ที่ส่งลิงก์นี้ให้คุณ")
-        return
-
-    payload = record.get("payload", {}) or {}
-    fund_name = payload.get("fund_name", "Investor Portfolio View")
-    as_of = str(payload.get("as_of", ""))[:16].replace("T", " ")
-    show_amounts = bool(payload.get("show_amounts", False))
-
-    safe_name = _html.escape(str(fund_name))
-    st.markdown(
-        f"<div class='xs-hero'><h1>{safe_name}</h1>"
-        f"<p>Read-only Investor View · ข้อมูล ณ {as_of} UTC</p>"
-        f"<span class='xs-pill'>🔒 Read-only</span>"
-        f"<div class='xs-ver'>สร้างจาก XSpring Dealer Suite · ไม่ใช่คำแนะนำการลงทุน</div></div>",
-        unsafe_allow_html=True,
-    )
-
-    k = st.columns(4)
-    metric_card(k[0], "Period Return", f"{payload.get('period_return_pct', 0):+.2f}%",
-                payload.get("period_return_pct", 0))
-    metric_card(k[1], "Sharpe Ratio", f"{payload.get('sharpe', 0):.2f}")
-    metric_card(k[2], "Max Drawdown", f"{payload.get('max_drawdown_pct', 0):.2f}%",
-                payload.get("max_drawdown_pct", 0))
-    metric_card(k[3], "Volatility (Ann.)", f"{payload.get('volatility_pct', 0):.2f}%")
-
-    if show_amounts and payload.get("portfolio_value_thb") is not None:
-        st.metric("Portfolio Value", fmt_baht(payload["portfolio_value_thb"]))
-
-    hist = payload.get("history", [])
-    if hist:
-        hdf = pd.DataFrame(hist)
-        hdf["date"] = pd.to_datetime(hdf["date"], errors="coerce")
-        hdf["value"] = pd.to_numeric(hdf["value"], errors="coerce")
-        hdf = hdf.dropna(subset=["date", "value"])
-        if not hdf.empty:
-            title = "Portfolio Value (THB)" if show_amounts else "Portfolio Index (Start = 100)"
-            fig = go.Figure(go.Scatter(
-                x=hdf["date"], y=hdf["value"],
-                line=dict(color="#0ecb81", width=2.4),
-                fill="tozeroy", fillcolor="rgba(14,203,129,0.12)",
-            ))
-            fig.update_layout(
-                template="plotly_dark", height=340, margin=dict(t=30, b=20),
-                title=dict(text=title, font=dict(size=14)),
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-    alloc = payload.get("allocation", [])
-    if alloc:
-        st.markdown("#### Allocation")
-        adf = pd.DataFrame(alloc).sort_values("allocation_pct", ascending=False)
-        cols = ["asset", "allocation_pct"] + (["value_thb"] if show_amounts else [])
-        cols = [c for c in cols if c in adf.columns]
-        rename = {"asset": "สินทรัพย์", "allocation_pct": "สัดส่วน (%)", "value_thb": "มูลค่า (THB)"}
-        st.dataframe(adf[cols].rename(columns=rename), hide_index=True, use_container_width=True)
-
-    st.caption(
-        f"Cash allocation: {payload.get('cash_pct', 0):.1f}% · "
-        "ข้อมูลนี้เพื่อการรับทราบเท่านั้น ไม่ใช่คำแนะนำการลงทุน และไม่รับประกันผลตอบแทนในอนาคต"
-    )
 
 
 def render_trading_journal(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
@@ -8568,6 +8662,8 @@ def render_trading_journal(cfg: dict[str, Any], data: pd.DataFrame, market_df: p
         st.markdown(row,unsafe_allow_html=True)
     st.markdown('</div>',unsafe_allow_html=True)
 
+    st.divider()
+    render_ai_trade_coach(sim)
 
 
 @_cache_data(ttl=300, show_spinner="กำลังคำนวณ Correlation…")
@@ -8962,7 +9058,9 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         unsafe_allow_html=True,
     )
 
-    t_port, t_watch, t_tx = st.tabs(["📊 Portfolio", "⭐ Watchlist", "🧾 Transaction History"])
+    t_port, t_watch, t_tx, t_goal, t_contrib = st.tabs([
+        "📊 Portfolio", "⭐ Watchlist", "🧾 Transaction History", "🎯 Goal", "🧩 Contribution"
+    ])
 
     with t_port:
         st.markdown(
@@ -8978,6 +9076,8 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
 
         _portfolio_cash_card(snap["cash_thb"], snap["total_value_thb"])
 
+        # เก็บฐานข้อมูลมูลค่าพอร์ตวันละ 1 ครั้งสำหรับ Goal/Contribution
+        maybe_autosnapshot_portfolio(sim, price_thb_map)
         st.markdown('<div class="portfolio-allocation-title">Allocation</div>', unsafe_allow_html=True)
         alloc_items = [{
             "asset": "THB",
@@ -9087,6 +9187,12 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
             "Average cost ใช้วิธีต้นทุนเฉลี่ยถ่วงน้ำหนัก · Unrealized P&L คำนวณจากราคาปัจจุบัน · "
             "Realized P&L เกิดเมื่อขาย โดยหักค่าธรรมเนียมแล้ว"
         )
+
+    with t_goal:
+        render_goal_tracker(sim, price_thb_map)
+
+    with t_contrib:
+        render_contribution_breakdown(sim, price_thb_map)
 # ---------------- ฟังก์ชัน AI ----------------
 
 AI_SYSTEM = (
@@ -11984,103 +12090,82 @@ def render_cash_flow_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_d
 
 
 @_cache_data(ttl=900, show_spinner=False)
-def _fetch_institutional_benchmarks(start: Any, end: Any) -> tuple[pd.DataFrame, dict[str, str]]:
-    """โหลด benchmark แบบแยก ticker พร้อม fallback และเก็บ error ไว้ debug.
-    BTC = BTC-USD, SET = ^SET.BK / SET.BK, S&P 500 = ^GSPC.
-    คืน (DataFrame, errors) — errors คือ {label: เหตุผลที่โหลดไม่สำเร็จ}
+def _fetch_institutional_benchmarks(start: Any, end: Any) -> pd.DataFrame:
+    """โหลด benchmark แบบแยก ticker เพื่อไม่ให้ ticker ตัวหนึ่งล้มแล้วทำให้ตัวอื่นหายไป.
+    BTC = BTC-USD, SET = ^SET.BK, S&P 500 = ^GSPC.
     """
     if "yf" not in globals() or yf is None:
-        return pd.DataFrame(), {"ทั้งหมด": "ไม่มี yfinance ในระบบ"}
+        return pd.DataFrame()
 
-    start_ts = pd.Timestamp(start).normalize() - pd.Timedelta(days=45)
+    start_ts = pd.Timestamp(start).normalize() - pd.Timedelta(days=30)
     end_ts = pd.Timestamp(end).normalize() + pd.Timedelta(days=3)
     ticker_map = {
-        "BTC": ["BTC-USD"],
-        "SET Index": ["^SET.BK", "SET.BK", "^SETI", "THD"],  # THD = ETF สำรอง ถ้าดัชนีตรงดึงไม่ได้
-        "S&P 500": ["^GSPC", "SPY"],  # SPY = ETF สำรองของ S&P 500
+        "BTC": "BTC-USD",
+        "SET Index": "^SET.BK",
+        "S&P 500": "^GSPC",
     }
 
-    def _clean_close(close: Any) -> pd.Series:
-        if close is None:
-            return pd.Series(dtype=float)
-        if isinstance(close, pd.DataFrame):
-            close = close.iloc[:, 0]
-        close = pd.to_numeric(close, errors="coerce")
-        idx = pd.to_datetime(close.index, errors="coerce")
+    series = {}
+    for label, ticker in ticker_map.items():
         try:
-            if getattr(idx, "tz", None) is not None:
-                idx = idx.tz_localize(None)
-        except Exception:
-            pass
-        close.index = idx.normalize()
-        return close[~close.index.duplicated(keep="last")].dropna().sort_index()
+            raw = yf.download(
+                ticker,
+                start=start_ts,
+                end=end_ts,
+                auto_adjust=False,
+                progress=False,
+                group_by="column",
+                threads=False,
+            )
+            if raw is None or raw.empty:
+                continue
 
-    series: dict[str, pd.Series] = {}
-    errors: dict[str, str] = {}
+            close = raw["Close"] if "Close" in raw.columns else None
+            if close is None:
+                continue
+            if isinstance(close, pd.DataFrame):
+                close = close.iloc[:, 0]
 
-    for label, tickers in ticker_map.items():
-        last_err = "ไม่ทราบสาเหตุ"
-        got = False
-        for ticker in tickers:
-            try:
-                raw = yf.download(
-                    ticker,
-                    start=start_ts,
-                    end=end_ts,
-                    auto_adjust=False,
-                    progress=False,
-                    threads=False,
-                )
-                if raw is None or raw.empty:
-                    # บาง index ทำงานกับ Ticker().history() ได้ดีกว่า download()
-                    raw = yf.Ticker(ticker).history(
-                        start=start_ts,
-                        end=end_ts,
-                        auto_adjust=False,
-                    )
-                if raw is None or raw.empty:
-                    last_err = f"{ticker}: ไม่มีข้อมูลย้อนหลังในช่วงที่เลือก"
-                    continue
+            close = pd.to_numeric(close, errors="coerce")
+            close.index = pd.to_datetime(close.index, errors="coerce")
+            if getattr(close.index, "tz", None) is not None:
+                close.index = close.index.tz_localize(None)
+            close.index = close.index.normalize()
+            close = close[~close.index.duplicated(keep="last")].dropna().sort_index()
 
-                close = raw["Close"] if "Close" in raw.columns else None
-                if close is None:
-                    last_err = f"{ticker}: ไม่พบคอลัมน์ Close"
-                    continue
-                close = _clean_close(close)
-                if close.empty:
-                    last_err = f"{ticker}: ข้อมูลว่างหลังทำความสะอาด"
-                    continue
-
+            if not close.empty:
                 series[label] = close
-                if ticker != tickers[0]:
-                    errors[label] = f"⚠️ ใช้ proxy '{ticker}' แทนดัชนีตรง (ตัวจริงดึงไม่ได้)"
-                got = True
-                break
-            except Exception as e:
-                last_err = f"{ticker}: {type(e).__name__} — {e}"
-
-        if not got:
-            errors[label] = last_err
+        except Exception:
+            # One unavailable benchmark must not remove the others.
+            continue
 
     if not series:
-        return pd.DataFrame(), errors
+        return pd.DataFrame()
 
     out = pd.concat(series, axis=1).sort_index()
     out.columns = [str(c) for c in out.columns]
-    return out.dropna(how="all"), errors
+    return out.dropna(how="all")
 
 
-def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, float], dict[str, str]]:
-    """สร้าง Institutional Benchmark Comparison
-    Benchmark เดินตามปฏิทินตลาดของมันเอง (ไม่ถูกบีบให้เหลือแค่วัน snapshot ของ portfolio)
-    ส่วน portfolio จะเป็นเส้นขั้นบันได (forward-fill ระหว่าง snapshot) ซึ่งถูกต้องตามจริง
-    เพราะเรารู้มูลค่าพอร์ตแค่ ณ วันที่มี snapshot เท่านั้น
+def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, float]]:
+    """สร้าง Institutional Benchmark Comparison จากวันของ Portfolio Snapshot จริง
+
+    สำคัญ: ไม่บังคับให้วัน Snapshot ตรงกับวันตลาดแบบ exact match
+    เพราะ SET/S&P500 ไม่มีข้อมูลเสาร์-อาทิตย์/วันหยุดตลาด ขณะที่ Portfolio
+    Snapshot อาจถูกบันทึกวันหยุดได้ จึงใช้ราคาตลาดล่าสุดที่มี ณ หรือก่อน
+    วัน Snapshot (forward-fill จาก benchmark) เพื่อให้เปรียบเทียบได้จริง
     """
-    empty_metrics = {"beta_btc": 0.0, "alpha_btc_annual": 0.0, "corr_btc": 0.0, "obs": 0.0}
+    empty_metrics = {
+        "beta_btc": 0.0,
+        "alpha_btc_annual": 0.0,
+        "corr_btc": 0.0,
+        "obs": 0.0,
+    }
 
-    if hist is None or hist.empty or len(hist) < 1:
-        return pd.DataFrame(), empty_metrics, {}
+    if hist is None or hist.empty or len(hist) < 2:
+        return pd.DataFrame(), empty_metrics
 
+    # --- Normalize portfolio snapshot dates ---
     port = hist[["date", "value"]].copy()
     port["date"] = pd.to_datetime(port["date"], errors="coerce").dt.tz_localize(None).dt.normalize()
     port["value"] = pd.to_numeric(port["value"], errors="coerce")
@@ -12091,81 +12176,100 @@ def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str
             .set_index("date")
     )
 
-    if port.empty:
-        return pd.DataFrame(), empty_metrics, {}
+    if len(port) < 2:
+        return pd.DataFrame(), empty_metrics
 
-    port_start = port.index.min()
-    port_end = max(port.index.max(), pd.Timestamp.now().normalize())
-
-    bench, bench_errors = _fetch_institutional_benchmarks(port_start, port_end)
+    # --- Download benchmark data ---
+    bench = _fetch_institutional_benchmarks(port.index.min(), port.index.max())
     if bench is None or bench.empty:
-        return pd.DataFrame(), empty_metrics, bench_errors
+        return pd.DataFrame(), empty_metrics
 
     bench = bench.copy()
     bench.index = pd.to_datetime(bench.index, errors="coerce").tz_localize(None).normalize()
     bench = bench[~bench.index.duplicated(keep="last")].sort_index()
     bench = bench.apply(pd.to_numeric, errors="coerce")
 
-    # ตัดช่วงให้อยู่ในกรอบเวลาที่ portfolio มีข้อมูล (ตั้งแต่ snapshot แรก ถึงวันนี้)
-    bench = bench[(bench.index >= port_start) & (bench.index <= port_end)]
+    # Resolve EACH portfolio snapshot to the latest benchmark close at or
+    # before that date.  A look-back buffer is fetched above so the first
+    # snapshot can also resolve when it falls on a weekend/holiday.
+    # This is more robust than exact-date intersection and avoids the case
+    # where SET/S&P500 have only one usable point and therefore no visible line.
+    aligned = bench.reindex(port.index, method="ffill")
+    aligned = aligned.dropna(how="all")
 
-    for label in ["BTC", "SET Index", "S&P 500"]:
-        if label not in bench.columns or bench[label].dropna().empty:
-            bench_errors.setdefault(label, "ไม่มีข้อมูลราคาสำหรับช่วงเวลานี้")
+    if aligned.empty:
+        return pd.DataFrame(), empty_metrics
 
-    benchmark_cols = [c for c in ["BTC", "SET Index", "S&P 500"] if c in bench.columns and not bench[c].dropna().empty]
-    if not benchmark_cols and port.empty:
-        return pd.DataFrame(), empty_metrics, bench_errors
+    comparison = pd.concat(
+        [
+            port["value"].rename("Portfolio"),
+            aligned,
+        ],
+        axis=1,
+    ).dropna(subset=["Portfolio"])
 
-    # รวมปฏิทิน: ทุกวันที่ benchmark มีเทรด + ทุกวันที่มี snapshot จริง
-    all_dates = bench.index.union(port.index).sort_values()
-    if all_dates.empty:
-        return pd.DataFrame(), empty_metrics, bench_errors
+    # Keep rows where at least one benchmark exists.
+    benchmark_cols = [c for c in ["BTC", "SET Index", "S&P 500"] if c in comparison.columns]
+    if not benchmark_cols:
+        return pd.DataFrame(), empty_metrics
 
-    levels = pd.DataFrame(index=all_dates)
+    comparison = comparison.dropna(subset=benchmark_cols, how="all")
 
-    # Portfolio: forward-fill ระหว่าง snapshot (ถูกต้องแล้ว เพราะรู้ค่าจริงแค่วันที่ snapshot)
-    port_on_all = port["value"].reindex(all_dates).ffill()
-    port_on_all = port_on_all.dropna()
-    if not port_on_all.empty and float(port_on_all.iloc[0]) != 0:
-        base_p = float(port_on_all.iloc[0])
-        levels.loc[port_on_all.index, "Portfolio"] = port_on_all / base_p * 100.0
+    if len(comparison) < 2:
+        return pd.DataFrame(), empty_metrics
 
-    # Benchmark: ใช้ค่าตามปฏิทินตลาดจริงของมันเอง ไม่ ffill ทับวันที่ไม่มีเทรดของ portfolio
+    # --- Normalize all series to 100 on the first common usable snapshot ---
+    levels = pd.DataFrame(index=comparison.index)
+    portfolio_base = float(comparison["Portfolio"].iloc[0])
+
+    if portfolio_base > 0:
+        levels["Portfolio"] = comparison["Portfolio"] / portfolio_base * 100.0
+
     for col in benchmark_cols:
-        s = bench[col].dropna()
-        if len(s) >= 1 and float(s.iloc[0]) != 0:
+        s = comparison[col].dropna()
+        # A benchmark needs at least 2 aligned observations to draw a
+        # meaningful comparison line.  Because the fetch now includes a
+        # look-back buffer, weekend/holiday snapshots normally have 2 points.
+        if len(s) >= 2 and float(s.iloc[0]) != 0:
             base = float(s.iloc[0])
-            levels.loc[s.index, col] = s / base * 100.0
-        else:
-            bench_errors.setdefault(col, "มีข้อมูลไม่พอสำหรับ normalize")
+            levels[col] = comparison[col] / base * 100.0
 
-    levels = levels.dropna(how="all")
-    if levels.empty or "Portfolio" not in levels.columns:
-        return pd.DataFrame(), empty_metrics, bench_errors
+    # For a clean institutional chart, only show the period where Portfolio
+    # and at least one benchmark are both available.
+    levels = levels.dropna(subset=["Portfolio"])
+    if levels.empty:
+        return pd.DataFrame(), empty_metrics
 
-    # ---- Alpha/Beta vs BTC: ใช้เฉพาะวันที่ทั้งคู่มีข้อมูลจริง (ไม่ใช่ ffill) ----
+    # --- Daily snapshot returns for Alpha/Beta vs BTC ---
+    returns = comparison.pct_change().replace([np.inf, -np.inf], np.nan)
+
     metrics = dict(empty_metrics)
-    if "BTC" in bench.columns:
-        btc_ret = bench["BTC"].dropna().pct_change().dropna()
-        port_ret_on_bench_days = port["value"].reindex(btc_ret.index, method="ffill").pct_change().dropna()
-        common_idx = btc_ret.index.intersection(port_ret_on_bench_days.index)
-        if len(common_idx) >= 2:
-            x = btc_ret.loc[common_idx].astype(float)
-            y = port_ret_on_bench_days.loc[common_idx].astype(float)
+
+    if "BTC" in returns.columns:
+        btc_pair = returns[["Portfolio", "BTC"]].dropna()
+
+        if len(btc_pair) >= 2:
+            x = btc_pair["BTC"].astype(float)
+            y = btc_pair["Portfolio"].astype(float)
+
             var_x = float(x.var(ddof=1))
+
             if var_x > 0 and x.std(ddof=1) > 0 and y.std(ddof=1) > 0:
                 beta = float(y.cov(x) / var_x)
                 corr = float(y.corr(x))
+
+                # Annualized alpha estimate, rf = 0%.
+                # Snapshot frequency is daily in normal use.
                 alpha = float((y.mean() - beta * x.mean()) * 252 * 100)
+
                 metrics.update({
                     "beta_btc": beta,
                     "alpha_btc_annual": alpha,
                     "corr_btc": corr,
-                    "obs": float(len(common_idx)),
+                    "obs": float(len(btc_pair)),
                 })
 
-    return levels, metrics, bench_errors
+    return levels, metrics
 
 
 def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
@@ -12240,12 +12344,13 @@ def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market
 
     st.markdown("### 📊 Institutional Benchmark Comparison")
     st.caption("ดัชนีเริ่มต้น = 100 • Portfolio ใช้ Snapshot จริง • Benchmark: BTC, SET Index และ S&P 500")
-    inst_chart, inst_metrics, inst_errors = _institutional_analytics(hist)
+    inst_chart, inst_metrics = _institutional_analytics(hist)
     if not inst_chart.empty:
         chart_cols = [c for c in ["Portfolio", "BTC", "SET Index", "S&P 500"] if c in inst_chart.columns]
 
-        # ใช้ Altair และแยกเส้นด้วย dash + รูป marker เพื่อให้เส้นที่ค่าเท่ากัน
-        # (เช่น SET/S&P ที่ยังมีข้อมูลตลาดเพียงวันเดียว) ไม่ถูกเส้นอื่นกลบทับจนมองไม่เห็น
+        # ใช้ Altair แทน st.line_chart เพื่อไม่ให้แกน Y เริ่มที่ 0
+        # เพราะการ normalize เป็น 100 + ช่วงข้อมูลสั้นอาจทำให้เส้นอื่น
+        # ดูเหมือนหายไป ทั้งที่จริงอยู่ใกล้กันมาก
         try:
             import altair as alt
             chart_df = (
@@ -12254,70 +12359,23 @@ def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market
                 .melt("date", var_name="Series", value_name="Index")
                 .dropna(subset=["Index"])
             )
-
-            # ลำดับคงที่ + dash ต่างกัน ทำให้ series ที่ซ้อนกันยังแยกออกจากกันได้
-            series_order = [c for c in ["Portfolio", "BTC", "SET Index", "S&P 500"] if c in chart_cols]
-            dash_range = [[1, 0], [8, 4], [3, 3], [12, 4]]
-            shape_range = ["circle", "diamond", "square", "triangle-up"]
-
-            base = alt.Chart(chart_df).encode(
-                x=alt.X(
-                    "date:T",
-                    title=None,
-                    axis=alt.Axis(
-                        format="%d %b",
-                        labelAngle=0,
-                        tickCount=min(6, max(2, len(chart_df["date"].unique()))),
-                        grid=False,
-                    ),
-                ),
-                y=alt.Y(
-                    "Index:Q",
-                    title="Index (Start = 100)",
-                    scale=alt.Scale(zero=False, padding=12),
-                ),
-                color=alt.Color(
-                    "Series:N",
-                    title=None,
-                    sort=series_order,
-                    legend=alt.Legend(orient="right"),
-                ),
-                detail="Series:N",
-                tooltip=[
-                    alt.Tooltip("date:T", title="Date", format="%d %b %Y"),
-                    alt.Tooltip("Series:N", title="Series"),
-                    alt.Tooltip("Index:Q", title="Index", format=".2f"),
-                ],
-            )
-
-            lines = base.mark_line(strokeWidth=2.5).encode(
-                strokeDash=alt.StrokeDash(
-                    "Series:N",
-                    sort=series_order,
-                    scale=alt.Scale(domain=series_order, range=dash_range),
-                    legend=None,
+            chart = (
+                alt.Chart(chart_df)
+                .mark_line(point=alt.OverlayMarkDef(size=45), strokeWidth=2.5)
+                .encode(
+                    x=alt.X("date:T", title=None, axis=alt.Axis(format="%d %b", labelAngle=0)),
+                    y=alt.Y("Index:Q", title="Index (Start = 100)", scale=alt.Scale(zero=False)),
+                    color=alt.Color("Series:N", title=None),
+                    tooltip=[
+                        alt.Tooltip("date:T", title="Date", format="%d %b %Y"),
+                        alt.Tooltip("Series:N", title="Series"),
+                        alt.Tooltip("Index:Q", title="Index", format=".2f"),
+                    ],
                 )
+                .properties(height=360)
+                .interactive()
             )
-            points = base.mark_point(size=75, filled=True).encode(
-                shape=alt.Shape(
-                    "Series:N",
-                    sort=series_order,
-                    scale=alt.Scale(domain=series_order, range=shape_range),
-                    legend=None,
-                )
-            )
-
-            chart = (lines + points).properties(height=360).interactive()
             st.altair_chart(chart, use_container_width=True)
-
-            # ถ้าหลาย series มีค่าเดียวกันจริง ให้บอกผู้ใช้ตรง ๆ ว่าเป็นการซ้อนกัน
-            latest = chart_df.sort_values("date").groupby("Series", as_index=False).tail(1)
-            if len(latest) >= 2:
-                duplicated = latest.groupby("Index")["Series"].apply(list)
-                overlap_groups = [names for names in duplicated if len(names) > 1]
-                if overlap_groups:
-                    overlap_text = " · ".join(", ".join(names) for names in overlap_groups)
-                    st.caption(f"ℹ️ บางเส้นมีค่าเดียวกัน ณ จุดล่าสุดจึงซ้อนกันจริง: {overlap_text} — ใช้รูป marker และเส้นประแยกให้แล้ว")
         except Exception:
             # Fallback ถ้า Altair ใช้งานไม่ได้
             st.line_chart(inst_chart[chart_cols], height=360, use_container_width=True)
@@ -12333,13 +12391,8 @@ def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market
             st.metric("Correlation vs BTC", f"{inst_metrics['corr_btc']:.2f}",
                       help="Correlation of aligned daily snapshot returns with BTC.")
         st.caption(f"คำนวณจากข้อมูลที่จับคู่กันได้ {int(inst_metrics['obs'])} observations")
-        if inst_errors:
-            st.caption("⚠️ บาง Benchmark โหลดไม่ครบ: " +
-                       " · ".join(f"{k}: {v}" for k, v in inst_errors.items()))
     else:
         st.info("ยังสร้าง Benchmark Comparison ไม่ได้ — ต้องมี Snapshot ที่มีวันที่ทับซ้อนกับข้อมูลตลาดอย่างน้อย 2 จุด")
-        if inst_errors:
-            st.caption("รายละเอียด: " + " · ".join(f"{k}: {v}" for k, v in inst_errors.items()))
 
     st.markdown("### 📊 Portfolio Value")
     chart = hist.set_index("date")[["value"]].rename(columns={"value": "Portfolio Value (THB)"})
@@ -13279,6 +13332,405 @@ def _render_ai_portfolio_narrator(sim: dict[str, Any], snap: dict[str, Any],
         unsafe_allow_html=True,
     )
 
+
+# =========================================================================
+# AI WEEKLY / MONTHLY DIGEST
+# =========================================================================
+
+DIGEST_AI_SYSTEM = (
+    "คุณคือนักวิเคราะห์ที่เขียนจดหมายสรุปผลงานพอร์ตให้นักลงทุน (Investor Letter) "
+    "โทนมืออาชีพแต่อ่านง่าย ภาษาไทย ความยาว 150-220 คำ แบ่งเป็นย่อหน้าสั้นๆ 3-4 ย่อหน้า "
+    "(1. ภาพรวมผลตอบแทนช่วงนี้ 2. จุดที่น่าสนใจ/ความผันผวนระหว่างทาง 3. กิจกรรมการเทรดและค่าธรรมเนียม "
+    "4. ข้อสังเกตด้านความเสี่ยงปิดท้าย) ใช้เฉพาะตัวเลขที่ได้รับเท่านั้น ห้ามสมมติหรือทำนายอนาคต "
+    "ห้ามแนะนำซื้อขายหรือถือเหรียญใด หากตัวเลขติดลบให้รายงานตามจริงอย่างเป็นกลาง ไม่ปลอบใจเกินจริง"
+)
+
+
+def compute_digest_period_stats(sim: dict[str, Any], period: str) -> Optional[dict[str, Any]]:
+    """คำนวณสถิติสำหรับ digest จาก Portfolio Snapshot History จริง (period = weekly/monthly)."""
+    period = str(period or "weekly").lower().strip()
+    if period not in {"weekly", "monthly"}:
+        period = "weekly"
+    snapshots = _portfolio_snapshots_init(sim)
+    if len(snapshots) < 2:
+        return None
+    df = pd.DataFrame(snapshots)
+    if "date" not in df.columns or "total_value_thb" not in df.columns:
+        return None
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["total_value_thb"] = pd.to_numeric(df["total_value_thb"], errors="coerce")
+    df = df.dropna(subset=["date", "total_value_thb"]).sort_values("date").reset_index(drop=True)
+    if len(df) < 2:
+        return None
+
+    end_date = df["date"].max()
+    if period == "weekly":
+        start_date = end_date - pd.Timedelta(days=7)
+        label = (
+            f"สัปดาห์ {(end_date - pd.Timedelta(days=6)).strftime('%d %b')} – "
+            f"{end_date.strftime('%d %b %Y')}"
+        )
+    else:
+        start_date = end_date - pd.Timedelta(days=30)
+        label = (
+            f"{(end_date - pd.Timedelta(days=29)).strftime('%d %b')} – "
+            f"{end_date.strftime('%d %b %Y')}"
+        )
+
+    window = df[df["date"] >= start_date].copy()
+    if len(window) < 2:
+        window = df.tail(2).copy()
+
+    start_row, end_row = window.iloc[0], window.iloc[-1]
+    start_val = float(start_row["total_value_thb"] or 0.0)
+    end_val = float(end_row["total_value_thb"] or 0.0)
+    period_return_pct = ((end_val / start_val) - 1.0) * 100.0 if start_val else 0.0
+
+    vals = window["total_value_thb"].astype(float)
+    rets = vals.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
+    best_day = float(rets.max() * 100.0) if len(rets) else 0.0
+    worst_day = float(rets.min() * 100.0) if len(rets) else 0.0
+    volatility = float(rets.std(ddof=1) * 100.0) if len(rets) >= 2 else 0.0
+
+    def _num(row: pd.Series, key: str) -> float:
+        try:
+            return float(row.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    fees_period = _num(end_row, "fees_thb") - _num(start_row, "fees_thb")
+    realized_period = _num(end_row, "realized_pnl_thb") - _num(start_row, "realized_pnl_thb")
+
+    start_assets = {
+        str(a.get("asset", "")).upper(): float(a.get("allocation_pct", 0) or 0)
+        for a in (start_row.get("assets") or []) if isinstance(a, dict)
+    }
+    end_assets = {
+        str(a.get("asset", "")).upper(): float(a.get("allocation_pct", 0) or 0)
+        for a in (end_row.get("assets") or []) if isinstance(a, dict)
+    }
+    drift = []
+    for sym in set(start_assets) | set(end_assets):
+        s0, s1 = start_assets.get(sym, 0.0), end_assets.get(sym, 0.0)
+        if abs(s1 - s0) >= 1.0:
+            drift.append({"asset": sym, "from_pct": round(s0, 1), "to_pct": round(s1, 1)})
+    drift.sort(key=lambda x: abs(x["to_pct"] - x["from_pct"]), reverse=True)
+
+    ledger = sim.get("portfolio_ledger", []) or []
+    n_buy = n_sell = 0
+    volume = 0.0
+    for t in ledger:
+        if not isinstance(t, dict):
+            continue
+        ts = pd.to_datetime(t.get("timestamp", ""), errors="coerce")
+        if pd.isna(ts) or ts < start_date or ts > end_date + pd.Timedelta(days=1):
+            continue
+        typ = str(t.get("type", "")).upper()
+        if typ in {"BUY", "SELL"}:
+            volume += float(t.get("gross_thb", 0) or 0)
+            if typ == "BUY":
+                n_buy += 1
+            else:
+                n_sell += 1
+
+    return {
+        "period_label": label,
+        "start_date": start_row["date"].strftime("%Y-%m-%d"),
+        "end_date": end_row["date"].strftime("%Y-%m-%d"),
+        "start_value_thb": round(start_val, 2),
+        "end_value_thb": round(end_val, 2),
+        "period_return_pct": round(period_return_pct, 2),
+        "best_day_pct": round(best_day, 2),
+        "worst_day_pct": round(worst_day, 2),
+        "volatility_pct": round(volatility, 2),
+        "fees_paid_thb": round(fees_period, 2),
+        "realized_pnl_thb": round(realized_period, 2),
+        "allocation_drift": drift[:5],
+        "n_buy": n_buy,
+        "n_sell": n_sell,
+        "trading_volume_thb": round(volume, 2),
+    }
+
+
+def _digest_cache_key(period: str, stats: dict[str, Any]) -> str:
+    return f"{period}:{stats['start_date']}_{stats['end_date']}"
+
+
+def generate_ai_weekly_digest(
+    sim: dict[str, Any], period: str, api_key: str, force: bool = False
+) -> tuple[Optional[str], Optional[dict[str, Any]]]:
+    stats = compute_digest_period_stats(sim, period)
+    if stats is None:
+        return None, None
+    cache = sim.setdefault("ai_digest_cache", {})
+    key = _digest_cache_key(period, stats)
+    if not force and key in cache:
+        return str(cache[key].get("text", "")), stats
+
+    prompt = (
+        f"เขียนสรุปผลงานพอร์ตช่วง {stats['period_label']} จากข้อมูลนี้:\n"
+        + json.dumps(stats, ensure_ascii=False)
+    )
+    text = ask_ai([{"role": "user", "content": prompt}], api_key, DIGEST_AI_SYSTEM)
+    cache[key] = {
+        "text": str(text),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    st.session_state["sim"] = sim
+    save_sim_state(sim)
+    return str(text), stats
+
+
+def render_ai_weekly_digest(sim: dict[str, Any]) -> None:
+    st.markdown("#### 📬 AI Weekly / Monthly Digest")
+    st.caption(
+        "สรุปผลงานพอร์ตแบบยาวจาก Portfolio Snapshot History จริง · "
+        "แคชแยกตามสัปดาห์/เดือน ไม่ยิง AI ซ้ำทุกครั้งที่เปิดหน้า · "
+        "แอปยังไม่มีระบบส่งอีเมลอัตโนมัติ จึงต้องเปิดแอปเพื่อสร้าง/ดู Digest"
+    )
+    try:
+        api_key = st.secrets["gemini_api_key"]
+    except Exception:
+        api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        st.caption("🔒 ยังไม่ได้ตั้งค่า `gemini_api_key`")
+        return
+
+    now_th = pd.Timestamp.now(tz="Asia/Bangkok")
+    if now_th.weekday() == 0:
+        stats_check = compute_digest_period_stats(sim, "weekly")
+        if stats_check and _digest_cache_key("weekly", stats_check) not in sim.get("ai_digest_cache", {}):
+            st.info("📅 วันนี้วันจันทร์ — ยังไม่ได้สร้างสรุปผลงานประจำสัปดาห์ กดสร้างด้านล่างได้เลย")
+
+    period_label = st.radio(
+        "ช่วงเวลา", ["รายสัปดาห์", "รายเดือน"], horizontal=True, key="digest_period"
+    )
+    period = "weekly" if period_label == "รายสัปดาห์" else "monthly"
+
+    c1, c2 = st.columns([1, 1])
+    gen_clicked = c1.button("📬 สร้าง / ดู Digest", key="digest_gen", **WIDE)
+    force_clicked = c2.button("🔄 สร้างใหม่ (ข้าม cache)", key="digest_force", **WIDE)
+
+    if gen_clicked or force_clicked:
+        with st.spinner("กำลังสรุปผลงาน…"):
+            text, stats = generate_ai_weekly_digest(sim, period, api_key, force=force_clicked)
+        if text is None or stats is None:
+            st.warning(
+                "ต้องมี Portfolio Snapshot อย่างน้อย 2 จุดก่อน — "
+                "ไปที่ Portfolio Calendar แล้วกด '📸 บันทึก Snapshot'"
+            )
+        else:
+            st.session_state["digest_last"] = {
+                "text": text,
+                "stats": stats,
+                "period": period,
+            }
+
+    last = st.session_state.get("digest_last")
+    if not last:
+        # ถ้ามี cache อยู่แล้ว ให้แสดงได้ทันทีโดยไม่ต้องยิง Gemini ใหม่
+        cache = sim.get("ai_digest_cache", {}) or {}
+        stats_cached = compute_digest_period_stats(sim, period)
+        if stats_cached:
+            cached = cache.get(_digest_cache_key(period, stats_cached))
+            if cached and cached.get("text"):
+                last = {
+                    "text": str(cached["text"]),
+                    "stats": stats_cached,
+                    "period": period,
+                }
+
+    if last:
+        s = last["stats"]
+        k = st.columns(4)
+        metric_card(k[0], "Period Return", f"{s['period_return_pct']:+.2f}%", s["period_return_pct"])
+        metric_card(k[1], "Best / Worst Day", f"{s['best_day_pct']:+.2f}% / {s['worst_day_pct']:+.2f}%")
+        metric_card(
+            k[2], "Trading Volume", fmt_baht(s["trading_volume_thb"]), None,
+            f"{s['n_buy']} Buy · {s['n_sell']} Sell"
+        )
+        metric_card(k[3], "Fees ช่วงนี้", fmt_baht(s["fees_paid_thb"]))
+
+        safe_text = _html.escape(str(last["text"])).replace("\n", "<br>")
+        st.markdown(
+            '<div style="background:rgba(14,203,129,.06);border-left:3px solid #0ecb81;'
+            'border-radius:8px;padding:16px 20px;margin-top:10px;color:#EAECEF;'
+            'font-size:.9rem;line-height:1.85;">'
+            f'<div style="color:#848e9c;font-size:.72rem;margin-bottom:8px;">'
+            f'INVESTOR LETTER · {_html.escape(str(s["period_label"]))}</div>{safe_text}</div>',
+            unsafe_allow_html=True,
+        )
+        if s["allocation_drift"]:
+            with st.expander("📊 Allocation ที่เปลี่ยนไปในช่วงนี้"):
+                st.dataframe(
+                    pd.DataFrame(s["allocation_drift"]).rename(columns={
+                        "asset": "เหรียญ",
+                        "from_pct": "สัดส่วนเริ่มต้น (%)",
+                        "to_pct": "สัดส่วนล่าสุด (%)",
+                    }),
+                    hide_index=True,
+                    **WIDE,
+                )
+
+
+# =========================================================================
+# AI TRADE COACH
+# =========================================================================
+
+TRADE_COACH_AI_SYSTEM = (
+    "คุณคือโค้ชด้านจิตวิทยาการเทรด วิเคราะห์ Trading Journal ของผู้ใช้ "
+    "(เหตุผลตอนเข้า/ปิดสถานะ, tags ที่ผู้ใช้ติดเอง, ผลกำไรขาดทุนจริงที่เกิดขึ้นแล้วจาก transaction ที่ปิดแล้ว) "
+    "เพื่อหา pattern เชิงพฤติกรรม เช่น กลยุทธ์ไหนชนะบ่อยแต่เก็บกำไรเร็วเกินไป, "
+    "คำในเหตุผลที่มักปรากฏตอนขาดทุน, tag ไหนสัมพันธ์กับผลลัพธ์ที่ไม่ดี ตอบเป็นภาษาไทย 5-8 ประโยค "
+    "กระชับ เป็นกันเอง ตรงประเด็น ห้ามแนะนำว่าควรซื้อ/ขาย/ถือเหรียญไหน ห้ามทำนายราคา "
+    "เน้นเฉพาะข้อสังเกตเชิงพฤติกรรมและวินัยการเทรดจากข้อมูลที่ให้เท่านั้น "
+    "ห้ามสมมติข้อมูลที่ไม่มี ถ้าข้อมูลน้อยเกินไปให้บอกตรงๆ ว่ายังสรุป pattern ชัดเจนไม่ได้"
+)
+
+
+def build_trade_coach_dataset(sim: dict[str, Any]) -> dict[str, Any]:
+    """รวม Trading Journal เข้ากับผลจริงจาก Portfolio Ledger."""
+    ensure_portfolio_ledger(sim)
+    journal = _journal_init(sim)
+    journal_by_id = {
+        str(j.get("tx_id", "")): j
+        for j in journal
+        if isinstance(j, dict)
+    }
+    txs = [
+        t for t in sim.get("portfolio_ledger", [])
+        if isinstance(t, dict) and str(t.get("type", "")).upper() in {"BUY", "SELL"}
+    ]
+
+    rows = []
+    for t in txs:
+        tid = str(t.get("id", ""))
+        j = journal_by_id.get(tid)
+        if not j or not (j.get("reason") or j.get("review") or j.get("tags")):
+            continue
+        typ = str(t.get("type", "")).upper()
+        rows.append({
+            "tx_id": tid,
+            "type": typ,
+            "asset": str(t.get("asset", "")).upper(),
+            "timestamp": str(t.get("timestamp", ""))[:16].replace("T", " "),
+            "gross_thb": round(float(t.get("gross_thb", 0) or 0), 2),
+            "realized_pnl_thb": (
+                round(float(t.get("realized_pnl_thb", 0) or 0), 2)
+                if typ == "SELL" else None
+            ),
+            "tags": j.get("tags", []),
+            "reason": j.get("reason", ""),
+            "review": j.get("review", ""),
+        })
+    rows.sort(key=lambda r: r["timestamp"], reverse=True)
+
+    tag_stats: dict[str, dict[str, float]] = {}
+    for r in rows:
+        if r["type"] != "SELL" or r["realized_pnl_thb"] is None:
+            continue
+        tags = r["tags"] or ["(ไม่ติด tag)"]
+        for tag in tags:
+            tag = str(tag)
+            s = tag_stats.setdefault(tag, {"count": 0, "wins": 0, "total_pnl": 0.0})
+            s["count"] += 1
+            s["total_pnl"] += float(r["realized_pnl_thb"])
+            if float(r["realized_pnl_thb"]) > 0:
+                s["wins"] += 1
+
+    tag_summary = []
+    for tag, stat in tag_stats.items():
+        count = int(stat["count"])
+        total_pnl = float(stat["total_pnl"])
+        win_rate = (stat["wins"] / count * 100.0) if count else 0.0
+        tag_summary.append({
+            "tag": tag,
+            "closed_trades": count,
+            "win_rate_pct": round(win_rate, 1),
+            "total_realized_pnl": round(total_pnl, 2),
+            "avg_realized_pnl": round(total_pnl / count, 2) if count else 0.0,
+        })
+    tag_summary.sort(key=lambda x: x["closed_trades"], reverse=True)
+
+    return {"rows": rows, "tag_summary": tag_summary, "n_journaled": len(rows)}
+
+
+def render_ai_trade_coach(sim: dict[str, Any]) -> None:
+    st.markdown("#### 🧑‍🏫 AI Trade Coach")
+    st.caption(
+        "วิเคราะห์ Trading Journal ที่บันทึกไว้ (เหตุผล / tags / review) "
+        "แล้วเทียบกับ Realized P&L จริงจาก SELL transaction — เป็น insight เพื่อทบทวนวินัย ไม่ใช่คำแนะนำลงทุน"
+    )
+    dataset = build_trade_coach_dataset(sim)
+    min_entries = 5
+    if dataset["n_journaled"] < min_entries:
+        st.info(
+            f"มี Journal ที่บันทึกเหตุผล/tags/review ไว้ {dataset['n_journaled']} รายการ "
+            f"— ต้องมีอย่างน้อย {min_entries} รายการก่อนให้ AI วิเคราะห์ pattern ได้อย่างมีความหมาย"
+        )
+        return
+
+    try:
+        api_key = st.secrets["gemini_api_key"]
+    except Exception:
+        api_key = os.environ.get("GEMINI_API_KEY", "")
+
+    if dataset["tag_summary"]:
+        st.markdown("##### 📊 สถิติตาม Tag (จาก Transaction ที่ปิดแล้ว)")
+        st.dataframe(
+            pd.DataFrame(dataset["tag_summary"]).rename(columns={
+                "tag": "Tag",
+                "closed_trades": "ปิดแล้ว (ครั้ง)",
+                "win_rate_pct": "Win Rate (%)",
+                "total_realized_pnl": "Realized P&L รวม",
+                "avg_realized_pnl": "P&L เฉลี่ย/ครั้ง",
+            }),
+            hide_index=True,
+            **WIDE,
+        )
+
+    if not api_key:
+        st.caption("🔒 ยังไม่ได้ตั้งค่า `gemini_api_key` — ใช้ได้เฉพาะตารางสถิติด้านบน")
+        return
+
+    today_key = pd.Timestamp.now(tz="Asia/Bangkok").strftime("%Y-%m-%d")
+    cache_sig = f"{today_key}:{dataset['n_journaled']}"
+    coach_cache = sim.setdefault("trade_coach_cache", {})
+
+    c1, c2 = st.columns(2)
+    gen = c1.button("🧑‍🏫 วิเคราะห์ Pattern", key="coach_gen", **WIDE)
+    force = c2.button("🔄 วิเคราะห์ใหม่", key="coach_force", **WIDE)
+
+    if gen or force:
+        if not force and coach_cache.get("sig") == cache_sig:
+            text = str(coach_cache.get("text", ""))
+        else:
+            prompt = (
+                "วิเคราะห์ pattern เชิงพฤติกรรมจาก Trading Journal นี้:\n"
+                f"สรุปตาม Tag: {json.dumps(dataset['tag_summary'], ensure_ascii=False)}\n\n"
+                f"รายการล่าสุด 20 รายการ: {json.dumps(dataset['rows'][:20], ensure_ascii=False)}"
+            )
+            with st.spinner("🧑‍🏫 โค้ชกำลังอ่าน Journal…"):
+                text = ask_ai([{"role": "user", "content": prompt}], api_key, TRADE_COACH_AI_SYSTEM)
+            coach_cache.update(
+                sig=cache_sig,
+                text=str(text),
+                generated_at=datetime.now(timezone.utc).isoformat(),
+            )
+            st.session_state["sim"] = sim
+            save_sim_state(sim)
+        st.session_state["coach_last_text"] = str(text)
+
+    last_text = st.session_state.get("coach_last_text") or coach_cache.get("text")
+    if last_text:
+        st.markdown(
+            '<div style="background:rgba(255,255,255,.03);border-left:3px solid #fcd535;'
+            'border-radius:8px;padding:15px 18px;margin-top:10px;color:#EAECEF;'
+            'font-size:.88rem;line-height:1.8;white-space:pre-wrap;">'
+            f'🧑‍🏫 {_html.escape(str(last_text))}</div>',
+            unsafe_allow_html=True,
+        )
+
 def render_dashboard(cfg: dict[str, Any], data: pd.DataFrame,
                      market_df: Optional[pd.DataFrame] = None) -> None:
     st.markdown(DASHBOARD_CSS, unsafe_allow_html=True)
@@ -14064,11 +14516,6 @@ def require_login() -> bool:
     return True
 
 def main() -> None:
-    share_token = st.query_params.get("share")
-    if share_token:
-        render_investor_public_view(str(share_token))
-        return
-
     st.set_page_config(
         page_title="XSpring Dealer Suite",
         page_icon="\u267b\ufe0f",
