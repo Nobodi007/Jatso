@@ -12462,9 +12462,11 @@ def render_quant_research_lab(cfg: dict[str, Any], data: pd.DataFrame, market_df
         synth_model = c1.selectbox("Model", ["GARCH(1,1)", "EGARCH", "Merton Jump-Diffusion", "t-Copula"], key="quant_synth_model")
         n_days = c2.number_input("Days", 250, 5000, 1000, 100, key="quant_synth_days")
         seed = c3.number_input("Seed", 1, 999999, 42, key="quant_synth_seed")
+        # ต้องมี real_ret นอกปุ่มด้วย เพราะผล Synthetic ที่บันทึกไว้ใน session
+        # อาจถูกนำมาแสดงในการ rerun ถัดไป โดยไม่เข้า block ของปุ่มอีกครั้ง
+        real_ret = returns.to_numpy()
         if st.button("🧬 Generate + Validate", key="quant_synth_run", use_container_width=True):
             try:
-                real_ret = returns.to_numpy()
                 if synth_model == "GARCH(1,1)":
                     synth = simulate_garch(int(n_days), float(real_ret.mean()), 1e-6, 0.08, 0.90, max(float(real_ret.std()),1e-4), int(seed))
                 elif synth_model == "EGARCH":
