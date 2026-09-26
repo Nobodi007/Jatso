@@ -102,6 +102,32 @@ LOCAL_EXCHANGES = ["Bitkub"]
 # =========================================================================
 # SOUND / MARKET MOOD / ATH EFFECTS — self-contained, no audio files
 # =========================================================================
+_AUDIO_UNLOCK_JS = r"""<script>
+(function() {
+  try {
+    const parentWin = window.parent;
+    const AudioCtx = parentWin.AudioContext || parentWin.webkitAudioContext;
+    if (!AudioCtx) return;
+    function ensureAudio() {
+      try {
+        if (!parentWin.__xsAudioCtx) parentWin.__xsAudioCtx = new AudioCtx();
+        const ctx = parentWin.__xsAudioCtx;
+        if (ctx.state === "suspended") {
+          const p = ctx.resume();
+          if (p && p.catch) p.catch(function(){});
+        }
+      } catch (e) {}
+    }
+    if (!parentWin.__xsAudioUnlockInstalled) {
+      parentWin.__xsAudioUnlockInstalled = true;
+      parentWin.document.addEventListener("pointerdown", ensureAudio, true);
+      parentWin.document.addEventListener("keydown", ensureAudio, true);
+      parentWin.document.addEventListener("touchstart", ensureAudio, true);
+    }
+  } catch (e) {}
+})();
+</script>"""
+
 _SOUND_JS_TEMPLATE = r"""<script>
 (function() {
   try {
@@ -110,14 +136,15 @@ _SOUND_JS_TEMPLATE = r"""<script>
     if (!AudioCtx) return;
     if (!parentWin.__xsAudioCtx) parentWin.__xsAudioCtx = new AudioCtx();
     const ctx = parentWin.__xsAudioCtx;
-    if (ctx.state === "suspended") ctx.resume();
+    const resumeResult = ctx.resume();
+    if (resumeResult && resumeResult.catch) resumeResult.catch(function(){});
     function tone(freq, start, dur, type, gainPeak) {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = type || "sine";
       osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
       gain.gain.setValueAtTime(0, ctx.currentTime + start);
-      gain.gain.linearRampToValueAtTime(gainPeak || 0.25, ctx.currentTime + start + 0.01);
+      gain.gain.linearRampToValueAtTime(gainPeak || 0.30, ctx.currentTime + start + 0.01);
       gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + dur);
       osc.connect(gain).connect(ctx.destination);
       osc.start(ctx.currentTime + start);
@@ -125,21 +152,25 @@ _SOUND_JS_TEMPLATE = r"""<script>
     }
     const kind = "__KIND__";
     if (kind === "buy") {
-      tone(520, 0, 0.09, "sine", 0.22); tone(780, 0.05, 0.10, "sine", 0.16);
+      tone(520, 0, 0.09, "sine", 0.28); tone(780, 0.05, 0.11, "sine", 0.22);
     } else if (kind === "sell") {
-      tone(480, 0, 0.09, "sine", 0.22); tone(320, 0.05, 0.12, "sine", 0.16);
+      tone(480, 0, 0.09, "sine", 0.28); tone(320, 0.05, 0.12, "sine", 0.22);
     } else if (kind === "profit") {
-      tone(1046, 0, 0.12, "triangle", 0.20); tone(1318, 0.09, 0.16, "triangle", 0.20); tone(1568, 0.17, 0.22, "triangle", 0.18);
+      tone(1046, 0, 0.12, "triangle", 0.24); tone(1318, 0.09, 0.16, "triangle", 0.24); tone(1568, 0.17, 0.22, "triangle", 0.22);
     } else if (kind === "loss") {
-      tone(300, 0, 0.15, "sawtooth", 0.12); tone(220, 0.10, 0.20, "sawtooth", 0.10);
+      tone(300, 0, 0.15, "sawtooth", 0.14); tone(220, 0.10, 0.20, "sawtooth", 0.12);
     } else if (kind === "ath") {
-      [523, 659, 784, 1046].forEach((f, i) => tone(f, i * 0.08, 0.20, "triangle", 0.22));
+      [523, 659, 784, 1046].forEach((f, i) => tone(f, i * 0.08, 0.20, "triangle", 0.25));
     } else if (kind === "reject") {
-      tone(200, 0, 0.10, "square", 0.10); tone(150, 0.08, 0.14, "square", 0.08);
+      tone(200, 0, 0.10, "square", 0.12); tone(150, 0.08, 0.14, "square", 0.10);
     }
   } catch (e) {}
 })();
 </script>"""
+
+def enable_audio_unlock() -> None:
+    """Install a one-time gesture listener so browser autoplay policy allows SFX."""
+    components.html(_AUDIO_UNLOCK_JS, height=0, width=0)
 
 def play_sound_effect(kind: str) -> None:
     """Play a synthesized browser sound: buy/sell/profit/loss/ath/reject."""
@@ -12298,6 +12329,9 @@ def render_dashboard(cfg: dict[str, Any], data: pd.DataFrame,
                 pass
 
 def _main_body() -> None:
+    # Unlock Web Audio on the user's first real click/tap so order SFX can
+    # play after Streamlit reruns without being blocked by browser autoplay.
+    enable_audio_unlock()
     st.markdown(THEME_CSS, unsafe_allow_html=True)
     st.markdown(PORTFOLIO_WALLET_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
