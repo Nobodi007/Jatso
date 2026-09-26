@@ -11557,13 +11557,15 @@ DASHBOARD_CSS = """
     .dash-qa-btn button:hover { border-color:#0ecb81 !important; color:#0ecb81 !important; }
 
     .st-key-dash_qa_bt button, .st-key-dash_qa_planner button,
-    .st-key-dash_qa_trade button, .st-key-dash_qa_wallet button {
+    .st-key-dash_qa_trade button, .st-key-dash_qa_wallet button,
+    .st-key-dash_qa_risk button, .st-key-dash_qa_intel button {
         width:100% !important; min-height:60px !important; border-radius:12px !important;
         background:#181a20 !important; border:1px solid #2b3139 !important;
         color:#EAECEF !important; font-weight:700 !important; font-size:.9rem !important;
     }
     .st-key-dash_qa_bt button:hover, .st-key-dash_qa_planner button:hover,
-    .st-key-dash_qa_trade button:hover, .st-key-dash_qa_wallet button:hover {
+    .st-key-dash_qa_trade button:hover, .st-key-dash_qa_wallet button:hover,
+    .st-key-dash_qa_risk button:hover, .st-key-dash_qa_intel button:hover {
         border-color:#0ecb81 !important; color:#0ecb81 !important;
     }
 
