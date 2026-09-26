@@ -400,29 +400,56 @@ def excel_bytes(summary, today, rejects, exposure) -> bytes:
 
 
 def _register_thai_font():
+    """Register fonts that can render both Thai and Latin/numeric text in PDF.
+
+    ReportLab does not automatically fall back between fonts.  Noto Sans Thai
+    on GitHub Actions is excellent for Thai, but its Latin/numeric glyph
+    coverage is incomplete.  We therefore register a Thai font plus DejaVu
+    Sans and explicitly switch fonts inside each Paragraph.
+    """
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
 
-    candidates = [
+    thai_candidates = [
         "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
         "/usr/share/fonts/opentype/noto/NotoSansThai-Regular.ttf",
         "C:/Windows/Fonts/leelawui.ttf",
         "C:/Windows/Fonts/THSarabunNew.ttf",
     ]
+    latin_candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/calibri.ttf",
+    ]
 
-    for font_path in candidates:
+    thai_font = "Helvetica"
+    latin_font = "Helvetica"
+
+    for font_path in thai_candidates:
         if Path(font_path).is_file():
             try:
                 pdfmetrics.registerFont(TTFont("DailyThai", font_path))
-                return "DailyThai"
+                thai_font = "DailyThai"
+                break
             except Exception as exc:
-                print(f"[pdf] font load failed {font_path}: {exc}")
+                print(f"[pdf] Thai font load failed {font_path}: {exc}")
 
-    print("[pdf] Thai font not found; fallback to Helvetica")
-    return "Helvetica"
+    for font_path in latin_candidates:
+        if Path(font_path).is_file():
+            try:
+                pdfmetrics.registerFont(TTFont("DailyLatin", font_path))
+                latin_font = "DailyLatin"
+                break
+            except Exception as exc:
+                print(f"[pdf] Latin font load failed {font_path}: {exc}")
+
+    print(f"[pdf] fonts: thai={thai_font} latin={latin_font}")
+    return thai_font, latin_font
 
 
 def pdf_bytes(summary, today, rejects, exposure) -> bytes:
+    from html import escape as html_escape
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_LEFT
     from reportlab.lib.pagesizes import A4, landscape
@@ -435,7 +462,7 @@ def pdf_bytes(summary, today, rejects, exposure) -> bytes:
     )
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
-    font = _register_thai_font()
+    thai_font, latin_font = _register_thai_font()
 
     out = BytesIO()
     doc = SimpleDocTemplate(
@@ -452,7 +479,7 @@ def pdf_bytes(summary, today, rejects, exposure) -> bytes:
         ParagraphStyle(
             name="DailyTitle",
             parent=styles["Title"],
-            fontName=font,
+            fontName=thai_font,
             fontSize=18,
             leading=22,
             alignment=TA_LEFT,
@@ -463,7 +490,7 @@ def pdf_bytes(summary, today, rejects, exposure) -> bytes:
         ParagraphStyle(
             name="DailyHeading",
             parent=styles["Heading3"],
-            fontName=font,
+            fontName=thai_font,
             fontSize=12,
             leading=15,
             spaceBefore=8,
@@ -474,7 +501,7 @@ def pdf_bytes(summary, today, rejects, exposure) -> bytes:
         ParagraphStyle(
             name="DailyNormal",
             parent=styles["Normal"],
-            fontName=font,
+            fontName=thai_font,
             fontSize=9,
             leading=12,
         )
@@ -483,7 +510,7 @@ def pdf_bytes(summary, today, rejects, exposure) -> bytes:
         ParagraphStyle(
             name="DailyCell",
             parent=styles["Normal"],
-            fontName=font,
+            fontName=thai_font,
             fontSize=6.5,
             leading=8,
         )
@@ -492,17 +519,52 @@ def pdf_bytes(summary, today, rejects, exposure) -> bytes:
         ParagraphStyle(
             name="DailyHeader",
             parent=styles["Normal"],
-            fontName=font,
+            fontName=thai_font,
             fontSize=6.5,
             leading=8,
             textColor=colors.white,
         )
     )
 
+    def mixed_text(value) -> str:
+        """Render Thai with Thai font and Latin/numbers with a Latin font."""
+        raw = "" if value is None else str(value)
+        raw = html_escape(raw)
+        if latin_font == thai_font:
+            return raw
+
+        # Thai Unicode block: U+0E00–U+0E7F.
+        parts = []
+        buf = []
+        in_thai = None
+
+        def flush():
+            if not buf:
+                return
+            chunk = "".join(buf)
+            fname = thai_font if in_thai else latin_font
+            parts.append(f'<font name="{fname}">{chunk}</font>')
+            buf.clear()
+
+        for ch in raw:
+            is_thai = "\u0e00" <= ch <= "\u0e7f"
+            if in_thai is None:
+                in_thai = is_thai
+            elif is_thai != in_thai:
+                flush()
+                in_thai = is_thai
+            buf.append(ch)
+        flush()
+        return "".join(parts)
+
     story = [
-        Paragraph("XSpring Dealer Suite — Daily Report", styles["DailyTitle"]),
+        Paragraph(mixed_text("XSpring Dealer Suite — Daily Report"), styles["DailyTitle"]),
         Paragraph(
-            datetime.now(BANGKOK).strftime("สร้างเมื่อ %Y-%m-%d %H:%M:%S (เวลาไทย)"),
+            mixed_text(
+                datetime.now(BANGKOK).strftime(
+                    "สร้างเมื่อ %Y-%m-%d %H:%M:%S (เวลาไทย)"
+                )
+            ),
             styles["DailyNormal"],
         ),
     ]
@@ -510,9 +572,9 @@ def pdf_bytes(summary, today, rejects, exposure) -> bytes:
     def fmt_value(value):
         if value is None:
             return "—"
-        if isinstance(value, float) and np.isnan(value):
-            return "—"
         if isinstance(value, (float, np.floating)):
+            if np.isnan(value):
+                return "—"
             return f"{float(value):,.4f}"
         if isinstance(value, (int, np.integer)):
             return f"{int(value):,}"
@@ -520,21 +582,28 @@ def pdf_bytes(summary, today, rejects, exposure) -> bytes:
 
     def add_dataframe(frame: pd.DataFrame, title: str, max_rows: int = 30):
         story.append(Spacer(1, 6))
-        story.append(Paragraph(title, styles["DailyHeading"]))
+        story.append(Paragraph(mixed_text(title), styles["DailyHeading"]))
 
-        if frame.empty:
-            story.append(Paragraph("ไม่มีข้อมูล", styles["DailyNormal"]))
+        if frame is None or frame.empty:
+            story.append(Paragraph(mixed_text("ไม่มีข้อมูล"), styles["DailyNormal"]))
             return
 
+        # Make a clean display copy so PDF values are identical to Excel values.
         view = frame.head(max_rows).copy()
-        headers = [Paragraph(str(c), styles["DailyHeader"]) for c in view.columns]
+        headers = [
+            Paragraph(mixed_text(str(c)), styles["DailyHeader"])
+            for c in view.columns
+        ]
         rows = [headers]
+
         for values in view.itertuples(index=False, name=None):
             rows.append(
-                [Paragraph(fmt_value(v), styles["DailyCell"]) for v in values]
+                [
+                    Paragraph(mixed_text(fmt_value(v)), styles["DailyCell"])
+                    for v in values
+                ]
             )
 
-        # ป้องกันหัวตารางยาวจนล้นหน้า
         table = Table(rows, repeatRows=1, hAlign="LEFT")
         table.setStyle(
             TableStyle(
@@ -558,7 +627,6 @@ def pdf_bytes(summary, today, rejects, exposure) -> bytes:
 
     doc.build(story)
     return out.getvalue()
-
 
 def send_telegram(files: list[Path]) -> bool:
     token = env("TELEGRAM_BOT_TOKEN")
