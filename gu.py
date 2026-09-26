@@ -176,7 +176,24 @@ def play_sound_effect(kind: str) -> None:
     """Play a synthesized browser sound: buy/sell/profit/loss/ath/reject."""
     if kind not in {"buy", "sell", "profit", "loss", "ath", "reject"}:
         return
-    components.html(_SOUND_JS_TEMPLATE.replace("__KIND__", kind), height=0, width=0)
+    components.html(_SOUND_JS_TEMPLATE.replace("__KIND__", kind), height=1, width=1)
+
+
+def queue_sound_effect(kind: str) -> None:
+    """Queue SFX for the next Streamlit render, avoiding iframe destruction by st.rerun()."""
+    if kind in {"buy", "sell", "profit", "loss", "ath", "reject"}:
+        pending = st.session_state.setdefault("_pending_sound_effects", [])
+        pending.append(kind)
+
+
+def flush_sound_effects() -> None:
+    """Play queued effects after the rerun that committed the trade state."""
+    pending = st.session_state.pop("_pending_sound_effects", [])
+    if not pending:
+        return
+    # Keep the sequence short and deterministic; trade side first, then P/L cue.
+    for kind in pending:
+        play_sound_effect(kind)
 
 _CONFETTI_JS = r"""<script>
 (function() {
@@ -6057,14 +6074,14 @@ def _submit_order(sim, side, amount_thb, data, order_date, ctx) -> None:
     if _rec is not None:
         result_text = str(_rec.get("ผลด่าน", ""))
         if result_text.startswith("Reject"):
-            play_sound_effect("reject")
+            queue_sound_effect("reject")
         else:
-            play_sound_effect("buy" if side == "buy" else "sell")
+            queue_sound_effect("buy" if side == "buy" else "sell")
             pnl_order = float(_rec.get("กำไรออเดอร์", 0.0) or 0.0)
             if pnl_order > 0:
-                play_sound_effect("profit")
+                queue_sound_effect("profit")
             elif pnl_order < 0:
-                play_sound_effect("loss")
+                queue_sound_effect("loss")
 
     st.rerun(scope="app")
 
@@ -12332,6 +12349,10 @@ def _main_body() -> None:
     # Unlock Web Audio on the user's first real click/tap so order SFX can
     # play after Streamlit reruns without being blocked by browser autoplay.
     enable_audio_unlock()
+    # Flush SFX queued by the previous render. This happens after the trade
+    # rerun, so the browser receives the audio iframe instead of it being
+    # destroyed in the same run that called st.rerun().
+    flush_sound_effects()
     st.markdown(THEME_CSS, unsafe_allow_html=True)
     st.markdown(PORTFOLIO_WALLET_CSS, unsafe_allow_html=True)
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
