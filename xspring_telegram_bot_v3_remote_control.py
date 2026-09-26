@@ -53,7 +53,7 @@ API_BASE = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
 
-BOT_BUILD = "2026-09-27-price-alert-persistent-v1"
+BOT_BUILD = "2026-09-26-stable-v4-command-stable"
 
 ALLOWED_EMAILS = {
     e.strip().lower()
@@ -1422,15 +1422,30 @@ NEWS_FEEDS = [
 # Telegram Price Alerts
 # =========================================================
 
-# Price Alert persistence is intentionally separated from sim_state.
-# The web app can rewrite sim_state, so alerts must have their own durable table.
-PRICE_ALERTS_TABLE = "telegram_price_alerts"
-
-
-def _legacy_price_alerts_for_email(email: str, sim: Optional[dict] = None) -> tuple[dict, list[dict]]:
-    """Backward-compatible reader for alerts created by older bot builds."""
+def _price_alerts_for_email(email: str, sim: Optional[dict] = None) -> tuple[dict, list[dict]]:
+    """Load alerts with dedicated persistence, while keeping legacy sim_state fallback."""
     if sim is None:
         sim = _sim_state(email)
+
+    # Primary store: dedicated telegram_price_alerts table.
+    # This prevents a portfolio/sim_state rewrite from accidentally deleting alerts.
+    if sb is not None:
+        try:
+            res = (
+                sb.table("telegram_price_alerts")
+                .select("*")
+                .eq("actor", email)
+                .order("created_at", desc=False)
+                .limit(500)
+                .execute()
+            )
+            rows = res.data or []
+            if rows:
+                return sim, [dict(x) for x in rows if isinstance(x, dict)]
+        except Exception as exc:
+            # Table may not exist yet; use legacy sim_state below.
+            print(f"[alerts] dedicated table unavailable: {exc}")
+
     alerts = sim.setdefault("price_alerts", [])
     if not isinstance(alerts, list):
         alerts = []
@@ -1438,91 +1453,51 @@ def _legacy_price_alerts_for_email(email: str, sim: Optional[dict] = None) -> tu
     return sim, alerts
 
 
-def _alert_row(alert: dict, email: str) -> dict:
-    """Normalize an alert into the standalone Supabase table shape."""
-    row = dict(alert)
-    row["id"] = str(row.get("id") or uuid.uuid4().hex[:6].upper())
-    row["actor"] = email
-    row["chat_id"] = int(row.get("chat_id") or 0)
-    row["asset"] = str(row.get("asset") or "").upper()
-    row["condition"] = str(row.get("condition") or "").lower()
-    row["target"] = float(row.get("target") or 0.0)
-    row["created_at"] = str(row.get("created_at") or datetime.now(timezone.utc).isoformat(timespec="seconds"))
-    row["last_price"] = float(row["last_price"]) if row.get("last_price") is not None else None
-    row["active"] = bool(row.get("active", True))
-    row["triggered_at"] = row.get("triggered_at")
-    row["deleted_at"] = row.get("deleted_at")
-    return {
-        "id": row["id"],
-        "actor": row["actor"],
-        "chat_id": row["chat_id"],
-        "asset": row["asset"],
-        "condition": row["condition"],
-        "target": row["target"],
-        "created_at": row["created_at"],
-        "last_price": row["last_price"],
-        "active": row["active"],
-        "triggered_at": row["triggered_at"],
-        "deleted_at": row["deleted_at"],
-    }
+def _insert_price_alert(email: str, alert: dict, sim: dict, alerts: list[dict]) -> None:
+    """Persist an alert independently from sim_state; legacy fallback if table unavailable."""
+    if sb is not None:
+        try:
+            sb.table("telegram_price_alerts").insert({
+                "id": str(alert["id"]),
+                "actor": email,
+                "chat_id": int(alert["chat_id"]),
+                "asset": str(alert["asset"]),
+                "condition": str(alert["condition"]),
+                "target": float(alert["target"]),
+                "created_at": alert["created_at"],
+                "last_price": float(alert["last_price"]) if alert.get("last_price") is not None else None,
+                "active": bool(alert.get("active", True)),
+                "triggered_at": alert.get("triggered_at"),
+                "deleted_at": alert.get("deleted_at"),
+            }).execute()
+            return
+        except Exception as exc:
+            print(f"[alerts] dedicated insert failed, using sim_state: {exc}")
+
+    alerts.append(alert)
+    sim["price_alerts"] = alerts[-100:]
+    _save_sim_state(email, sim)
 
 
-def _load_standalone_alerts(email: str, chat_id: Optional[int] = None) -> Optional[list[dict]]:
-    """Return None when the standalone table is unavailable, so legacy fallback can run."""
-    if sb is None:
-        return None
-    try:
-        q = sb.table(PRICE_ALERTS_TABLE).select("*").eq("actor", email).order("created_at", desc=False)
-        if chat_id is not None:
-            q = q.eq("chat_id", int(chat_id))
-        res = q.limit(500).execute()
-        return list(res.data or [])
-    except Exception as exc:
-        print(f"[alert] standalone table unavailable: {exc}")
-        return None
+def _update_price_alert(alert: dict, email: str, sim: Optional[dict] = None) -> None:
+    """Persist alert state changes to the dedicated table; fallback to sim_state."""
+    if sb is not None:
+        try:
+            aid = str(alert.get("id") or "")
+            if aid:
+                payload = {
+                    "last_price": float(alert["last_price"]) if alert.get("last_price") is not None else None,
+                    "active": bool(alert.get("active", True)),
+                    "triggered_at": alert.get("triggered_at"),
+                    "deleted_at": alert.get("deleted_at"),
+                }
+                sb.table("telegram_price_alerts").update(payload).eq("id", aid).eq("actor", email).execute()
+                return
+        except Exception as exc:
+            print(f"[alerts] dedicated update failed, using sim_state: {exc}")
 
-
-def _upsert_standalone_alert(email: str, alert: dict) -> bool:
-    if sb is None:
-        return False
-    try:
-        sb.table(PRICE_ALERTS_TABLE).upsert(_alert_row(alert, email), on_conflict="id").execute()
-        return True
-    except Exception as exc:
-        print(f"[alert] standalone upsert error: {exc}")
-        return False
-
-
-def _migrate_legacy_alerts(email: str, sim: Optional[dict] = None) -> list[dict]:
-    """Copy old sim_state alerts into the standalone table once, without deleting legacy data."""
-    sim, legacy = _legacy_price_alerts_for_email(email, sim)
-    if not legacy or sb is None:
-        return []
-    migrated = []
-    for alert in legacy:
-        if not isinstance(alert, dict):
-            continue
-        if _upsert_standalone_alert(email, alert):
-            migrated.append(alert)
-    return migrated
-
-
-def _get_price_alerts(email: str, chat_id: Optional[int] = None) -> tuple[Optional[list[dict]], Optional[dict]]:
-    """Primary source = standalone table; fallback = old sim_state structure."""
-    sim = _sim_state(email)
-    rows = _load_standalone_alerts(email, chat_id)
-    if rows is not None:
-        # Import any alerts that existed before this version.
-        legacy = _legacy_price_alerts_for_email(email, sim)[1]
-        if legacy:
-            existing_ids = {str(x.get("id")) for x in rows}
-            for alert in legacy:
-                if str(alert.get("id")) not in existing_ids and _upsert_standalone_alert(email, alert):
-                    rows.append(alert)
-        rows.sort(key=lambda x: str(x.get("created_at") or ""))
-        return rows, sim
-    return _legacy_price_alerts_for_email(email, sim)[1], sim
-
+    if sim is not None:
+        _save_sim_state(email, sim)
 
 def _format_thb_price(price: float) -> str:
     return f"฿{float(price):,.2f}"
@@ -1561,6 +1536,7 @@ def cmd_price_alert(chat_id: int, arg: str) -> str:
     if asset not in SUPPORTED_TRADE_ASSETS:
         return f"❌ ไม่รองรับ {asset} ใน Exchange Simulator"
 
+    # Verify the market is reachable and capture the current price.
     try:
         ticker = _bitkub_ticker(asset)
         current = float(ticker["last"])
@@ -1568,8 +1544,9 @@ def cmd_price_alert(chat_id: int, arg: str) -> str:
         print(f"[alert] ticker error: {exc}")
         return f"❌ ดึงราคา {asset}/THB ไม่ได้ตอนนี้"
 
-    rows, sim = _get_price_alerts(email, chat_id)
-    active = [a for a in (rows or []) if a.get("active", True)]
+    sim, alerts = _price_alerts_for_email(email)
+    mine = [a for a in alerts if int(a.get("chat_id") or 0) == int(chat_id)]
+    active = [a for a in mine if a.get("active", True)]
     if len(active) >= 20:
         return "❌ ตั้งแจ้งเตือนได้สูงสุด 20 รายการที่ยังทำงานอยู่"
 
@@ -1584,16 +1561,8 @@ def cmd_price_alert(chat_id: int, arg: str) -> str:
         "last_price": current,
         "active": True,
         "triggered_at": None,
-        "deleted_at": None,
     }
-
-    # New source of truth: standalone table. Keep legacy sim_state write only as a compatibility backup.
-    standalone_ok = _upsert_standalone_alert(email, alert)
-    if not standalone_ok:
-        sim, legacy = _legacy_price_alerts_for_email(email, sim)
-        legacy.append(alert)
-        sim["price_alerts"] = legacy[-100:]
-        _save_sim_state(email, sim)
+    _insert_price_alert(email, alert, sim, alerts)
 
     cond_text = "แตะ/สูงกว่า" if condition == "above" else "แตะ/ต่ำกว่า"
     return (
@@ -1610,40 +1579,18 @@ def cmd_price_alerts(chat_id: int) -> str:
     if err:
         return err
     try:
-        rows, sim = _get_price_alerts(email, chat_id)
-        mine = [a for a in (rows or []) if int(a.get("chat_id") or 0) == int(chat_id)]
+        sim, alerts = _price_alerts_for_email(email)
+        mine = [a for a in alerts if int(a.get("chat_id") or 0) == int(chat_id)]
         if not mine:
             return "🔔 ยังไม่มี Price Alert\nใช้ /alert BTC above 3000000 เพื่อสร้างรายการแรก"
-
-        active_rows = [a for a in mine if a.get("active", True)]
-        history_rows = [a for a in mine if not a.get("active", True)]
         lines = ["🔔 Price Alerts", ""]
-
-        if active_rows:
-            lines.append("🟢 ACTIVE — รวมคำสั่งที่ตั้งไว้ก่อนหน้านี้ด้วย")
-            for a in reversed(active_rows[-20:]):
-                op = ">=" if a.get("condition") == "above" else "<="
-                lines.append(
-                    f"{a.get('id','-')} | 🟢 ACTIVE\n"
-                    f"{a.get('asset','-')}/THB {op} {_format_thb_price(float(a.get('target') or 0))}\n"
-                    f"ตั้งเมื่อ: {str(a.get('created_at') or '-')[:19].replace('T',' ')}"
-                )
-
-        if history_rows:
-            lines.extend(["", "📜 HISTORY — คำสั่งเก่า"])
-            for a in reversed(history_rows[-10:]):
-                if a.get("triggered_at"):
-                    status = "⚪ TRIGGERED"
-                elif a.get("deleted_at"):
-                    status = "⚫ DELETED"
-                else:
-                    status = "⚪ INACTIVE"
-                op = ">=" if a.get("condition") == "above" else "<="
-                lines.append(
-                    f"{a.get('id','-')} | {status}\n"
-                    f"{a.get('asset','-')}/THB {op} {_format_thb_price(float(a.get('target') or 0))}\n"
-                    f"ตั้งเมื่อ: {str(a.get('created_at') or '-')[:19].replace('T',' ')}"
-                )
+        for a in reversed(mine[-20:]):
+            status = "🟢 ACTIVE" if a.get("active", True) else "⚪ TRIGGERED"
+            op = ">=" if a.get("condition") == "above" else "<="
+            lines.append(
+                f"{a.get('id','-')} | {status}\n"
+                f"{a.get('asset','-')}/THB {op} {_format_thb_price(float(a.get('target') or 0))}"
+            )
         return "\n".join(lines)
     except Exception as exc:
         print(f"[alerts] list error: {exc}")
@@ -1658,153 +1605,107 @@ def cmd_delete_price_alert(chat_id: int, arg: str) -> str:
     if not alert_id:
         return "ใช้แบบนี้: /delalert A1B2C3"
     try:
-        rows, sim = _get_price_alerts(email, chat_id)
-        found = None
-        for a in (rows or []):
+        sim, alerts = _price_alerts_for_email(email)
+        found = False
+        for a in alerts:
             if str(a.get("id", "")).upper() == alert_id and int(a.get("chat_id") or 0) == int(chat_id):
-                found = a
+                a["active"] = False
+                a["deleted_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                _update_price_alert(a, email, sim)
+                found = True
                 break
-        if found is None:
+        if not found:
             return f"❌ ไม่พบ Alert ID {alert_id}"
-
-        found["active"] = False
-        found["deleted_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        if _load_standalone_alerts(email, chat_id) is not None:
-            if not _upsert_standalone_alert(email, found):
-                return "❌ ลบ Price Alert ไม่สำเร็จ"
-        else:
-            sim["price_alerts"] = rows or []
-            _save_sim_state(email, sim)
         return f"✅ ลบ Price Alert {alert_id} แล้ว"
     except Exception as exc:
         print(f"[delalert] error: {exc}")
         return "❌ ลบ Price Alert ไม่สำเร็จ"
 
-
 def check_price_alerts() -> None:
-    """ตรวจ Price Alerts จากตารางถาวร; fallback ไป sim_state สำหรับระบบเก่า."""
+    """ตรวจ Price Alerts จาก dedicated table เพื่อไม่ให้หายเมื่อ sim_state ถูกเขียนทับ."""
     if sb is None:
         return
+    try:
+        res = (
+            sb.table("telegram_price_alerts")
+            .select("*")
+            .eq("active", True)
+            .limit(1000)
+            .execute()
+        )
+        rows = res.data or []
+    except Exception as exc:
+        print(f"[alert] dedicated table unavailable: {exc}")
+        # Legacy fallback for installations that have not created the table yet.
+        try:
+            res = sb.table("sim_state").select("actor,data").limit(500).execute()
+            rows = []
+            for row in (res.data or []):
+                email = str(row.get("actor") or "").strip()
+                sim = row.get("data")
+                if not email or not isinstance(sim, dict):
+                    continue
+                for a in (sim.get("price_alerts") or []):
+                    if isinstance(a, dict) and a.get("active", True):
+                        aa = dict(a)
+                        aa["actor"] = email
+                        rows.append(aa)
+        except Exception as exc2:
+            print(f"[alert] legacy load error: {exc2}")
+            return
+
     ticker_cache: dict[str, float] = {}
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-    # Primary path: standalone table. This survives web-app sim_state writes/restarts.
-    try:
-        res = sb.table(PRICE_ALERTS_TABLE).select("*").eq("active", True).limit(1000).execute()
-        standalone_rows = list(res.data or [])
-    except Exception as exc:
-        print(f"[alert] standalone checker unavailable; using legacy sim_state: {exc}")
-        standalone_rows = None
-
-    if standalone_rows is not None:
-        for alert in standalone_rows:
-            email = str(alert.get("actor") or "").strip()
-            chat_id = alert.get("chat_id")
-            asset = str(alert.get("asset") or "").upper().strip()
-            condition = str(alert.get("condition") or "").lower().strip()
-            try:
-                target = float(alert.get("target"))
-                previous = float(alert.get("last_price")) if alert.get("last_price") is not None else None
-                chat_id = int(chat_id)
-                if not email or not asset or condition not in {"above", "below"} or target <= 0 or chat_id <= 0:
-                    alert["active"] = False
-                    _upsert_standalone_alert(email, alert)
-                    continue
-            except (TypeError, ValueError):
-                if email:
-                    alert["active"] = False
-                    _upsert_standalone_alert(email, alert)
+    for alert in rows:
+        if not isinstance(alert, dict) or not alert.get("active", True):
+            continue
+        email = str(alert.get("actor") or "").strip()
+        chat_id = alert.get("chat_id")
+        asset = str(alert.get("asset") or "").upper().strip()
+        condition = str(alert.get("condition") or "").lower().strip()
+        try:
+            target = float(alert.get("target"))
+            previous = float(alert.get("last_price")) if alert.get("last_price") is not None else None
+            chat_id = int(chat_id)
+            if not email or not asset or condition not in {"above", "below"} or target <= 0 or chat_id <= 0:
                 continue
+        except (TypeError, ValueError):
+            continue
 
+        try:
+            if asset not in ticker_cache:
+                ticker_cache[asset] = float(_bitkub_ticker(asset)["last"])
+            current = ticker_cache[asset]
+        except Exception as exc:
+            print(f"[alert] {asset} ticker error: {exc}")
+            continue
+
+        crossed = (
+            current >= target and (previous is None or previous < target)
+            if condition == "above"
+            else current <= target and (previous is None or previous > target)
+        )
+
+        alert["last_price"] = current
+        if crossed:
+            direction = "ขึ้นถึง" if condition == "above" else "ลงถึง"
+            msg = (
+                "🚨 PRICE ALERT\n"
+                f"{asset}/THB {direction} {_format_thb_price(target)}\n"
+                f"ราคาปัจจุบัน: {_format_thb_price(current)}\n"
+                f"Alert ID: {alert.get('id','-')}\n"
+                "สถานะ: Triggered (หยุดแจ้งซ้ำแล้ว)"
+            )
             try:
-                if asset not in ticker_cache:
-                    ticker_cache[asset] = float(_bitkub_ticker(asset)["last"])
-                current = ticker_cache[asset]
+                send_message(chat_id, msg)
+                alert["active"] = False
+                alert["triggered_at"] = now_iso
             except Exception as exc:
-                print(f"[alert] {asset} ticker error: {exc}")
-                continue
+                print(f"[alert] send error for {chat_id}: {exc}")
 
-            crossed = (
-                current >= target and (previous is None or previous < target)
-                if condition == "above"
-                else current <= target and (previous is None or previous > target)
-            )
-            alert["last_price"] = current
-
-            if crossed:
-                direction = "ขึ้นถึง" if condition == "above" else "ลงถึง"
-                msg = (
-                    "🚨 PRICE ALERT\n"
-                    f"{asset}/THB {direction} {_format_thb_price(target)}\n"
-                    f"ราคาปัจจุบัน: {_format_thb_price(current)}\n"
-                    f"Alert ID: {alert.get('id','-')}\n"
-                    "สถานะ: Triggered (หยุดแจ้งซ้ำแล้ว)"
-                )
-                try:
-                    send_message(chat_id, msg)
-                    alert["active"] = False
-                    alert["triggered_at"] = now_iso
-                except Exception as exc:
-                    print(f"[alert] send error for {chat_id}: {exc}")
-            _upsert_standalone_alert(email, alert)
-        return
-
-    # Legacy fallback for deployments where the new table has not been created yet.
-    try:
-        res = sb.table("sim_state").select("actor,data").limit(500).execute()
-        rows = res.data or []
-    except Exception as exc:
-        print(f"[alert] legacy load sim_state error: {exc}")
-        return
-
-    for row in rows:
-        email = str(row.get("actor") or "").strip()
-        sim = row.get("data")
-        if not email or not isinstance(sim, dict):
-            continue
-        alerts = sim.get("price_alerts")
-        if not isinstance(alerts, list):
-            continue
-        changed = False
-        for alert in alerts:
-            if not alert.get("active", True):
-                continue
-            chat_id = alert.get("chat_id")
-            asset = str(alert.get("asset") or "").upper().strip()
-            condition = str(alert.get("condition") or "").lower().strip()
-            try:
-                target = float(alert.get("target"))
-                previous = float(alert.get("last_price")) if alert.get("last_price") is not None else None
-                chat_id = int(chat_id)
-            except (TypeError, ValueError):
-                continue
-            try:
-                if asset not in ticker_cache:
-                    ticker_cache[asset] = float(_bitkub_ticker(asset)["last"])
-                current = ticker_cache[asset]
-            except Exception:
-                continue
-            crossed = (
-                current >= target and (previous is None or previous < target)
-                if condition == "above" else current <= target and (previous is None or previous > target)
-            )
-            alert["last_price"] = current
-            if crossed:
-                direction = "ขึ้นถึง" if condition == "above" else "ลงถึง"
-                try:
-                    send_message(chat_id, "🚨 PRICE ALERT\n"
-                                 f"{asset}/THB {direction} {_format_thb_price(target)}\n"
-                                 f"ราคาปัจจุบัน: {_format_thb_price(current)}\n"
-                                 f"Alert ID: {alert.get('id','-')}\n"
-                                 "สถานะ: Triggered (หยุดแจ้งซ้ำแล้ว)")
-                    alert["active"] = False
-                    alert["triggered_at"] = now_iso
-                    changed = True
-                except Exception as exc:
-                    print(f"[alert] legacy send error: {exc}")
-        if changed:
-            sim["price_alerts"] = alerts[-100:]
-            _save_sim_state(email, sim)
+        # Persist only the alert row, never the whole sim_state.
+        _update_price_alert(alert, email, None)
 
 
 # =========================================================
