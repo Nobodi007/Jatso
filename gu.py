@@ -11646,22 +11646,37 @@ def render_cash_flow_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_d
 
 @_cache_data(ttl=900, show_spinner=False)
 def _fetch_institutional_benchmarks(start: Any, end: Any) -> pd.DataFrame:
-    """โหลด benchmark แบบแยก ticker เพื่อไม่ให้ ticker ตัวหนึ่งล้มแล้วทำให้ตัวอื่นหายไป.
-    BTC = BTC-USD, SET = ^SET.BK, S&P 500 = ^GSPC.
-    """
-    if "yf" not in globals() or yf is None:
-        return pd.DataFrame()
+    """โหลด benchmark แยกทีละตลาด พร้อม fallback ไป Yahoo Chart API โดยตรง.
 
-    start_ts = pd.Timestamp(start).normalize() - pd.Timedelta(days=30)
-    end_ts = pd.Timestamp(end).normalize() + pd.Timedelta(days=3)
+    เป้าหมายคือให้ Portfolio + BTC + SET Index + S&P 500 ได้ข้อมูลแยกกันจริง ๆ
+    แม้ yfinance จะโหลด ticker ใด ticker หนึ่งไม่ได้.
+    """
+    start_ts = pd.Timestamp(start).normalize() - pd.Timedelta(days=45)
+    end_ts = pd.Timestamp(end).normalize() + pd.Timedelta(days=4)
     ticker_map = {
         "BTC": "BTC-USD",
         "SET Index": "^SET.BK",
         "S&P 500": "^GSPC",
     }
 
-    series = {}
-    for label, ticker in ticker_map.items():
+    def _clean_close(close: Any) -> pd.Series:
+        if close is None:
+            return pd.Series(dtype=float)
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
+        close = pd.to_numeric(close, errors="coerce")
+        idx = pd.to_datetime(close.index, errors="coerce")
+        try:
+            if getattr(idx, "tz", None) is not None:
+                idx = idx.tz_localize(None)
+        except Exception:
+            pass
+        close.index = idx.normalize()
+        return close[~close.index.duplicated(keep="last")].dropna().sort_index()
+
+    def _from_yfinance(ticker: str) -> pd.Series:
+        if "yf" not in globals() or yf is None:
+            return pd.Series(dtype=float)
         try:
             raw = yf.download(
                 ticker,
@@ -11672,27 +11687,66 @@ def _fetch_institutional_benchmarks(start: Any, end: Any) -> pd.DataFrame:
                 group_by="column",
                 threads=False,
             )
-            if raw is None or raw.empty:
-                continue
-
-            close = raw["Close"] if "Close" in raw.columns else None
-            if close is None:
-                continue
-            if isinstance(close, pd.DataFrame):
-                close = close.iloc[:, 0]
-
-            close = pd.to_numeric(close, errors="coerce")
-            close.index = pd.to_datetime(close.index, errors="coerce")
-            if getattr(close.index, "tz", None) is not None:
-                close.index = close.index.tz_localize(None)
-            close.index = close.index.normalize()
-            close = close[~close.index.duplicated(keep="last")].dropna().sort_index()
-
-            if not close.empty:
-                series[label] = close
+            if raw is not None and not raw.empty and "Close" in raw.columns:
+                return _clean_close(raw["Close"])
         except Exception:
-            # One unavailable benchmark must not remove the others.
-            continue
+            pass
+        try:
+            raw = yf.Ticker(ticker).history(
+                start=start_ts,
+                end=end_ts,
+                auto_adjust=False,
+            )
+            if raw is not None and not raw.empty and "Close" in raw.columns:
+                return _clean_close(raw["Close"])
+        except Exception:
+            pass
+        return pd.Series(dtype=float)
+
+    def _from_yahoo_chart_api(ticker: str) -> pd.Series:
+        # Stdlib-only fallback; avoids dependency/version/crumb issues in yfinance.
+        try:
+            import json
+            import urllib.parse
+            import urllib.request
+
+            p1 = int(pd.Timestamp(start_ts).timestamp())
+            p2 = int(pd.Timestamp(end_ts + pd.Timedelta(days=1)).timestamp())
+            q = urllib.parse.urlencode({
+                "period1": p1,
+                "period2": p2,
+                "interval": "1d",
+                "events": "history",
+                "includeAdjustedClose": "true",
+            })
+            url = "https://query1.finance.yahoo.com/v8/finance/chart/" + urllib.parse.quote(ticker, safe="") + "?" + q
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": "Mozilla/5.0 XSpring-Analytics"},
+            )
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            result = payload.get("chart", {}).get("result") or []
+            if not result:
+                return pd.Series(dtype=float)
+            r0 = result[0]
+            ts = r0.get("timestamp") or []
+            quote = (r0.get("indicators", {}).get("quote") or [{}])[0]
+            closes = quote.get("close") or []
+            if not ts or not closes:
+                return pd.Series(dtype=float)
+            idx = pd.to_datetime(ts, unit="s", utc=True).tz_convert(None)
+            return _clean_close(pd.Series(closes, index=idx))
+        except Exception:
+            return pd.Series(dtype=float)
+
+    series: dict[str, pd.Series] = {}
+    for label, ticker in ticker_map.items():
+        close = _from_yfinance(ticker)
+        if close.empty:
+            close = _from_yahoo_chart_api(ticker)
+        if not close.empty:
+            series[label] = close
 
     if not series:
         return pd.DataFrame()
