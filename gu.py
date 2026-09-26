@@ -11657,8 +11657,8 @@ def _fetch_institutional_benchmarks(start: Any, end: Any) -> tuple[pd.DataFrame,
     end_ts = pd.Timestamp(end).normalize() + pd.Timedelta(days=3)
     ticker_map = {
         "BTC": ["BTC-USD"],
-        "SET Index": ["^SET.BK", "SET.BK"],
-        "S&P 500": ["^GSPC"],
+        "SET Index": ["^SET.BK", "SET.BK", "^SETI", "THD"],  # THD = ETF สำรอง ถ้าดัชนีตรงดึงไม่ได้
+        "S&P 500": ["^GSPC", "SPY"],  # SPY = ETF สำรองของ S&P 500
     }
 
     def _clean_close(close: Any) -> pd.Series:
@@ -11713,6 +11713,8 @@ def _fetch_institutional_benchmarks(start: Any, end: Any) -> tuple[pd.DataFrame,
                     continue
 
                 series[label] = close
+                if ticker != tickers[0]:
+                    errors[label] = f"⚠️ ใช้ proxy '{ticker}' แทนดัชนีตรง (ตัวจริงดึงไม่ได้)"
                 got = True
                 break
             except Exception as e:
