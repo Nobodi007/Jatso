@@ -1430,8 +1430,6 @@ NAV_LABELS = [
     "💰 Cash Flow Analytics",
     "🕒 Customer Timeline",
     "🖨️ Fund Fact Sheet (Print)",
-    "🧪 Scenario Stress Lab",
-    "🩺 Portfolio Health Score",
     "🧪 Quant Research Lab",
 ]
 NAV_DASHBOARD = NAV_LABELS[0]
@@ -1451,9 +1449,11 @@ NAV_PERFORMANCE = NAV_LABELS[15]
 NAV_CASHFLOW = NAV_LABELS[16]
 NAV_TIMELINE = NAV_LABELS[17]
 NAV_FACTSHEET_PRINT = NAV_LABELS[18]
-NAV_STRESS_LAB = NAV_LABELS[19]
-NAV_HEALTH_SCORE = NAV_LABELS[20]
-NAV_QUANT_RESEARCH = NAV_LABELS[21]
+# These two research tools live inside Quant Research Lab rather than the
+# top-level navigation. Keep stable labels for routing/session migration.
+NAV_STRESS_LAB = "🧪 Scenario Stress Lab"
+NAV_HEALTH_SCORE = "🩺 Portfolio Health Score"
+NAV_QUANT_RESEARCH = NAV_LABELS[19]
 
 # Quant Research pages live under one top-level menu.  Their internal labels
 # stay stable so old session state and direct routing can be migrated safely.
@@ -1478,6 +1478,8 @@ QUANT_RESEARCH_PAGES = [
     NAV_TRANSACTION_COST_LAB,
     NAV_PBO_DSR_LAB,
     NAV_RESEARCH_REPORT,
+    NAV_STRESS_LAB,
+    NAV_HEALTH_SCORE,
     NAV_SYNTHETIC_LAB,
     NAV_HMM_RESEARCH,
     NAV_FINAL_QUANT_REVIEW,
@@ -15398,6 +15400,10 @@ def render_quant_research_hub(cfg: dict[str, Any], data: pd.DataFrame, market_df
         render_pbo_dsr_lab(cfg, data, market_df)
     elif selected == NAV_RESEARCH_REPORT:
         render_quant_research_report(cfg, data, market_df)
+    elif selected == NAV_STRESS_LAB:
+        render_scenario_stress_lab(cfg, data, market_df)
+    elif selected == NAV_HEALTH_SCORE:
+        render_portfolio_health_score(cfg, data, market_df)
     elif selected == NAV_SYNTHETIC_LAB:
         render_synthetic_market_lab(cfg, data, market_df)
     elif selected == NAV_HMM_RESEARCH:
@@ -15737,10 +15743,6 @@ def _main_body() -> None:
             render_cash_flow_analytics(cfg, data, market_df)
         elif nav == NAV_TIMELINE:
             render_customer_timeline(cfg, data, market_df)
-        elif nav == NAV_STRESS_LAB:
-            render_scenario_stress_lab(cfg, data, market_df)
-        elif nav == NAV_HEALTH_SCORE:
-            render_portfolio_health_score(cfg, data, market_df)
         elif nav == NAV_QUANT_RESEARCH:
             render_quant_research_hub(cfg, data, market_df)
         elif nav == NAV_FACTSHEET_PRINT:
