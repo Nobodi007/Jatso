@@ -12170,6 +12170,97 @@ def render_smart_alerts(cfg: dict[str, Any], data: pd.DataFrame,
     )
 
 # =========================================================================
+
+
+def _render_ai_portfolio_narrator(sim: dict[str, Any], snap: dict[str, Any],
+                                  market_df: Optional[pd.DataFrame]) -> None:
+    """แสดง AI Portfolio Narrator แบบข้อความเท่านั้น — cache 1 ครั้ง/วัน."""
+    try:
+        api_key = st.secrets["gemini_api_key"]
+    except Exception:
+        api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        return
+
+    # ใช้วันที่ไทยเพื่อให้ cache เปลี่ยนตามวันของผู้ใช้/ตลาดไทย
+    today_key = pd.Timestamp.now(tz="Asia/Bangkok").strftime("%Y-%m-%d")
+    cache = sim.setdefault("ai_narration_cache", {})
+    refresh = st.button("🔄", key="ai_narrator_refresh", help="ให้ Gemini สรุปพอร์ตวันนี้ใหม่")
+
+    if not refresh and cache.get("date") == today_key and cache.get("text"):
+        narration = str(cache["text"])
+    else:
+        pct_map: dict[str, float] = {}
+        if isinstance(market_df, pd.DataFrame) and not market_df.empty:
+            for _, row in market_df.iterrows():
+                sym = str(row.get("symbol", "")).upper().strip()
+                if sym:
+                    try:
+                        pct_map[sym] = float(row.get("pct_change", 0) or 0)
+                    except (TypeError, ValueError):
+                        pct_map[sym] = 0.0
+
+        movers = []
+        for row in snap.get("rows", []) or []:
+            sym = str(row.get("asset", "")).upper()
+            if not sym or sym not in pct_map:
+                continue
+            movers.append({
+                "asset": sym,
+                "pct_24h": round(pct_map[sym], 2),
+                "allocation_pct": round(float(row.get("allocation_pct", 0) or 0), 2),
+            })
+        movers.sort(key=lambda x: x["pct_24h"], reverse=True)
+
+        total_alloc = sum(x["allocation_pct"] for x in movers)
+        weighted_pct = (
+            sum(x["pct_24h"] * x["allocation_pct"] for x in movers) / total_alloc
+            if total_alloc > 0 else 0.0
+        )
+
+        highlights = {
+            "portfolio_value_thb": round(float(snap.get("total_value_thb", 0) or 0), 2),
+            "weighted_24h_pct": round(weighted_pct, 2),
+            "top_gainer": movers[0] if movers else None,
+            "top_loser": movers[-1] if len(movers) > 1 else None,
+            "holdings_count": len(movers),
+        }
+
+        if not movers:
+            narration = "วันนี้ยังไม่มีข้อมูลราคาของสินทรัพย์ในพอร์ตเพียงพอสำหรับสรุปครับ"
+        else:
+            system = (
+                "คุณคือผู้บรรยายกีฬาที่กำลังสรุปผลงานพอร์ตคริปโตของผู้ใช้ "
+                "เขียนภาษาไทย 2-3 ประโยค สไตล์นักข่าวกีฬา กระชับ มีจังหวะและอ่านสนุก "
+                "ห้ามแนะนำซื้อหรือขาย ห้ามทำนายราคา และห้ามสร้างตัวเลขเอง "
+                "ใช้เฉพาะตัวเลขที่อยู่ในข้อมูลที่ส่งให้เท่านั้น"
+            )
+            prompt = (
+                "สรุปผลงานพอร์ตวันนี้จากข้อมูลจริงด้านล่างเท่านั้น "
+                "พูดถึงทิศทางรวมของพอร์ตจาก weighted_24h_pct, ดาวเด่นจาก top_gainer, "
+                "ตัวถ่วงจาก top_loser ถ้ามี และปิดท้ายด้วยมูลค่าพอร์ตรวม "
+                "ห้ามเติมข้อมูลหรือตัวเลขอื่น:\n" +
+                json.dumps(highlights, ensure_ascii=False)
+            )
+            with st.spinner("🎙️ Gemini กำลังสรุปพอร์ตวันนี้…"):
+                narration = ask_ai([{"role": "user", "content": prompt}], api_key, system)
+
+        cache.update(date=today_key, text=str(narration), highlights=highlights if movers else {})
+        # เก็บ state ให้ระบบบันทึก sim ตามกลไกเดิมของแอป
+        st.session_state["sim"] = sim
+
+    c1, c2 = st.columns([1, 12])
+    with c1:
+        st.markdown("<div style='font-size:1.35rem;text-align:center;'>🎙️</div>", unsafe_allow_html=True)
+    with c2:
+        st.markdown("<div style='font-weight:700;color:#EAECEF;'>AI Portfolio Narrator</div>", unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="background:#181a20;border:1px solid #2b3139;'
+            f'border-left:3px solid #0ecb81;border-radius:10px;padding:12px 15px;'
+            f'margin-top:6px;color:#EAECEF;line-height:1.7;">{str(narration)}</div>',
+            unsafe_allow_html=True,
+        )
+
 def render_dashboard(cfg: dict[str, Any], data: pd.DataFrame,
                      market_df: Optional[pd.DataFrame] = None) -> None:
     st.markdown(DASHBOARD_CSS, unsafe_allow_html=True)
@@ -12234,6 +12325,14 @@ def render_dashboard(cfg: dict[str, Any], data: pd.DataFrame,
         f'</div>',
         unsafe_allow_html=True,
     )
+
+    # ---- AI Portfolio Narrator (ข้อความเท่านั้น) ----
+    try:
+        _narrator_snap = portfolio_snapshot(sim, price_thb_map)
+        _render_ai_portfolio_narrator(sim, _narrator_snap, market_df)
+    except Exception as _e:
+        # ฟีเจอร์ AI ห้ามทำให้ Dashboard หลักล่ม
+        pass
 
     # ---- Portfolio Performance chart ----
     st.markdown('<div class="dash-chart-card">'
