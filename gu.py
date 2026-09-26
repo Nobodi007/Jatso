@@ -12185,7 +12185,7 @@ def _render_ai_portfolio_narrator(sim: dict[str, Any], snap: dict[str, Any],
     # ใช้วันที่ไทยเพื่อให้ cache เปลี่ยนตามวันของผู้ใช้/ตลาดไทย
     today_key = pd.Timestamp.now(tz="Asia/Bangkok").strftime("%Y-%m-%d")
     cache = sim.setdefault("ai_narration_cache", {})
-    refresh = st.button("🔄", key="ai_narrator_refresh", help="ให้ Gemini สรุปพอร์ตวันนี้ใหม่")
+    refresh = False
 
     if not refresh and cache.get("date") == today_key and cache.get("text"):
         narration = str(cache["text"])
@@ -12249,17 +12249,41 @@ def _render_ai_portfolio_narrator(sim: dict[str, Any], snap: dict[str, Any],
         # เก็บ state ให้ระบบบันทึก sim ตามกลไกเดิมของแอป
         st.session_state["sim"] = sim
 
-    c1, c2 = st.columns([1, 12])
-    with c1:
-        st.markdown("<div style='font-size:1.35rem;text-align:center;'>🎙️</div>", unsafe_allow_html=True)
-    with c2:
-        st.markdown("<div style='font-weight:700;color:#EAECEF;'>AI Portfolio Narrator</div>", unsafe_allow_html=True)
+    # ---- Polished compact narrator card (ข้อความเท่านั้น) ----
+    # จัดปุ่ม refresh ให้อยู่ในหัวการ์ด ไม่ลอยแยกออกไปด้านบน
+    safe_narration = _html.escape(str(narration))
+    h1, h2 = st.columns([8.5, 1.5])
+    with h1:
         st.markdown(
-            f'<div style="background:#181a20;border:1px solid #2b3139;'
-            f'border-left:3px solid #0ecb81;border-radius:10px;padding:12px 15px;'
-            f'margin-top:6px;color:#EAECEF;line-height:1.7;">{str(narration)}</div>',
+            '<div style="display:flex;align-items:center;gap:10px;margin:10px 0 8px;">'
+            '<div style="width:34px;height:34px;border-radius:10px;'
+            'background:rgba(14,203,129,.12);border:1px solid rgba(14,203,129,.25);'
+            'display:flex;align-items:center;justify-content:center;font-size:17px;">🎙️</div>'
+            '<div>'
+            '<div style="font-size:16px;font-weight:800;color:#F0F2F5;line-height:1.2;">AI Portfolio Narrator</div>'
+            '<div style="font-size:11px;color:#8B93A1;margin-top:3px;">สรุปภาพรวมพอร์ตวันนี้จากข้อมูลจริง</div>'
+            '</div></div>',
             unsafe_allow_html=True,
         )
+    with h2:
+        refresh2 = st.button("↻", key="ai_narrator_refresh_card", help="สรุปใหม่")
+
+    # ถ้ากดปุ่มหัวการ์ด ให้ regenerate ในรอบถัดไปโดยไม่สร้างปุ่มลอย
+    if refresh2:
+        cache.pop("date", None)
+        st.rerun()
+
+    st.markdown(
+        '<div style="position:relative;overflow:hidden;'
+        'background:linear-gradient(135deg,#171A20 0%,#14171C 100%);'
+        'border:1px solid #2A3039;border-radius:14px;'
+        'padding:17px 20px 16px;margin:0 0 18px;box-shadow:0 4px 18px rgba(0,0,0,.12);">'
+        '<div style="position:absolute;left:0;top:0;bottom:0;width:3px;background:#0ECB81;"></div>'
+        '<div style="font-size:12px;color:#8B93A1;margin-bottom:7px;">TODAY\'S PORTFOLIO BRIEF</div>'
+        f'<div style="font-size:15px;font-weight:500;color:#EAECEF;line-height:1.85;">{safe_narration}</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
 def render_dashboard(cfg: dict[str, Any], data: pd.DataFrame,
                      market_df: Optional[pd.DataFrame] = None) -> None:
