@@ -12447,7 +12447,12 @@ PRINT_REPORT_CSS = """
 .print-table th { text-align:left; background:#0b0e11; color:#fff; padding:8px 10px; }
 .print-table td { padding:7px 10px; border-bottom:1px solid #eceef0; font-variant-numeric:tabular-nums; }
 .print-disclaimer { font-size:.66rem; color:#8a93a0; margin-top:26px; border-top:1px solid #eceef0; padding-top:10px; line-height:1.6; }
-@media(max-width:700px){.print-report-card{padding:20px}.print-kpi-grid{grid-template-columns:repeat(2,1fr)}.print-report-header{display:block}}
+
+/* Current Holdings — coin logo table */
+.holdings-section{margin-top:28px}.holdings-section-title{display:flex;align-items:center;gap:10px;margin-bottom:12px}.holdings-section-title .title-icon{width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:rgba(14,203,129,.10);border:1px solid rgba(14,203,129,.25);font-size:17px}.holdings-section-title .title-text{font-size:1rem;font-weight:800;color:#0ecb81}.holdings-section-title .title-sub{color:#8a93a0;font-size:.70rem;margin-left:auto}.holdings-table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden;border:1px solid #2b3139;border-radius:14px;background:#0f1115;color:#eaecef;font-size:.80rem}.holdings-table thead th{background:#171a1f;color:#8a93a0;padding:12px 14px;text-align:right;font-size:.67rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;border-bottom:1px solid #2b3139;white-space:nowrap}.holdings-table thead th:first-child{text-align:left}.holdings-table tbody tr:hover{background:#171a1f}.holdings-table tbody td{padding:13px 14px;border-bottom:1px solid #20242b;text-align:right;vertical-align:middle;font-variant-numeric:tabular-nums}.holdings-table tbody tr:last-child td{border-bottom:none}.holding-asset{display:flex;align-items:center;gap:11px;text-align:left;min-width:150px}.holding-logo-wrap{width:34px;height:34px;flex:0 0 34px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#181b21;border:1px solid #303640;box-shadow:0 3px 10px rgba(0,0,0,.20);overflow:hidden}.holding-coin-logo{width:26px;height:26px;object-fit:contain;display:block}.holding-coin-fallback{width:26px;height:26px;border-radius:50%;display:none;align-items:center;justify-content:center;background:#2b3139;color:#eaecef;font-size:11px;font-weight:800}.holding-asset-name{display:flex;flex-direction:column;line-height:1.15}.holding-symbol{color:#f0f2f5;font-weight:800;font-size:.84rem}.holding-type{color:#707987;font-size:.64rem;margin-top:3px}.holding-number{color:#eaecef;font-weight:600}.holding-value{color:#f0f2f5;font-weight:750}.holding-allocation{color:#aeb6c2}.holding-pnl-positive{color:#0ecb81;font-weight:700}.holding-pnl-negative{color:#f6465d;font-weight:700}.holding-pnl-neutral{color:#aeb6c2}
+
+@media(max-width:700px){.print-report-card{padding:20px}.print-kpi-grid{grid-template-columns:repeat(2,1fr)}.print-report-header{display:block}.holdings-table{font-size:.70rem}.holdings-table thead th,.holdings-table tbody td{padding:9px 8px}.holding-asset{min-width:115px;gap:7px}.holding-logo-wrap{width:29px;height:29px;flex-basis:29px}.holding-coin-logo{width:22px;height:22px}.holding-symbol{font-size:.74rem}.holding-type{display:none}.holdings-section-title .title-sub{display:none}}
+@media print{.holdings-table{background:#fff!important;color:#111!important;border-color:#d7dbe0!important}.holdings-table thead th{background:#111!important;color:#fff!important}.holdings-table tbody td{border-color:#e5e7eb!important;color:#111!important}.holding-symbol,.holding-number,.holding-value{color:#111!important}.holding-logo-wrap{box-shadow:none!important;border-color:#d7dbe0!important;background:#fff!important}}
 </style>
 """
 
@@ -12472,20 +12477,61 @@ def render_print_report(fund_name: str, cfg: dict[str, Any], sim: dict[str, Any]
       <div class="print-section-title">Portfolio Value Trend</div>""", unsafe_allow_html=True)
     if not metrics["history"].empty:
         st.line_chart(metrics["history"].set_index("date")[["value"]], height=260)
+    HOLDING_LOGOS = {
+        "BTC": "https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@master/128/color/btc.png",
+        "ETH": "https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@master/128/color/eth.png",
+        "ADA": "https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@master/128/color/ada.png",
+        "SOL": "https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@master/128/color/sol.png",
+        "USDT": "https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@master/128/color/usdt.png",
+        "DOGE": "https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@master/128/color/doge.png",
+        "XRP": "https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@master/128/color/xrp.png",
+        "BNB": "https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@master/128/color/bnb.png",
+        "AVAX": "https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@master/128/color/avax.png",
+        "DOT": "https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@master/128/color/dot.png",
+        "LINK": "https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@master/128/color/link.png",
+        "MATIC": "https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@master/128/color/matic.png",
+    }
+
+    def _holding_logo(asset: str) -> str:
+        symbol = str(asset or "").upper().strip()
+        safe_symbol = _html.escape(symbol)
+        url = HOLDING_LOGOS.get(symbol)
+        if url:
+            return (f'<img class="holding-coin-logo" src="{url}" alt="{safe_symbol}" '
+                    f'onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\';">'
+                    f'<span class="holding-coin-fallback">{_html.escape(symbol[:1])}</span>')
+        return f'<span class="holding-coin-fallback" style="display:flex">{_html.escape(symbol[:1] or "?")}</span>'
+
     rows_html = ""
     rows = sorted(snap.get("rows", []) or [], key=lambda x: x.get("market_value", 0), reverse=True)
     for r in rows:
-        rows_html += (f'<tr><td>{_html.escape(str(r.get("asset", "")))}</td>'
-                      f'<td>{float(r.get("qty", 0)):,.6f}</td><td>฿{float(r.get("market_value", 0)):,.2f}</td>'
-                      f'<td>{float(r.get("allocation_pct", 0)):.1f}%</td><td>{float(r.get("unrealized_pnl", 0)):+,.2f}</td></tr>')
+        asset = str(r.get("asset", "") or "").upper().strip()
+        qty = float(r.get("qty", 0) or 0)
+        market_value = float(r.get("market_value", 0) or 0)
+        allocation = float(r.get("allocation_pct", 0) or 0)
+        unrealized = float(r.get("unrealized_pnl", 0) or 0)
+        pnl_class = ("holding-pnl-positive" if unrealized > 0 else
+                     "holding-pnl-negative" if unrealized < 0 else "holding-pnl-neutral")
+        pnl_sign = "+" if unrealized > 0 else ""
+        rows_html += (
+            f'<tr><td><div class="holding-asset"><div class="holding-logo-wrap">{_holding_logo(asset)}</div>'
+            f'<div class="holding-asset-name"><span class="holding-symbol">{_html.escape(asset)}</span>'
+            f'<span class="holding-type">Crypto Asset</span></div></div></td>'
+            f'<td class="holding-number">{qty:,.6f}</td>'
+            f'<td class="holding-value">฿{market_value:,.2f}</td>'
+            f'<td class="holding-allocation">{allocation:.1f}%</td>'
+            f'<td class="{pnl_class}">{pnl_sign}฿{unrealized:,.2f}</td></tr>'
+        )
     if not rows_html:
-        rows_html = '<tr><td colspan="5">No holdings</td></tr>'
-    st.markdown(f"""<div class="print-section-title">Current Holdings</div>
-      <table class="print-table"><thead><tr><th>Asset</th><th>Qty</th><th>Value (THB)</th><th>Alloc %</th><th>Unreal. P&amp;L</th></tr></thead>
+        rows_html = '<tr><td colspan="5" style="text-align:center;padding:28px;color:#8a93a0;">No holdings</td></tr>'
+
+    st.markdown(f"""<div class="holdings-section">
+      <div class="holdings-section-title"><div class="title-icon">💼</div>
+      <div class="title-text">Current Holdings</div><div class="title-sub">{len(rows)} assets</div></div>
+      <table class="holdings-table"><thead><tr><th>Asset</th><th>Qty</th><th>Value (THB)</th><th>Alloc %</th><th>Unreal. P&amp;L</th></tr></thead>
       <tbody>{rows_html}</tbody></table>
       <div class="print-disclaimer">This document is generated by a portfolio simulation tool for planning and educational purposes only.
       It is not investment advice, a solicitation, or a guarantee of future performance.</div></div>""", unsafe_allow_html=True)
-
 
 # =========================================================================
 
