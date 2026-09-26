@@ -11653,8 +11653,10 @@ def _fetch_institutional_benchmarks(start: Any, end: Any) -> pd.DataFrame:
     if "yf" not in globals() or yf is None:
         return pd.DataFrame()
     try:
-        start_ts = pd.Timestamp(start).normalize()
-        end_ts = pd.Timestamp(end).normalize() + pd.Timedelta(days=1)
+        # Fetch a buffer before the first snapshot so weekend/holiday
+        # snapshots can still resolve to the latest prior trading session.
+        start_ts = pd.Timestamp(start).normalize() - pd.Timedelta(days=14)
+        end_ts = pd.Timestamp(end).normalize() + pd.Timedelta(days=2)
         tickers = ["BTC-USD", "^SET.BK", "^GSPC"]
         raw = yf.download(
             tickers,
@@ -11740,15 +11742,12 @@ def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str
     bench = bench[~bench.index.duplicated(keep="last")].sort_index()
     bench = bench.apply(pd.to_numeric, errors="coerce")
 
-    # Reindex benchmark onto the EXACT portfolio snapshot dates.
-    # method='ffill' means:
-    #   - weekday snapshot -> same-day market close when available
-    #   - weekend/holiday snapshot -> latest market close before that date
-    # This fixes the previous exact-date intersection failure.
+    # Resolve EACH portfolio snapshot to the latest benchmark close at or
+    # before that date.  A look-back buffer is fetched above so the first
+    # snapshot can also resolve when it falls on a weekend/holiday.
+    # This is more robust than exact-date intersection and avoids the case
+    # where SET/S&P500 have only one usable point and therefore no visible line.
     aligned = bench.reindex(port.index, method="ffill")
-
-    # A benchmark may still be NaN for the first snapshot if the provider
-    # returned no usable value before that date. Drop only those rows.
     aligned = aligned.dropna(how="all")
 
     if aligned.empty:
@@ -11781,8 +11780,10 @@ def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str
 
     for col in benchmark_cols:
         s = comparison[col].dropna()
-        if not s.empty and float(s.iloc[0]) != 0:
-            # Use the first benchmark value available in the comparison window.
+        # A benchmark needs at least 2 aligned observations to draw a
+        # meaningful comparison line.  Because the fetch now includes a
+        # look-back buffer, weekend/holiday snapshots normally have 2 points.
+        if len(s) >= 2 and float(s.iloc[0]) != 0:
             base = float(s.iloc[0])
             levels[col] = comparison[col] / base * 100.0
 
