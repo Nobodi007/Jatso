@@ -11645,18 +11645,20 @@ def render_cash_flow_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_d
 
 
 @_cache_data(ttl=900, show_spinner=False)
-def _fetch_institutional_benchmarks(start: Any, end: Any) -> pd.DataFrame:
-    """โหลด benchmark แยกทีละตลาด พร้อม fallback ไป Yahoo Chart API โดยตรง.
-
-    เป้าหมายคือให้ Portfolio + BTC + SET Index + S&P 500 ได้ข้อมูลแยกกันจริง ๆ
-    แม้ yfinance จะโหลด ticker ใด ticker หนึ่งไม่ได้.
+def _fetch_institutional_benchmarks(start: Any, end: Any) -> tuple[pd.DataFrame, dict[str, str]]:
+    """โหลด benchmark แบบแยก ticker พร้อม fallback และเก็บ error ไว้ debug.
+    BTC = BTC-USD, SET = ^SET.BK / SET.BK, S&P 500 = ^GSPC.
+    คืน (DataFrame, errors) — errors คือ {label: เหตุผลที่โหลดไม่สำเร็จ}
     """
+    if "yf" not in globals() or yf is None:
+        return pd.DataFrame(), {"ทั้งหมด": "ไม่มี yfinance ในระบบ"}
+
     start_ts = pd.Timestamp(start).normalize() - pd.Timedelta(days=45)
-    end_ts = pd.Timestamp(end).normalize() + pd.Timedelta(days=4)
+    end_ts = pd.Timestamp(end).normalize() + pd.Timedelta(days=3)
     ticker_map = {
-        "BTC": "BTC-USD",
-        "SET Index": "^SET.BK",
-        "S&P 500": "^GSPC",
+        "BTC": ["BTC-USD"],
+        "SET Index": ["^SET.BK", "SET.BK"],
+        "S&P 500": ["^GSPC"],
     }
 
     def _clean_close(close: Any) -> pd.Series:
@@ -11674,95 +11676,62 @@ def _fetch_institutional_benchmarks(start: Any, end: Any) -> pd.DataFrame:
         close.index = idx.normalize()
         return close[~close.index.duplicated(keep="last")].dropna().sort_index()
 
-    def _from_yfinance(ticker: str) -> pd.Series:
-        if "yf" not in globals() or yf is None:
-            return pd.Series(dtype=float)
-        try:
-            raw = yf.download(
-                ticker,
-                start=start_ts,
-                end=end_ts,
-                auto_adjust=False,
-                progress=False,
-                group_by="column",
-                threads=False,
-            )
-            if raw is not None and not raw.empty and "Close" in raw.columns:
-                return _clean_close(raw["Close"])
-        except Exception:
-            pass
-        try:
-            raw = yf.Ticker(ticker).history(
-                start=start_ts,
-                end=end_ts,
-                auto_adjust=False,
-            )
-            if raw is not None and not raw.empty and "Close" in raw.columns:
-                return _clean_close(raw["Close"])
-        except Exception:
-            pass
-        return pd.Series(dtype=float)
-
-    def _from_yahoo_chart_api(ticker: str) -> pd.Series:
-        # Stdlib-only fallback; avoids dependency/version/crumb issues in yfinance.
-        try:
-            import json
-            import urllib.parse
-            import urllib.request
-
-            p1 = int(pd.Timestamp(start_ts).timestamp())
-            p2 = int(pd.Timestamp(end_ts + pd.Timedelta(days=1)).timestamp())
-            q = urllib.parse.urlencode({
-                "period1": p1,
-                "period2": p2,
-                "interval": "1d",
-                "events": "history",
-                "includeAdjustedClose": "true",
-            })
-            url = "https://query1.finance.yahoo.com/v8/finance/chart/" + urllib.parse.quote(ticker, safe="") + "?" + q
-            req = urllib.request.Request(
-                url,
-                headers={"User-Agent": "Mozilla/5.0 XSpring-Analytics"},
-            )
-            with urllib.request.urlopen(req, timeout=12) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-            result = payload.get("chart", {}).get("result") or []
-            if not result:
-                return pd.Series(dtype=float)
-            r0 = result[0]
-            ts = r0.get("timestamp") or []
-            quote = (r0.get("indicators", {}).get("quote") or [{}])[0]
-            closes = quote.get("close") or []
-            if not ts or not closes:
-                return pd.Series(dtype=float)
-            idx = pd.to_datetime(ts, unit="s", utc=True).tz_convert(None)
-            return _clean_close(pd.Series(closes, index=idx))
-        except Exception:
-            return pd.Series(dtype=float)
-
     series: dict[str, pd.Series] = {}
-    for label, ticker in ticker_map.items():
-        close = _from_yfinance(ticker)
-        if close.empty:
-            close = _from_yahoo_chart_api(ticker)
-        if not close.empty:
-            series[label] = close
+    errors: dict[str, str] = {}
+
+    for label, tickers in ticker_map.items():
+        last_err = "ไม่ทราบสาเหตุ"
+        got = False
+        for ticker in tickers:
+            try:
+                raw = yf.download(
+                    ticker,
+                    start=start_ts,
+                    end=end_ts,
+                    auto_adjust=False,
+                    progress=False,
+                    threads=False,
+                )
+                if raw is None or raw.empty:
+                    # บาง index ทำงานกับ Ticker().history() ได้ดีกว่า download()
+                    raw = yf.Ticker(ticker).history(
+                        start=start_ts,
+                        end=end_ts,
+                        auto_adjust=False,
+                    )
+                if raw is None or raw.empty:
+                    last_err = f"{ticker}: ไม่มีข้อมูลย้อนหลังในช่วงที่เลือก"
+                    continue
+
+                close = raw["Close"] if "Close" in raw.columns else None
+                if close is None:
+                    last_err = f"{ticker}: ไม่พบคอลัมน์ Close"
+                    continue
+                close = _clean_close(close)
+                if close.empty:
+                    last_err = f"{ticker}: ข้อมูลว่างหลังทำความสะอาด"
+                    continue
+
+                series[label] = close
+                got = True
+                break
+            except Exception as e:
+                last_err = f"{ticker}: {type(e).__name__} — {e}"
+
+        if not got:
+            errors[label] = last_err
 
     if not series:
-        return pd.DataFrame()
+        return pd.DataFrame(), errors
 
     out = pd.concat(series, axis=1).sort_index()
     out.columns = [str(c) for c in out.columns]
-    return out.dropna(how="all")
+    return out.dropna(how="all"), errors
 
 
-def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, float]]:
+def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, float], dict[str, str]]:
     """สร้าง Institutional Benchmark Comparison จากวันของ Portfolio Snapshot จริง
-
-    สำคัญ: ไม่บังคับให้วัน Snapshot ตรงกับวันตลาดแบบ exact match
-    เพราะ SET/S&P500 ไม่มีข้อมูลเสาร์-อาทิตย์/วันหยุดตลาด ขณะที่ Portfolio
-    Snapshot อาจถูกบันทึกวันหยุดได้ จึงใช้ราคาตลาดล่าสุดที่มี ณ หรือก่อน
-    วัน Snapshot (forward-fill จาก benchmark) เพื่อให้เปรียบเทียบได้จริง
+    คืนค่าเพิ่ม errors dict เพื่อบอกว่า benchmark ไหนหาย เพราะอะไร (debug ได้)
     """
     empty_metrics = {
         "beta_btc": 0.0,
@@ -11772,9 +11741,8 @@ def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str
     }
 
     if hist is None or hist.empty or len(hist) < 2:
-        return pd.DataFrame(), empty_metrics
+        return pd.DataFrame(), empty_metrics, {}
 
-    # --- Normalize portfolio snapshot dates ---
     port = hist[["date", "value"]].copy()
     port["date"] = pd.to_datetime(port["date"], errors="coerce").dt.tz_localize(None).dt.normalize()
     port["value"] = pd.to_numeric(port["value"], errors="coerce")
@@ -11786,91 +11754,62 @@ def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str
     )
 
     if len(port) < 2:
-        return pd.DataFrame(), empty_metrics
+        return pd.DataFrame(), empty_metrics, {}
 
-    # --- Download benchmark data ---
-    bench = _fetch_institutional_benchmarks(port.index.min(), port.index.max())
+    bench, bench_errors = _fetch_institutional_benchmarks(port.index.min(), port.index.max())
     if bench is None or bench.empty:
-        return pd.DataFrame(), empty_metrics
+        return pd.DataFrame(), empty_metrics, bench_errors
 
     bench = bench.copy()
     bench.index = pd.to_datetime(bench.index, errors="coerce").tz_localize(None).normalize()
     bench = bench[~bench.index.duplicated(keep="last")].sort_index()
     bench = bench.apply(pd.to_numeric, errors="coerce")
 
-    # Resolve EACH portfolio snapshot to the latest benchmark close at or
-    # before that date.  A look-back buffer is fetched above so the first
-    # snapshot can also resolve when it falls on a weekend/holiday.
-    # This is more robust than exact-date intersection and avoids the case
-    # where SET/S&P500 have only one usable point and therefore no visible line.
+    # ffill ก่อน แล้ว bfill เพิ่ม เผื่อวัน snapshot แรกอยู่ก่อนข้อมูล benchmark ที่มี
     aligned = bench.reindex(port.index, method="ffill")
-    aligned = aligned.dropna(how="all")
+    aligned = aligned.bfill().ffill()
 
-    if aligned.empty:
-        return pd.DataFrame(), empty_metrics
+    comparison = pd.concat([port["value"].rename("Portfolio"), aligned], axis=1)
+    comparison = comparison.dropna(subset=["Portfolio"])
 
-    comparison = pd.concat(
-        [
-            port["value"].rename("Portfolio"),
-            aligned,
-        ],
-        axis=1,
-    ).dropna(subset=["Portfolio"])
-
-    # Keep rows where at least one benchmark exists.
     benchmark_cols = [c for c in ["BTC", "SET Index", "S&P 500"] if c in comparison.columns]
+    for label in ["BTC", "SET Index", "S&P 500"]:
+        if label not in benchmark_cols:
+            bench_errors.setdefault(label, "ไม่มีข้อมูลราคาสำหรับช่วงเวลานี้")
+
     if not benchmark_cols:
-        return pd.DataFrame(), empty_metrics
+        return pd.DataFrame(), empty_metrics, bench_errors
 
-    comparison = comparison.dropna(subset=benchmark_cols, how="all")
-
-    if len(comparison) < 2:
-        return pd.DataFrame(), empty_metrics
-
-    # --- Normalize all series to 100 on the first common usable snapshot ---
     levels = pd.DataFrame(index=comparison.index)
     portfolio_base = float(comparison["Portfolio"].iloc[0])
-
     if portfolio_base > 0:
         levels["Portfolio"] = comparison["Portfolio"] / portfolio_base * 100.0
 
     for col in benchmark_cols:
         s = comparison[col].dropna()
-        # A benchmark needs at least 2 aligned observations to draw a
-        # meaningful comparison line.  Because the fetch now includes a
-        # look-back buffer, weekend/holiday snapshots normally have 2 points.
-        if len(s) >= 2 and float(s.iloc[0]) != 0:
+        # ผ่อนเกณฑ์จาก >=2 เป็น >=1 จุด เพื่อให้เห็น benchmark แม้ snapshot สั้นมาก
+        if len(s) >= 1 and float(s.iloc[0]) != 0:
             base = float(s.iloc[0])
             levels[col] = comparison[col] / base * 100.0
+        else:
+            bench_errors.setdefault(col, "มีข้อมูลไม่พอสำหรับ normalize (ราคาเริ่มต้นเป็น 0 หรือไม่มีข้อมูล)")
 
-    # For a clean institutional chart, only show the period where Portfolio
-    # and at least one benchmark are both available.
     levels = levels.dropna(subset=["Portfolio"])
     if levels.empty:
-        return pd.DataFrame(), empty_metrics
+        return pd.DataFrame(), empty_metrics, bench_errors
 
-    # --- Daily snapshot returns for Alpha/Beta vs BTC ---
     returns = comparison.pct_change().replace([np.inf, -np.inf], np.nan)
-
     metrics = dict(empty_metrics)
-
     if "BTC" in returns.columns:
         btc_pair = returns[["Portfolio", "BTC"]].dropna()
-
         if len(btc_pair) >= 2:
             x = btc_pair["BTC"].astype(float)
             y = btc_pair["Portfolio"].astype(float)
-
             var_x = float(x.var(ddof=1))
-
             if var_x > 0 and x.std(ddof=1) > 0 and y.std(ddof=1) > 0:
                 beta = float(y.cov(x) / var_x)
                 corr = float(y.corr(x))
-
-                # Annualized alpha estimate, rf = 0%.
-                # Snapshot frequency is daily in normal use.
                 alpha = float((y.mean() - beta * x.mean()) * 252 * 100)
-
                 metrics.update({
                     "beta_btc": beta,
                     "alpha_btc_annual": alpha,
@@ -11878,8 +11817,7 @@ def _institutional_analytics(hist: pd.DataFrame) -> tuple[pd.DataFrame, dict[str
                     "obs": float(len(btc_pair)),
                 })
 
-    return levels, metrics
-
+    return levels, metrics, bench_errors
 
 def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
     """Portfolio performance analytics derived from stored portfolio snapshots."""
@@ -11953,7 +11891,7 @@ def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market
 
     st.markdown("### 📊 Institutional Benchmark Comparison")
     st.caption("ดัชนีเริ่มต้น = 100 • Portfolio ใช้ Snapshot จริง • Benchmark: BTC, SET Index และ S&P 500")
-    inst_chart, inst_metrics = _institutional_analytics(hist)
+    inst_chart, inst_metrics, inst_errors = _institutional_analytics(hist)
     if not inst_chart.empty:
         chart_cols = [c for c in ["Portfolio", "BTC", "SET Index", "S&P 500"] if c in inst_chart.columns]
 
@@ -12000,8 +11938,13 @@ def render_performance_analytics(cfg: dict[str, Any], data: pd.DataFrame, market
             st.metric("Correlation vs BTC", f"{inst_metrics['corr_btc']:.2f}",
                       help="Correlation of aligned daily snapshot returns with BTC.")
         st.caption(f"คำนวณจากข้อมูลที่จับคู่กันได้ {int(inst_metrics['obs'])} observations")
+        if inst_errors:
+            st.caption("⚠️ บาง Benchmark โหลดไม่ครบ: " +
+                       " · ".join(f"{k}: {v}" for k, v in inst_errors.items()))
     else:
         st.info("ยังสร้าง Benchmark Comparison ไม่ได้ — ต้องมี Snapshot ที่มีวันที่ทับซ้อนกับข้อมูลตลาดอย่างน้อย 2 จุด")
+        if inst_errors:
+            st.caption("รายละเอียด: " + " · ".join(f"{k}: {v}" for k, v in inst_errors.items()))
 
     st.markdown("### 📊 Portfolio Value")
     chart = hist.set_index("date")[["value"]].rename(columns={"value": "Portfolio Value (THB)"})
