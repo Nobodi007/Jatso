@@ -3532,6 +3532,191 @@ def load_nc_snapshots(limit: int = 100) -> list[dict[str, Any]]:
     return list(st.session_state.get("nc_snapshots", []))[-limit:]
 
 
+
+
+# =========================================================================
+# INVESTOR SHARE — Read-only public link + QR code
+# =========================================================================
+
+INVESTOR_SHARE_TABLE = "investor_shares"
+
+
+def build_investor_share_payload(cfg: dict[str, Any], sim: dict[str, Any],
+                                 snap: dict[str, Any], fund_name: str,
+                                 show_amounts: bool) -> dict[str, Any]:
+    metrics = compute_factsheet_metrics(sim, snap)
+    hist = metrics["history"]
+    if hist.empty:
+        history_points = []
+    elif show_amounts:
+        history_points = [{"date": d.strftime("%Y-%m-%d"), "value": float(v)}
+                          for d, v in zip(hist["date"], hist["value"])]
+    else:
+        norm = _normalize_to_100(hist.set_index("date")["value"])
+        history_points = [{"date": d.strftime("%Y-%m-%d"), "value": float(v)}
+                          for d, v in norm.items()]
+
+    allocation = []
+    for r in snap.get("rows", []) or []:
+        item = {
+            "asset": r.get("asset", ""),
+            "allocation_pct": round(float(r.get("allocation_pct", 0) or 0), 2),
+        }
+        if show_amounts:
+            item["value_thb"] = round(float(r.get("market_value", 0) or 0), 2)
+        allocation.append(item)
+
+    total_val = float(snap.get("total_value_thb", 0) or 0)
+    cash_pct = (float(snap.get("cash_thb", 0) or 0) / total_val * 100.0) if total_val else 0.0
+
+    payload = {
+        "fund_name": fund_name,
+        "asset": cfg.get("asset", ""),
+        "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "show_amounts": bool(show_amounts),
+        "period_return_pct": round(metrics["period_return_pct"], 2),
+        "sharpe": round(metrics["sharpe"], 2),
+        "sortino": round(metrics["sortino"], 2),
+        "max_drawdown_pct": round(metrics["max_drawdown_pct"], 2),
+        "volatility_pct": round(metrics["volatility_pct"], 2),
+        "cash_pct": round(cash_pct, 2),
+        "history": history_points,
+        "allocation": allocation,
+    }
+    if show_amounts:
+        payload["portfolio_value_thb"] = round(total_val, 2)
+        payload["total_pnl_thb"] = round(float(snap.get("total_pnl_thb", 0) or 0), 2)
+    return payload
+
+
+def create_investor_share(payload: dict[str, Any], expires_days: Optional[int] = 30) -> Optional[str]:
+    if is_guest_mode():
+        return None
+    token = uuid.uuid4().hex
+    now = datetime.now(timezone.utc)
+    expires_at = (now + pd.Timedelta(days=int(expires_days))).isoformat() if expires_days else None
+    record = {
+        "token": token, "actor": _current_actor(),
+        "created_at": now.isoformat(), "expires_at": expires_at,
+        "revoked": False, "payload": _json_safe(payload),
+    }
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            sb.table(INVESTOR_SHARE_TABLE).insert(record).execute()
+            return token
+        except Exception as exc:
+            print(f"[investor_share] save error: {exc}")
+
+    p = _HERE / "investor_shares.json"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    data[token] = record
+    try:
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return token
+    except OSError:
+        return None
+
+
+def load_investor_share(token: str) -> Optional[dict[str, Any]]:
+    token = str(token or "").strip()
+    if not token:
+        return None
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            res = sb.table(INVESTOR_SHARE_TABLE).select("*").eq("token", token).limit(1).execute()
+            if res.data:
+                return res.data[0]
+        except Exception as exc:
+            print(f"[investor_share] load error: {exc}")
+    p = _HERE / "investor_shares.json"
+    if p.is_file():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            return data.get(token) if isinstance(data, dict) else None
+        except (OSError, json.JSONDecodeError):
+            return None
+    return None
+
+
+def list_investor_shares(actor: Optional[str] = None) -> list[dict[str, Any]]:
+    actor = actor or _current_actor()
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            res = (sb.table(INVESTOR_SHARE_TABLE)
+                     .select("token,created_at,expires_at,revoked,payload")
+                     .eq("actor", actor).order("created_at", desc=True).execute())
+            return res.data or []
+        except Exception as exc:
+            print(f"[investor_share] list error: {exc}")
+    p = _HERE / "investor_shares.json"
+    if p.is_file():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            return [v for v in data.values() if isinstance(v, dict) and v.get("actor") == actor] if isinstance(data, dict) else []
+        except (OSError, json.JSONDecodeError):
+            return []
+    return []
+
+
+def revoke_investor_share(token: str) -> bool:
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            sb.table(INVESTOR_SHARE_TABLE).update({"revoked": True}).eq("token", token).execute()
+            return True
+        except Exception as exc:
+            print(f"[investor_share] revoke error: {exc}")
+    p = _HERE / "investor_shares.json"
+    if p.is_file():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and token in data:
+                data[token]["revoked"] = True
+                p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                return True
+        except (OSError, json.JSONDecodeError):
+            pass
+    return False
+
+
+def is_share_valid(record: Optional[dict[str, Any]]) -> tuple[bool, str]:
+    if not record:
+        return False, "ไม่พบลิงก์นี้"
+    if record.get("revoked"):
+        return False, "ลิงก์นี้ถูกยกเลิกแล้ว"
+    exp = record.get("expires_at")
+    if exp:
+        try:
+            if pd.Timestamp(exp) < pd.Timestamp.now(tz="UTC"):
+                return False, "ลิงก์นี้หมดอายุแล้ว"
+        except Exception:
+            pass
+    return True, ""
+
+
+def qr_code_image_url(data: str, size: int = 220) -> str:
+    q = urllib.parse.quote(data, safe="")
+    return f"https://api.qrserver.com/v1/create-qr-code/?size={size}x{size}&data={q}"
+
+
+def _fetch_qr_png_bytes(data: str, size: int = 260) -> Optional[bytes]:
+    try:
+        req = urllib.request.Request(qr_code_image_url(data, size),
+                                     headers={"User-Agent": "XSpringDealerSuite"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            return resp.read()
+    except Exception:
+        return None
+
+
 def _config_for_compare(cfg: dict[str, Any]) -> dict[str, Any]:
     keys = ["asset", "dealer_spread", "hedge_fee", "local_premium", "fx_limit_max",
             "trade_vol", "slippage_sensitivity", "market_depth_usd", "impact_penalty",
@@ -8173,6 +8358,160 @@ def render_portfolio_calendar(cfg: dict[str, Any], data: pd.DataFrame, market_df
 
     with st.expander("📄 Fund Fact Sheet — PDF", expanded=False):
         render_fund_factsheet_panel(cfg, sim, snap, fetch_price_data, fund_name="XSpring Digital Asset Fund")
+
+    with st.expander("🔗 Shareable Investor View", expanded=False):
+        render_investor_share_manager(cfg, sim, snap)
+
+
+
+
+
+def render_investor_share_manager(cfg: dict[str, Any], sim: dict[str, Any],
+                                  snap: dict[str, Any]) -> None:
+    st.markdown("#### 🔗 Shareable Investor View")
+    st.caption(
+        "สร้างลิงก์ Read-only ให้นักลงทุนดู Performance ได้โดยไม่ต้องล็อกอิน "
+        "เป็นภาพนิ่ง ณ เวลาที่กดสร้าง ไม่ใช่ live data และไม่มีข้อมูลบัญชีจริง"
+    )
+    if is_guest_mode():
+        st.info("โหมด Guest ไม่สามารถสร้างลิงก์แชร์ถาวรได้")
+        return
+
+    try:
+        default_base = st.secrets.get("app_base_url", "")
+    except Exception:
+        default_base = ""
+    base_url = st.text_input(
+        "URL ของแอปนี้ (ใช้ต่อท้าย token)",
+        value=st.session_state.get("investor_base_url", default_base),
+        placeholder="https://your-app.streamlit.app",
+        key="investor_base_url",
+    )
+
+    c1, c2, c3 = st.columns(3)
+    fund_name = c1.text_input("ชื่อที่แสดงบนหน้าแชร์", value="XSpring Portfolio", key="inv_share_name")
+    show_amounts = c2.toggle(
+        "แสดงมูลค่าจริง (THB)", value=False, key="inv_share_amounts",
+        help="ปิด = แชร์เฉพาะ % ผลตอบแทนและสัดส่วน ไม่เปิดเผยมูลค่าเงินจริง",
+    )
+    expiry_label = c3.selectbox(
+        "อายุลิงก์", ["7 วัน", "30 วัน", "90 วัน", "ไม่หมดอายุ"],
+        index=1, key="inv_share_exp",
+    )
+    expiry_days = {"7 วัน": 7, "30 วัน": 30, "90 วัน": 90, "ไม่หมดอายุ": None}[expiry_label]
+
+    if st.button("🔗 สร้างลิงก์แชร์ใหม่", key="inv_share_create", use_container_width=True):
+        payload = build_investor_share_payload(cfg, sim, snap, fund_name, show_amounts)
+        token = create_investor_share(payload, expiry_days)
+        if token:
+            st.session_state["inv_share_last_token"] = token
+            st.success("สร้างลิงก์สำเร็จ")
+        else:
+            st.error("สร้างลิงก์ไม่สำเร็จ — ตรวจสอบ Supabase หรือสิทธิ์เขียนไฟล์")
+
+    last_token = st.session_state.get("inv_share_last_token")
+    if last_token and base_url.strip():
+        link = f"{base_url.rstrip('/')}/?share={last_token}"
+        st.code(link, language=None)
+        qc1, qc2 = st.columns([1, 2])
+        qr_bytes = _fetch_qr_png_bytes(link, 260)
+        if qr_bytes:
+            qc1.image(qr_bytes, caption="QR Code", width=160)
+        else:
+            qc1.image(qr_code_image_url(link), caption="QR Code", width=160)
+        qc2.caption("ให้นักลงทุนสแกน QR หรือกดลิงก์ด้านบนเพื่อดู Performance แบบ Read-only")
+    elif last_token:
+        st.warning("กรอก URL ของแอปด้านบนก่อน เพื่อประกอบเป็นลิงก์ที่กดได้จริง")
+        st.code(last_token, language=None)
+
+    st.markdown("##### ลิงก์ที่เคยสร้างไว้")
+    shares = list_investor_shares()
+    if not shares:
+        st.caption("ยังไม่มีลิงก์ที่สร้างไว้")
+        return
+    for s in shares:
+        token = s.get("token", "")
+        payload = s.get("payload", {}) or {}
+        ok, reason = is_share_valid(s)
+        status = "🟢 ใช้งานได้" if ok else f"🔴 {reason}"
+        cA, cB, cC = st.columns([3, 1.4, 1])
+        cA.markdown(f"**{payload.get('fund_name', 'Investor View')}** · `{token[:10]}…` · {status}")
+        cB.caption(f"สร้างเมื่อ {str(s.get('created_at',''))[:16].replace('T',' ')}")
+        if ok and cC.button("ยกเลิกลิงก์", key=f"inv_share_revoke_{token}"):
+            revoke_investor_share(token)
+            st.rerun()
+
+
+
+
+def render_investor_public_view(token: str) -> None:
+    st.set_page_config(page_title="Investor View — XSpring", page_icon="📈", layout="centered")
+    st.markdown(THEME_CSS, unsafe_allow_html=True)
+    record = load_investor_share(token)
+    ok, reason = is_share_valid(record)
+    if not ok:
+        st.error(f"⚠️ {reason}")
+        st.caption("ลิงก์นี้อาจถูกยกเลิก หมดอายุ หรือพิมพ์ไม่ครบ — ติดต่อผู้ที่ส่งลิงก์นี้ให้คุณ")
+        return
+
+    payload = record.get("payload", {}) or {}
+    fund_name = payload.get("fund_name", "Investor Portfolio View")
+    as_of = str(payload.get("as_of", ""))[:16].replace("T", " ")
+    show_amounts = bool(payload.get("show_amounts", False))
+
+    safe_name = _html.escape(str(fund_name))
+    st.markdown(
+        f"<div class='xs-hero'><h1>{safe_name}</h1>"
+        f"<p>Read-only Investor View · ข้อมูล ณ {as_of} UTC</p>"
+        f"<span class='xs-pill'>🔒 Read-only</span>"
+        f"<div class='xs-ver'>สร้างจาก XSpring Dealer Suite · ไม่ใช่คำแนะนำการลงทุน</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    k = st.columns(4)
+    metric_card(k[0], "Period Return", f"{payload.get('period_return_pct', 0):+.2f}%",
+                payload.get("period_return_pct", 0))
+    metric_card(k[1], "Sharpe Ratio", f"{payload.get('sharpe', 0):.2f}")
+    metric_card(k[2], "Max Drawdown", f"{payload.get('max_drawdown_pct', 0):.2f}%",
+                payload.get("max_drawdown_pct", 0))
+    metric_card(k[3], "Volatility (Ann.)", f"{payload.get('volatility_pct', 0):.2f}%")
+
+    if show_amounts and payload.get("portfolio_value_thb") is not None:
+        st.metric("Portfolio Value", fmt_baht(payload["portfolio_value_thb"]))
+
+    hist = payload.get("history", [])
+    if hist:
+        hdf = pd.DataFrame(hist)
+        hdf["date"] = pd.to_datetime(hdf["date"], errors="coerce")
+        hdf["value"] = pd.to_numeric(hdf["value"], errors="coerce")
+        hdf = hdf.dropna(subset=["date", "value"])
+        if not hdf.empty:
+            title = "Portfolio Value (THB)" if show_amounts else "Portfolio Index (Start = 100)"
+            fig = go.Figure(go.Scatter(
+                x=hdf["date"], y=hdf["value"],
+                line=dict(color="#0ecb81", width=2.4),
+                fill="tozeroy", fillcolor="rgba(14,203,129,0.12)",
+            ))
+            fig.update_layout(
+                template="plotly_dark", height=340, margin=dict(t=30, b=20),
+                title=dict(text=title, font=dict(size=14)),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+    alloc = payload.get("allocation", [])
+    if alloc:
+        st.markdown("#### Allocation")
+        adf = pd.DataFrame(alloc).sort_values("allocation_pct", ascending=False)
+        cols = ["asset", "allocation_pct"] + (["value_thb"] if show_amounts else [])
+        cols = [c for c in cols if c in adf.columns]
+        rename = {"asset": "สินทรัพย์", "allocation_pct": "สัดส่วน (%)", "value_thb": "มูลค่า (THB)"}
+        st.dataframe(adf[cols].rename(columns=rename), hide_index=True, use_container_width=True)
+
+    st.caption(
+        f"Cash allocation: {payload.get('cash_pct', 0):.1f}% · "
+        "ข้อมูลนี้เพื่อการรับทราบเท่านั้น ไม่ใช่คำแนะนำการลงทุน และไม่รับประกันผลตอบแทนในอนาคต"
+    )
 
 
 def render_trading_journal(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
@@ -13725,6 +14064,11 @@ def require_login() -> bool:
     return True
 
 def main() -> None:
+    share_token = st.query_params.get("share")
+    if share_token:
+        render_investor_public_view(str(share_token))
+        return
+
     st.set_page_config(
         page_title="XSpring Dealer Suite",
         page_icon="\u267b\ufe0f",
