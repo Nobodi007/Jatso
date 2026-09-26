@@ -193,36 +193,6 @@ def check_and_celebrate_ath(sim: dict, total_value_thb: float) -> bool:
         return True
     return False
 
-def market_mood_css(avg_change_pct: float) -> str:
-    avg_change_pct = max(-10.0, min(10.0, float(avg_change_pct)))
-    intensity = abs(avg_change_pct) / 10.0
-    if avg_change_pct >= 0.15:
-        c1, c2 = "#0a1f18", "#0a2a20"
-        glow = f"rgba(14,203,129,{0.10 + intensity * 0.12:.3f})"
-    elif avg_change_pct <= -0.15:
-        c1, c2 = "#1f100f", "#1c0d10"
-        glow = f"rgba(246,70,93,{0.10 + intensity * 0.12:.3f})"
-    else:
-        c1, c2 = "#0b0e11", "#12151a"
-        glow = "rgba(132,142,156,0.05)"
-    return f"""
-    <style>
-    .stApp {{
-        background: radial-gradient(circle at 15% 8%, {glow}, transparent 45%),
-                    linear-gradient(160deg, {c1} 0%, {c2} 55%, #0b0e11 100%) !important;
-        background-attachment: fixed !important;
-        transition: background 2.2s ease;
-    }}
-    </style>
-    """
-
-def render_market_mood(market_df) -> None:
-    if market_df is None or market_df.empty or "pct_change" not in market_df.columns:
-        avg = 0.0
-    else:
-        avg = float(pd.to_numeric(market_df["pct_change"], errors="coerce").dropna().mean() or 0.0)
-    st.markdown(market_mood_css(avg), unsafe_allow_html=True)
-
 SUPPORTED_ASSETS = [
     "BTC", "ETH", "SOL", "DOGE", "ADA", "HBAR", "LINK", "XLM", "XRP", "USDT", "USDC",
 ]
@@ -10104,7 +10074,6 @@ def render_mobile_home(cfg: dict[str, Any], data: pd.DataFrame) -> None:
     except Exception:
         market_df = pd.DataFrame()
 
-    render_market_mood(market_df)
 
     price_thb_map: dict[str, float] = {}
     pct_map: dict[str, float] = {}
