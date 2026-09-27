@@ -16058,7 +16058,7 @@ def render_site_footer() -> None:
             box-sizing: border-box;
         }
         .st-key-xs_footer .xs-footer-inner { max-width: none; margin: 0 auto; }
-        .st-key-xs_footer .xs-footer-brand { padding-right: 30px; }
+        .st-key-xs_footer .xs-footer-brand { padding-right: 30px; text-align: left; }
         .st-key-xs_footer .xs-footer-logo { display:flex; align-items:center; gap:12px; margin-bottom:16px; }
         .st-key-xs_footer .xs-footer-logo-icon {
             width:40px; height:40px; border-radius:9px; display:flex; align-items:center; justify-content:center;
@@ -16066,7 +16066,18 @@ def render_site_footer() -> None:
         }
         .st-key-xs_footer .xs-footer-logo-text { color:#f5f7fa; font-size:17px; font-weight:800; letter-spacing:-.2px; line-height:1.35; max-width:210px; }
         .st-key-xs_footer .xs-footer-description { color:#7c8695; font-size:12.5px; line-height:1.75; max-width:270px; }
-        .st-key-xs_footer .xs-footer-heading { color:#f5f7fa; font-size:13.5px; font-weight:800; margin:0 0 15px 0; line-height:1.4; }
+
+        /* คอลัมน์เมนู: จัดกึ่งกลางทั้งหัวข้อและลิงก์ */
+        .st-key-xs_footer .xs-footer-col { text-align: center; }
+        .st-key-xs_footer .xs-footer-heading {
+            color:#f5f7fa; font-size:13.5px; font-weight:800;
+            margin:0 0 15px 0; line-height:1.4; text-align:center;
+        }
+        .st-key-xs_footer .xs-footer-col [data-testid="stButton"] > button {
+            justify-content: center !important;
+            text-align: center !important;
+        }
+
         .st-key-xs_footer .xs-footer-bottom {
             margin-top:30px; padding-top:16px; border-top:1px solid #1e2228;
             display:flex; align-items:center; justify-content:space-between; gap:20px;
@@ -16091,12 +16102,10 @@ def render_site_footer() -> None:
             background: transparent !important;
             color: #6ea8fe !important;
             box-shadow: none !important;
-            justify-content: flex-start !important;
             font-size: 13px !important;
             font-weight: 400 !important;
             line-height: 1.55 !important;
             white-space: normal !important;
-            text-align: left !important;
         }
         .st-key-xs_footer [data-testid="stButton"] > button:hover,
         .st-key-xs_footer [data-testid="stButton"] > button:focus,
@@ -16118,6 +16127,12 @@ def render_site_footer() -> None:
             .st-key-xs_footer .xs-footer-wrap { padding:28px 16px 18px; }
             .st-key-xs_footer .xs-footer-bottom { margin-top:24px; align-items:flex-start; flex-direction:column; gap:8px; }
             .st-key-xs_footer [data-testid="stButton"] > button { font-size:12px !important; }
+            .st-key-xs_footer .xs-footer-col { text-align: left; }
+            .st-key-xs_footer .xs-footer-heading { text-align: left; }
+            .st-key-xs_footer .xs-footer-col [data-testid="stButton"] > button {
+                justify-content: flex-start !important;
+                text-align: left !important;
+            }
         }
         </style>
         """,
@@ -16142,7 +16157,8 @@ def render_site_footer() -> None:
             )
 
         with c2:
-            st.markdown('<div class="xs-footer-heading">การซื้อขาย</div>', unsafe_allow_html=True)
+            st.markdown('<div class="xs-footer-col"><div class="xs-footer-heading">การซื้อขาย</div></div>', unsafe_allow_html=True)
+            st.markdown('<div class="xs-footer-col">', unsafe_allow_html=True)
             st.button("ซื้อ / ขาย", key="footer_trade", use_container_width=True,
                       on_click=_footer_go_to, args=(NAV_EXCHANGE,))
             st.button("Portfolio", key="footer_portfolio", use_container_width=True,
@@ -16151,9 +16167,11 @@ def render_site_footer() -> None:
                       on_click=_footer_go_to, args=(NAV_LABELS[4],), kwargs={"portfolio_section": "watchlist"})
             st.button("Orders & History", key="footer_orders", use_container_width=True,
                       on_click=_footer_go_to, args=(NAV_LABELS[4],), kwargs={"portfolio_section": "transactions"})
+            st.markdown('</div>', unsafe_allow_html=True)
 
         with c3:
-            st.markdown('<div class="xs-footer-heading">Quant Research</div>', unsafe_allow_html=True)
+            st.markdown('<div class="xs-footer-col"><div class="xs-footer-heading">Quant Research</div></div>', unsafe_allow_html=True)
+            st.markdown('<div class="xs-footer-col">', unsafe_allow_html=True)
             st.button("Quant Research Lab", key="footer_quant", use_container_width=True,
                       on_click=_footer_go_to, args=(NAV_QUANT_RESEARCH,))
             st.button("Shadow Mode", key="footer_shadow", use_container_width=True,
@@ -16162,9 +16180,11 @@ def render_site_footer() -> None:
                       on_click=_footer_go_to, args=(NAV_LABELS[1],))
             st.button("Risk & Stress", key="footer_risk", use_container_width=True,
                       on_click=_footer_go_to, args=(NAV_RISK,))
+            st.markdown('</div>', unsafe_allow_html=True)
 
         with c4:
-            st.markdown('<div class="xs-footer-heading">เครื่องมือ</div>', unsafe_allow_html=True)
+            st.markdown('<div class="xs-footer-col"><div class="xs-footer-heading">เครื่องมือ</div></div>', unsafe_allow_html=True)
+            st.markdown('<div class="xs-footer-col">', unsafe_allow_html=True)
             st.button("Market Overview", key="footer_market", use_container_width=True,
                       on_click=_footer_go_to, args=(NAV_DASHBOARD,))
             st.button("Order Book", key="footer_orderbook", use_container_width=True,
@@ -16173,9 +16193,11 @@ def render_site_footer() -> None:
                       on_click=_footer_go_to, args=(NAV_QUANT_RESEARCH,), kwargs={"quant_section": NAV_RESEARCH_REPORT})
             st.button("Settings", key="footer_settings", use_container_width=True,
                       on_click=_footer_go_to, args=(NAV_SYSTEM_HEALTH,))
+            st.markdown('</div>', unsafe_allow_html=True)
 
         with c5:
-            st.markdown('<div class="xs-footer-heading">ช่วยเหลือ</div>', unsafe_allow_html=True)
+            st.markdown('<div class="xs-footer-col"><div class="xs-footer-heading">ช่วยเหลือ</div></div>', unsafe_allow_html=True)
+            st.markdown('<div class="xs-footer-col">', unsafe_allow_html=True)
             st.button("คู่มือการใช้งาน", key="footer_guide", use_container_width=True,
                       on_click=_footer_go_to, args=(NAV_DASHBOARD,))
             st.button("เกี่ยวกับระบบ", key="footer_about", use_container_width=True,
@@ -16184,6 +16206,7 @@ def render_site_footer() -> None:
                       on_click=_footer_go_to, args=(NAV_SYSTEM_HEALTH,))
             st.button("ติดต่อ", key="footer_contact", use_container_width=True,
                       on_click=_footer_go_to, args=(NAV_SYSTEM_HEALTH,))
+            st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown(
             '<div class="xs-footer-bottom">'
