@@ -5640,6 +5640,18 @@ td{padding:12px 14px;border-bottom:1px solid #2b3139;font-variant-numeric:tabula
   border-radius:4px;padding:0 4px;}
 a{color:#4c9aff;text-decoration:none;}
 .up{color:#0ecb81}.dn{color:#f6465d}.mut{color:#5e6673}
+.dev-wrap{display:flex;align-items:center;gap:5px;white-space:nowrap;}
+.dev-bar-track{position:relative;height:6px;background:#20242b;border-radius:3px;width:70px;display:inline-block;vertical-align:middle;}
+.dev-bar-center{position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:#5e6673;}
+.dev-bar-fill{position:absolute;top:0;height:100%;border-radius:3px;}
+.dev-bar-fill.right{left:50%;}.dev-bar-fill.left{right:50%;}
+.dev-bar-label{font-size:.68rem;font-variant-numeric:tabular-nums;}
+.mkshare-track{height:4px;background:#20242b;border-radius:2px;margin-top:4px;width:100%;min-width:90px;}
+.mkshare-fill{height:100%;border-radius:2px;}
+.mkshare-label{font-size:.62rem;color:#5e6673;margin-top:2px;}
+.rank-badge{margin-left:5px;font-size:.66rem;font-weight:700;padding:1px 5px;border-radius:4px;white-space:nowrap;}
+.rank-badge.vol{background:rgba(59,130,246,.12);color:#3B82F6;}
+.rank-badge.cheap{background:rgba(14,203,129,.10);color:#0ecb81;}
 tr.arb-buy{background:rgba(14,203,129,.10);border-left:3px solid #0ecb81;}
 tr.arb-sell{background:rgba(246,70,93,.10);border-left:3px solid #f6465d;}
 tr.arb-buy td:first-child::after{content:" 🟢 ซื้อที่นี่";font-size:.68rem;color:#0ecb81;}
@@ -5647,7 +5659,7 @@ tr.arb-sell td:first-child::after{content:" 🔴 ขายที่นี่";fo
 .note{color:#848e9c;font-size:.78rem;margin-top:8px;line-height:1.5;}
 </style></head><body>
 <div class="wrap"><table><thead><tr><th>Exchange</th><th>Symbol</th><th>Price($)</th>
-<th>Chg 24H(%)</th><th>Turnover 24h</th></tr></thead><tbody id="tb"></tbody></table></div>
+<th>Chg 24H(%)</th><th>vs VWAP</th><th>Turnover 24h</th></tr></thead><tbody id="tb"></tbody></table></div>
 <div class="note" id="note"></div>
 <script>
 const D = __PAYLOAD__;
@@ -5675,8 +5687,71 @@ const JOBS = {
   },
 };
 
+function computeVWAP(rows){
+  const valid = rows.filter(r => r.price && r.turnover && !r.err && isFinite(r.price) && isFinite(r.turnover));
+  if(!valid.length) return null;
+  const totalTurnover = valid.reduce((s,r) => s + Number(r.turnover), 0);
+  if(totalTurnover <= 0) return null;
+  return valid.reduce((s,r) => s + Number(r.price) * Number(r.turnover), 0) / totalTurnover;
+}
+
+function deviationFromVWAP(price,vwap){
+  if(!vwap || vwap <= 0) return 0;
+  return (Number(price) - vwap) / vwap * 100;
+}
+
+function deviationBarHTML(devPct,maxAbsDev){
+  const scale = maxAbsDev > 0 ? Math.min(Math.abs(devPct) / maxAbsDev, 1) : 0;
+  const isPositive = devPct >= 0;
+  const barColor = isPositive ? '#f6465d' : '#0ecb81';
+  const widthPct = (scale * 50).toFixed(1);
+  return `<div class="dev-wrap"><div class="dev-bar-track"><div class="dev-bar-center"></div>${isPositive
+    ? `<div class="dev-bar-fill right" style="width:${widthPct}%;background:${barColor}"></div>`
+    : `<div class="dev-bar-fill left" style="width:${widthPct}%;background:${barColor}"></div>`}</div><span class="dev-bar-label" style="color:${barColor}">${devPct >= 0 ? '+' : ''}${devPct.toFixed(3)}%</span></div>`;
+}
+
+function computeMarketShare(rows){
+  const valid = rows.filter(r => r.turnover && !r.err && isFinite(r.turnover));
+  const total = valid.reduce((s,r) => s + Number(r.turnover), 0);
+  if(total <= 0) return {};
+  const shares = {};
+  valid.forEach(r => { shares[r.exchange] = Number(r.turnover) / total * 100; });
+  return shares;
+}
+
+function turnoverCellHTML(turnover,sharePct){
+  if(!(turnover > 0) || !isFinite(turnover)) return '<span class="mut">—</span>';
+  const barColor = sharePct >= 30 ? '#F0B90B' : (sharePct >= 10 ? '#3B82F6' : '#5e6673');
+  return `<div>${fmtT(turnover)}</div><div class="mkshare-track"><div class="mkshare-fill" style="width:${Math.min(sharePct,100).toFixed(1)}%;background:${barColor}"></div></div><div class="mkshare-label">${sharePct.toFixed(1)}% ของตลาด</div>`;
+}
+
+function computeRanks(rows){
+  const valid = rows.filter(r => r.price && !r.err && isFinite(r.price));
+  const byTurnover = [...valid].sort((a,b) => (Number(b.turnover)||0) - (Number(a.turnover)||0));
+  const turnoverRank = {};
+  byTurnover.forEach((r,i) => { turnoverRank[r.exchange] = i + 1; });
+  const byPriceAsc = [...valid].sort((a,b) => Number(a.price) - Number(b.price));
+  const priceRank = {};
+  byPriceAsc.forEach((r,i) => { priceRank[r.exchange] = i + 1; });
+  return {turnoverRank,priceRank};
+}
+
+function rankBadgeHTML(rank,kind){
+  if(!rank) return '';
+  if(kind === 'turnover') return rank <= 3 ? `<span class="rank-badge vol" title="อันดับ Turnover">Vol#${rank}</span>` : '';
+  if(kind === 'price' && rank === 1) return '<span class="rank-badge cheap" title="ราคาถูกสุด">💰</span>';
+  return '';
+}
+
 function render(){
   const valid = rows.filter(r => r.price && !r.err && isFinite(r.price));
+  const vwap = computeVWAP(rows);
+  const validForDev = rows.filter(r => r.price && !r.err && isFinite(r.price));
+  const maxAbsDev = validForDev.length && vwap
+    ? Math.max(...validForDev.map(r => Math.abs(deviationFromVWAP(r.price,vwap))))
+    : 1;
+  const shares = computeMarketShare(rows);
+  const ranks = computeRanks(rows);
   let cheapest = null, priciest = null;
   if(valid.length >= 2){
     cheapest = valid.reduce((a,b) => a.price < b.price ? a : b);
@@ -5692,22 +5767,26 @@ function render(){
   const list = rows.slice().sort((a,b) => (b.turnover ?? -1) - (a.turnover ?? -1));
   document.getElementById('tb').innerHTML = list.map(r => {
     const via = r.via ? '<span class="via" title="ข้อมูลไม่ได้ดึงตรงจาก server">via '+esc(r.via)+'</span>' : '';
-    let p, c, t;
+    const tRank = ranks.turnoverRank[r.exchange];
+    const pRank = ranks.priceRank[r.exchange];
+    const badges = rankBadgeHTML(tRank,'turnover') + rankBadgeHTML(pRank,'price');
+    let p, c, d, t;
     if(r.err){
-      p = c = t = '<span class="mut" title="'+esc(r.err)+'">—</span>';
+      p = c = d = t = '<span class="mut" title="'+esc(r.err)+'">—</span>';
     } else {
       p = fmtP(r.price);
       c = '<span class="'+(r.chg>=0?'up':'dn')+'">'+(r.chg>=0?'+':'')+r.chg.toFixed(2)+'%</span>'
         + (r.note ? '<span class="mut" style="cursor:help" title="'+esc(r.note)+'"> *</span>' : '');
-      t = fmtT(r.turnover);
+      d = (r.price && vwap) ? deviationBarHTML(deviationFromVWAP(r.price,vwap),maxAbsDev) : '<span class="mut">—</span>';
+      t = turnoverCellHTML(Number(r.turnover),shares[r.exchange] || 0);
     }
     const logo = r.logo
       ? ('<span class="logo-wrap"><img class="logo" src="'+esc(r.logo)+'" alt="'+esc(r.exchange)+' logo" loading="lazy" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'inline-flex\';"><span class="logo-fallback" style="background:'+esc(r.bg)+';color:'+esc(r.fg)+'">'+esc(r.tx)+'</span></span>')
       : ('<span class="logo-wrap"><span class="logo-fallback" style="display:inline-flex;background:'+esc(r.bg)+';color:'+esc(r.fg)+'">'+esc(r.tx)+'</span></span>');
     const rowClass = r.arbRole === 'buy' ? 'arb-buy' : (r.arbRole === 'sell' ? 'arb-sell' : '');
-    return '<tr class="'+rowClass+'"><td><div class="ex">'+logo+esc(r.exchange)+via+'</div></td>'
+    return '<tr class="'+rowClass+'"><td><div class="ex">'+logo+esc(r.exchange)+badges+via+'</div></td>'
       +'<td><a href="'+esc(r.url)+'" target="_blank" rel="noopener">'+esc(r.symbol)+'</a></td>'
-      +'<td>'+p+'</td><td>'+c+'</td><td>'+t+'</td></tr>';
+      +'<td>'+p+'</td><td>'+c+'</td><td>'+d+'</td><td>'+t+'</td></tr>';
   }).join('');
 
   const bad = rows.filter(r => r.err).map(r => r.exchange+' ('+r.err+')');
@@ -5715,6 +5794,13 @@ function render(){
   rows.forEach(r => { if(r.via) (via[r.via] = via[r.via]||[]).push(r.exchange); });
 
   let n = 'อัปเดต '+D.ts+' (เวลาไทย) · เรียงตาม Turnover';
+  if(validForDev.length >= 1 && vwap) n += ' · VWAP ≈ $'+fmtP(vwap);
+  if(validForDev.length > 0 && validForDev.length < 4 && vwap) n += ' · ⚠️ VWAP sample เล็ก ('+validForDev.length+' venues)';
+  const shareEntries = Object.entries(shares);
+  if(shareEntries.length){
+    const top = shareEntries.reduce((a,b) => b[1] > a[1] ? b : a);
+    if(top[1] >= 50) n += ' · ⚠️ '+top[0]+' ครองสภาพคล่อง '+top[1].toFixed(0)+'% — ราคาอาจเป็น reference หลัก';
+  }
   Object.keys(via).forEach(k => { n += ' · '+via[k].join(', ')+' ดึงผ่าน '+k; });
   if(bad.length) n += ' · ดึงไม่ได้: '+bad.join(', ');
   document.getElementById('note').textContent = n;
