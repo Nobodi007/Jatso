@@ -5794,8 +5794,10 @@ def _arb_history_record(highlights: Optional[dict], rows: list[dict[str, Any]], 
         return
     try:
         actor = _arb_history_actor()
-        if not actor:
-            return
+        # Guest/session users should still get live Opportunity History and
+        # Intelligence Analytics in the current Streamlit session. Guests
+        # are never persisted to Supabase/local shared storage.
+        session_actor = actor or "session"
         edge = compute_net_arb_edge(
             highlights["buy_venue"], highlights["buy_price"],
             highlights["sell_venue"], highlights["sell_price"],
@@ -5811,7 +5813,7 @@ def _arb_history_record(highlights: Optional[dict], rows: list[dict[str, Any]], 
         now = datetime.now(timezone.utc)
         fp = _arb_history_fingerprint(highlights, edge, order_size_usd)
         row = {
-            "actor": actor,
+            "actor": session_actor,
             "base": str(base),
             "observed_at": now.isoformat(),
             "buy_venue": str(highlights["buy_venue"]),
@@ -5833,6 +5835,12 @@ def _arb_history_record(highlights: Optional[dict], rows: list[dict[str, Any]], 
         if not (last and last.get("fingerprint") == fp):
             session_history.append({**row, "timestamp": row["observed_at"]})
             del session_history[:-200]
+
+        # Guests/session users stop here after updating session cache.
+        # Authenticated users continue to persistent Supabase/local storage.
+        if not actor:
+            st.session_state["arb_history_persistence_mode"] = "session"
+            return
 
         # Query the latest persistent row for this actor/base and suppress duplicates within 30s.
         sb = _get_supabase()
@@ -6411,7 +6419,30 @@ def render_arb_intelligence_analytics(base: str = "BTC") -> None:
     """Analyze persisted Arb Opportunity History without changing the raw history view."""
     history, source = _arb_history_load_persistent(base=base, limit=5000)
     if not history:
-        st.info("📊 ยังไม่มีข้อมูลพอสำหรับ Arb Intelligence Analytics · ระบบจะเริ่มวิเคราะห์อัตโนมัติเมื่อมี Opportunity History")
+        session_rows = list(st.session_state.get("arb_opportunity_history", []) or [])
+        history = [
+            r for r in session_rows
+            if str(r.get("base") or base) == str(base)
+        ]
+        if history:
+            source = "session"
+    if not history:
+        st.markdown(
+            """
+            <div style='margin-top:14px;border:1px solid #2b3139;border-radius:12px;
+                        padding:22px;background:linear-gradient(135deg,rgba(22,26,30,.96),rgba(14,18,23,.96));'>
+              <div style='font-weight:800;color:#EAECEF;font-size:1rem;'>🧠 Arb Intelligence กำลังเก็บข้อมูล</div>
+              <div style='margin-top:8px;color:#848e9c;line-height:1.6;'>
+                ตอนนี้ยังไม่มี snapshot มากพอสำหรับคำนวณสถิติย้อนหลัง
+                แต่ระบบจะเก็บ Opportunity อัตโนมัติทุกครั้งที่ตรวจพบ Arb snapshot
+              </div>
+              <div style='margin-top:10px;color:#5e6673;font-size:.78rem;'>
+                ไม่ต้องกดบันทึกเอง · โหมด Guest จะเก็บเฉพาะใน session ปัจจุบัน
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         return
     df = pd.DataFrame(history)
     if df.empty or "net_edge_pct" not in df.columns:
@@ -6430,7 +6461,8 @@ def render_arb_intelligence_analytics(base: str = "BTC") -> None:
     best_edge = float(df["net_edge_pct"].max())
 
     st.markdown("<div style='margin:4px 0 10px;font-weight:800;color:#EAECEF;font-size:1rem;'>🧠 Arb Intelligence Analytics</div>", unsafe_allow_html=True)
-    st.caption(f"{source.title()} · {len(df):,} snapshots · วิเคราะห์เฉพาะข้อมูลที่ระบบสังเกตเห็นจริง · ไม่รวม funding / transfer / slippage")
+    source_label = "Session · live" if source == "session" else source.title()
+    st.caption(f"{source_label} · {len(df):,} snapshots · วิเคราะห์เฉพาะข้อมูลที่ระบบสังเกตเห็นจริง · ไม่รวม funding / transfer / slippage")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Opportunity Snapshots", f"{len(df):,}")
     c2.metric("Positive Net Edge Rate", f"{positive_rate:.1f}%")
