@@ -6418,7 +6418,6 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
         for r in perp:
             body.append(render_row(r))
     if spot:
-        body.append("<tr class='section-row'><td colspan='7'>SPOT MARKET · 5 เพิ่มเติม · แสดงเพื่อเทียบราคา/สภาพคล่อง · ไม่รวม Perpetual Arb</td></tr>")
         for r in spot:
             body.append(render_row(r))
     html = css + "<div class='nobody-pv-wrap'><table class='nobody-pv'><thead><tr><th>Exchange</th><th>Symbol</th><th>Price($)</th><th>Chg 24H(%)</th><th>vs VWAP</th><th>Turnover 24h</th><th>Liquidity</th></tr></thead><tbody>" + "".join(body) + "</tbody></table></div>"
