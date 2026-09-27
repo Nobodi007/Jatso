@@ -9468,7 +9468,11 @@ def render_risk_center (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :pd
         .risk-alert-badge-warn{color:#f5c84b;background:rgba(240,185,11,.09);border:1px solid rgba(240,185,11,.16);}
         .risk-alert-badge-red{color:#ff8091;background:rgba(246,70,93,.09);border:1px solid rgba(246,70,93,.16);}
         .risk-alert-check-value{font-size:1rem;font-weight:850;color:#f0f2f5;line-height:1.15;}
-        .risk-alert-check-note{font-size:.63rem;color:#727d8c;margin-top:5px;line-height:1.35;}
+        .risk-alert-bar{height:7px;margin-top:8px;border-radius:999px;background:#252b34;overflow:hidden;}
+        .risk-alert-bar-fill{height:100%;border-radius:999px;background:#19c987;}
+        .risk-alert-bar-fill.warn{background:#f0b90b;}
+        .risk-alert-bar-fill.red{background:#f6465d;}
+        .risk-alert-check-note{font-size:.63rem;color:#727d8c;margin-top:6px;line-height:1.35;}
         .risk-alert-foot{display:flex;justify-content:space-between;gap:12px;margin-top:11px;padding-top:10px;border-top:1px solid #242a32;color:#687282;font-size:.63rem;line-height:1.4;}
         .risk-alert-foot b{color:#9aa3af;}
         @media(max-width:900px){.risk-alert-checks{grid-template-columns:repeat(2,minmax(0,1fr));}}
@@ -9498,13 +9502,34 @@ def render_risk_center (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :pd
         unsafe_allow_html=True,
     )
 
+    # v109 — compact numeric progress bars, matching the earlier Risk Center KPI style.
+    # Bars are visual guides only; alert status still comes from the exact thresholds above.
+    bar_max = {
+        "Volatility": 60.0,
+        "Max Drawdown": 25.0,
+        "Concentration": 100.0,
+        "BTC Exposure": 100.0,
+        "Cash": 100.0,
+    }
+    bar_values = {
+        "Volatility": abs(vol),
+        "Max Drawdown": abs(dd),
+        "Concentration": concentration_pct,
+        "BTC Exposure": btc,
+        "Cash": cash_pct,
+    }
+
     check_html = ['<div class="risk-alert-checks">']
     for title, value, note, tone, level in checks:
+        raw_bar = float(bar_values.get(title, 0.0) or 0.0)
+        limit = float(bar_max.get(title, 100.0) or 100.0)
+        bar_pct = min(max((raw_bar / limit) * 100.0, 0.0), 100.0)
         check_html.append(
             f'<div class="risk-alert-check">'
             f'<div class="risk-alert-check-head"><span class="risk-alert-check-name">{_html.escape(title)}</span>'
             f'<span class="risk-alert-badge risk-alert-badge-{tone}">{level}</span></div>'
             f'<div class="risk-alert-check-value">{_html.escape(value)}</div>'
+            f'<div class="risk-alert-bar"><div class="risk-alert-bar-fill {tone}" style="width:{bar_pct:.1f}%"></div></div>'
             f'<div class="risk-alert-check-note">{_html.escape(note)}</div>'
             '</div>'
         )
