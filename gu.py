@@ -5178,10 +5178,32 @@ extra_headers :Optional [dict ]=None ,
 
         # แต่ละฟังก์ชันคืน (price_usd, chg24h_pct, turnover24h_usd)
 def _pv_binance (b :str )->tuple [float ,float ,float ]:
-    d =_http_json (
-    f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={b }USDT"
-    )
-    return float (d ["lastPrice"]),float (d ["priceChangePercent"]),float (d ["quoteVolume"])
+    """Binance USD-M perpetual ticker with a web-host fallback.
+
+    Some hosted environments can reach Binance's public web domain while
+    the dedicated fapi hostname is unavailable/restricted.  Both endpoints
+    expose the same public 24h ticker payload shape; keep the fallback
+    server-side so Binance remains a real venue row and still participates
+    in the existing Perpetual calculations when data is available.
+    """
+    urls = [
+        f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={b }USDT",
+        f"https://www.binance.com/fapi/v1/ticker/24hr?symbol={b }USDT",
+    ]
+    last_err = None
+    for url in urls:
+        try:
+            d = _http_json(url, timeout=5.0)
+            return (
+                float(d ["lastPrice"]),
+                float(d ["priceChangePercent"]),
+                float(d ["quoteVolume"]),
+            )
+        except Exception as e:
+            last_err = e
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError("Binance ticker unavailable")
 
 
 def _pv_gate (b :str )->tuple [float ,float ,float ]:
@@ -5535,6 +5557,26 @@ def fetch_perp_venues (base :str ="BTC")->tuple [pd.DataFrame ,str ]:
 
     with ThreadPoolExecutor (max_workers =len (venues))as ex :
         rows =list (ex .map (one ,venues))
+
+    # Binance recovery: if the dedicated futures hostname is blocked by the
+    # hosting route, try Binance's public web host before external fallbacks.
+    for r in rows:
+        if r.get("exchange") != "Binance" or not r.get("err") or r.get("market_type") != "perp":
+            continue
+        try:
+            d = _http_json(
+                f"https://www.binance.com/fapi/v1/ticker/24hr?symbol={base}USDT",
+                timeout=5.0,
+            )
+            r.update(
+                price=float(d["lastPrice"]),
+                chg=float(d["priceChangePercent"]),
+                turnover=float(d["quoteVolume"]),
+                err=None,
+                via="Binance web",
+            )
+        except Exception:
+            pass
 
     # CoinGlass fallback applies only to perpetual venues.
     failed =[r for r in rows if r ["err"] and r.get("market_type")=="perp"]
