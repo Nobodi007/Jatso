@@ -5969,7 +5969,7 @@ def render_perp_venue_table (base :str ="BTC")->None :
 
     components .html (
     _PV_HTML .replace ("__PAYLOAD__",payload ),
-    height =150 +52 *len (rows ),
+    height =180 +76 *len (rows ),
     scrolling =False ,
     )
 
