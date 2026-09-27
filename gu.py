@@ -6406,6 +6406,77 @@ def _render_global_perp_coin_tabs(default_base: str = "BTC") -> str:
     return selected
 
 
+
+def render_arb_intelligence_analytics(base: str = "BTC") -> None:
+    """Analyze persisted Arb Opportunity History without changing the raw history view."""
+    history, source = _arb_history_load_persistent(base=base, limit=5000)
+    if not history:
+        st.info("📊 ยังไม่มีข้อมูลพอสำหรับ Arb Intelligence Analytics · ระบบจะเริ่มวิเคราะห์อัตโนมัติเมื่อมี Opportunity History")
+        return
+    df = pd.DataFrame(history)
+    if df.empty or "net_edge_pct" not in df.columns:
+        st.info("📊 ยังไม่มีข้อมูลพอสำหรับ Arb Intelligence Analytics")
+        return
+    ts_source = df["observed_at"] if "observed_at" in df.columns else df.get("timestamp")
+    df["timestamp"] = pd.to_datetime(ts_source, utc=True, errors="coerce")
+    df["net_edge_pct"] = pd.to_numeric(df["net_edge_pct"], errors="coerce")
+    df = df.dropna(subset=["timestamp", "net_edge_pct"]).sort_values("timestamp").copy()
+    if df.empty:
+        st.info("📊 ยังไม่มีข้อมูลพอสำหรับ Arb Intelligence Analytics")
+        return
+    df["pair"] = df["buy_venue"].astype(str) + " → " + df["sell_venue"].astype(str)
+    positive_rate = float((df["net_edge_pct"] > 0).mean() * 100)
+    avg_edge = float(df["net_edge_pct"].mean())
+    best_edge = float(df["net_edge_pct"].max())
+
+    st.markdown("<div style='margin:4px 0 10px;font-weight:800;color:#EAECEF;font-size:1rem;'>🧠 Arb Intelligence Analytics</div>", unsafe_allow_html=True)
+    st.caption(f"{source.title()} · {len(df):,} snapshots · วิเคราะห์เฉพาะข้อมูลที่ระบบสังเกตเห็นจริง · ไม่รวม funding / transfer / slippage")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Opportunity Snapshots", f"{len(df):,}")
+    c2.metric("Positive Net Edge Rate", f"{positive_rate:.1f}%")
+    c3.metric("Average Net Edge", f"{avg_edge:+.3f}%")
+    c4.metric("Best Net Edge", f"{best_edge:+.3f}%")
+
+    st.markdown("#### 📈 Net Edge Pattern")
+    st.line_chart(df[["timestamp", "net_edge_pct"]].set_index("timestamp"), height=220, use_container_width=True)
+
+    st.markdown("#### 🔁 Venue Pair Intelligence")
+    pair = (df.groupby("pair", as_index=False).agg(
+        snapshots=("pair", "size"),
+        positive_rate=("net_edge_pct", lambda x: float((x > 0).mean() * 100)),
+        avg_net_edge=("net_edge_pct", "mean"),
+        best_net_edge=("net_edge_pct", "max"),
+    ).sort_values(["positive_rate", "avg_net_edge", "snapshots"], ascending=[False, False, False]).head(10).copy())
+    if not pair.empty:
+        pair["Positive Rate"] = pair["positive_rate"].map(lambda x: f"{x:.1f}%")
+        pair["Avg Net Edge"] = pair["avg_net_edge"].map(lambda x: f"{x:+.3f}%")
+        pair["Best Net Edge"] = pair["best_net_edge"].map(lambda x: f"{x:+.3f}%")
+        st.dataframe(pair[["pair", "snapshots", "Positive Rate", "Avg Net Edge", "Best Net Edge"]].rename(columns={"pair":"BUY → SELL", "snapshots":"Snapshots"}), use_container_width=True, hide_index=True)
+
+    st.markdown("#### ⏱️ Observed Opportunity Persistence")
+    work = df[["timestamp", "pair"]].copy()
+    work["prev_pair"] = work["pair"].shift(1)
+    work["gap_sec"] = work["timestamp"].diff().dt.total_seconds()
+    persistence = work.loc[work["pair"].eq(work["prev_pair"]) & work["gap_sec"].between(0, 600, inclusive="both"), "gap_sec"]
+    if len(persistence):
+        st.write(f"เฉลี่ยระหว่าง snapshot ของคู่เดิม **{float(persistence.mean()):.0f} วินาที** · ช่วงห่างสูงสุดที่นับเป็นโอกาสต่อเนื่อง **{float(persistence.max()):.0f} วินาที**")
+        st.caption("เป็น observed persistence จากความถี่ในการเก็บ snapshot ไม่ใช่เวลาที่ execute arbitrage ได้จริง")
+    else:
+        st.caption("ยังมีข้อมูลต่อเนื่องไม่พอสำหรับคำนวณ persistence")
+
+    st.markdown("#### 🧩 Opportunity Quality Matrix")
+    q = df.copy()
+    q["buy_liq"] = pd.to_numeric(q.get("buy_liquidity_share"), errors="coerce").fillna(0.0)
+    q["sell_liq"] = pd.to_numeric(q.get("sell_liquidity_share"), errors="coerce").fillna(0.0)
+    q["liq_level"] = "Low"
+    q.loc[(q["buy_liq"] >= 0.20) & (q["sell_liq"] >= 0.20), "liq_level"] = "High"
+    q.loc[(q["liq_level"] != "High") & (q[["buy_liq", "sell_liq"]].min(axis=1) >= 0.08), "liq_level"] = "Medium"
+    q["edge_state"] = q["net_edge_pct"].apply(lambda x: "Positive" if x > 0 else "Non-positive")
+    matrix = q.groupby(["edge_state", "liq_level"], as_index=False).size().rename(columns={"size":"Snapshots"})
+    matrix["Category"] = matrix["edge_state"] + " · " + matrix["liq_level"]
+    st.dataframe(matrix[["Category", "Snapshots"]], use_container_width=True, hide_index=True)
+    st.caption("Liquidity ใช้ 24h Turnover เป็น proxy เดิมของระบบ · Quality Matrix เป็น research heuristic ไม่ใช่ executable execution score")
+
 def render_perp_venue_table (base :str ="BTC")->None :
     # Fetch/build the venue rows first so the comparison table is the first
     # visual element in this section.  Analysis controls/cards follow below.
@@ -6510,10 +6581,11 @@ def render_perp_venue_table (base :str ="BTC")->None :
 
     # Compact analysis navigation: keep the venue table as the main view,
     # then switch between the three analysis panels instead of stacking them.
-    tab_arb, tab_quality, tab_history = st.tabs([
+    tab_arb, tab_quality, tab_history, tab_intel = st.tabs([
         "⚡ Arb Opportunity",
         "🎯 Execution Quality",
         "📚 Opportunity History",
+        "🧠 Intelligence",
     ])
 
     # Record the snapshot regardless of which tab is currently selected so
@@ -6528,6 +6600,9 @@ def render_perp_venue_table (base :str ="BTC")->None :
 
     with tab_history:
         render_arb_history_tracker (base=base)
+
+    with tab_intel:
+        render_arb_intelligence_analytics (base=base)
 
 
     # ============================================================
