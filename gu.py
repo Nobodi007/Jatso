@@ -17582,7 +17582,6 @@ def _main_body ()->None :
         NAV_LABELS [2 ],# Liquidity & Capital Planner
         NAV_LABELS [3 ],# Exchange UI Simulator
         NAV_LABELS [5 ],# Investment Backtest
-        NAV_AUTO_DCA ,# Live Auto DCA
         ],
         "💼 พอร์ตของฉัน":[
         NAV_LABELS [4 ],# Portfolio & Wallet
