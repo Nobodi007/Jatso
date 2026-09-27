@@ -9624,10 +9624,13 @@ AI_SYSTEM =(
 def ask_ai (messages ,api_key ,system_override :Optional [str ]=None ):
     # Primary model + fallbacks. 503/5xx can be transient capacity errors;
     # do not expose those directly to the user when another Gemini endpoint works.
+    # Current GA models. Gemini 2.5 Flash-Lite is intentionally removed:
+    # new users may receive HTTP 404 because access is restricted.
     AI_MODELS = [
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash",
         "gemini-3-flash-preview",
-        "gemini-2.5-flash-lite",
-        "gemini-2.5-flash",
     ]
 
     formatted_messages =[]
@@ -9672,7 +9675,12 @@ def ask_ai (messages ,api_key ,system_override :Optional [str ]=None ):
 
                 # Capacity/rate-limit errors are retryable.  After a short
                 # retry, move to the next model so the UI stays usable.
-                if e .code in (429 ,500 ,502 ,503 ,504 ):
+                # 404 can mean the selected model is unavailable to this
+                # API project/user. Treat it as a model-level failure and
+                # continue to the next supported model.
+                if e .code in (404 ,429 ,500 ,502 ,503 ,504 ):
+                    if e .code == 404 :
+                        break
                     if attempt ==0 :
                         import time as _time
                         _time .sleep (0.8 )
