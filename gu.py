@@ -15099,6 +15099,9 @@ market_df :Optional [pd .DataFrame ]=None )->None :
     cust_thb =float (sim .get ("customer_thb",1_000_000.0 )or 0.0 )
     cust_coins =sim .get ("customer_coins",{})or {}
     orders =sim .get ("orders",[])if isinstance (sim ,dict )else []
+    # Baseline is used only by the Portfolio Performance fallback chart.
+    # It is NOT used for the Portfolio card P&L percentage.
+    initial_capital =float (sim .get ("initial_capital",1_000_000.0 )or 1_000_000.0 )
 
     usdthb_now =1.0 
     try :
