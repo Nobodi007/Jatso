@@ -9757,6 +9757,40 @@ def render_ai_fab ()->None :
             if hist :
                 st .button ("🗑️ ล้างแชท",key ="ai_clear",on_click =_ai_clear )
 
+def build_dealer_ctx (cfg :dict [str ,Any ],data :pd .DataFrame )->Optional [tuple [dict [str ,Any ],float ]]:
+    """คำนวณ ctx และ target_stock_thb ร่วมกันสำหรับ order simulator และ alerts"""
+    if data .empty :
+        return None
+    settlement_days =cfg ["settlement_days"]
+    asset =cfg ["asset"]
+    rp_sim =risk_profile (data ["Global_USD"])
+    if rp_sim is None :
+        return None
+    h_crypto_sim =crypto_haircut (rp_sim ["es99"],settlement_days )
+    h_cex_sim =(cfg ["cex_counterparty_haircut"]
+    if cfg ["cex_margin_asset"].startswith ("Stablecoin")else h_crypto_sim )
+    a_factor_sim =safety_stock_factor (cfg ["net_bias_pct"],cfg ["flow_cv_pct"],
+    settlement_days ,cfg ["z_alpha"])
+    target_stock_thb =a_factor_sim *cfg ["monthly_volume_thb"]
+    cex_liquidity_thb =max (0.0 ,float (cfg ["cex_margin_thb"]))
+    ctx =dict (
+    asset =asset ,local_premium =cfg ["local_premium"],spread =cfg ["dealer_spread"],
+    hedge_fee =cfg ["hedge_fee"],fx_limit =cfg ["fx_limit_max"],slip_sens =cfg ["slippage_sensitivity"],
+    market_depth_usd =cfg ["market_depth_usd"],impact_penalty =cfg ["impact_penalty"],
+    include_fee_rev =cfg ["include_trading_fee_revenue"],wd_markup =cfg ["withdrawal_fee_markup_pct"],
+    wd_fee_per_coin =WITHDRAWAL_FEE_TABLE .get (asset ,0.0 ),bank_type =cfg ["bank_type"],
+    ktb_wd_fee =cfg ["ktb_wd_fee_thb"],ktb_fx_bps =cfg ["ktb_fx_spread_bps"],
+    capital =cfg ["total_capital_thb"],cex_margin =cfg ["cex_margin_thb"],
+    cex_liquidity_thb =cex_liquidity_thb ,liab =cfg ["liab_thb"],
+    h_crypto =h_crypto_sim ,h_cex =h_cex_sim ,fixed_min_nc =cfg ["fixed_min_nc"],
+    trading_risk_rate =cfg ["trading_risk_rate"],daily_volume_thb =cfg ["daily_volume_thb"],
+    custody_rate =cfg ["custody_rate_blended"],hot_breach =cfg ["hot_wallet_cap_breach"],
+    hedge_trigger_pct =cfg .get ("hedge_trigger_pct",0.0 ),
+    hedge_vol_block_pct =cfg .get ("hedge_vol_block_pct",0.0 ),
+    )
+    return ctx ,target_stock_thb
+
+
 def compute_active_alerts (cfg :dict [str ,Any ],sim :Optional [dict [str ,Any ]],
 data :pd .DataFrame ,market_df :Optional [pd .DataFrame ])->list [dict [str ,str ]]:
     """เช็ค NC Buffer / FX Limit / CEX Liquidity / Hot Wallet ของ sandbox รายผู้ใช้"""
