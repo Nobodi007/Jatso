@@ -15368,16 +15368,64 @@ def render_quant_research_hub(cfg: dict[str, Any], data: pd.DataFrame, market_df
     st.markdown("## 🧪 Quant Research Lab")
     st.caption("รวมเครื่องมือ Quant ทั้งหมดไว้ที่เดียว แล้วเลือกโมดูลที่ต้องการจากเมนูด้านล่าง")
 
+    # แบ่ง Quant เป็นหมวดก่อน แล้วค่อยเลือกโมดูล เพื่อไม่ให้ dropdown ยาวเกินไป
+    quant_groups = {
+        "📚 Research & Evaluation": [
+            NAV_RESEARCH_SCORECARD,
+            NAV_PRODUCTION_GATE,
+            NAV_TRANSACTION_COST_LAB,
+            NAV_PBO_DSR_LAB,
+        ],
+        "🛡️ Risk & Stress": [
+            NAV_STRESS_LAB,
+            NAV_HEALTH_SCORE,
+        ],
+        "🕶️ Shadow & Governance": [
+            NAV_SHADOW_MODE,
+            NAV_EXPERIMENT_TRACKER,
+            NAV_MODEL_GOVERNANCE,
+        ],
+        "🧬 Models & Simulation": [
+            NAV_SYNTHETIC_LAB,
+            NAV_HMM_RESEARCH,
+        ],
+        "🧾 Reports & Final Review": [
+            NAV_RESEARCH_REPORT,
+            NAV_FINAL_QUANT_REVIEW,
+        ],
+    }
+
     default_page = st.session_state.get("quant_research_section", NAV_RESEARCH_SCORECARD)
     if default_page not in QUANT_RESEARCH_PAGES:
         default_page = NAV_RESEARCH_SCORECARD
 
-    selected = st.selectbox(
-        "เลือก Quant Module",
-        QUANT_RESEARCH_PAGES,
-        index=QUANT_RESEARCH_PAGES.index(default_page),
-        key="quant_research_section",
+    default_group = next(
+        (group for group, pages in quant_groups.items() if default_page in pages),
+        next(iter(quant_groups)),
     )
+
+    c_group, c_module = st.columns([0.9, 1.6], gap="small")
+    with c_group:
+        selected_group = st.selectbox(
+            "หมวด Quant",
+            list(quant_groups.keys()),
+            index=list(quant_groups.keys()).index(default_group),
+            key="quant_research_group",
+        )
+
+    pages_in_group = quant_groups[selected_group]
+    # ถ้าผู้ใช้เปลี่ยนหมวด ให้เปิดหน้าแรกของหมวดนั้นโดยอัตโนมัติ
+    if default_page not in pages_in_group:
+        default_page = pages_in_group[0]
+        st.session_state["quant_research_section"] = default_page
+
+    with c_module:
+        selected = st.selectbox(
+            "เลือก Quant Module",
+            pages_in_group,
+            index=pages_in_group.index(default_page),
+            key="quant_research_section",
+        )
 
     st.markdown(
         '<div style="height:1px;background:#2b3139;margin:8px 0 18px 0;"></div>',
