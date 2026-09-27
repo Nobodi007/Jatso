@@ -9390,27 +9390,13 @@ def render_risk_center (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :pd
     # Explicit boundary: everything below is the user's portfolio risk view.
     section ("🛡️ ความเสี่ยงพอร์ตของฉัน")
 
+    # Keep the section heading as the single portfolio-risk entry point.
+    # The four KPI cards below it were removed because the same metrics are
+    # already surfaced in Risk Alert Engine / lower risk sections.
     vol =float (risk ["volatility_pct"])
     dd =float (risk ["max_drawdown_pct"])
     btc =float (risk ["btc_exposure_pct"])
     cash_pct =float (risk ["cash_pct"])
-    vol_tone ="green"if vol <30 else "warn"if vol <60 else "red"
-    dd_tone ="green"if abs (dd )<10 else "warn"if abs (dd )<25 else "red"
-    btc_tone ="green"if btc <50 else "warn"if btc <70 else "red"
-    cash_tone ="green"if cash_pct >=20 else "warn"if cash_pct >=10 else "red"
-
-    st .markdown ('<div class="risk-grid">',unsafe_allow_html =True )
-    # Use columns to keep Streamlit layout responsive while cards themselves remain styled.
-    r1 ,r2 ,r3 ,r4 =st .columns (4 ,gap ="small")
-    with r1 :
-        _risk_metric_card ("Volatility",f"{vol :.1f}%","Annualized estimate · current weights",vol ,80 ,vol_tone )
-    with r2 :
-        _risk_metric_card ("Max Drawdown",f"{dd :+.1f}%","Worst peak-to-trough in risk window",abs (dd ),50 ,dd_tone )
-    with r3 :
-        _risk_metric_card ("BTC Exposure",f"{btc :.1f}%","Share of current portfolio value",btc ,100 ,btc_tone )
-    with r4 :
-        _risk_metric_card ("Cash",f"{cash_pct :.1f}%","THB share of current portfolio",cash_pct ,100 ,cash_tone )
-    st .markdown ('</div>',unsafe_allow_html =True )
 
     # v107 — Portfolio Risk Alert Engine — polished / unified layout
     # Concentration is based on the largest non-cash asset. Cash is evaluated separately.
