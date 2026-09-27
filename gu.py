@@ -9618,6 +9618,7 @@ AI_SYSTEM =(
 "ต้องแยกคำตอบเป็น 2 ชั้น: [ข้อเท็จจริงจากระบบ] คือค่าที่ส่งมาจาก Risk Center และ [การตีความของ AI] คือคำอธิบายความสัมพันธ์/ความหมายของตัวเลขเท่านั้น; ห้ามเขียนการตีความเหมือนเป็นค่าที่ระบบตรวจพบ"
 "ถ้าข้อมูล Risk ตัวใดไม่มี ให้ระบุว่าไม่มีข้อมูล ไม่เดา และห้ามสรุปว่าพอร์ตปลอดภัยหรือไม่ปลอดภัยจากตัวเลขที่ไม่มี"
 "ถ้าผู้ใช้ขอสร้าง Auto DCA ให้ใช้ Auto DCA Assistant ซึ่งต้องมีการยืนยันจากผู้ใช้ก่อนสร้างแผนจริงเสมอ"
+" ถ้าคำถามเกี่ยวกับ Transaction ให้ใช้ transaction_context เป็น source of truth และแยกข้อเท็จจริงจากคำอธิบายของ AI"
 )
 
 def ask_ai (messages ,api_key ,system_override :Optional [str ]=None ):
@@ -9843,6 +9844,49 @@ def render_ledger_anomaly_detector (cfg :dict [str ,Any ],bt :pd .DataFrame )->N
             )
 
 
+TRANSACTION_AI_SYSTEM = (
+"คุณคือ AI อธิบาย Transaction ของ Nobody. เมื่อผู้ใช้ถามเกี่ยวกับรายการธุรกรรม "
+"ให้ใช้ข้อมูลจาก transaction_context เท่านั้นเป็นข้อเท็จจริง ห้ามเดาตัวเลขหรือเติมข้อมูลที่ไม่มี. "
+"อธิบายอย่างน้อย: ประเภท (BUY/SELL), เหรียญ, จำนวน, ราคา, มูลค่า, Fee, ช่องทาง/Source, Exchange, Order Type และ Order ID ถ้ามี. "
+"แยก [ข้อเท็จจริงจาก Ledger] ออกจาก [คำอธิบายของ AI]. "
+"ถ้าหา transaction ที่ผู้ใช้หมายถึงไม่เจอ ให้บอกว่าไม่พบและขอ Order ID หรือให้เลือก Transaction แทน ห้ามเดา. "
+"ถ้าข้อมูลบางช่องไม่มี ให้ระบุว่าไม่พบใน Ledger. "
+)
+
+
+def _build_ai_transaction_context(sim: dict[str, Any], limit: int = 40) -> dict[str, Any]:
+    """ส่ง Transaction ล่าสุดจาก Portfolio Ledger ให้ AI อธิบายแบบ read-only."""
+    ensure_portfolio_ledger(sim)
+    ledger = sim.get("portfolio_ledger", [])
+    if not isinstance(ledger, list):
+        return {"available": False, "transactions": []}
+
+    rows = []
+    for tx in ledger[-limit:][::-1]:
+        if not isinstance(tx, dict):
+            continue
+        qty = float(tx.get("qty", 0.0) or 0.0)
+        rows.append({
+            "id": str(tx.get("id", "")),
+            "external_order_id": str(tx.get("external_order_id", "")),
+            "timestamp": str(tx.get("timestamp", "")),
+            "type": str(tx.get("type", "")).upper(),
+            "asset": str(tx.get("asset", "")).upper(),
+            "qty": abs(qty),
+            "side_qty_sign": "BUY" if qty >= 0 else "SELL",
+            "price_thb": float(tx.get("price_thb", 0.0) or 0.0),
+            "gross_thb": float(tx.get("gross_thb", 0.0) or 0.0),
+            "fee_thb": float(tx.get("fee_thb", 0.0) or 0.0),
+            "cash_delta_thb": float(tx.get("cash_delta_thb", 0.0) or 0.0),
+            "realized_pnl_thb": float(tx.get("realized_pnl_thb", 0.0) or 0.0),
+            "source": str(tx.get("source", "")),
+            "exchange": str(tx.get("exchange", "")),
+            "order_type": str(tx.get("order_type", "")).upper(),
+            "note": str(tx.get("note", "")),
+        })
+    return {"available": bool(rows), "transactions": rows}
+
+
 AI_SUGGESTIONS =[
 "พอร์ตตอนนี้เป็นยังไงบ้าง",
 "ทำไม P&L วันนี้ติดลบ",
@@ -9853,6 +9897,8 @@ AI_SUGGESTIONS =[
 "สรุปพอร์ตตอนนี้ให้หน่อย",
 "ตอนนี้พอร์ตเสี่ยงตรงไหน",
 "ตั้ง DCA BTC เดือนละ 5,000 บาท ทุกวันที่ 1 เวลา 10 โมง",
+"รายการ Telegram ล่าสุดคืออะไร",
+"รายการนี้คืออะไร",
 ]
 
 def _ai_queue (q :str )->None :
@@ -10284,6 +10330,27 @@ market_df :Optional [pd .DataFrame ]=None )->None :
                 return
 
             # -----------------------------------------------------------------
+            # TRANSACTION CONTEXT — read-only. AI can explain the selected
+            # ledger transaction, but it cannot modify the ledger.
+            # -----------------------------------------------------------------
+            sim_for_tx = st .session_state .get ("sim", {}) or {}
+            tx_ctx = _build_ai_transaction_context(sim_for_tx) if isinstance(sim_for_tx, dict) else {"available": False, "transactions": []}
+            tx_options = ["ไม่เลือก Transaction"]
+            tx_lookup = {}
+            for tx in tx_ctx.get("transactions", []):
+                oid = tx.get("external_order_id") or tx.get("id") or "-"
+                label = f"{tx.get('type','')} · {tx.get('asset','')} · {oid}"
+                tx_options.append(label)
+                tx_lookup[label] = tx
+            selected_tx_label = st .selectbox (
+                "🔎 Transaction ที่ต้องการถาม AI",
+                tx_options,
+                key = "ai_tx_selected",
+                help = "เลือกจาก Portfolio Ledger เพื่อให้ AI อธิบายรายการแบบตรงกับข้อมูลในระบบ"
+            )
+            selected_tx = tx_lookup.get(selected_tx_label)
+
+            # -----------------------------------------------------------------
             # AUTO DCA ASSISTANT — AI only prepares a draft. No plan is written
             # until the user explicitly presses "ยืนยันสร้าง Auto DCA".
             # -----------------------------------------------------------------
@@ -10396,12 +10463,15 @@ market_df :Optional [pd .DataFrame ]=None )->None :
                             try :
                                 portfolio_ctx =_build_ai_portfolio_context (cfg ,data ,market_df )
                                 context_text =json .dumps (portfolio_ctx ,ensure_ascii =False ,indent =2 )
+                                tx_text =json .dumps (selected_tx or tx_ctx ,ensure_ascii =False ,indent =2 )
                                 ai_messages [-1 ]={
                                 "role":"user",
                                 "content":(
                                 question +
                                 "\n\n[PRIVATE PORTFOLIO CONTEXT — ใช้ตัวเลขชุดนี้เป็น source of truth; "
                                 "ห้ามสร้างตัวเลขใหม่\n"+context_text+"\nEND PORTFOLIO CONTEXT]"
+                                "\n\n[TRANSACTION CONTEXT — ใช้ข้อมูล Ledger ชุดนี้เป็น source of truth; "
+                                "ห้ามสร้างตัวเลขใหม่\n"+tx_text+"\nEND TRANSACTION CONTEXT]"
                                 ),
                                 }
                             except Exception as exc :
@@ -10410,7 +10480,9 @@ market_df :Optional [pd .DataFrame ]=None )->None :
                                 "content":question+f"\n\n[Portfolio Context unavailable: {exc}]",
                                 }
                         with st .spinner ("กำลังคิดจากข้อมูลพอร์ตจริง…"):
-                            ans =ask_ai (ai_messages ,api_key )
+                            tx_words = ("transaction", "รายการ", "ledger", "order id", "orderid", "telegram buy", "telegram sell")
+                            tx_question = any(w in question.lower() for w in tx_words) or selected_tx is not None
+                            ans =ask_ai (ai_messages ,api_key ,system_override=(TRANSACTION_AI_SYSTEM if tx_question else None))
                         hist .append ({"role":"assistant","content":ans })
                 else :
                     # Existing Portfolio/Risk Copilot path remains unchanged.
@@ -10419,12 +10491,15 @@ market_df :Optional [pd .DataFrame ]=None )->None :
                         try :
                             portfolio_ctx =_build_ai_portfolio_context (cfg ,data ,market_df )
                             context_text =json .dumps (portfolio_ctx ,ensure_ascii =False ,indent =2 )
+                            tx_text =json .dumps (selected_tx or tx_ctx ,ensure_ascii =False ,indent =2 )
                             ai_messages [-1 ]={
                             "role":"user",
                             "content":(
                             question +
                             "\n\n[PRIVATE PORTFOLIO CONTEXT — ใช้ตัวเลขชุดนี้เป็น source of truth; "
                             "ห้ามสร้างตัวเลขใหม่\n"+context_text+"\nEND PORTFOLIO CONTEXT]"
+                            "\n\n[TRANSACTION CONTEXT — ใช้ข้อมูล Ledger ชุดนี้เป็น source of truth; "
+                            "ห้ามสร้างตัวเลขใหม่\n"+tx_text+"\nEND TRANSACTION CONTEXT]"
                             ),
                             }
                         except Exception as exc :
@@ -10434,7 +10509,9 @@ market_df :Optional [pd .DataFrame ]=None )->None :
                             }
 
                     with st .spinner ("กำลังคิดจากข้อมูลพอร์ตจริง…"):
-                        ans =ask_ai (ai_messages ,api_key )
+                        tx_words = ("transaction", "รายการ", "ledger", "order id", "orderid", "telegram buy", "telegram sell")
+                        tx_question = any(w in question.lower() for w in tx_words) or selected_tx is not None
+                        ans =ask_ai (ai_messages ,api_key ,system_override=(TRANSACTION_AI_SYSTEM if tx_question else None))
                     hist .append ({"role":"assistant","content":ans })
 
             draw ()
