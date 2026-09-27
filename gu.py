@@ -6652,25 +6652,8 @@ def render_fund_flow_section (cfg :dict [str ,Any ]|None =None )->None :
     )
 
 
-def render_tab2 (cfg :dict [str ,Any ],data :pd .DataFrame ,data_err :Optional [str ])->None :
-    st .markdown (
-    "ตอบคำถามที่ผู้บริหารถามจริง:\n\n"
-    "> **\"ถ้าธุรกรรมเดือนละ X ล้าน ต้องดำรงเหรียญเท่าไหร่ เงินสดเท่าไหร่ "
-    "NC เหลือเท่าไหร่ ผ่านเกณฑ์ไหม และทุนที่มีรับได้สูงสุดกี่ล้าน\"**"
-    )
-    if not cfg ["dates_ok"]:
-        st .error ("❌ ช่วงวันที่ในแถบซ้ายไม่ถูกต้อง")
-        return 
-
-    asset =cfg ["asset"]
-
-    # Risk Calculation Mode is controlled from Risk Center so the planner below
-    # reuses the same global scope selection without rendering a duplicate control.
-    cp_mode =st .session_state .get (
-    "cp_mode",
-    "Single-Asset (ใช้เหรียญที่เลือกในแถบซ้าย)",
-    )
-
+def _render_nc_planner_results (cfg :dict [str ,Any ],data :pd .DataFrame ,asset :str ,cp_mode :str )->None :
+    """Render NC Planner outputs inside Risk Center using the shared risk scope."""
     rp =None 
     risk_label =""
     weighted_avg_haircut =None # ค่าเฉลี่ย haircut แยกรายเหรียญ (ถ่วงน้ำหนัก) สำหรับโหมด Multi-Asset
@@ -6678,7 +6661,7 @@ def render_tab2 (cfg :dict [str ,Any ],data :pd .DataFrame ,data_err :Optional [
 
     if cp_mode .startswith ("Single"):
         if data .empty :
-            st .error (f"⚠️ โหลดข้อมูลไม่สำเร็จ: {data_err }")
+            st .error ("⚠️ โหลดข้อมูลไม่สำเร็จ")
         else :
             rp =risk_profile (data ["Global_USD"])
             risk_label =asset 
@@ -6875,6 +6858,29 @@ def render_tab2 (cfg :dict [str ,Any ],data :pd .DataFrame ,data_err :Optional [
     metric_card (k1 [1 ],"เงินสดคงเหลือ",fmt_baht (cash_after_stock_thb ),cash_after_stock_thb )
     metric_card (k1 [2 ],"Net Capital (NC) จริง",fmt_baht (nlc_thb ),nlc_thb )
     metric_card (k1 [3 ],"NC ขั้นต่ำที่ต้องดำรง",fmt_baht (required_nc_total ),nc_buffer_thb ,f"ส่วนเกิน {fmt_baht (nc_buffer_thb ,force_sign =True )}")
+
+
+
+def render_tab2 (cfg :dict [str ,Any ],data :pd .DataFrame ,data_err :Optional [str ])->None :
+    st .markdown (
+    "ตอบคำถามที่ผู้บริหารถามจริง:\n\n"
+    "> **\"ถ้าธุรกรรมเดือนละ X ล้าน ต้องดำรงเหรียญเท่าไหร่ เงินสดเท่าไหร่ "
+    "NC เหลือเท่าไหร่ ผ่านเกณฑ์ไหม และทุนที่มีรับได้สูงสุดกี่ล้าน\"**"
+    )
+    if not cfg ["dates_ok"]:
+        st .error ("❌ ช่วงวันที่ในแถบซ้ายไม่ถูกต้อง")
+        return 
+
+    asset =cfg ["asset"]
+
+    # Risk Calculation Mode is controlled from Risk Center so the planner below
+    # reuses the same global scope selection without rendering a duplicate control.
+    cp_mode =st .session_state .get (
+    "cp_mode",
+    "Single-Asset (ใช้เหรียญที่เลือกในแถบซ้าย)",
+    )
+
+    _render_nc_planner_results (cfg ,data ,asset ,cp_mode )
 
     st .markdown ("<br>",unsafe_allow_html =True )
     render_perp_venue_table (asset )
@@ -8869,6 +8875,11 @@ def render_risk_center (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :pd
     st .caption (
     "โหมดนี้จะถูกใช้ร่วมกับ Risk / NC Planner โดยไม่ต้องเลือกซ้ำในหน้าคำนวณ"
     )
+
+    # NC Planner summary/details live here with the Risk calculation scope.
+    _render_nc_planner_results (cfg ,data ,asset ,st .session_state .get (
+    "cp_mode", "Single-Asset (ใช้เหรียญที่เลือกในแถบซ้าย)"
+    ))
 
     vol =float (risk ["volatility_pct"])
     dd =float (risk ["max_drawdown_pct"])
