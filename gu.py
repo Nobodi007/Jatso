@@ -11074,51 +11074,23 @@ def render_mobile_home (cfg :dict [str ,Any ],data :pd .DataFrame )->None :
     unsafe_allow_html =True ,
     )
 
-    # ---- กราฟ Portfolio Performance (สร้างจากกำไรสะสมของออเดอร์จริง) ----
+    # ---- กราฟ Portfolio Performance ----
     st .markdown ('<div class="mobile-home-chart-card">'
-    '<div class="mobile-home-chart-title">📈 Portfolio Performance</div>',
-    unsafe_allow_html =True )
-    if orders :
+    '<div class="mobile-home-chart-title">📈 Portfolio Performance</div>',unsafe_allow_html =True )
+    plot_df =_build_portfolio_performance_df(sim,orders,initial_capital) if go is not None else pd.DataFrame()
+    if not plot_df.empty:
         try :
-            odf =pd .DataFrame (orders )
-            odf ["วันที่"]=pd .to_datetime (odf .get ("วันที่"),errors ="coerce")
-            odf =odf .dropna (subset =["วันที่"]).sort_values ("วันที่")
-            odf ["กำไรออเดอร์"]=pd .to_numeric (odf .get ("กำไรออเดอร์",0 ),errors ="coerce").fillna (0.0 )
-            # Aggregate orders by day. The source ledger stores dates without time, so
-            # plotting every order separately can collapse the x-axis to microseconds.
-            daily =(odf .groupby ("วันที่",as_index =False )["กำไรออเดอร์"].sum ()
-            .sort_values ("วันที่"))
-            daily ["equity"]=initial_capital +daily ["กำไรออเดอร์"].cumsum ()
-            # Add a starting point so the portfolio line has a visible baseline.
-            start_date =daily ["วันที่"].iloc [0 ]-pd .Timedelta (days =1 )
-            plot_df =pd .concat ([
-            pd .DataFrame ({"วันที่":[start_date ],"equity":[initial_capital ]}),
-            daily [["วันที่","equity"]],
-            ],ignore_index =True )
-            marker_mode ="lines+markers"if len (plot_df )<=8 else "lines"
-            ymin ,ymax =float (plot_df ["equity"].min ()),float (plot_df ["equity"].max ())
-            span =max (ymax -ymin ,initial_capital *0.005 ,1.0 )
-            pad =span *0.18 
-            fig =go .Figure (go .Scatter (
-            x =plot_df ["วันที่"],y =plot_df ["equity"],mode =marker_mode ,
-            line =dict (color ="#0ecb81",width =2.2 ),
-            marker =dict (size =6 ),
-            fill ="tozeroy",fillcolor ="rgba(14,203,129,0.12)",
-            ))
-            fig .update_layout (
-            template ="plotly_dark",height =170 ,margin =dict (t =4 ,b =4 ,l =4 ,r =4 ),
-            showlegend =False ,xaxis =dict (visible =False ),
-            yaxis =dict (visible =False ,range =[ymin -pad ,ymax +pad ]),
-            paper_bgcolor ="rgba(0,0,0,0)",plot_bgcolor ="rgba(0,0,0,0)",
-            )
-            st .plotly_chart (fig ,use_container_width =True ,config ={"displayModeBar":False })
-        except Exception :
-            st .markdown ('<div class="mobile-home-chart-empty">ไม่สามารถแสดงกราฟได้ในขณะนี้</div>',
-            unsafe_allow_html =True )
-    else :
-        st .markdown ('<div class="mobile-home-chart-empty">ยังไม่มีประวัติการเทรด — '
-        'เริ่มซื้อขายที่แท็บ Trade เพื่อดูกราฟผลงาน</div>',unsafe_allow_html =True )
-    st .markdown ('</div>',unsafe_allow_html =True )
+            marker_mode="lines+markers"if len(plot_df)<=8 else "lines"
+            ymin,ymax=float(plot_df["equity"].min()),float(plot_df["equity"].max())
+            span=max(ymax-ymin,abs(float(initial_capital))*0.005,1.0); pad=span*0.18
+            fig=go.Figure(go.Scatter(x=plot_df["วันที่"],y=plot_df["equity"],mode=marker_mode,line=dict(color="#0ecb81",width=2.2),marker=dict(size=6),fill="tozeroy",fillcolor="rgba(14,203,129,0.12)"))
+            fig.update_layout(template="plotly_dark",height=170,margin=dict(t=4,b=4,l=4,r=4),showlegend=False,xaxis=dict(visible=False),yaxis=dict(visible=False,range=[ymin-pad,ymax+pad]),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)")
+            st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False},key="portfolio_performance_mobile")
+        except Exception:
+            st.markdown('<div class="mobile-home-chart-empty">ไม่สามารถแสดงกราฟได้ในขณะนี้</div>',unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="mobile-home-chart-empty">ยังไม่มีข้อมูล Portfolio Performance</div>',unsafe_allow_html=True)
+    st.markdown('</div>',unsafe_allow_html=True)
 
     # ---- รายการสินทรัพย์ ----
     st .markdown ('<div class="mobile-home-section-label">สินทรัพย์</div>',unsafe_allow_html =True )
@@ -14932,6 +14904,47 @@ def render_experiment_tracker (cfg :dict [str ,Any ],data :pd .DataFrame ,market
             _vnext_save_json_list (_EXPERIMENT_LOCAL ,"quant_experiments",experiments )
             st .rerun ()
 
+def _build_portfolio_performance_df(sim, orders, initial_capital):
+    """Build chart data from portfolio snapshots, or fall back to order P&L.
+    Supports both English and legacy Thai ledger field names.
+    """
+    try:
+        snaps = sim.get("portfolio_snapshots", []) if isinstance(sim, dict) else []
+        rows = []
+        for s in snaps if isinstance(snaps, list) else []:
+            if not isinstance(s, dict):
+                continue
+            dt = pd.to_datetime(s.get("timestamp") or s.get("date"), errors="coerce")
+            val = pd.to_numeric(s.get("total_value_thb"), errors="coerce")
+            if pd.notna(dt) and pd.notna(val):
+                rows.append((dt, float(val)))
+        if len(rows) >= 2:
+            df = pd.DataFrame(rows, columns=["วันที่", "equity"]).sort_values("วันที่")
+            return df.drop_duplicates("วันที่", keep="last").reset_index(drop=True)
+        if not orders:
+            return pd.DataFrame(columns=["วันที่", "equity"])
+        odf = pd.DataFrame(orders).copy()
+        ds = odf.get("timestamp")
+        if ds is None: ds = odf.get("วันที่")
+        if ds is None: ds = odf.get("date")
+        odf["วันที่"] = pd.to_datetime(ds, errors="coerce")
+        ps = odf.get("realized_pnl_thb")
+        if ps is None: ps = odf.get("กำไรออเดอร์")
+        if ps is None: ps = odf.get("realized_pnl")
+        if ps is None: ps = 0.0
+        odf["pnl"] = pd.to_numeric(ps, errors="coerce").fillna(0.0)
+        odf = odf.dropna(subset=["วันที่"]).sort_values("วันที่")
+        if odf.empty:
+            return pd.DataFrame(columns=["วันที่", "equity"])
+        daily = odf.groupby(odf["วันที่"].dt.date, as_index=False)["pnl"].sum()
+        daily["วันที่"] = pd.to_datetime(daily["วันที่"])
+        daily["equity"] = float(initial_capital) + daily["pnl"].cumsum()
+        start = daily["วันที่"].iloc[0] - pd.Timedelta(days=1)
+        return pd.concat([pd.DataFrame({"วันที่":[start],"equity":[float(initial_capital)]}), daily[["วันที่","equity"]]], ignore_index=True)
+    except Exception:
+        return pd.DataFrame(columns=["วันที่", "equity"])
+
+
 def render_dashboard (cfg :dict [str ,Any ],data :pd .DataFrame ,
 market_df :Optional [pd .DataFrame ]=None )->None :
     st .markdown (DASHBOARD_CSS ,unsafe_allow_html =True )
@@ -15015,51 +15028,23 @@ market_df :Optional [pd .DataFrame ]=None )->None :
     # ฟีเจอร์ AI ห้ามทำให้ Dashboard หลักล่ม
         pass 
 
-        # ---- Portfolio Performance chart ----
+    # ---- Portfolio Performance chart ----
     st .markdown ('<div class="dash-chart-card">'
-    '<div class="dash-chart-title">📈 Portfolio Performance</div>',
-    unsafe_allow_html =True )
-    if orders :
+    '<div class="dash-chart-title">📈 Portfolio Performance</div>',unsafe_allow_html =True )
+    plot_df =_build_portfolio_performance_df(sim,orders,initial_capital) if go is not None else pd.DataFrame()
+    if not plot_df.empty:
         try :
-            odf =pd .DataFrame (orders )
-            odf ["วันที่"]=pd .to_datetime (odf .get ("วันที่"),errors ="coerce")
-            odf =odf .dropna (subset =["วันที่"]).sort_values ("วันที่")
-            odf ["กำไรออเดอร์"]=pd .to_numeric (odf .get ("กำไรออเดอร์",0 ),errors ="coerce").fillna (0.0 )
-            # Aggregate the ledger to daily P&L. Orders currently carry a date (not a
-            # timestamp), so duplicate dates otherwise produce a collapsed microsecond axis.
-            daily =(odf .groupby ("วันที่",as_index =False )["กำไรออเดอร์"].sum ()
-            .sort_values ("วันที่"))
-            daily ["equity"]=initial_capital +daily ["กำไรออเดอร์"].cumsum ()
-            start_date =daily ["วันที่"].iloc [0 ]-pd .Timedelta (days =1 )
-            plot_df =pd .concat ([
-            pd .DataFrame ({"วันที่":[start_date ],"equity":[initial_capital ]}),
-            daily [["วันที่","equity"]],
-            ],ignore_index =True )
-            marker_mode ="lines+markers"if len (plot_df )<=8 else "lines"
-            ymin ,ymax =float (plot_df ["equity"].min ()),float (plot_df ["equity"].max ())
-            span =max (ymax -ymin ,initial_capital *0.005 ,1.0 )
-            pad =span *0.18 
-            fig =go .Figure (go .Scatter (
-            x =plot_df ["วันที่"],y =plot_df ["equity"],mode =marker_mode ,
-            line =dict (color ="#0ecb81",width =2.4 ),
-            marker =dict (size =7 ),
-            fill ="tozeroy",fillcolor ="rgba(14,203,129,0.12)",
-            ))
-            fig .update_layout (
-            template ="plotly_dark",height =320 ,margin =dict (t =10 ,b =10 ,l =10 ,r =10 ),
-            showlegend =False ,hovermode ="x unified",
-            yaxis_title ="THB",yaxis =dict (range =[ymin -pad ,ymax +pad ]),
-            paper_bgcolor ="rgba(0,0,0,0)",plot_bgcolor ="rgba(0,0,0,0)",
-            )
-            st .plotly_chart (fig ,**WIDE )
-        except Exception :
-            st .markdown ('<div class="dash-chart-empty">ไม่สามารถแสดงกราฟได้ในขณะนี้</div>',
-            unsafe_allow_html =True )
-    else :
-        st .markdown ('<div class="dash-chart-empty">ยังไม่มีประวัติการเทรด — '
-        'เริ่มซื้อขายที่ Exchange UI Simulator เพื่อดูกราฟผลงาน</div>',
-        unsafe_allow_html =True )
-    st .markdown ('</div>',unsafe_allow_html =True )
+            marker_mode ="lines+markers"if len(plot_df)<=8 else "lines"
+            ymin,ymax =float(plot_df["equity"].min()),float(plot_df["equity"].max())
+            span=max(ymax-ymin,abs(float(initial_capital))*0.005,1.0); pad=span*0.18
+            fig=go.Figure(go.Scatter(x=plot_df["วันที่"],y=plot_df["equity"],mode=marker_mode,line=dict(color="#0ecb81",width=2.4),marker=dict(size=7),fill="tozeroy",fillcolor="rgba(14,203,129,0.12)"))
+            fig.update_layout(template="plotly_dark",height=320,margin=dict(t=10,b=10,l=10,r=10),showlegend=False,hovermode="x unified",yaxis_title="THB",yaxis=dict(range=[ymin-pad,ymax+pad]),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)")
+            st.plotly_chart(fig,**WIDE,key="portfolio_performance_desktop")
+        except Exception:
+            st.markdown('<div class="dash-chart-empty">ไม่สามารถแสดงกราฟได้ในขณะนี้</div>',unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="dash-chart-empty">ยังไม่มีข้อมูล Portfolio Performance</div>',unsafe_allow_html=True)
+    st.markdown('</div>',unsafe_allow_html=True)
 
     # ---- Layout: Assets (ซ้าย) + Quick Actions (ขวา) ----
     col_assets ,col_side =st .columns ([2.4 ,1 ],gap ="large")
