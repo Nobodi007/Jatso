@@ -11193,6 +11193,9 @@ def render_mobile_home (cfg :dict [str ,Any ],data :pd .DataFrame )->None :
     cust_thb =float (sim .get ("customer_thb",1_000_000.0 )or 0.0 )
     cust_coins =sim .get ("customer_coins",{})or {}
     orders =sim .get ("orders",[])if isinstance (sim ,dict )else []
+    # ใช้เฉพาะเป็น baseline สำหรับ fallback ของกราฟเท่านั้น
+    # ไม่ถูกนำไปคำนวณ % P&L ที่แสดงบน Portfolio card
+    initial_capital =float (sim .get ("initial_capital",1_000_000.0 )or 1_000_000.0 )
 
     usdthb_now =1.0 
     try :
