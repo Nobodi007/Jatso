@@ -8863,44 +8863,10 @@ def render_risk_center (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :pd
     risk_data =data
     risk_asset =asset
 
-    # Single-Asset coin selector: use the Risk Center itself instead of the sidebar.
+    # Single-Asset uses the coin selected in the existing left/sidebar control.
+    # No duplicate coin selector is shown inside Risk Center.
     if cp_mode .startswith ("Single"):
-        single_assets =[a for a in SUPPORTED_ASSETS if a not in STABLECOINS]
-        default_single =asset if asset in single_assets else single_assets [0]
-        if st .session_state .get ("risk_single_asset") not in single_assets:
-            st .session_state ["risk_single_asset"] =default_single
-        st .markdown (
-        '<div style="margin:4px 0 8px;color:#8b95a5;font-size:.82rem;font-weight:700;">เลือกเหรียญ</div>',
-        unsafe_allow_html =True ,
-        )
-        risk_asset =st .radio (
-        "เลือกเหรียญ",
-        single_assets ,
-        horizontal =True ,
-        key ="risk_single_asset",
-        label_visibility ="collapsed",
-        )
-        if risk_asset != asset:
-            risk_data ,risk_err =fetch_price_data (
-            risk_asset ,cfg ["start_date"],cfg ["end_date"]
-            )
-            if risk_data .empty:
-                st .warning (f"⚠️ ไม่สามารถโหลดข้อมูล {risk_asset} ได้ จึงใช้ {asset} แทน")
-                risk_asset =asset
-                risk_data =data
-
-        # Rebuild the risk snapshot for the coin selected in Risk Center.
-        if not risk_data .empty:
-            selected_date =pd .to_datetime (risk_data .index [-1 ])
-            selected_usdthb =float (risk_data .loc [selected_date ,"USDTHB"])
-            selected_price_map ={k:v for k,v in price_map .items () if k != asset}
-            if "Global_USD" in risk_data .columns:
-                try:
-                    selected_price_map [risk_asset]=float (risk_data .loc [selected_date ,"Global_USD"])*selected_usdthb
-                except (TypeError ,ValueError ,KeyError):
-                    pass
-            snap =portfolio_snapshot (sim ,selected_price_map)
-            risk =_portfolio_risk_metrics (snap ,selected_date)
+        risk_asset =asset
 
     # NC Planner summary/details live here with the Risk calculation scope.
     # This block represents the company / capital-safety view.
