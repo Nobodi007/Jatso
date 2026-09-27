@@ -17277,6 +17277,20 @@ def _risk_dashboard_body (cfg ,ctx ,target_stock_thb ,price_thb )->None :
         key =lambda s :s .abs (),ascending =False ),
         height =min (300 ,40 +35 *len (rows )),**WIDE )
 
+
+# Restored core risk constants from the stable Nobody base version.
+RISK_ICON = {"ok": "🟢", "warn": "🟡", "crit": "🔴"}
+RISK_COLOR = {"ok": "#0ecb81", "warn": "#fcd535", "crit": "#f6465d"}
+_RISK_RANK = {"ok": 0, "warn": 1, "crit": 2}
+
+# Hedge Rule Lab presets used by render_hedge_rule_lab().
+HEDGE_RULE_PRESETS = {
+    "Hedge ทุกครั้ง (เดิม)": (0.0, 0.0),
+    "Trigger 10%": (0.10, 0.0),
+    "Trigger 25%": (0.25, 0.0),
+    "Trigger 10% + งดเมื่อ vol > 8%": (0.10, 0.08),
+}
+
 def compare_hedge_rules (sim ,cfg ,ctx ,target_stock_thb ,coins ,n_orders ,seed ,
 amt_min ,amt_max ,rules :dict )->pd .DataFrame :
     rows =[]
