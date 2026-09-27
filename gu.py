@@ -5695,6 +5695,96 @@ def compute_spread_badge(rows: list[dict]) -> Optional[dict]:
     }
 
 
+def _valid_global_market_rows(rows: list[dict]) -> list[dict]:
+    """All venue rows with usable observed prices, regardless of market type."""
+    out = []
+    for r in rows:
+        try:
+            price = float(r.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if price > 0 and not r.get("err"):
+            out.append(r)
+    return out
+
+
+def compute_cross_market_highlights(rows: list[dict]) -> dict:
+    """Compare Spot + Perpetual observed prices for the same underlying asset.
+
+    This is a cross-market price monitor, not an executable arbitrage quote: the
+    board currently uses ticker/last prices rather than synchronized bid/ask.
+    """
+    valid = _valid_global_market_rows(rows)
+    if len(valid) < 2:
+        return {}
+    buy = min(valid, key=lambda r: float(r["price"]))
+    sell = max(valid, key=lambda r: float(r["price"]))
+    buy_px = float(buy["price"])
+    sell_px = float(sell["price"])
+    if buy_px <= 0 or buy is sell:
+        return {}
+    spread_pct = (sell_px / buy_px - 1.0) * 100.0
+    if spread_pct < ARB_HIGHLIGHT_THRESHOLD_PCT:
+        return {}
+    return {
+        "buy_venue": str(buy["exchange"]),
+        "buy_price": buy_px,
+        "buy_market": str(buy.get("market_type") or "perp").lower(),
+        "sell_venue": str(sell["exchange"]),
+        "sell_price": sell_px,
+        "sell_market": str(sell.get("market_type") or "perp").lower(),
+        "spread_pct": spread_pct,
+        "spread_abs": sell_px - buy_px,
+    }
+
+
+def render_cross_market_opportunity_card(highlights: dict, order_size_usd: float = 10_000.0) -> None:
+    """Show the cheapest-vs-most-expensive observed venue across Spot + Perp."""
+    if not highlights:
+        return
+    edge = compute_net_arb_edge(
+        highlights["buy_venue"], highlights["buy_price"],
+        highlights["sell_venue"], highlights["sell_price"],
+        order_size_usd,
+    )
+    buy_market = str(highlights.get("buy_market", "perp")).upper()
+    sell_market = str(highlights.get("sell_market", "perp")).upper()
+    cross = buy_market != sell_market
+    title = "🌐 Cross-Market Price Opportunity" if cross else "🌐 Global Price Opportunity"
+    market_note = f"{buy_market} → {sell_market}" if cross else buy_market
+    tone = "#0ecb81" if edge["is_profitable"] else "#f6465d"
+    st.markdown(
+        f"""<div style='background:#11151b;border:1px solid #2b3139;border-radius:10px;
+        padding:12px 14px;margin:8px 0 10px;'>
+        <div style='display:flex;justify-content:space-between;align-items:center;gap:10px;'>
+          <div style='font-weight:800;color:#EAECEF;font-size:.92rem;'>{title}</div>
+          <div style='font-weight:800;color:{tone};font-size:.76rem;'>{market_note}</div>
+        </div>
+        <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px;margin-top:10px;'>
+          <div style='background:#181c23;border-radius:7px;padding:8px 10px;'>
+            <div style='color:#848e9c;font-size:.68rem;'>🟢 BUY — ราคาต่ำสุดที่เห็น</div>
+            <div style='color:#EAECEF;font-weight:700;margin-top:3px;'>{_html.escape(highlights["buy_venue"])} <span style='color:#848e9c;font-size:.68rem;'>{buy_market}</span></div>
+            <div style='color:#0ecb81;font-size:.82rem;margin-top:2px;'>${highlights["buy_price"]:,.2f}</div>
+          </div>
+          <div style='background:#181c23;border-radius:7px;padding:8px 10px;'>
+            <div style='color:#848e9c;font-size:.68rem;'>🔴 SELL — ราคาสูงสุดที่เห็น</div>
+            <div style='color:#EAECEF;font-weight:700;margin-top:3px;'>{_html.escape(highlights["sell_venue"])} <span style='color:#848e9c;font-size:.68rem;'>{sell_market}</span></div>
+            <div style='color:#f6465d;font-size:.82rem;margin-top:2px;'>${highlights["sell_price"]:,.2f}</div>
+          </div>
+          <div style='background:#181c23;border-radius:7px;padding:8px 10px;'>
+            <div style='color:#848e9c;font-size:.68rem;'>OBSERVED SPREAD</div>
+            <div style='color:#EAECEF;font-weight:800;margin-top:3px;'>{edge["gross_edge_pct"]:.3f}%</div>
+            <div style='color:#848e9c;font-size:.70rem;margin-top:2px;'>≈ ${edge["net_edge_usd"]:+,.2f} หลัง taker fee (estimate)</div>
+          </div>
+        </div>
+        <div style='color:#848e9c;font-size:.70rem;margin-top:8px;'>
+          Spot และ Perpetual เชื่อมกันในชั้นเปรียบเทียบราคาแล้ว · ใช้ observed/last price · ยังไม่ใช่ executable bid/ask quote
+        </div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+
 def get_taker_fee_pct(venue_name: str) -> float:
     """คืนค่า taker fee (%) จาก preset; venue ที่ไม่มี preset ใช้ fallback"""
     preset_key = _VENUE_TO_FEE_PRESET.get(venue_name)
@@ -6396,7 +6486,8 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
     perp_stats = market_stats(perp)
     spot_stats = market_stats(spot)
 
-    # Perpetual arb remains exactly what it was: observed low/high among PERP only.
+    # Two layers: Perpetual-only arb stays isolated, while the board itself
+    # now also connects Spot + Perpetual for a global observed-price monitor.
     low = min(perp, key=lambda r: float(r["price"])) if perp else None
     high = max(perp, key=lambda r: float(r["price"])) if perp else None
     spread_pct = (
@@ -6406,6 +6497,17 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
     arb_enabled = bool(low and high and low is not high and spread_pct >= 0.02)
     low_name = str(low.get("exchange")) if arb_enabled else ""
     high_name = str(high.get("exchange")) if arb_enabled else ""
+
+    global_valid = valid
+    global_low = min(global_valid, key=lambda r: float(r["price"])) if global_valid else None
+    global_high = max(global_valid, key=lambda r: float(r["price"])) if global_valid else None
+    global_spread_pct = (
+        (float(global_high["price"]) / float(global_low["price"]) - 1.0) * 100.0
+        if global_low and global_high and global_low is not global_high and float(global_low["price"]) > 0 else 0.0
+    )
+    global_enabled = bool(global_low and global_high and global_low is not global_high and global_spread_pct >= ARB_HIGHLIGHT_THRESHOLD_PCT)
+    global_low_name = str(global_low.get("exchange")) if global_enabled else ""
+    global_high_name = str(global_high.get("exchange")) if global_enabled else ""
 
     def esc(x: Any) -> str:
         return _html.escape(str(x))
@@ -6475,10 +6577,12 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
         liq_name, liq_color, liq_width = liquidity_from_share(share)
         row_class = "spot-row" if is_spot else ""
         role_html = ""
-        if not is_spot and name == low_name:
-            row_class = "buy"; role_html = "<div class='arb-buy'>🟢 ซื้อที่นี่</div>"
-        elif not is_spot and name == high_name:
-            row_class = "sell"; role_html = "<div class='arb-sell'>🔴 ขายที่นี่</div>"
+        if global_enabled and name == global_low_name:
+            row_class = "buy"
+            role_html = f"<div class='arb-buy'>🟢 ซื้อที่นี่ · {('SPOT' if is_spot else 'PERP')}</div>"
+        elif global_enabled and name == global_high_name:
+            row_class = "sell"
+            role_html = f"<div class='arb-sell'>🔴 ขายที่นี่ · {('SPOT' if is_spot else 'PERP')}</div>"
         rank_html = ""
         if turn_rank <= 3:
             rank_html += f"<span class='rank'>Vol#{turn_rank}</span>"
@@ -6777,6 +6881,13 @@ def render_perp_venue_table (base :str ="BTC")->None :
     # Render server-side so the comparison table cannot disappear when the
     # embedded components iframe/JS is suppressed by a deployed browser.
     _render_perp_venue_table_static(rows)
+
+    # Connect Spot + Perpetual at the board level: show the cheapest and most
+    # expensive observed venue across both market types, without mixing this
+    # signal into the Perpetual-only Arb Opportunity / History engine.
+    cross_market = compute_cross_market_highlights(rows)
+    if cross_market:
+        render_cross_market_opportunity_card(cross_market, 10000.0)
 
     # Coin tabs intentionally sit BELOW the exchange board.  The board stays
     # focused on venue comparison while the tabs control which asset is shown.
