@@ -6073,25 +6073,27 @@ def render_perp_venue_table (base :str ="BTC")->None :
         )
         )
 
-    # Render the comparison table immediately: price / VWAP / turnover / liquidity
-    # are the primary research surface for this section.
-    payload =json .dumps (
-    dict (base =base ,ts =ts ,rows =rows ),
-    ensure_ascii =False ,
-    ).replace ("</","<\\/")
-
-    components .html (
-    _PV_HTML .replace ("__PAYLOAD__",payload ),
-    height =120 +72 *len (rows ),
-    scrolling =False ,
-    )
-
+    # Keep the contextual header directly above the comparison table so the
+    # section does not feel visually empty while preserving the table as the
+    # main research surface.
     st .caption (
     f"อัปเดต {ts } (เวลาไทย) · Global Perpetual ใช้สำหรับ Arb / VWAP / Ranks"
     " · บาง venue อาจให้เบราว์เซอร์ดึงข้อมูลซ้ำเมื่อ server fetch ไม่สำเร็จ"
     )
 
     section (f"🌐 เทียบราคา {base } — Global Perpetual")
+
+    # Render the comparison table directly under its contextual header.
+    payload =json .dumps (
+    dict (base =base ,ts =ts ,rows =rows ),
+    ensure_ascii =False ,
+    ).replace ("</","<\/")
+
+    components .html (
+    _PV_HTML .replace ("__PAYLOAD__",payload ),
+    height =120 +72 *len (rows ),
+    scrolling =False ,
+    )
 
     c_cap ,c_btn =st .columns ([8 ,2 ])
     with c_btn :
