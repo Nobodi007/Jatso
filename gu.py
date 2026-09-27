@@ -5721,6 +5721,119 @@ def render_execution_quality_card(highlights: dict, rows: list[dict[str, Any]], 
     st.caption("Liquidity = proxy จาก 24h Turnover · Execution Quality เป็น research heuristic ไม่ใช่ executable execution score · ไม่รวม bid/ask depth, slippage, funding หรือ transfer cost")
 
 
+
+def _arb_history_record(highlights: Optional[dict], rows: list[dict[str, Any]], order_size_usd: float) -> None:
+    """เก็บ snapshot opportunity แบบ session-local เพื่อดูพฤติกรรมย้อนหลังระหว่าง session."""
+    if not highlights:
+        return
+    try:
+        edge = compute_net_arb_edge(
+            highlights["buy_venue"], highlights["buy_price"],
+            highlights["sell_venue"], highlights["sell_price"],
+            order_size_usd,
+        )
+        valid = [r for r in rows if r.get("market_type") != "spot" and not r.get("err") and r.get("turnover")]
+        by_name = {str(r.get("exchange")): r for r in valid}
+        buy = by_name.get(str(highlights["buy_venue"]), {})
+        sell = by_name.get(str(highlights["sell_venue"]), {})
+        max_turn = max((float(r.get("turnover") or 0) for r in valid), default=0.0)
+        buy_share = float(buy.get("turnover") or 0) / max_turn if max_turn else 0.0
+        sell_share = float(sell.get("turnover") or 0) / max_turn if max_turn else 0.0
+        now = datetime.now(timezone.utc)
+        fp = (
+            str(highlights.get("buy_venue")), str(highlights.get("sell_venue")),
+            round(float(edge.get("gross_edge_pct", 0.0)), 6),
+            round(float(edge.get("net_edge_pct", 0.0)), 6),
+        )
+        history = st.session_state.setdefault("arb_opportunity_history", [])
+        last = history[-1] if history else None
+        if last and tuple(last.get("fingerprint", ())) == fp:
+            try:
+                last_dt = pd.to_datetime(last.get("timestamp"), utc=True)
+                if (now - last_dt.to_pydatetime()).total_seconds() < 30:
+                    return
+            except Exception:
+                pass
+        history.append({
+            "timestamp": now.isoformat(),
+            "buy_venue": str(highlights["buy_venue"]),
+            "sell_venue": str(highlights["sell_venue"]),
+            "buy_price": float(highlights["buy_price"]),
+            "sell_price": float(highlights["sell_price"]),
+            "gross_spread_pct": float(edge["gross_edge_pct"]),
+            "net_edge_pct": float(edge["net_edge_pct"]),
+            "net_edge_usd": float(edge["net_edge_usd"]),
+            "buy_liquidity_share": buy_share,
+            "sell_liquidity_share": sell_share,
+            "fingerprint": fp,
+        })
+        del history[:-200]
+    except Exception:
+        return
+
+
+def render_arb_history_tracker() -> None:
+    """แสดงประวัติ opportunity ที่สังเกตได้ใน session ปัจจุบัน."""
+    history = st.session_state.get("arb_opportunity_history", [])
+    if not history:
+        return
+
+    hdf = pd.DataFrame(history)
+    if hdf.empty:
+        return
+    hdf["timestamp"] = pd.to_datetime(hdf["timestamp"], utc=True, errors="coerce")
+    hdf = hdf.dropna(subset=["timestamp"]).copy()
+    if hdf.empty:
+        return
+    hdf["time_th"] = hdf["timestamp"].dt.tz_convert("Asia/Bangkok").dt.strftime("%H:%M:%S")
+
+    st.markdown(
+        "<div style='margin:12px 0 7px;font-weight:800;color:#EAECEF;font-size:.94rem;'>"
+        "📚 Arb Opportunity History</div>",
+        unsafe_allow_html=True,
+    )
+    st.caption("เก็บ snapshot จาก session ปัจจุบัน · สูงสุด 200 จุด · ใช้สำหรับดูความถี่และความต่อเนื่องของ opportunity")
+
+    latest = hdf.iloc[-1]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Snapshots", f"{len(hdf):,}")
+    c2.metric("Latest Net Edge", f"{float(latest['net_edge_pct']):+.3f}%")
+    c3.metric("Positive Net Edge", f"{int((hdf['net_edge_pct'] > 0).sum()):,}")
+    c4.metric("Best Net Edge", f"{float(hdf['net_edge_pct'].max()):+.3f}%")
+
+    chart_df = hdf[["timestamp", "net_edge_pct"]].set_index("timestamp").sort_index()
+    if len(chart_df) >= 2:
+        st.line_chart(chart_df, height=190, use_container_width=True)
+
+    display = hdf.sort_values("timestamp", ascending=False).head(12).copy()
+    display["timestamp"] = display["timestamp"].dt.tz_convert("Asia/Bangkok").dt.strftime("%d/%m %H:%M:%S")
+    display = display[[
+        "timestamp", "buy_venue", "sell_venue", "gross_spread_pct",
+        "net_edge_pct", "net_edge_usd", "buy_liquidity_share", "sell_liquidity_share",
+    ]]
+    display.columns = [
+        "เวลา", "BUY", "SELL", "Gross Spread %", "Net Edge %", "Net USD",
+        "BUY Liquidity", "SELL Liquidity",
+    ]
+    display["Gross Spread %"] = display["Gross Spread %"].map(lambda x: f"{x:+.3f}%")
+    display["Net Edge %"] = display["Net Edge %"].map(lambda x: f"{x:+.3f}%")
+    display["Net USD"] = display["Net USD"].map(lambda x: f"${x:+,.2f}")
+    display["BUY Liquidity"] = display["BUY Liquidity"].map(lambda x: f"{x*100:.0f}%")
+    display["SELL Liquidity"] = display["SELL Liquidity"].map(lambda x: f"{x*100:.0f}%")
+    st.dataframe(display, hide_index=True, use_container_width=True, height=330)
+
+    csv = hdf.drop(columns=["fingerprint", "time_th"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        "⬇️ Export Arb History CSV",
+        data=csv,
+        file_name="nobody_arb_opportunity_history.csv",
+        mime="text/csv",
+        key="arb_history_csv",
+    )
+
+    st.caption("หมายเหตุ: history นี้เป็น session-local; หาก Streamlit process/restart ใหม่ ประวัติจะเริ่มใหม่ ไม่ใช่ persistent market database")
+
+
 _PV_HTML =r"""<!doctype html><html><head><meta charset="utf-8"><style>
 html,body{margin:0;padding:0;background:transparent;color:#EAECEF;
   font-family:"Source Sans Pro",-apple-system,"Segoe UI",Roboto,sans-serif;}
@@ -6001,6 +6114,8 @@ def render_perp_venue_table (base :str ="BTC")->None :
 
     render_arb_opportunity_card (highlights ,float (order_size ))
     render_execution_quality_card (highlights ,rows ,float (order_size ))
+    _arb_history_record (highlights ,rows ,float (order_size ))
+    render_arb_history_tracker ()
 
     payload =json .dumps (
     dict (base =base ,ts =ts ,rows =rows ),
