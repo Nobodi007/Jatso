@@ -5481,6 +5481,147 @@ def fetch_perp_venues (base :str ="BTC")->tuple [pd .DataFrame ,str ]:
     return df .reset_index (drop =True ),pd .Timestamp .now ("Asia/Bangkok").strftime ("%H:%M:%S")
 
 
+# ==========================================================================
+# PERP ARBITRAGE INSIGHT LAYER
+# ใช้ราคาที่ดึงได้จริงจากแต่ละ venue เพื่อชี้ cross-venue price dislocation
+# หมายเหตุ: price ในตารางเป็น observed/last price ไม่ใช่ executable bid/ask
+# ==========================================================================
+ARB_HIGHLIGHT_THRESHOLD_PCT = 0.02
+ARB_ALERT_THRESHOLD_PCT = 0.05
+DEFAULT_TAKER_FEE_PCT = 0.05
+
+_VENUE_TO_FEE_PRESET = {
+    "Binance": "Binance",
+    "OKX": "OKX",
+    "Bitget": None,
+    "Gate": None,
+    "Hyperliquid": None,
+    "Bitunix": None,
+    "Deribit": None,
+    "Aster": None,
+}
+
+
+def _valid_perp_rows(rows: list[dict]) -> list[dict]:
+    """เฉพาะแถวที่มีราคาและไม่มี error เท่านั้น"""
+    out = []
+    for r in rows:
+        try:
+            price = float(r.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if price > 0 and not r.get("err"):
+            out.append(r)
+    return out
+
+
+def compute_arb_highlights(rows: list[dict]) -> dict:
+    """หา venue ราคาต่ำสุด/สูงสุดจากข้อมูลที่สำเร็จจริง
+
+    ใช้ threshold เพื่อไม่ให้ spread เล็กมากกลายเป็น signal หลอก
+    """
+    valid = _valid_perp_rows(rows)
+    if len(valid) < 2:
+        return {}
+    cheapest = min(valid, key=lambda r: float(r["price"]))
+    priciest = max(valid, key=lambda r: float(r["price"]))
+    lo = float(cheapest["price"])
+    hi = float(priciest["price"])
+    spread_pct = ((hi - lo) / lo * 100.0) if lo > 0 else 0.0
+    if spread_pct < ARB_HIGHLIGHT_THRESHOLD_PCT:
+        return {}
+    return {
+        "buy_venue": cheapest["exchange"],
+        "buy_price": lo,
+        "sell_venue": priciest["exchange"],
+        "sell_price": hi,
+        "spread_pct": spread_pct,
+        "spread_abs": hi - lo,
+    }
+
+
+def compute_spread_badge(rows: list[dict]) -> Optional[dict]:
+    valid = _valid_perp_rows(rows)
+    if len(valid) < 2:
+        return None
+    prices = [float(r["price"]) for r in valid]
+    lo, hi = min(prices), max(prices)
+    spread_pct = ((hi - lo) / lo * 100.0) if lo > 0 else 0.0
+    return {
+        "spread_pct": spread_pct,
+        "spread_abs": hi - lo,
+        "is_alert": spread_pct >= ARB_ALERT_THRESHOLD_PCT,
+        "low_venue": min(valid, key=lambda r: float(r["price"]))["exchange"],
+        "high_venue": max(valid, key=lambda r: float(r["price"]))["exchange"],
+    }
+
+
+def get_taker_fee_pct(venue_name: str) -> float:
+    """คืนค่า taker fee (%) จาก preset; venue ที่ไม่มี preset ใช้ fallback"""
+    preset_key = _VENUE_TO_FEE_PRESET.get(venue_name)
+    if preset_key and preset_key in GLOBAL_EXCHANGE_FEE_PRESET:
+        return float(GLOBAL_EXCHANGE_FEE_PRESET[preset_key])
+    return DEFAULT_TAKER_FEE_PCT
+
+
+def compute_net_arb_edge(
+    buy_venue: str,
+    buy_price: float,
+    sell_venue: str,
+    sell_price: float,
+    order_size_usd: float = 10_000.0,
+) -> dict:
+    """คำนวณ gross/net edge แบบ research estimate จาก taker fee 2 ขา"""
+    buy_fee_pct = get_taker_fee_pct(buy_venue)
+    sell_fee_pct = get_taker_fee_pct(sell_venue)
+    gross_edge_pct = ((sell_price - buy_price) / buy_price * 100.0) if buy_price > 0 else 0.0
+    total_fee_pct = buy_fee_pct + sell_fee_pct
+    net_edge_pct = gross_edge_pct - total_fee_pct
+    net_edge_usd = float(order_size_usd) * net_edge_pct / 100.0
+    return {
+        "gross_edge_pct": gross_edge_pct,
+        "total_fee_pct": total_fee_pct,
+        "net_edge_pct": net_edge_pct,
+        "net_edge_usd": net_edge_usd,
+        "is_profitable": net_edge_pct > 0,
+        "buy_fee_pct": buy_fee_pct,
+        "sell_fee_pct": sell_fee_pct,
+    }
+
+
+def render_arb_opportunity_card(highlights: dict, order_size_usd: float = 10_000.0) -> None:
+    if not highlights:
+        return
+    edge = compute_net_arb_edge(
+        highlights["buy_venue"], highlights["buy_price"],
+        highlights["sell_venue"], highlights["sell_price"],
+        order_size_usd,
+    )
+    tone = "#0ecb81" if edge["is_profitable"] else "#f6465d"
+    verdict = "✅ Net edge เป็นบวกหลังหัก fee" if edge["is_profitable"] else "❌ Net edge ติดลบหลังหัก fee"
+    st.markdown(
+        f"<div style='background:#181a20;border:1px solid #2b3139;"
+        f"border-left:3px solid {tone};border-radius:8px;padding:12px 16px;margin:8px 0;'>"
+        f"<div style='font-weight:700;color:{tone};font-size:.85rem;'>{verdict}</div>"
+        f"<div style='font-size:.78rem;color:#b7bdc6;margin-top:6px;line-height:1.7;'>"
+        f"ราคาต่ำสุด <b style='color:#EAECEF'>{_html.escape(str(highlights['buy_venue']))}</b> "
+        f"(${highlights['buy_price']:,.2f}, taker {edge['buy_fee_pct']:.3f}%) → "
+        f"ราคาสูงสุด <b style='color:#EAECEF'>{_html.escape(str(highlights['sell_venue']))}</b> "
+        f"(${highlights['sell_price']:,.2f}, taker {edge['sell_fee_pct']:.3f}%)<br>"
+        f"Gross edge: {edge['gross_edge_pct']:.3f}% · "
+        f"ค่าธรรมเนียมรวม: {edge['total_fee_pct']:.3f}% · "
+        f"<b style='color:{tone}'>Net edge: {edge['net_edge_pct']:+.3f}% "
+        f"(≈ ${edge['net_edge_usd']:+,.2f} ต่อขนาด ${order_size_usd:,.0f})</b>"
+        f"</div></div>",
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "⚠️ เป็น research estimate จาก taker fee เท่านั้น ไม่รวม funding rate, "
+        "เวลา/ค่าธรรมเนียมโอนข้ามกระดาน และ slippage จาก market depth จริง "
+        "ราคาที่ใช้เป็น observed price ไม่ใช่ executable bid/ask"
+    )
+
+
 _PV_HTML =r"""<!doctype html><html><head><meta charset="utf-8"><style>
 html,body{margin:0;padding:0;background:transparent;color:#EAECEF;
   font-family:"Source Sans Pro",-apple-system,"Segoe UI",Roboto,sans-serif;}
@@ -5499,6 +5640,10 @@ td{padding:12px 14px;border-bottom:1px solid #2b3139;font-variant-numeric:tabula
   border-radius:4px;padding:0 4px;}
 a{color:#4c9aff;text-decoration:none;}
 .up{color:#0ecb81}.dn{color:#f6465d}.mut{color:#5e6673}
+tr.arb-buy{background:rgba(14,203,129,.10);border-left:3px solid #0ecb81;}
+tr.arb-sell{background:rgba(246,70,93,.10);border-left:3px solid #f6465d;}
+tr.arb-buy td:first-child::after{content:" 🟢 ซื้อที่นี่";font-size:.68rem;color:#0ecb81;}
+tr.arb-sell td:first-child::after{content:" 🔴 ขายที่นี่";font-size:.68rem;color:#f6465d;}
 .note{color:#848e9c;font-size:.78rem;margin-top:8px;line-height:1.5;}
 </style></head><body>
 <div class="wrap"><table><thead><tr><th>Exchange</th><th>Symbol</th><th>Price($)</th>
@@ -5531,6 +5676,19 @@ const JOBS = {
 };
 
 function render(){
+  const valid = rows.filter(r => r.price && !r.err && isFinite(r.price));
+  let cheapest = null, priciest = null;
+  if(valid.length >= 2){
+    cheapest = valid.reduce((a,b) => a.price < b.price ? a : b);
+    priciest = valid.reduce((a,b) => a.price > b.price ? a : b);
+    const spreadPct = cheapest.price > 0 ? ((priciest.price - cheapest.price) / cheapest.price) * 100 : 0;
+    if(spreadPct < 0.02){ cheapest = null; priciest = null; }
+  }
+  rows.forEach(r => {
+    r.arbRole = '';
+    if(cheapest && r.exchange === cheapest.exchange) r.arbRole = 'buy';
+    if(priciest && r.exchange === priciest.exchange) r.arbRole = 'sell';
+  });
   const list = rows.slice().sort((a,b) => (b.turnover ?? -1) - (a.turnover ?? -1));
   document.getElementById('tb').innerHTML = list.map(r => {
     const via = r.via ? '<span class="via" title="ข้อมูลไม่ได้ดึงตรงจาก server">via '+esc(r.via)+'</span>' : '';
@@ -5546,7 +5704,8 @@ function render(){
     const logo = r.logo
       ? ('<span class="logo-wrap"><img class="logo" src="'+esc(r.logo)+'" alt="'+esc(r.exchange)+' logo" loading="lazy" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'inline-flex\';"><span class="logo-fallback" style="background:'+esc(r.bg)+';color:'+esc(r.fg)+'">'+esc(r.tx)+'</span></span>')
       : ('<span class="logo-wrap"><span class="logo-fallback" style="display:inline-flex;background:'+esc(r.bg)+';color:'+esc(r.fg)+'">'+esc(r.tx)+'</span></span>');
-    return '<tr><td><div class="ex">'+logo+esc(r.exchange)+via+'</div></td>'
+    const rowClass = r.arbRole === 'buy' ? 'arb-buy' : (r.arbRole === 'sell' ? 'arb-sell' : '');
+    return '<tr class="'+rowClass+'"><td><div class="ex">'+logo+esc(r.exchange)+via+'</div></td>'
       +'<td><a href="'+esc(r.url)+'" target="_blank" rel="noopener">'+esc(r.symbol)+'</a></td>'
       +'<td>'+p+'</td><td>'+c+'</td><td>'+t+'</td></tr>';
   }).join('');
@@ -5613,6 +5772,31 @@ def render_perp_venue_table (base :str ="BTC")->None :
         via =r ["via"]if isinstance (r ["via"],str )else None ,
         )
         )
+
+    # Cross-row arbitrage analysis: observed low/high venue, spread and fee-adjusted edge.
+    highlights =compute_arb_highlights (rows )
+    badge =compute_spread_badge (rows )
+
+    c_badge ,c_size =st .columns ([3 ,1 ])
+    with c_badge :
+        if badge :
+            tone ="#f6465d"if badge ["is_alert"]else "#848e9c"
+            bg ="rgba(246,70,93,.08)"if badge ["is_alert"]else "rgba(132,142,156,.08)"
+            st .markdown (
+            f"<span style='display:inline-block;padding:3px 10px;border-radius:6px;"
+            f"background:{bg};border:1px solid {tone};color:{tone};font-size:.78rem;font-weight:700;'>"
+            f"⚡ Spread: {badge['spread_pct']:.3f}% (${badge['spread_abs']:,.2f}) · "
+            f"ต่ำสุด { _html.escape(str(badge['low_venue'])) } / สูงสุด { _html.escape(str(badge['high_venue'])) }"
+            f"</span>",
+            unsafe_allow_html =True ,
+            )
+    with c_size :
+        order_size =st .number_input (
+            "ขนาดออเดอร์ (USD)",value =10000.0,min_value =100.0,step =1000.0,
+            key =f"arb_size_{base}",
+        )
+
+    render_arb_opportunity_card (highlights ,float (order_size ))
 
     payload =json .dumps (
     dict (base =base ,ts =ts ,rows =rows ),
