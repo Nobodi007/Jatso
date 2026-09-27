@@ -5453,17 +5453,18 @@ def _spot_okx_global(b: str) -> tuple[float, float, float]:
     return last, chg, float(d.get("volCcy24h") or 0.0)
 
 
-def _spot_bitunix_global(b: str) -> tuple[float, float, float]:
-    """Read Bitunix Spot public price with a documented REST fallback.
+def _spot_bitunix_global(b: str) -> tuple:
+    """Read Bitunix Spot price with direct REST first and a real-market fallback.
 
-    Bitunix documents /api/spot/v1/market/last_price as a public endpoint.
-    Some hosted environments can receive an HTTP 403 from that endpoint, so
-    retry the same public API with browser-like headers and then fall back to
-    the documented Spot K-line endpoint for the latest close. We never invent
-    24h volume/change when the Spot API does not provide them.
+    Bitunix documents the public Spot REST endpoints, but some hosted IPs can
+    receive HTTP 403 from api.bitunix.com. In that case, use CoinGecko's
+    Bitunix exchange ticker as a secondary market-data source. CoinGecko
+    exposes exchange-specific tickers and keeps the exchange identity attached
+    to the ticker, so this is still Bitunix Spot data rather than a generic BTC
+    price. The fallback may be cached and is therefore not treated as an
+    executable quote.
     """
     symbol = f"{b.upper()}USDT"
-    url = f"https://api.bitunix.com/api/spot/v1/market/last_price?symbol={symbol}"
     browser_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154.0 Safari/537.36",
         "Accept": "application/json,text/plain,*/*",
@@ -5472,7 +5473,10 @@ def _spot_bitunix_global(b: str) -> tuple[float, float, float]:
         "Origin": "https://www.bitunix.com",
     }
     last_err = None
+
+    # 1) Bitunix's documented direct Spot endpoint.
     try:
+        url = f"https://api.bitunix.com/api/spot/v1/market/last_price?symbol={symbol}"
         d = _http_json(url, timeout=8.0, extra_headers=browser_headers)
         if str(d.get("code")) not in {"0", "200"}:
             raise RuntimeError(str(d.get("msg") or "Bitunix spot error")[:80])
@@ -5482,27 +5486,52 @@ def _spot_bitunix_global(b: str) -> tuple[float, float, float]:
     except Exception as e:
         last_err = e
 
-    # Documented Spot K-line endpoint: use the latest close as a price-only
-    # fallback. This still stays Spot and avoids fabricating volume statistics.
+    # 2) CoinGecko exchange-specific ticker fallback.
+    #    Prefer the configured API key when available, but do not require one.
     try:
-        kurl = f"https://api.bitunix.com/api/spot/v1/market/kline?symbol={symbol}&interval=1"
-        kd = _http_json(kurl, timeout=8.0, extra_headers=browser_headers)
-        if str(kd.get("code")) not in {"0", "200"}:
-            raise RuntimeError(str(kd.get("msg") or "Bitunix spot kline error")[:80])
-        data = kd.get("data") or []
-        if isinstance(data, dict):
-            rows = [data]
-        else:
-            rows = list(data)
-        if rows:
-            row = rows[-1]
-            px = float(row.get("close") or row.get("last") or 0.0)
+        cg_id = COINGECKO_ID_MAP.get(b.upper(), b.lower()) if "COINGECKO_ID_MAP" in globals() else b.lower()
+        cg_url = (
+            f"https://api.coingecko.com/api/v3/coins/{cg_id}/tickers"
+            f"?exchange_ids=bitunix&include_exchange_logo=false&page=1"
+        )
+        cg_headers = {
+            "User-Agent": "Nobody-Dealer-Suite/1.0",
+            "Accept": "application/json",
+        }
+        try:
+            cg_key = str(st.secrets.get("coingecko_api_key", "") or os.environ.get("COINGECKO_API_KEY", "")).strip()
+        except Exception:
+            cg_key = str(os.environ.get("COINGECKO_API_KEY", "")).strip()
+        if cg_key:
+            cg_headers["x-cg-demo-api-key"] = cg_key
+        d = _http_json(cg_url, timeout=8.0, extra_headers=cg_headers)
+        tickers = d.get("tickers") or []
+        candidates = []
+        for x in tickers:
+            base = str(x.get("base") or "").upper()
+            target = str(x.get("target") or "").upper()
+            market = x.get("market") or {}
+            if base != b.upper() or target not in {"USDT", "USDC", "USD"}:
+                continue
+            try:
+                last = float(x.get("last") or 0.0)
+                usd_px = float((x.get("converted_last") or {}).get("usd") or 0.0)
+                volume_usd = float((x.get("converted_volume") or {}).get("usd") or 0.0)
+                px = usd_px if usd_px > 0 else last
+            except (TypeError, ValueError):
+                continue
             if px > 0:
-                return px, None, 0.0
+                candidates.append((px, volume_usd, str(market.get("name") or "Bitunix")))
+        if candidates:
+            # Highest reported USD turnover is the preferred Bitunix ticker.
+            px, vol, _market_name = max(candidates, key=lambda z: z[1])
+            return px, None, vol, "CoinGecko"
     except Exception as e:
         last_err = e
 
-    raise RuntimeError(f"Bitunix Spot unavailable: {type(last_err).__name__ if last_err else 'unknown'}")
+    raise RuntimeError(
+        f"Bitunix Spot unavailable: {type(last_err).__name__ if last_err else 'unknown'}"
+    )
 
 
 def _spot_deribit(b: str) -> tuple[float, float, float]:
@@ -5765,7 +5794,12 @@ def fetch_perp_venues (base :str ="BTC")->tuple [pd.DataFrame ,str ]:
             market_type=market_type,
         )
         try:
-            p, c, t = v["fn"](base)
+            result = v["fn"](base)
+            if isinstance(result, tuple) and len(result) == 4:
+                p, c, t, via = result
+                row["via"] = via
+            else:
+                p, c, t = result
             if not (p > 0):
                 raise ValueError("bad price")
             row.update(price=p, chg=c, turnover=t)
