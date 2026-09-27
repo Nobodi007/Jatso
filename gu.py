@@ -14367,121 +14367,132 @@ def render_print_report (fund_name :str ,cfg :dict [str ,Any ],sim :dict [str ,A
     # =========================================================================
 
 
-def _render_ai_portfolio_narrator (sim :dict [str ,Any ],snap :dict [str ,Any ],
-market_df :Optional [pd .DataFrame ])->None :
-    """แสดง AI Portfolio Narrator แบบข้อความเท่านั้น — cache 1 ครั้ง/วัน."""
+def _render_ai_daily_portfolio_brief (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :Optional [pd .DataFrame ])->None :
+    """AI Daily Portfolio Brief — server facts first, Gemini only interprets them."""
     try :
         api_key =st .secrets ["gemini_api_key"]
     except Exception :
         api_key =os .environ .get ("GEMINI_API_KEY","")
     if not api_key :
-        return 
+        return
 
-        # ใช้วันที่ไทยเพื่อให้ cache เปลี่ยนตามวันของผู้ใช้/ตลาดไทย
+    sim =st .session_state .get ("sim",{}) or {}
+    if not isinstance (sim,dict ):
+        sim ={}
+
+    try :
+        context =_build_ai_portfolio_context (cfg ,data ,market_df )
+    except Exception :
+        context ={"available":False }
+
+    if not context.get ("available"):
+        return
+
+    portfolio =context.get ("portfolio",{}) or {}
+    holdings =context.get ("holdings",[]) or []
+    risk =context.get ("risk_copilot",{}) or {}
+    risk_facts =risk.get ("facts",{}) or {}
+    daily =context.get ("daily_pnl",{}) or {}
+
+    # All displayed numbers below are calculated by Nobody, not by Gemini.
+    portfolio_value =float (portfolio.get ("total_value_thb",0 )or 0 )
+    cash_thb =float (portfolio.get ("cash_thb",0 )or 0 )
+    cash_pct =(cash_thb /portfolio_value *100.0 )if portfolio_value >0 else 0.0
+    daily_pnl_thb =float (daily.get ("net_pnl_thb",0 )or 0 )
+    daily_pnl_pct =(daily_pnl_thb /portfolio_value *100.0 )if portfolio_value >0 else 0.0
+
+    ranked =sorted (
+        [h for h in holdings if float (h.get ("market_value_thb",0 )or 0 )>0],
+        key =lambda h :float (h.get ("allocation_pct",0 )or 0 ),
+        reverse =True ,
+    )
+    top_exposure =ranked [0]if ranked else {}
+    top_exposure_asset =str (top_exposure.get ("asset","—" )).upper ()or "—"
+    top_exposure_pct =float (top_exposure.get ("allocation_pct",0 )or 0 )
+
+    active_dca =sum (
+        1 for plan in (sim.get ("dca_plans",[])or [])
+        if isinstance (plan,dict )and bool (plan.get ("enabled",False))
+    )
+
+    nc =risk_facts.get ("nc",{})or {}
+    nc_buffer =nc.get ("buffer_thb")
+    overall_level =str (risk_facts.get ("overall_level","")or "")
+
+    facts ={
+        "portfolio_value_thb":round (portfolio_value,2 ),
+        "daily_pnl_thb":round (daily_pnl_thb,2 ),
+        "daily_pnl_pct":round (daily_pnl_pct,2 ),
+        "cash_thb":round (cash_thb,2 ),
+        "cash_pct":round (cash_pct,2 ),
+        "top_exposure_asset":top_exposure_asset,
+        "top_exposure_pct":round (top_exposure_pct,2 ),
+        "nc_buffer_thb":round (float (nc_buffer),2 )if nc_buffer is not None else None,
+        "nc_level":str (nc.get ("level","—")),
+        "active_auto_dca_plans":active_dca,
+        "risk_overall_level":overall_level or "—",
+    }
+
     today_key =pd .Timestamp .now (tz ="Asia/Bangkok").strftime ("%Y-%m-%d")
-    cache =sim .setdefault ("ai_narration_cache",{})
-    refresh =False 
+    cache =sim .setdefault ("ai_daily_brief_cache",{})
+    cache_key =json .dumps (facts ,sort_keys =True ,ensure_ascii =False )
+    brief_text =None
+    if cache.get ("date")==today_key and cache.get ("facts_key")==cache_key and cache.get ("text"):
+        brief_text =str (cache.get ("text"))
 
-    if not refresh and cache .get ("date")==today_key and cache .get ("text"):
-        narration =str (cache ["text"])
-    else :
-        pct_map :dict [str ,float ]={}
-        if isinstance (market_df ,pd .DataFrame )and not market_df .empty :
-            for _ ,row in market_df .iterrows ():
-                sym =str (row .get ("symbol","")).upper ().strip ()
-                if sym :
-                    try :
-                        pct_map [sym ]=float (row .get ("pct_change",0 )or 0 )
-                    except (TypeError ,ValueError ):
-                        pct_map [sym ]=0.0 
-
-        movers =[]
-        for row in snap .get ("rows",[])or []:
-            sym =str (row .get ("asset","")).upper ()
-            if not sym or sym not in pct_map :
-                continue 
-            movers .append ({
-            "asset":sym ,
-            "pct_24h":round (pct_map [sym ],2 ),
-            "allocation_pct":round (float (row .get ("allocation_pct",0 )or 0 ),2 ),
-            })
-        movers .sort (key =lambda x :x ["pct_24h"],reverse =True )
-
-        total_alloc =sum (x ["allocation_pct"]for x in movers )
-        weighted_pct =(
-        sum (x ["pct_24h"]*x ["allocation_pct"]for x in movers )/total_alloc 
-        if total_alloc >0 else 0.0 
+    if brief_text is None:
+        system =(
+        "คุณคือ Nobody AI Daily Portfolio Analyst. ตอบภาษาไทยสั้น กระชับ. "
+        "ข้อมูลที่ส่งมาใน JSON คือข้อเท็จจริงที่ระบบ Nobody คำนวณแล้ว ห้ามแก้ตัวเลข ห้ามสร้างตัวเลขใหม่ "
+        "ห้ามทำนายราคาและห้ามแนะนำซื้อหรือขาย. วิเคราะห์เฉพาะความสัมพันธ์จาก facts ที่ให้. "
+        "เขียน 1-2 ประโยคสั้น ๆ สำหรับหัวข้อ 'AI มองภาพรวม' เช่น ระบุสินทรัพย์ที่มีสัดส่วนสูงสุด "
+        "และอธิบายว่าการเปลี่ยนแปลงรายวันของพอร์ตมาจากอะไรเมื่อข้อมูลรองรับ. "
+        "ถ้าข้อมูลไม่พอ ให้บอกว่าไม่มีข้อมูลเพียงพอแทนการเดา."
         )
-
-        highlights ={
-        "portfolio_value_thb":round (float (snap .get ("total_value_thb",0 )or 0 ),2 ),
-        "weighted_24h_pct":round (weighted_pct ,2 ),
-        "top_gainer":movers [0 ]if movers else None ,
-        "top_loser":movers [-1 ]if len (movers )>1 else None ,
-        "holdings_count":len (movers ),
-        }
-
-        if not movers :
-            narration ="วันนี้ยังไม่มีข้อมูลราคาของสินทรัพย์ในพอร์ตเพียงพอสำหรับสรุปครับ"
-        else :
-            system =(
-            "คุณคือผู้บรรยายกีฬาที่กำลังสรุปผลงานพอร์ตคริปโตของผู้ใช้ "
-            "เขียนภาษาไทยให้ครบ 3 ประโยคเต็ม สไตล์นักข่าวกีฬา มีจังหวะ สนุก และอ่านแล้วรู้ภาพรวมทันที "
-            "ประโยคที่ 1 ต้องบอกทิศทางรวมของพอร์ตและตัวเลข weighted_24h_pct "
-            "ประโยคที่ 2 ต้องพูดถึงดาวเด่น top_gainer พร้อมเปอร์เซ็นต์ และตัวถ่วง top_loser ถ้ามี "
-            "ประโยคที่ 3 ต้องปิดท้ายด้วยมูลค่าพอร์ตรวมเป็นบาท "
-            "ห้ามขึ้นต้นด้วยคำทักทาย ห้ามพูดลอยๆ เช่น 'ทิศทางพอร์ตวันนี้...' โดยไม่มีตัวเลข "
-            "ห้ามแนะนำซื้อหรือขาย ห้ามทำนายราคา และห้ามสร้างตัวเลขเอง "
-            "ใช้เฉพาะตัวเลขที่อยู่ในข้อมูลที่ส่งให้เท่านั้น"
-            )
-            prompt =(
-            "เขียนสรุปพอร์ตวันนี้ให้ครบ 3 ประโยคตามกติกา ห้ามตัดให้สั้นกว่านี้ "
-            "ต้องใส่ตัวเลขจริงจากข้อมูลทุกประโยคที่เกี่ยวข้อง และต้องจบด้วยมูลค่าพอร์ตรวม "
-            "ห้ามเติมข้อมูลหรือตัวเลขอื่น:\n"+
-            json .dumps (highlights ,ensure_ascii =False )
-            )
-            with st .spinner ("🎙️ Gemini กำลังสรุปพอร์ตวันนี้…"):
-                narration =ask_ai ([{"role":"user","content":prompt }],api_key ,system )
-
-        cache .update (date =today_key ,text =str (narration ),highlights =highlights if movers else {})
-        # เก็บ state ให้ระบบบันทึก sim ตามกลไกเดิมของแอป
-        st .session_state ["sim"]=sim 
-
-        # ---- Polished compact narrator card (ข้อความเท่านั้น) ----
-        # จัดปุ่ม refresh ให้อยู่ในหัวการ์ด ไม่ลอยแยกออกไปด้านบน
-    safe_narration =_html .escape (str (narration ))
-    h1 ,h2 =st .columns ([8.5 ,1.5 ])
-    with h1 :
-        st .markdown (
-        '<div style="display:flex;align-items:center;gap:10px;margin:10px 0 8px;">'
-        '<div style="width:34px;height:34px;border-radius:10px;'
-        'background:rgba(14,203,129,.12);border:1px solid rgba(14,203,129,.25);'
-        'display:flex;align-items:center;justify-content:center;font-size:17px;">🎙️</div>'
-        '<div>'
-        '<div style="font-size:16px;font-weight:800;color:#F0F2F5;line-height:1.2;">AI Portfolio Narrator</div>'
-        '<div style="font-size:11px;color:#8B93A1;margin-top:3px;">สรุปภาพรวมพอร์ตวันนี้จากข้อมูลจริง</div>'
-        '</div></div>',
-        unsafe_allow_html =True ,
+        prompt =(
+        "สรุปภาพรวมพอร์ตวันนี้จากข้อเท็จจริงชุดนี้เท่านั้น:\n"+
+        json .dumps (facts ,ensure_ascii =False )
         )
-    with h2 :
-        refresh2 =st .button ("↻",key ="ai_narrator_refresh_card",help ="สรุปใหม่")
+        with st .spinner ("🤖 Gemini กำลังสรุป Daily Portfolio Brief…"):
+            brief_text =ask_ai ([{"role":"user","content":prompt }],api_key ,system )
+        cache.update (date =today_key ,facts_key =cache_key ,text =str (brief_text))
+        st .session_state ["sim"] =sim
 
-        # ถ้ากดปุ่มหัวการ์ด ให้ regenerate ในรอบถัดไปโดยไม่สร้างปุ่มลอย
-    if refresh2 :
-        cache .pop ("date",None )
-        st .rerun ()
+    safe =_html .escape (str (brief_text))
+    daily_cls ="up"if daily_pnl_thb >=0 else "down"
+    daily_sign ="+"if daily_pnl_thb >=0 else ""
+    cash_txt =f"฿{cash_thb:,.0f} ({cash_pct:.1f}%)"
+    nc_txt =f"฿{float(nc_buffer):,.0f}"if nc_buffer is not None else "—"
 
     st .markdown (
-    '<div style="position:relative;overflow:hidden;'
-    'background:linear-gradient(135deg,#171A20 0%,#14171C 100%);'
-    'border:1px solid #2A3039;border-radius:14px;'
-    'padding:17px 20px 16px;margin:0 0 18px;box-shadow:0 4px 18px rgba(0,0,0,.12);">'
-    '<div style="position:absolute;left:0;top:0;bottom:0;width:3px;background:#0ECB81;"></div>'
-    '<div style="font-size:12px;color:#8B93A1;margin-bottom:7px;">TODAY\'S PORTFOLIO BRIEF</div>'
-    f'<div style="font-size:15px;font-weight:500;color:#EAECEF;line-height:1.85;">{safe_narration }</div>'
-    '</div>',
-    unsafe_allow_html =True ,
+    '<div style="display:flex;align-items:center;gap:10px;margin:10px 0 8px;">'
+    '<div style="width:34px;height:34px;border-radius:10px;background:rgba(14,203,129,.12);'
+    'border:1px solid rgba(14,203,129,.25);display:flex;align-items:center;justify-content:center;font-size:17px;">🤖</div>'
+    '<div><div style="font-size:16px;font-weight:800;color:#F0F2F5;line-height:1.2;">AI Daily Portfolio Brief</div>'
+    '<div style="font-size:11px;color:#8B93A1;margin-top:3px;">ข้อเท็จจริงจาก Nobody + การตีความของ AI</div></div></div>',
+    unsafe_allow_html =True )
+
+    daily_color = "#0ECB81" if daily_pnl_thb >= 0 else "#F6465D"
+    brief_html = (
+        '<div style="background:linear-gradient(135deg,#171A20 0%,#14171C 100%);border:1px solid #2A3039;'
+        'border-radius:14px;padding:16px 18px;margin:0 0 18px;box-shadow:0 4px 18px rgba(0,0,0,.12);">'
+        '<div style="font-size:12px;color:#8B93A1;margin-bottom:12px;">PORTFOLIO BRIEF</div>'
+        '<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;">'
+        f'<div><div style="font-size:11px;color:#8B93A1;">มูลค่าพอร์ต</div><div style="font-size:19px;font-weight:800;color:#EAECEF;">฿{portfolio_value:,.0f}</div></div>'
+        f'<div><div style="font-size:11px;color:#8B93A1;">วันนี้</div><div style="font-size:19px;font-weight:800;color:{daily_color};">{daily_sign}{daily_pnl_pct:,.2f}%</div></div>'
+        f'<div><div style="font-size:11px;color:#8B93A1;">Exposure สูงสุด</div><div style="font-size:19px;font-weight:800;color:#EAECEF;">{_html.escape(top_exposure_asset)} {top_exposure_pct:.1f}%</div></div>'
+        f'<div><div style="font-size:11px;color:#8B93A1;">Cash</div><div style="font-size:19px;font-weight:800;color:#EAECEF;">{cash_txt}</div></div>'
+        '</div>'
+        f'<div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:14px;padding-top:12px;border-top:1px solid #2A3039;">'
+        f'<span style="font-size:12px;color:#AEB4BE;">NC Buffer <b style="color:#EAECEF;">{nc_txt}</b></span>'
+        f'<span style="font-size:12px;color:#AEB4BE;">Auto DCA Active <b style="color:#EAECEF;">{active_dca} แผน</b></span>'
+        f'<span style="font-size:12px;color:#AEB4BE;">Risk <b style="color:#EAECEF;">{_html.escape(overall_level or "—")}</b></span>'
+        '</div>'
+        f'<div style="margin-top:13px;padding-top:12px;border-top:1px solid #2A3039;color:#EAECEF;font-size:14px;line-height:1.75;">'
+        f'<b style="color:#0ECB81;">AI มองภาพรวม:</b> {safe}</div>'
+        '</div>'
     )
+    st .markdown (brief_html,unsafe_allow_html =True )
 
 
     # =========================================================================
@@ -15635,8 +15646,7 @@ market_df :Optional [pd .DataFrame ]=None )->None :
 
     # ---- AI Portfolio Narrator (ข้อความเท่านั้น) ----
     try :
-        _narrator_snap =portfolio_snapshot (sim ,price_thb_map )
-        _render_ai_portfolio_narrator (sim ,_narrator_snap ,market_df )
+        _render_ai_daily_portfolio_brief (cfg ,data ,market_df)
     except Exception as _e :
     # ฟีเจอร์ AI ห้ามทำให้ Dashboard หลักล่ม
         pass 
