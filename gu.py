@@ -16474,75 +16474,131 @@ def _main_body() -> None:
         st.markdown("""
         <style>
         .st-key-desktop_navigation {
-            margin: 2px 0 14px 0 !important;
+            margin: 2px 0 18px 0 !important;
+            padding-bottom: 14px !important;
+            border-bottom: 2px solid #0ecb81 !important;
         }
+
+        /* ---- ปุ่มหมวดหลักบนแถบเมนู (flat style เหมือน Bitkub) ---- */
+        .st-key-desktop_navigation [data-testid="stButton"] > button,
         .st-key-desktop_navigation [data-testid="stPopover"] > button {
-            min-height: 38px !important;
-            width: auto !important;
-            padding: 6px 14px !important;
-            border: 1px solid #2f3640 !important;
-            border-radius: 10px !important;
-            background: #181a20 !important;
-            color: #EAECEF !important;
-            font-size: 13px !important;
-            font-weight: 700 !important;
+            min-height: 40px !important;
+            width: 100% !important;
+            padding: 6px 10px !important;
+            border: none !important;
+            border-radius: 0 !important;
+            background: transparent !important;
+            color: #c4cad3 !important;
+            font-size: 14px !important;
+            font-weight: 600 !important;
             box-shadow: none !important;
+            position: relative;
         }
+        .st-key-desktop_navigation [data-testid="stButton"] > button:hover,
         .st-key-desktop_navigation [data-testid="stPopover"] > button:hover {
-            border-color: #0ecb81 !important;
-            background: #20242b !important;
+            color: #ffffff !important;
+            background: transparent !important;
         }
+        /* ปุ่ม active (type=primary) ให้มีเส้นใต้เขียว */
+        .st-key-desktop_navigation [data-testid="stButton"] > button[kind="primary"],
+        .st-key-desktop_navigation [data-testid="stPopover"] > button[kind="primary"] {
+            background: transparent !important;
+            color: #ffffff !important;
+            border: none !important;
+            box-shadow: inset 0 -3px 0 0 #0ecb81 !important;
+        }
+
+        /* ---- Mega menu dropdown (popover body) ---- */
         .st-key-desktop_navigation [data-testid="stPopoverBody"] {
-            min-width: 280px !important;
-            max-width: 360px !important;
-            padding: 12px !important;
+            min-width: 260px !important;
+            max-width: 340px !important;
+            padding: 14px !important;
             background: #181a20 !important;
             border: 1px solid #2b3139 !important;
-            border-radius: 14px !important;
+            border-radius: 12px !important;
         }
-        .st-key-desktop_navigation [data-testid="stPopoverBody"] [data-testid="stRadio"] label {
-            padding: 9px 10px !important;
-            border-radius: 9px !important;
-            color: #b8bac2 !important;
+        .st-key-desktop_navigation [data-testid="stPopoverBody"] [data-testid="stButton"] > button {
+            justify-content: flex-start !important;
+            text-align: left !important;
             font-size: 13px !important;
+            font-weight: 500 !important;
+            color: #b8bac2 !important;
+            padding: 8px 10px !important;
+            border-radius: 8px !important;
         }
-        .st-key-desktop_navigation [data-testid="stPopoverBody"] [data-testid="stRadio"] label:hover {
+        .st-key-desktop_navigation [data-testid="stPopoverBody"] [data-testid="stButton"] > button:hover {
             background: rgba(255,255,255,.05) !important;
             color: #fff !important;
         }
-        .st-key-desktop_navigation .desktop-current-page {
-            display: inline-flex !important;
-            align-items: center !important;
-            margin-left: 8px !important;
-            color: #848e9c !important;
-            font-size: 12px !important;
-            vertical-align: middle !important;
+        .st-key-desktop_navigation [data-testid="stPopoverBody"] [data-testid="stButton"] > button[kind="primary"] {
+            background: rgba(14,203,129,.10) !important;
+            color: #0ecb81 !important;
+            box-shadow: none !important;
         }
+
         @media (max-width: 900px) {
             .st-key-desktop_navigation { display:none !important; }
         }
         </style>
         """, unsafe_allow_html=True)
 
-        menu_col, current_col = st.columns([1.15, 5.85], vertical_alignment="center")
-        with menu_col:
-            with st.popover("☰ เมนู", use_container_width=False):
-                st.markdown("### ไปยังหน้า")
-                for _nav_item in nav_labels_all:
-                    _active = _nav_item == current_nav
-                    if st.button(
-                        ("●  " if _active else "○  ") + _nav_item,
-                        key=f"desktop_menu_{nav_labels_all.index(_nav_item)}",
-                        use_container_width=True,
-                        type="primary" if _active else "secondary",
-                    ):
-                        st.session_state["main_nav"] = _nav_item
-                        st.rerun()
-        with current_col:
-            st.markdown(
-                f'<span class="desktop-current-page">กำลังอยู่: <b style="color:#EAECEF;margin-left:4px;">{current_nav}</b></span>',
-                unsafe_allow_html=True,
-            )
+        # ---- จัดกลุ่มเมนูแบบ Bitkub-style mega menu ----
+        nav_groups = {
+            "📊 ซื้อขาย & วางแผน": [
+                NAV_LABELS[1],   # Backtest Simulator
+                NAV_LABELS[2],   # Liquidity & Capital Planner
+                NAV_LABELS[3],   # Exchange UI Simulator
+                NAV_LABELS[5],   # Investment Backtest
+            ],
+            "💼 พอร์ตของฉัน": [
+                NAV_LABELS[4],   # Portfolio & Wallet
+                NAV_LABELS[8],   # What-if Simulator
+                NAV_LABELS[9],   # Trading Journal
+                NAV_LABELS[10],  # Portfolio Calendar
+                NAV_LABELS[14],  # Rebalance Simulator
+                NAV_LABELS[17],  # Customer Timeline
+                NAV_LABELS[18],  # Fund Fact Sheet (Print)
+            ],
+            "📈 วิเคราะห์ & ความเสี่ยง": [
+                NAV_LABELS[6],   # Risk Center
+                NAV_LABELS[7],   # Portfolio Intelligence
+                NAV_LABELS[11],  # Fee Analytics
+                NAV_LABELS[12],  # Correlation & Diversification
+                NAV_LABELS[13],  # Smart Alerts
+                NAV_LABELS[15],  # Performance Analytics
+                NAV_LABELS[16],  # Cash Flow Analytics
+            ],
+            "🧪 Quant Research": [
+                NAV_LABELS[19],  # Quant Research Lab
+                NAV_LABELS[20],  # System Health Center
+            ],
+        }
+
+        bar_cols = st.columns([0.85] + [1.15] * len(nav_groups) + [3.2])
+
+        with bar_cols[0]:
+            home_active = current_nav == NAV_DASHBOARD
+            if st.button("🏠 หน้าหลัก", key="navbar_home", use_container_width=True,
+                        type="primary" if home_active else "secondary"):
+                st.session_state["main_nav"] = NAV_DASHBOARD
+                st.rerun()
+
+        for i, (group_name, items) in enumerate(nav_groups.items()):
+            with bar_cols[i + 1]:
+                group_active = current_nav in items
+                display_label = group_name + (" ●" if group_active else "")
+                with st.popover(display_label, use_container_width=True):
+                    st.caption(group_name)
+                    for item in items:
+                        is_active = item == current_nav
+                        if st.button(
+                            item,
+                            key=f"navbar_item_{i}_{items.index(item)}",
+                            use_container_width=True,
+                            type="primary" if is_active else "secondary",
+                        ):
+                            st.session_state["main_nav"] = item
+                            st.rerun()
 
     # Mobile UI อยู่ใน shell แยก เพื่อไม่ให้ถูก render บน Desktop
     # แต่ยังคงสร้าง widget ได้ปกติบน Mobile viewport
