@@ -5143,14 +5143,14 @@ def render_tab1 (cfg :dict [str ,Any ],data :pd .DataFrame ,data_err :Optional [
     # ---- 5.3 TAB 2 — LIQUIDITY & CAPITAL PLANNER ---------------------------
 
     # =========================================================================
-    # GLOBAL PERP VENUE TABLE (v3) — เทียบราคา/ปริมาณเทรดข้ามกระดานโลก
+    # GLOBAL SPOT VENUE TABLE (v4) — เทียบราคา/ปริมาณเทรดข้ามกระดานโลก
     # ลำดับการดึงข้อมูล:
     #   1) server ดึงตรงจากกระดานทั้ง 9 (ฟรี ไม่ใช้ key)
     #   2) [ตัวเลือก] กระดานไหนล้ม + มี coinglass_api_key → ดึงผ่าน CoinGlass
     #   3) กระดานที่ยังล้มอยู่ (เช่น Binance) → ให้ browser ของผู้ใช้ดึงเอง
     #      ใช้ IP ผู้ใช้ จึงช่วยหลีกเลี่ยงข้อจำกัดภูมิภาคของ server
     #
-    # จุดเรียกใน render_tab2 ยังเป็น render_perp_venue_table(asset) เหมือนเดิม
+    # Existing callers still use render_perp_venue_table(asset) for compatibility
     # =========================================================================
 
 _VENUE_HEADERS ={
@@ -5184,7 +5184,7 @@ def _pv_binance (b :str )->tuple [float ,float ,float ]:
     the dedicated fapi hostname is unavailable/restricted.  Both endpoints
     expose the same public 24h ticker payload shape; keep the fallback
     server-side so Binance remains a real venue row and still participates
-    in the existing Perpetual calculations when data is available.
+    in legacy compatibility code; the Global Venue Board now uses Spot only.
     """
     urls = [
         f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={b }USDT",
@@ -5282,7 +5282,7 @@ def _pv_bitunix (b :str )->tuple [float ,float ,float ]:
 
 # --------------------------------------------------------------------------
 # GLOBAL SPOT VENUES — เพิ่มกระดาน Spot ขนาดใหญ่เข้า Board เดียวกัน
-# หมายเหตุ: Spot จะไม่ถูกนำไปคำนวณ Perpetual arbitrage / funding / execution
+# หมายเหตุ: Global Venue Board ใช้ Spot เท่านั้น; ไม่มี funding/perpetual execution ในตารางนี้
 # เพื่อไม่ให้เอาคนละ market type มาเทียบกันผิดความหมาย
 # --------------------------------------------------------------------------
 def _spot_kraken(b: str) -> tuple[float, float, float]:
@@ -5344,6 +5344,82 @@ def _spot_kucoin(b: str) -> tuple[float, float, float]:
     return last, chg, turnover
 
 
+# --------------------------------------------------------------------------
+# GLOBAL SPOT VENUES — former perpetual venues are now represented by SPOT
+# --------------------------------------------------------------------------
+def _spot_binance(b: str) -> tuple[float, float, float]:
+    d = _http_json(f"https://api.binance.com/api/v3/ticker/24hr?symbol={b.upper()}USDT")
+    return float(d["lastPrice"]), float(d["priceChangePercent"]), float(d["quoteVolume"])
+
+
+def _spot_gate(b: str) -> tuple[float, float, float]:
+    d = _http_json(f"https://api.gateio.ws/api/v4/spot/tickers?currency_pair={b.upper()}_USDT")[0]
+    return float(d["last"]), float(d.get("change_percentage") or 0.0), float(d.get("quote_volume") or 0.0)
+
+
+def _spot_hyperliquid(b: str) -> tuple[float, float, float]:
+    doc = _http_json("https://api.hyperliquid.xyz/info", {"type": "spotMetaAndAssetCtxs"})
+    meta, ctxs = doc
+    target = b.upper()
+    idx = None
+    for i, u in enumerate(meta.get("universe", [])):
+        name = str(u.get("name") or "").upper()
+        if name in {f"{target}/USDC", f"{target}/USDT"} or name.startswith(target + "/"):
+            idx = i
+            break
+    if idx is None:
+        raise ValueError(f"Hyperliquid spot pair not found: {target}")
+    c = ctxs[idx]
+    px = float(c.get("midPx") or c.get("markPx") or 0.0)
+    prev = float(c.get("prevDayPx") or 0.0)
+    chg = ((px / prev) - 1.0) * 100.0 if prev > 0 else 0.0
+    turn = float(c.get("dayNtlVlm") or 0.0)
+    if px <= 0:
+        raise ValueError("bad Hyperliquid spot price")
+    return px, chg, turn
+
+
+def _spot_bitget_global(b: str) -> tuple[float, float, float]:
+    d = _http_json(f"https://api.bitget.com/api/v3/market/tickers?category=SPOT&symbol={b.upper()}USDT")
+    x = (d.get("data") or [])[0]
+    return float(x["lastPrice"]), float(x.get("price24hPcnt") or 0.0) * 100.0, float(x.get("turnover24h") or 0.0)
+
+
+def _spot_okx_global(b: str) -> tuple[float, float, float]:
+    d = _http_json(f"https://www.okx.com/api/v5/market/ticker?instId={b.upper()}-USDT")["data"][0]
+    last, op = float(d["last"]), float(d["open24h"])
+    chg = ((last / op) - 1.0) * 100.0 if op > 0 else 0.0
+    # For SPOT, OKX volCcy24h is quote-currency volume.
+    return last, chg, float(d.get("volCcy24h") or 0.0)
+
+
+def _spot_bitunix_global(b: str) -> tuple[float, float, float]:
+    # Bitunix Spot public docs expose latest price directly. The spot ticker
+    # endpoint does not expose the same 24h stats payload as its futures API,
+    # so turnover/change remain unknown rather than being fabricated.
+    d = _http_json(f"https://api.bitunix.com/api/spot/v1/market/last_price?symbol={b.upper()}USDT")
+    if str(d.get("code")) not in {"0", "200"}:
+        raise RuntimeError(str(d.get("msg") or "Bitunix spot error")[:60])
+    return float(d["data"]), None, 0.0
+
+
+def _spot_deribit(b: str) -> tuple[float, float, float]:
+    # Deribit Spot supports BTC_USDC and BTC_USDT. Use BTC_USDC as the primary
+    # USD-denominated spot reference; its API ticker returns last + 24h stats.
+    instrument = f"{b.upper()}_USDC"
+    d = _http_json(f"https://www.deribit.com/api/v2/public/ticker?instrument_name={instrument}")["result"]
+    last = float(d["last_price"])
+    stats = d.get("stats") or {}
+    chg = float(stats.get("price_change") or 0.0)
+    turn = float(stats.get("volume_usd") or 0.0)
+    return last, chg, turn
+
+
+def _spot_aster_global(b: str) -> tuple[float, float, float]:
+    d = _http_json(f"https://sapi.asterdex.com/api/v3/ticker/24hr?symbol={b.upper()}USDT")
+    return float(d["lastPrice"]), float(d.get("priceChangePercent") or 0.0), float(d.get("quoteVolume") or 0.0)
+
+
 _SPOT_VENUES =[
     dict(name="Kraken", bg="#5741D9", fg="#ffffff", tx="K",
          logo="https://www.google.com/s2/favicons?domain=kraken.com&sz=64",
@@ -5371,6 +5447,53 @@ _SPOT_VENUES =[
          url=lambda b: f"https://www.kucoin.com/trade/{b}-USDT",
          note="Spot · USDT"),
 ]
+
+# All venues shown on the board are now SPOT.  The original perpetual venue
+# definitions are retained below only for backward compatibility with older
+# code paths, but fetch_perp_venues() no longer uses them.
+_GLOBAL_SPOT_VENUES = [
+    dict(name="Binance", bg="#F0B90B", fg="#0b0e11", tx="BN",
+         logo="https://www.google.com/s2/favicons?domain=binance.com&sz=64",
+         fn=_spot_binance, sym=lambda b: f"{b}USDT",
+         url=lambda b: f"https://www.binance.com/en/trade/{b}_USDT?type=spot",
+         note="Spot · USDT"),
+    dict(name="OKX", bg="#000000", fg="#ffffff", tx="OK",
+         logo="https://www.google.com/s2/favicons?domain=okx.com&sz=64",
+         fn=_spot_okx_global, sym=lambda b: f"{b}-USDT",
+         url=lambda b: f"https://www.okx.com/trade-spot/{b.lower()}-usdt",
+         note="Spot · USDT"),
+    dict(name="Gate", bg="#2354E6", fg="#ffffff", tx="G",
+         logo="https://www.google.com/s2/favicons?domain=gate.com&sz=64",
+         fn=_spot_gate, sym=lambda b: f"{b}_USDT",
+         url=lambda b: f"https://www.gate.com/trade/{b}_USDT",
+         note="Spot · USDT"),
+    dict(name="Bitget", bg="#00F0FF", fg="#0b0e11", tx="BG",
+         logo="https://www.google.com/s2/favicons?domain=bitget.com&sz=64",
+         fn=_spot_bitget_global, sym=lambda b: f"{b}USDT",
+         url=lambda b: f"https://www.bitget.com/spot/{b}USDT",
+         note="Spot · USDT"),
+    dict(name="Hyperliquid", bg="#072723", fg="#97FCE4", tx="HL",
+         logo="https://www.google.com/s2/favicons?domain=hyperliquid.xyz&sz=64",
+         fn=_spot_hyperliquid, sym=lambda b: f"{b}/USDC",
+         url=lambda b: f"https://app.hyperliquid.xyz/spot/{b}",
+         note="Spot · USDC"),
+    dict(name="Bitunix", bg="#1F2A44", fg="#7CFFB2", tx="BU",
+         logo="https://www.google.com/s2/favicons?domain=bitunix.com&sz=64",
+         fn=_spot_bitunix_global, sym=lambda b: f"{b}USDT",
+         url=lambda b: f"https://www.bitunix.com/spot/{b}USDT",
+         note="Spot · USDT"),
+    dict(name="Deribit", bg="#0B7BE5", fg="#ffffff", tx="DB",
+         logo="https://www.google.com/s2/favicons?domain=deribit.com&sz=64",
+         fn=_spot_deribit, sym=lambda b: f"{b}_USDC",
+         url=lambda b: f"https://www.deribit.com/spot/{b}-USDC",
+         note="Spot · USDC"),
+    dict(name="Aster", bg="#E8B96A", fg="#0b0e11", tx="AS",
+         logo="https://www.google.com/s2/favicons?domain=asterdex.com&sz=64",
+         fn=_spot_aster_global, sym=lambda b: f"{b}USDT",
+         url=lambda b: f"https://www.asterdex.com/en/spot/{b}USDT",
+         note="Spot · USDT"),
+] + _SPOT_VENUES
+
 
 _PERP_VENUES =[
 dict (
@@ -5524,98 +5647,45 @@ rows :list [dict ],v :dict ,base :str
 
 @_cache_data (ttl =30 ,show_spinner =False )
 def fetch_perp_venues (base :str ="BTC")->tuple [pd.DataFrame ,str ]:
-    """ดึง Global Perpetual + Global Spot ในรอบเดียว
+    """Fetch the Global Spot Venue Board.
 
-    Spot ถูกเก็บเป็น market_type="spot" เพื่อให้แสดงบน Board เดียวกัน
-    แต่ไม่ปนเข้า Perpetual arbitrage / VWAP / opportunity history
+    Kept under the historical function name so existing callers do not break.
+    Every venue on this board is now SPOT; no perpetual ticker is used here.
     """
-    venues =[(v, "perp") for v in _PERP_VENUES] + [(v, "spot") for v in _SPOT_VENUES]
+    venues = [(v, "spot") for v in _GLOBAL_SPOT_VENUES]
 
-    def one (item :tuple[dict,str])->dict :
+    def one(item: tuple[dict, str]) -> dict:
         v, market_type = item
-        row =dict (
-        exchange =v ["name"],
-        symbol =v ["sym"](base ),
-        url =v ["url"](base ),
-        price =None ,
-        chg =None ,
-        turnover =None ,
-        err =None ,
-        via =None ,
-        market_type =market_type ,
+        row = dict(
+            exchange=v["name"],
+            symbol=v["sym"](base),
+            url=v["url"](base),
+            price=None,
+            chg=None,
+            turnover=None,
+            err=None,
+            via=None,
+            market_type=market_type,
         )
-        try :
-            p ,c ,t =v ["fn"](base )
-            if not (p >0):
-                raise ValueError ("bad price")
-            row .update (price =p ,chg =c ,turnover =t )
-        except urllib .error .HTTPError as e :
-            row ["err"]=f"HTTP {e .code }"
-        except Exception as e :
-            row ["err"]=type (e ).__name__
+        try:
+            p, c, t = v["fn"](base)
+            if not (p > 0):
+                raise ValueError("bad price")
+            row.update(price=p, chg=c, turnover=t)
+        except urllib.error.HTTPError as e:
+            row["err"] = f"HTTP {e.code}"
+        except Exception as e:
+            row["err"] = type(e).__name__
         return row
 
-    with ThreadPoolExecutor (max_workers =len (venues))as ex :
-        rows =list (ex .map (one ,venues))
+    with ThreadPoolExecutor(max_workers=len(venues)) as ex:
+        rows = list(ex.map(one, venues))
 
-    # Binance recovery: if the dedicated futures hostname is blocked by the
-    # hosting route, try Binance's public web host before external fallbacks.
-    for r in rows:
-        if r.get("exchange") != "Binance" or not r.get("err") or r.get("market_type") != "perp":
-            continue
-        try:
-            d = _http_json(
-                f"https://www.binance.com/fapi/v1/ticker/24hr?symbol={base}USDT",
-                timeout=5.0,
-            )
-            r.update(
-                price=float(d["lastPrice"]),
-                chg=float(d["priceChangePercent"]),
-                turnover=float(d["quoteVolume"]),
-                err=None,
-                via="Binance web",
-            )
-        except Exception:
-            pass
-
-    # CoinGlass fallback applies only to perpetual venues.
-    failed =[r for r in rows if r ["err"] and r.get("market_type")=="perp"]
-    if failed :
-        key =_coinglass_key ()
-        cg_rows :list [dict ]=[]
-        cg_err =""
-
-        if key :
-            try :
-                cg_rows =_cg_pairs (base ,key )
-            except urllib .error .HTTPError as e :
-                cg_err =f"CoinGlass HTTP {e .code }"
-            except Exception as e :
-                cg_err =f"CoinGlass {type (e ).__name__ }: {e }"[:70 ]
-
-        meta ={v ["name"]:v for v in (_PERP_VENUES + _SPOT_VENUES)}
-        for r in failed :
-            hit =_cg_pick (cg_rows ,meta [r ["exchange"]],base )if cg_rows else None
-            if hit :
-                r .update (
-                price =hit [0 ],
-                chg =hit [1 ],
-                turnover =hit [2 ],
-                err =None ,
-                via ="CoinGlass",
-                )
-            elif cg_err :
-                r ["err"]+=f" → {cg_err }"
-            elif key :
-                r ["err"]+=" → CoinGlass ไม่พบคู่นี้"
-
-    df =pd .DataFrame (rows )
-    # Perpetual first (by turnover), then Spot (by turnover), keeping the board
-    # visually grouped while still showing all venues together.
-    df ["_type_order"] =df ["market_type"].map ({"perp":0,"spot":1}).fillna(9)
-    df =df .sort_values (["_type_order","turnover"],ascending =[True,False],na_position ="last")
-    df =df .drop (columns ="_type_order")
-    return df .reset_index (drop =True ),pd .Timestamp .now ("Asia/Bangkok").strftime ("%H:%M:%S")
+    df = pd.DataFrame(rows)
+    df["_type_order"] = 0
+    df = df.sort_values(["_type_order", "turnover"], ascending=[True, False], na_position="last")
+    df = df.drop(columns="_type_order")
+    return df.reset_index(drop=True), pd.Timestamp.now("Asia/Bangkok").strftime("%H:%M:%S")
 
 
 # ==========================================================================
@@ -5640,11 +5710,9 @@ _VENUE_TO_FEE_PRESET = {
 
 
 def _valid_perp_rows(rows: list[dict]) -> list[dict]:
-    """เฉพาะแถว Perpetual ที่มีราคาและไม่มี error เท่านั้น; Spot ไม่ร่วม arb."""
+    """Historical helper name; now returns all usable Global Spot rows."""
     out = []
     for r in rows:
-        if str(r.get("market_type", "perp")).lower() != "perp":
-            continue
         try:
             price = float(r.get("price"))
         except (TypeError, ValueError):
@@ -5709,7 +5777,7 @@ def _valid_global_market_rows(rows: list[dict]) -> list[dict]:
 
 
 def compute_cross_market_highlights(rows: list[dict]) -> dict:
-    """Compare Spot + Perpetual observed prices for the same underlying asset.
+    """Compare observed prices across the Global Spot venues for the same asset.
 
     This is a cross-market price monitor, not an executable arbitrage quote: the
     board currently uses ticker/last prices rather than synchronized bid/ask.
@@ -5739,7 +5807,7 @@ def compute_cross_market_highlights(rows: list[dict]) -> dict:
 
 
 def render_cross_market_opportunity_card(highlights: dict, order_size_usd: float = 10_000.0) -> None:
-    """Show the cheapest-vs-most-expensive observed venue across Spot + Perp."""
+    """Show the cheapest-vs-most-expensive observed Global Spot venue."""
     if not highlights:
         return
     edge = compute_net_arb_edge(
@@ -5778,7 +5846,7 @@ def render_cross_market_opportunity_card(highlights: dict, order_size_usd: float
           </div>
         </div>
         <div style='color:#848e9c;font-size:.70rem;margin-top:8px;'>
-          Spot และ Perpetual เชื่อมกันในชั้นเปรียบเทียบราคาแล้ว · ใช้ observed/last price · ยังไม่ใช่ executable bid/ask quote
+          Global Spot venues เชื่อมกันในชั้นเปรียบเทียบราคาแล้ว · ใช้ observed/last price · ยังไม่ใช่ executable bid/ask quote
         </div>
         </div>""",
         unsafe_allow_html=True,
@@ -5819,7 +5887,7 @@ def compute_net_arb_edge(
 
 
 def render_arb_opportunity_card(highlights: dict, order_size_usd: float = 10_000.0) -> None:
-    """แสดงสรุป opportunity จากราคาที่สังเกตได้จริงของ Global Perpetual เท่านั้น."""
+    """แสดงสรุป opportunity จากราคาที่สังเกตได้จริงของ Global Spot venues."""
     if not highlights:
         return
 
@@ -5883,7 +5951,7 @@ def render_execution_quality_card(highlights: dict, rows: list[dict[str, Any]], 
         highlights["sell_venue"], highlights["sell_price"],
         order_size_usd,
     )
-    valid = [r for r in rows if r.get("market_type") != "spot" and not r.get("err") and r.get("turnover")]
+    valid = [r for r in rows if not r.get("err") and r.get("turnover")]
     max_turnover = max((float(r.get("turnover") or 0) for r in valid), default=0.0)
     by_name = {str(r.get("exchange")): r for r in valid}
     buy_row = by_name.get(str(highlights["buy_venue"]), {})
@@ -6040,7 +6108,7 @@ def _arb_history_record(highlights: Optional[dict], rows: list[dict[str, Any]], 
             highlights["sell_venue"], highlights["sell_price"],
             order_size_usd,
         )
-        valid = [r for r in rows if r.get("market_type") != "spot" and not r.get("err") and r.get("turnover")]
+        valid = [r for r in rows if not r.get("err") and r.get("turnover")]
         by_name = {str(r.get("exchange")): r for r in valid}
         buy = by_name.get(str(highlights["buy_venue"]), {})
         sell = by_name.get(str(highlights["sell_venue"]), {})
@@ -6450,17 +6518,16 @@ run();
 def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
     """Render the Global Venue Board with real comparison logic for both markets.
 
-    Perpetual and Spot are shown in one board, but each market type has its own
-    VWAP, turnover share, liquidity ranking and price ranking.  Perpetual-only
-    arbitrage remains isolated in the analysis layer below the table.
+    All venues are shown as Spot in one board, with one shared Spot VWAP, turnover share, liquidity ranking and price ranking.
     """
     valid = [r for r in rows if r.get("price") is not None and not r.get("err")]
     if not valid:
         st.warning("ไม่พบข้อมูล Global Venue ในขณะนี้")
         return
 
-    perp = [r for r in valid if str(r.get("market_type", "perp")).lower() == "perp"]
-    spot = [r for r in valid if str(r.get("market_type", "perp")).lower() == "spot"]
+    # All venues are intentionally SPOT in v115.
+    perp = []
+    spot = valid
 
     def market_stats(items: list[dict[str, Any]]) -> dict[str, Any]:
         total_turn = sum(float(r.get("turnover") or 0.0) for r in items)
@@ -6486,10 +6553,9 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
     perp_stats = market_stats(perp)
     spot_stats = market_stats(spot)
 
-    # Two layers: Perpetual-only arb stays isolated, while the board itself
-    # now also connects Spot + Perpetual for a global observed-price monitor.
-    low = min(perp, key=lambda r: float(r["price"])) if perp else None
-    high = max(perp, key=lambda r: float(r["price"])) if perp else None
+    # All venues are Spot; the price highlight therefore compares Spot vs Spot.
+    low = min(spot, key=lambda r: float(r["price"])) if spot else None
+    high = max(spot, key=lambda r: float(r["price"])) if spot else None
     spread_pct = (
         (float(high["price"]) / float(low["price"]) - 1.0) * 100.0
         if low and high and float(low["price"]) > 0 else 0.0
@@ -6526,8 +6592,7 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
             return "—"
 
     def liquidity_from_share(share: float) -> tuple[str, str, float]:
-        # Relative to the market type, so Spot is not unfairly labelled Low
-        # merely because Spot turnover is numerically smaller than Perpetual.
+        # Relative to the Global Spot market, so liquidity is comparable across venues.
         if share >= 30.0:
             return "High", "#0ecb81", 100.0
         if share >= 10.0:
@@ -6561,11 +6626,11 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
         chg = r.get("chg")
         turn = float(r.get("turnover") or 0.0)
         is_spot = str(r.get("market_type", "perp")).lower() == "spot"
-        stats = spot_stats if is_spot else perp_stats
+        stats = spot_stats
         vwap = float(stats["vwap"] or 0.0)
         dev = (p / vwap - 1.0) * 100.0 if vwap > 0 else 0.0
         max_dev = max(
-            [abs((float(x["price"]) / vwap - 1.0) * 100.0) for x in (spot if is_spot else perp) if vwap > 0] or [0.001]
+            [abs((float(x["price"]) / vwap - 1.0) * 100.0) for x in spot if vwap > 0] or [0.001]
         )
         width = min(42.0, abs(dev) / max_dev * 42.0)
         color = "#0ecb81" if dev <= 0 else "#f6465d"
@@ -6575,22 +6640,22 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
         turn_rank = int(stats["turn_rank"].get(name, 0) or 0)
         price_rank = int(stats["price_rank"].get(name, 0) or 0)
         liq_name, liq_color, liq_width = liquidity_from_share(share)
-        row_class = "spot-row" if is_spot else ""
+        row_class = "spot-row"
         role_html = ""
         if global_enabled and name == global_low_name:
             row_class = "buy"
-            role_html = f"<div class='arb-buy'>🟢 ซื้อที่นี่ · {('SPOT' if is_spot else 'PERP')}</div>"
+            role_html = "<div class='arb-buy'>🟢 ซื้อที่นี่ · SPOT</div>"
         elif global_enabled and name == global_high_name:
             row_class = "sell"
-            role_html = f"<div class='arb-sell'>🔴 ขายที่นี่ · {('SPOT' if is_spot else 'PERP')}</div>"
+            role_html = "<div class='arb-sell'>🔴 ขายที่นี่ · SPOT</div>"
         rank_html = ""
         if turn_rank <= 3:
             rank_html += f"<span class='rank'>Vol#{turn_rank}</span>"
         if price_rank == 1:
             rank_html += "<span class='rank cheap'>💰 #1 ราคา</span>"
-        type_cls = "type-spot" if is_spot else "type-perp"
-        type_label = "SPOT" if is_spot else "PERP"
-        share_label = "% ของ Spot" if is_spot else "% ของ Perpetual"
+        type_cls = "type-spot"
+        type_label = "SPOT"
+        share_label = "% ของ Spot"
         share_html = f"<div class='share'><i style='width:{min(100,share):.1f}%'></i></div><div class='muted'>{share:.1f}{share_label}</div>"
         via_html = f"<span class='via'>via {esc(r.get('via'))}</span>" if r.get("via") else ""
         logo_html = f"<img class='venue-logo' src='{esc(r.get('logo',''))}' onerror=\"this.style.display='none'\" />" if r.get("logo") else ""
@@ -6608,7 +6673,7 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
           <td><span class='liq' style='color:{liq_color}'>{liq_name}</span><div class='liqline'><i style='width:{liq_width:.1f}%;background:{liq_color}'></i></div></td>
         </tr>"""
 
-    body = [render_row(r) for r in perp] + [render_row(r) for r in spot]
+    body = [render_row(r) for r in spot]
     html = css + "<div class='nobody-pv-wrap'><table class='nobody-pv'><thead><tr><th>Exchange</th><th>Symbol</th><th>Price($)</th><th>Chg 24H(%)</th><th>vs VWAP</th><th>Turnover 24h</th><th>Liquidity</th></tr></thead><tbody>" + "".join(body) + "</tbody></table></div>"
     st.markdown(html, unsafe_allow_html=True)
 
@@ -6618,7 +6683,7 @@ def _render_global_perp_coin_tabs(default_base: str = "BTC") -> str:
 
     The control is intentionally rendered as a horizontal tab strip rather
     than a row of action buttons.  The selected coin is stored in Streamlit
-    session state and drives the Global Perpetual comparison below.
+    session state and drives the Global Spot comparison below.
     """
     choices = [a for a in SUPPORTED_ASSETS if a not in STABLECOINS]
     if not choices:
@@ -6632,7 +6697,7 @@ def _render_global_perp_coin_tabs(default_base: str = "BTC") -> str:
 
     st.markdown("""
     <style>
-      /* Nobody — Global Perpetual coin tabs */
+      /* Nobody — Global Spot coin tabs */
       div[data-testid="stRadio"]:has(input[value="BTC"]) > div:first-child {
         display:flex !important;
         gap:6px !important;
@@ -6816,7 +6881,7 @@ def render_perp_venue_table (base :str ="BTC")->None :
     # Fetch/build the venue rows first so the comparison table is the first
     # visual element in this section.  Analysis controls/cards follow below.
     df ,ts =fetch_perp_venues (base )
-    meta ={v ["name"]:v for v in (_PERP_VENUES + _SPOT_VENUES)}
+    meta ={v ["name"]:v for v in _GLOBAL_SPOT_VENUES}
 
     def _num (x :Any )->Optional [float ]:
         return None if pd .isna (x )else float (x )
@@ -6843,8 +6908,8 @@ def render_perp_venue_table (base :str ="BTC")->None :
         )
         )
 
-    section ("🌐 เทียบราคา — Global Venue Board")
-    st.caption (f"Perpetual {len(_PERP_VENUES)} กระดาน + Spot {len(_SPOT_VENUES)} กระดาน · Spot แสดงเพื่อเทียบตลาดและสภาพคล่อง แต่ไม่รวม Perpetual Arb")
+    section ("🌐 เทียบราคา — Global Spot Venue Board")
+    st.caption (f"Spot {len(_GLOBAL_SPOT_VENUES)} กระดาน · ทุกแถวใช้ราคาตลาด Spot จริง · Arb/Ranking คำนวณจาก Spot ทั้งหมด")
 
     # The exchange comparison table is the hero element.  Read the selected
     # coin from session state first, then render the coin tabs underneath it.
@@ -6882,12 +6947,8 @@ def render_perp_venue_table (base :str ="BTC")->None :
     # embedded components iframe/JS is suppressed by a deployed browser.
     _render_perp_venue_table_static(rows)
 
-    # Connect Spot + Perpetual at the board level: show the cheapest and most
-    # expensive observed venue across both market types, without mixing this
-    # signal into the Perpetual-only Arb Opportunity / History engine.
-    cross_market = compute_cross_market_highlights(rows)
-    if cross_market:
-        render_cross_market_opportunity_card(cross_market, 10000.0)
+    # All venues are Spot now, so the board-level highlight compares Spot
+    # venues directly and feeds the same observed-price analysis/history.
 
     # Coin tabs intentionally sit BELOW the exchange board.  The board stays
     # focused on venue comparison while the tabs control which asset is shown.
@@ -6899,7 +6960,7 @@ def render_perp_venue_table (base :str ="BTC")->None :
             fetch_perp_venues .clear ()
             st .rerun ()
 
-    # Cross-row arbitrage analysis: observed low/high venue, spread and fee-adjusted edge.
+    # Cross-row Spot arbitrage analysis: observed low/high venue, spread and fee-adjusted edge.
     highlights =compute_arb_highlights (rows )
     badge =compute_spread_badge (rows )
 
@@ -7676,7 +7737,7 @@ def _render_nc_planner_results (cfg :dict [str ,Any ],data :pd .DataFrame ,asset
 
 
 def render_tab2 (cfg :dict [str ,Any ],data :pd .DataFrame ,data_err :Optional [str ])->None :
-    # Research tab starts directly with the Perpetual Venue Comparison.
+    # Research tab starts directly with the Global Spot Venue Comparison.
     # The old executive-question prompt was removed to keep the actionable
     # market comparison at the top of the page.
     if not cfg ["dates_ok"]:
@@ -7697,7 +7758,7 @@ def render_tab2 (cfg :dict [str ,Any ],data :pd .DataFrame ,data_err :Optional [
 
     render_perp_venue_table (asset )
 
-    # --- FUND FLOW LAYER: อยู่ถัดจาก Perpetual Venue Comparison เพื่อให้ market context ตามหลัง price/opportunity ---
+    # --- FUND FLOW LAYER: อยู่ถัดจาก Global Spot Venue Comparison เพื่อให้ market context ตามหลัง price/opportunity ---
     with st .expander ("💧 Cryptocurrency Fund Flow",expanded =False ):
         render_fund_flow_section (cfg )
 
