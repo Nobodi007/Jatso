@@ -17278,6 +17278,12 @@ def _risk_dashboard_body (cfg ,ctx ,target_stock_thb ,price_thb )->None :
         height =min (300 ,40 +35 *len (rows )),**WIDE )
 
 
+if HAS_FRAGMENT :
+    _risk_dashboard_live =st .fragment (run_every =30 )(_risk_dashboard_body )
+else :
+    _risk_dashboard_live =_risk_dashboard_body
+
+
 # Restored core risk constants from the stable Nobody base version.
 RISK_ICON = {"ok": "🟢", "warn": "🟡", "crit": "🔴"}
 RISK_COLOR = {"ok": "#0ecb81", "warn": "#fcd535", "crit": "#f6465d"}
