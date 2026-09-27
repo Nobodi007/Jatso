@@ -16408,15 +16408,6 @@ def _main_body ()->None :
             border-bottom: 2px solid #0ecb81 !important;
         }
 
-        /* User-supplied Auto DCA logo */
-        .st-key-navbar_live_dca [data-testid="stButton"] > button {
-            background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAECklEQVR42p2Wz29UVRTHP+fe9+bNtENrW0tpEEkRRExUYnChC40LNEjUuHFh3MvSpTHxL3CnSxN3JIalMUZcaGJIiIkogg2/K4hSoLSVdqYz896957h4w8xUi0m5m0num9zv/X6/53vOlZGxKaO7zBTMgN7W5pYBIojzva2k900Vl1ZwLgXhAZeAKUW7gfMekBLANJIOj7Pn0AdM7NmPz1I2i+KdkNYqxPwuJz99j9WbV3EuQbY8NGkuqbDn0IfseP5dqpMJlXq1p5L9D9SgkE4gy2Co7licu85X779EsbZCghnOVRh99AWKdpNKMUroRIpYnpw5UCAaRC0P9QKJu+db+RsAVFAtSIanEecxjKR3j+jAhKjgDSaqoArza0bihJqH0Qy8CM1grOblrVPXZ5J3DFWIeX8v6fsjpUcGqcAbOx1bhxyfzQYeqQt7x4SnJhy1VLiwpJy+rZxdMjqxZGMGONAAIS/1k3VVZGBmmCqmhhk8OyV8NJyytQZJFfIWdCIcfMxxcMZxfC5y7GJkNe+CKJizvm7rGNxzzRS01DsCD2fl/09eU078Fck8zIw6nptyvLrb0yngi4uBECH1gA7mSP4LUDJRvDh8AkRwDpbbyulbgUYBeYQXt3uO7E85vNfz60Lk51tKIoCzQQK4dbdXAwWNyp2msdgwFlvGStt4bSbh9V0JiRk76vDTfOCH64Hl3JiqQeYUVe2eoRtJVMKKGTHCd38U/HgjUs9gvCbUEuFGQ1nLjdWOoQZHZ3OOXwnkaoj1FR4MSLJeHsMBRYTpIeHAjGPulvL974EsgRDhlZmEXROOoujmwsGZm5ErSxFxAm6dx//yAECVTqFsG/a880yFpQVjrdPm7EKgmgjjVXjziRR8N10ZjJ2Bq8uRoIo4A5UNPOjXKqkY5xYiv1wMjI8Ib++r8PSkpwjGlxdyvj1f0GrAatMITYhqOAxTKz3YiIFZ+UENUmcst4yjsx0mRhz7d3omh6tcX1HUYFvdUUuATMqq7hWIdTN03xwYFg2NRgLMLQY+OdHk8N6Ml3dX2D7d7wunLgeu/R1568mM0axsAWqGt/sGTcoqsLISpKvfpcXI56fafHMpZ7oujNc8t5uRc3ciyy1lpWPcbSlFtO5coeyOGzGwoJiWU826fbrioNFRzs5Hznuh4gvaoWx0Anx9vo1DiGZ4AaSbgy6LgTL1xCIQOwXeC4jrpcMJDPnSpxCgIv0ZUeT9eWAOQDFLBhiIQy3QXJhly/QB8tUWVgTEuc2PTjFcmrK2cBnVUM7nkbEpMw1kW7bx+KGPqU3sw3kpATaFYCBGaM3z27EjtJb/RLwvAcoCivh0eOBFIA/2rDAldBq9Cyb9eeOJefPBnywD1Tj4bPkHopImjkSxyNkAAAAASUVORK5CYII=" ) !important;
-            background-repeat: no-repeat !important;
-            background-position: 12px center !important;
-            background-size: 24px 24px !important;
-            padding-left: 42px !important;
-        }
-
         /* ---- ปุ่มหมวดหลักบนแถบเมนู (flat style เหมือน Bitkub) ---- */
         .st-key-desktop_navigation [data-testid="stButton"] > button,
         .st-key-desktop_navigation [data-testid="stPopover"] > button {
@@ -16513,10 +16504,9 @@ def _main_body ()->None :
         ],
         }
 
-        # Auto DCA is intentionally exposed as a DIRECT top-level button.
-        # Do not hide the live scheduler inside the mega-menu; the old Backfill
-        # page caused confusion because users could land on the historical DCA UI.
-        bar_cols =st .columns ([0.82 ,1.08 ]+[1.15 ]*len (nav_groups )+[2.6 ])
+        # Auto DCA is intentionally NOT a separate top-level button here.
+        # The live Auto DCA page remains available through its existing in-page entry.
+        bar_cols =st .columns ([0.82 ]+[1.15 ]*len (nav_groups )+[2.6 ])
 
         with bar_cols [0 ]:
             home_active =current_nav ==NAV_DASHBOARD 
@@ -16525,15 +16515,8 @@ def _main_body ()->None :
                 st .session_state ["main_nav"]=NAV_DASHBOARD 
                 st .rerun ()
 
-        with bar_cols [1 ]:
-            dca_active =current_nav ==NAV_AUTO_DCA
-            if st .button ("Auto DCA",key ="navbar_live_dca",use_container_width =True ,
-            type ="primary"if dca_active else "secondary"):
-                st .session_state ["main_nav"]=NAV_AUTO_DCA
-                st .rerun ()
-
         for i ,(group_name ,items )in enumerate (nav_groups .items ()):
-            with bar_cols [i +2 ]:
+            with bar_cols [i +1 ]:
                 group_active =current_nav in items 
                 display_label =group_name +(" ●"if group_active else "")
                 with st .popover (display_label ,use_container_width =True ):
