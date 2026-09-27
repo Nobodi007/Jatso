@@ -5348,8 +5348,35 @@ def _spot_kucoin(b: str) -> tuple[float, float, float]:
 # GLOBAL SPOT VENUES — former perpetual venues are now represented by SPOT
 # --------------------------------------------------------------------------
 def _spot_binance(b: str) -> tuple[float, float, float]:
-    d = _http_json(f"https://api.binance.com/api/v3/ticker/24hr?symbol={b.upper()}USDT")
-    return float(d["lastPrice"]), float(d["priceChangePercent"]), float(d["quoteVolume"])
+    """Binance Spot 24h ticker with multiple official public API fallbacks.
+
+    Some hosted regions can fail against api.binance.com even though Binance
+    documents several equivalent public endpoints. data-api.binance.vision
+    explicitly exposes /api/v3/ticker/24hr, while api1-api4 are alternate
+    Binance API hosts.
+    """
+    symbol = f"{b.upper()}USDT"
+    urls = [
+        f"https://data-api.binance.vision/api/v3/ticker/24hr?symbol={symbol}",
+        f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}",
+        f"https://api1.binance.com/api/v3/ticker/24hr?symbol={symbol}",
+        f"https://api2.binance.com/api/v3/ticker/24hr?symbol={symbol}",
+        f"https://api3.binance.com/api/v3/ticker/24hr?symbol={symbol}",
+        f"https://api4.binance.com/api/v3/ticker/24hr?symbol={symbol}",
+        f"https://api-gcp.binance.com/api/v3/ticker/24hr?symbol={symbol}",
+    ]
+    last_err = None
+    for url in urls:
+        try:
+            d = _http_json(url, timeout=5.0)
+            return (
+                float(d["lastPrice"]),
+                float(d["priceChangePercent"]),
+                float(d["quoteVolume"]),
+            )
+        except Exception as e:
+            last_err = e
+    raise RuntimeError(f"Binance Spot unavailable: {type(last_err).__name__ if last_err else 'unknown'}")
 
 
 def _spot_gate(b: str) -> tuple[float, float, float]:
@@ -5482,11 +5509,6 @@ _GLOBAL_SPOT_VENUES = [
          fn=_spot_bitunix_global, sym=lambda b: f"{b}USDT",
          url=lambda b: f"https://www.bitunix.com/spot/{b}USDT",
          note="Spot · USDT"),
-    dict(name="Deribit", bg="#0B7BE5", fg="#ffffff", tx="DB",
-         logo="https://www.google.com/s2/favicons?domain=deribit.com&sz=64",
-         fn=_spot_deribit, sym=lambda b: f"{b}_USDC",
-         url=lambda b: f"https://www.deribit.com/spot/{b}-USDC",
-         note="Spot · USDC"),
     dict(name="Aster", bg="#E8B96A", fg="#0b0e11", tx="AS",
          logo="https://www.google.com/s2/favicons?domain=asterdex.com&sz=64",
          fn=_spot_aster_global, sym=lambda b: f"{b}USDT",
@@ -6520,12 +6542,16 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
 
     All venues are shown as Spot in one board, with one shared Spot VWAP, turnover share, liquidity ranking and price ranking.
     """
+    # Keep every configured venue visible. A failed endpoint must not make a
+    # venue silently disappear from the board; only valid rows participate in
+    # VWAP/ranking/arbitrage calculations.
     valid = [r for r in rows if r.get("price") is not None and not r.get("err")]
-    if not valid:
-        st.warning("ไม่พบข้อมูล Global Venue ในขณะนี้")
+    display_rows = list(rows)
+    if not display_rows:
+        st.warning("ไม่พบ Global Venue ที่ตั้งค่าไว้ในขณะนี้")
         return
 
-    # All venues are intentionally SPOT in v115.
+    # All venues are intentionally SPOT in v116.
     perp = []
     spot = valid
 
@@ -6622,9 +6648,27 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
     """
 
     def render_row(r: dict[str, Any]) -> str:
-        p = float(r["price"])
+        has_price = r.get("price") is not None and not r.get("err")
+        p = float(r["price"]) if has_price else None
         chg = r.get("chg")
         turn = float(r.get("turnover") or 0.0)
+        if not has_price:
+            name = str(r.get("exchange", "—"))
+            logo_html = f"<img class='venue-logo' src='{esc(r.get('logo',''))}' onerror=\"this.style.display='none'\" />" if r.get("logo") else ""
+            symbol = esc(r.get("symbol", "—"))
+            url = esc(r.get("url", ""))
+            symbol_html = f"<a href='{url}' target='_blank' rel='noopener'>{symbol}</a>" if url else symbol
+            err = esc(r.get("err") or "ข้อมูลไม่พร้อม")
+            return f"""
+            <tr class='spot-row'>
+              <td class='venue'><div class='venuebox'>{logo_html}<div>{name}</div></div></td>
+              <td class='symbol'>{symbol_html}<span class='type type-spot'>SPOT</span></td>
+              <td>—</td>
+              <td>—</td>
+              <td><span class='muted'>รอข้อมูล · {err}</span></td>
+              <td><span class='muted'>—</span></td>
+              <td><span class='liq' style='color:#848e9c'>Unavailable</span></td>
+            </tr>"""
         is_spot = str(r.get("market_type", "perp")).lower() == "spot"
         stats = spot_stats
         vwap = float(stats["vwap"] or 0.0)
@@ -6673,7 +6717,7 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
           <td><span class='liq' style='color:{liq_color}'>{liq_name}</span><div class='liqline'><i style='width:{liq_width:.1f}%;background:{liq_color}'></i></div></td>
         </tr>"""
 
-    body = [render_row(r) for r in spot]
+    body = [render_row(r) for r in display_rows]
     html = css + "<div class='nobody-pv-wrap'><table class='nobody-pv'><thead><tr><th>Exchange</th><th>Symbol</th><th>Price($)</th><th>Chg 24H(%)</th><th>vs VWAP</th><th>Turnover 24h</th><th>Liquidity</th></tr></thead><tbody>" + "".join(body) + "</tbody></table></div>"
     st.markdown(html, unsafe_allow_html=True)
 
