@@ -14215,7 +14215,9 @@ def _vnext_shadow_auto_capture(cfg: dict[str, Any], data: pd.DataFrame) -> tuple
         "signal": sig.get("signal"), "confidence": sig.get("confidence"), "reason": sig.get("reason"),
         "price_usd": sig.get("price"), "momentum_20d": sig.get("momentum_20d"),
         "return_1d": sig.get("return_1d"), "vol_20d": sig.get("vol_20d"),
-        "dealer_spread": cfg.get("dealer_spread"), "outcome_1d": None, "evaluated": False,
+        "dealer_spread": cfg.get("dealer_spread"),
+        "outcome_1d": None, "outcome_3d": None, "outcome_5d": None, "outcome_20d": None,
+        "evaluated": False,
     })
     _vnext_save_json_list(_SHADOW_LOCAL, "quant_shadow_log", rows)
     return rows, True
