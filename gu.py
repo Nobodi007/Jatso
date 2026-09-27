@@ -9373,25 +9373,9 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         unsafe_allow_html=True,
     )
 
-    # Footer can request a specific inner Portfolio tab before rerun.
-    _footer_target = st.session_state.pop("portfolio_footer_target", None)
-    if _footer_target == "watchlist":
-        t_watch, t_port, t_tx = st.tabs(["⭐ Watchlist", "📊 Portfolio", "🧾 Transaction History"])
-        _portfolio_tab = t_port
-        _watchlist_tab = t_watch
-        _tx_tab = t_tx
-    elif _footer_target == "transactions":
-        t_tx, t_port, t_watch = st.tabs(["🧾 Transaction History", "📊 Portfolio", "⭐ Watchlist"])
-        _portfolio_tab = t_port
-        _watchlist_tab = t_watch
-        _tx_tab = t_tx
-    else:
-        t_port, t_watch, t_tx = st.tabs(["📊 Portfolio", "⭐ Watchlist", "🧾 Transaction History"])
-        _portfolio_tab = t_port
-        _watchlist_tab = t_watch
-        _tx_tab = t_tx
+    t_port, t_watch, t_tx = st.tabs(["📊 Portfolio", "⭐ Watchlist", "🧾 Transaction History"])
 
-    with _portfolio_tab:
+    with t_port:
         st.markdown(
             '<div class="portfolio-section-title">สินทรัพย์ใน Wallet</div>'
             '<div class="portfolio-section-subtitle">กดที่เหรียญเพื่อเปิด Exchange ของเหรียญนั้นทันที</div>',
@@ -9455,7 +9439,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         if wd_toast:
             st.toast(f"ถอนเงิน {wd_toast[0]:,.2f} THB · ค่าธรรมเนียม {wd_toast[1]:,.2f} THB", icon="✅")
 
-    with _watchlist_tab:
+    with t_watch:
         current_watch = list(st.session_state.get("favorite_tickers", []))
         if not current_watch:
             current_watch = list(sim.get("watchlist", []))
@@ -9496,7 +9480,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         else:
             st.info("เลือกเหรียญที่ต้องการติดตามจากรายการด้านบน")
 
-    with _tx_tab:
+    with t_tx:
         txs = snap["transactions"]
         if txs:
             txdf = pd.DataFrame(txs)
@@ -16020,173 +16004,125 @@ def render_quant_research_hub(cfg: dict[str, Any], data: pd.DataFrame, market_df
 
 
 
-def _footer_go_to(nav: str, *, portfolio_section: str | None = None,
-                  quant_section: str | None = None) -> None:
-    """Route a Footer button to the same top-level navigation used by the app."""
-    st.session_state["main_nav"] = nav
-    if portfolio_section is not None:
-        st.session_state["portfolio_footer_target"] = portfolio_section
-    else:
-        st.session_state.pop("portfolio_footer_target", None)
-    if quant_section is not None:
-        st.session_state["quant_research_section"] = quant_section
-    elif nav != NAV_QUANT_RESEARCH:
-        st.session_state.pop("quant_research_section", None)
-    st.rerun()
-
-
 def render_site_footer() -> None:
-    """Responsive XSpring footer with real Streamlit navigation buttons."""
+    """Responsive XSpring footer matching the app's dark theme."""
     st.markdown(
         r"""
         <style>
-        /* Footer visual design — keep real Streamlit buttons/functionality */
-        .st-key-xs_footer {
-            margin-top: 70px;
-            padding: 0 !important;
-        }
-        .st-key-xs_footer .xs-footer-wrap {
+        .xs-footer {
             width: 100%;
-            padding: 44px 34px 24px;
+            margin-top: 70px;
+            padding: 42px 34px 24px;
             background: linear-gradient(180deg, rgba(255,255,255,.018), rgba(255,255,255,.006));
             border-top: 1px solid rgba(255,255,255,.10);
             box-sizing: border-box;
         }
-        .st-key-xs_footer .xs-footer-inner { max-width: none; margin: 0 auto; }
-        .st-key-xs_footer .xs-footer-brand { padding-right: 26px; }
-        .st-key-xs_footer .xs-footer-logo { display:flex; align-items:center; gap:14px; margin-bottom:18px; }
-        .st-key-xs_footer .xs-footer-logo-icon {
-            width:44px; height:44px; border-radius:10px; display:flex; align-items:center; justify-content:center;
-            background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.10); font-size:19px;
+        .xs-footer-inner { max-width: 1500px; margin: 0 auto; }
+        .xs-footer-grid {
+            display: grid;
+            grid-template-columns: 1.35fr 1fr 1fr 1fr 1fr;
+            gap: 42px;
         }
-        .st-key-xs_footer .xs-footer-logo-text { color:#f5f7fa; font-size:20px; font-weight:800; letter-spacing:-.25px; line-height:1.45; white-space:normal; max-width:190px; }
-        .st-key-xs_footer .xs-footer-description { color:rgba(255,255,255,.56); font-size:13px; line-height:1.85; max-width:290px; }
-        .st-key-xs_footer .xs-footer-heading { color:#f5f7fa; font-size:14px; font-weight:800; margin:0 0 17px 0; line-height:1.4; }
-        .st-key-xs_footer .xs-footer-bottom {
-            margin-top:34px; padding-top:19px; border-top:1px solid rgba(255,255,255,.07);
+        .xs-footer-brand { padding-right: 25px; }
+        .xs-footer-logo { display:flex; align-items:center; gap:10px; margin-bottom:13px; }
+        .xs-footer-logo-icon {
+            width:36px; height:36px; border-radius:10px;
+            display:flex; align-items:center; justify-content:center;
+            background:rgba(255,255,255,.08);
+            border:1px solid rgba(255,255,255,.10);
+            font-size:19px;
+        }
+        .xs-footer-logo-text { color:#f5f7fa; font-size:20px; font-weight:800; letter-spacing:-.2px; }
+        .xs-footer-description {
+            color:rgba(255,255,255,.56); font-size:13px; line-height:1.75; max-width:290px;
+        }
+        .xs-footer-heading { color:#f5f7fa; font-size:14px; font-weight:800; margin-bottom:17px; }
+        .xs-footer-link {
+            display:block; color:rgba(255,255,255,.66); text-decoration:none !important;
+            font-size:13px; line-height:1.65; margin-bottom:10px;
+            transition:color .18s ease, transform .18s ease;
+        }
+        .xs-footer-link:hover { color:#fff !important; transform:translateX(2px); }
+        .xs-footer-bottom {
+            margin-top:34px; padding-top:19px;
+            border-top:1px solid rgba(255,255,255,.07);
             display:flex; align-items:center; justify-content:space-between; gap:20px;
         }
-        .st-key-xs_footer .xs-footer-copy { color:rgba(255,255,255,.38); font-size:11px; line-height:1.6; }
-        .st-key-xs_footer .xs-footer-status { display:inline-flex; align-items:center; gap:7px; color:rgba(255,255,255,.48); font-size:11px; }
-        .st-key-xs_footer .xs-footer-status-dot {
-            width:7px; height:7px; border-radius:50%; background:#20c997; box-shadow:0 0 10px rgba(32,201,151,.45);
+        .xs-footer-copy { color:rgba(255,255,255,.38); font-size:11px; line-height:1.6; }
+        .xs-footer-status { display:inline-flex; align-items:center; gap:7px; color:rgba(255,255,255,.48); font-size:11px; }
+        .xs-footer-status-dot {
+            width:7px; height:7px; border-radius:50%; background:#20c997;
+            box-shadow:0 0 10px rgba(32,201,151,.45);
         }
-
-        /* IMPORTANT: style only footer buttons, while keeping them clickable */
-        .st-key-xs_footer [data-testid="stButton"] { margin: 0 !important; padding: 0 !important; min-height: 0 !important; }
-        .st-key-xs_footer [data-testid="stElementContainer"]:has([data-testid="stButton"]) { margin: 0 0 10px 0 !important; padding: 0 !important; min-height: 0 !important; }
-        .st-key-xs_footer [data-testid="stVerticalBlock"] { gap: 0 !important; }
-        .st-key-xs_footer [data-testid="stButton"] > button {
-            min-height: 0 !important;
-            height: auto !important;
-            width: 100% !important;
-            padding: 0 !important;
-            margin: 0 !important;
-            border: 0 !important;
-            border-radius: 0 !important;
-            background: transparent !important;
-            color: rgba(255,255,255,.66) !important;
-            box-shadow: none !important;
-            justify-content: flex-start !important;
-            font-size: 13px !important;
-            font-weight: 400 !important;
-            line-height: 1.5 !important;
-            white-space: normal !important;
-            text-align: left !important;
-        }
-        .st-key-xs_footer [data-testid="stButton"] > button:hover,
-        .st-key-xs_footer [data-testid="stButton"] > button:focus,
-        .st-key-xs_footer [data-testid="stButton"] > button:active {
-            color: #ffffff !important;
-            border: 0 !important;
-            background: transparent !important;
-            box-shadow: none !important;
-        }
-        .st-key-xs_footer [data-testid="stButton"] > button p { margin: 0 !important; }
-        .st-key-xs_footer .stColumn { min-width: 0 !important; }
-
         @media (max-width:900px) {
-            .st-key-xs_footer .xs-footer-wrap { padding:36px 24px 22px; }
+            .xs-footer { padding:36px 24px 22px; }
+            .xs-footer-grid { grid-template-columns:1.3fr 1fr 1fr; gap:32px 25px; }
         }
         @media (max-width:640px) {
-            .st-key-xs_footer { margin-top:45px; }
-            .st-key-xs_footer .xs-footer-wrap { padding:30px 18px 20px; }
-            .st-key-xs_footer .xs-footer-bottom { margin-top:27px; align-items:flex-start; flex-direction:column; gap:8px; }
-            .st-key-xs_footer [data-testid="stButton"] > button { font-size:12px !important; }
+            .xs-footer { margin-top:45px; padding:30px 18px 20px; }
+            .xs-footer-grid { grid-template-columns:1fr 1fr; gap:28px 20px; }
+            .xs-footer-brand { grid-column:1 / -1; padding-right:0; }
+            .xs-footer-description { max-width:100%; }
+            .xs-footer-heading { font-size:13px; margin-bottom:13px; }
+            .xs-footer-link { font-size:12px; margin-bottom:8px; }
+            .xs-footer-bottom { margin-top:27px; align-items:flex-start; flex-direction:column; gap:8px; }
+        }
+        @media (max-width:380px) {
+            .xs-footer-grid { grid-template-columns:1fr; }
+            .xs-footer-brand { grid-column:auto; }
         }
         </style>
+        <footer class="xs-footer">
+          <div class="xs-footer-inner">
+            <div class="xs-footer-grid">
+              <div class="xs-footer-brand">
+                <div class="xs-footer-logo">
+                  <div class="xs-footer-logo-icon">📈</div>
+                  <div class="xs-footer-logo-text">XSpring Dealer Suite</div>
+                </div>
+                <div class="xs-footer-description">
+                  แพลตฟอร์มจำลองการซื้อขายและเครื่องมือ Quant Research
+                  สำหรับการศึกษา วิเคราะห์ และทดสอบกลยุทธ์
+                </div>
+              </div>
+              <div>
+                <div class="xs-footer-heading">การซื้อขาย</div>
+                <a class="xs-footer-link" href="#trading">ซื้อ / ขาย</a>
+                <a class="xs-footer-link" href="#portfolio">Portfolio</a>
+                <a class="xs-footer-link" href="#watchlist">Watchlist</a>
+                <a class="xs-footer-link" href="#orders">Orders &amp; History</a>
+              </div>
+              <div>
+                <div class="xs-footer-heading">Quant Research</div>
+                <a class="xs-footer-link" href="#quant">Quant Research Lab</a>
+                <a class="xs-footer-link" href="#shadow">Shadow Mode</a>
+                <a class="xs-footer-link" href="#backtest">Backtest</a>
+                <a class="xs-footer-link" href="#risk">Risk &amp; Stress</a>
+              </div>
+              <div>
+                <div class="xs-footer-heading">เครื่องมือ</div>
+                <a class="xs-footer-link" href="#market">Market Overview</a>
+                <a class="xs-footer-link" href="#orderbook">Order Book</a>
+                <a class="xs-footer-link" href="#reports">Reports</a>
+                <a class="xs-footer-link" href="#settings">Settings</a>
+              </div>
+              <div>
+                <div class="xs-footer-heading">ช่วยเหลือ</div>
+                <a class="xs-footer-link" href="#guide">คู่มือการใช้งาน</a>
+                <a class="xs-footer-link" href="#about">เกี่ยวกับระบบ</a>
+                <a class="xs-footer-link" href="#privacy">ความเป็นส่วนตัว</a>
+                <a class="xs-footer-link" href="#contact">ติดต่อ</a>
+              </div>
+            </div>
+            <div class="xs-footer-bottom">
+              <div class="xs-footer-copy">© 2026 XSpring Dealer Suite · Research &amp; Simulation Platform</div>
+              <div class="xs-footer-status"><span class="xs-footer-status-dot"></span>ระบบพร้อมใช้งาน</div>
+            </div>
+          </div>
+        </footer>
         """,
         unsafe_allow_html=True,
     )
-
-    with st.container(key="xs_footer"):
-        st.markdown('<div class="xs-footer-wrap"><div class="xs-footer-inner">', unsafe_allow_html=True)
-        c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1], gap="medium")
-
-        with c1:
-            st.markdown(
-                '<div class="xs-footer-brand">'
-                '<div class="xs-footer-logo">'
-                '<div class="xs-footer-logo-icon">📈</div>'
-                '<div class="xs-footer-logo-text">XSpring Dealer Suite</div>'
-                '</div>'
-                '<div class="xs-footer-description">'
-                'แพลตฟอร์มจำลองการซื้อขายและเครื่องมือ Quant Research สำหรับการศึกษา วิเคราะห์ และทดสอบกลยุทธ์'
-                '</div></div>',
-                unsafe_allow_html=True,
-            )
-
-        with c2:
-            st.markdown('<div class="xs-footer-heading">การซื้อขาย</div>', unsafe_allow_html=True)
-            st.button("ซื้อ / ขาย", key="footer_trade", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_EXCHANGE,))
-            st.button("Portfolio", key="footer_portfolio", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_LABELS[4],))
-            st.button("Watchlist", key="footer_watchlist", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_LABELS[4],), kwargs={"portfolio_section": "watchlist"})
-            st.button("Orders & History", key="footer_orders", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_LABELS[4],), kwargs={"portfolio_section": "transactions"})
-
-        with c3:
-            st.markdown('<div class="xs-footer-heading">Quant Research</div>', unsafe_allow_html=True)
-            st.button("Quant Research Lab", key="footer_quant", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_QUANT_RESEARCH,))
-            st.button("Shadow Mode", key="footer_shadow", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_QUANT_RESEARCH,), kwargs={"quant_section": NAV_SHADOW_MODE})
-            st.button("Backtest", key="footer_backtest", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_LABELS[1],))
-            st.button("Risk & Stress", key="footer_risk", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_RISK,))
-
-        with c4:
-            st.markdown('<div class="xs-footer-heading">เครื่องมือ</div>', unsafe_allow_html=True)
-            st.button("Market Overview", key="footer_market", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_DASHBOARD,))
-            st.button("Order Book", key="footer_orderbook", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_EXCHANGE,))
-            st.button("Reports", key="footer_reports", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_QUANT_RESEARCH,), kwargs={"quant_section": NAV_RESEARCH_REPORT})
-            st.button("Settings", key="footer_settings", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_SYSTEM_HEALTH,))
-
-        with c5:
-            st.markdown('<div class="xs-footer-heading">ช่วยเหลือ</div>', unsafe_allow_html=True)
-            st.button("คู่มือการใช้งาน", key="footer_guide", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_DASHBOARD,))
-            st.button("เกี่ยวกับระบบ", key="footer_about", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_SYSTEM_HEALTH,))
-            st.button("ความเป็นส่วนตัว", key="footer_privacy", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_SYSTEM_HEALTH,))
-            st.button("ติดต่อ", key="footer_contact", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_SYSTEM_HEALTH,))
-
-        st.markdown(
-            '<div class="xs-footer-bottom">'
-            '<div class="xs-footer-copy">© 2026 XSpring Dealer Suite · Research &amp; Simulation Platform</div>'
-            '<div class="xs-footer-status"><span class="xs-footer-status-dot"></span>ระบบพร้อมใช้งาน</div>'
-            '</div></div></div>',
-            unsafe_allow_html=True,
-        )
 
 def _main_body() -> None:
     # Unlock Web Audio on the user's first real click/tap so order SFX can
