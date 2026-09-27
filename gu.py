@@ -16052,8 +16052,9 @@ def render_site_footer() -> None:
             padding: 0 !important;
         }
         .st-key-xs_footer .xs-footer-wrap {
-            width: 100%;
-            padding: 44px 34px 24px;
+            width: min(100%, 1630px);
+            margin: 0 auto;
+            padding: 44px 52px 24px;
             background: linear-gradient(180deg, rgba(255,255,255,.018), rgba(255,255,255,.006));
             border-top: 1px solid rgba(255,255,255,.10);
             box-sizing: border-box;
@@ -16127,7 +16128,7 @@ def render_site_footer() -> None:
 
     with st.container(key="xs_footer"):
         st.markdown('<div class="xs-footer-wrap"><div class="xs-footer-inner">', unsafe_allow_html=True)
-        c1, c2, c3, c4, c5 = st.columns([1.25, 1, 1, 1, 1], gap="medium")
+        c1, c2, c3, c4, c5 = st.columns([1.25, 1, 1, 1, 1], gap="large")
 
         with c1:
             st.markdown(
