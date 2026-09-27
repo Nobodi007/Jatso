@@ -9579,8 +9579,11 @@ def render_tab4 (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :pd .DataF
         txs =snap ["transactions"]
         if txs :
             txdf =pd .DataFrame (txs )
-            txdf ["timestamp"]=pd .to_datetime (txdf ["timestamp"],errors ="coerce")
+            # แสดงเวลา Transaction History เป็นเวลาไทย (Asia/Bangkok, UTC+7)
+            # เก็บ timestamp ต้นฉบับใน ledger เป็น UTC เหมือนเดิม เพื่อไม่กระทบการคำนวณ/การ sync
+            txdf ["timestamp"]=pd .to_datetime (txdf ["timestamp"],errors ="coerce",utc =True)
             txdf =txdf .sort_values ("timestamp",ascending =False )
+            txdf ["timestamp"]=txdf ["timestamp"].dt .tz_convert ("Asia/Bangkok").dt .strftime ("%Y-%m-%d %H:%M:%S")
             display_cols =[
             "timestamp","type","asset","qty","price_thb",
             "gross_thb","fee_thb","cash_delta_thb","realized_pnl_thb","note",
