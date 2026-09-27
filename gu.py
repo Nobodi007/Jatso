@@ -16003,6 +16003,127 @@ def render_quant_research_hub(cfg: dict[str, Any], data: pd.DataFrame, market_df
         render_final_quant_production_review(cfg, data, market_df)
 
 
+
+def render_site_footer() -> None:
+    """Responsive XSpring footer matching the app's dark theme."""
+    st.markdown(
+        r"""
+        <style>
+        .xs-footer {
+            width: 100%;
+            margin-top: 70px;
+            padding: 42px 34px 24px;
+            background: linear-gradient(180deg, rgba(255,255,255,.018), rgba(255,255,255,.006));
+            border-top: 1px solid rgba(255,255,255,.10);
+            box-sizing: border-box;
+        }
+        .xs-footer-inner { max-width: 1500px; margin: 0 auto; }
+        .xs-footer-grid {
+            display: grid;
+            grid-template-columns: 1.35fr 1fr 1fr 1fr 1fr;
+            gap: 42px;
+        }
+        .xs-footer-brand { padding-right: 25px; }
+        .xs-footer-logo { display:flex; align-items:center; gap:10px; margin-bottom:13px; }
+        .xs-footer-logo-icon {
+            width:36px; height:36px; border-radius:10px;
+            display:flex; align-items:center; justify-content:center;
+            background:rgba(255,255,255,.08);
+            border:1px solid rgba(255,255,255,.10);
+            font-size:19px;
+        }
+        .xs-footer-logo-text { color:#f5f7fa; font-size:20px; font-weight:800; letter-spacing:-.2px; }
+        .xs-footer-description {
+            color:rgba(255,255,255,.56); font-size:13px; line-height:1.75; max-width:290px;
+        }
+        .xs-footer-heading { color:#f5f7fa; font-size:14px; font-weight:800; margin-bottom:17px; }
+        .xs-footer-link {
+            display:block; color:rgba(255,255,255,.66); text-decoration:none !important;
+            font-size:13px; line-height:1.65; margin-bottom:10px;
+            transition:color .18s ease, transform .18s ease;
+        }
+        .xs-footer-link:hover { color:#fff !important; transform:translateX(2px); }
+        .xs-footer-bottom {
+            margin-top:34px; padding-top:19px;
+            border-top:1px solid rgba(255,255,255,.07);
+            display:flex; align-items:center; justify-content:space-between; gap:20px;
+        }
+        .xs-footer-copy { color:rgba(255,255,255,.38); font-size:11px; line-height:1.6; }
+        .xs-footer-status { display:inline-flex; align-items:center; gap:7px; color:rgba(255,255,255,.48); font-size:11px; }
+        .xs-footer-status-dot {
+            width:7px; height:7px; border-radius:50%; background:#20c997;
+            box-shadow:0 0 10px rgba(32,201,151,.45);
+        }
+        @media (max-width:900px) {
+            .xs-footer { padding:36px 24px 22px; }
+            .xs-footer-grid { grid-template-columns:1.3fr 1fr 1fr; gap:32px 25px; }
+        }
+        @media (max-width:640px) {
+            .xs-footer { margin-top:45px; padding:30px 18px 20px; }
+            .xs-footer-grid { grid-template-columns:1fr 1fr; gap:28px 20px; }
+            .xs-footer-brand { grid-column:1 / -1; padding-right:0; }
+            .xs-footer-description { max-width:100%; }
+            .xs-footer-heading { font-size:13px; margin-bottom:13px; }
+            .xs-footer-link { font-size:12px; margin-bottom:8px; }
+            .xs-footer-bottom { margin-top:27px; align-items:flex-start; flex-direction:column; gap:8px; }
+        }
+        @media (max-width:380px) {
+            .xs-footer-grid { grid-template-columns:1fr; }
+            .xs-footer-brand { grid-column:auto; }
+        }
+        </style>
+        <footer class="xs-footer">
+          <div class="xs-footer-inner">
+            <div class="xs-footer-grid">
+              <div class="xs-footer-brand">
+                <div class="xs-footer-logo">
+                  <div class="xs-footer-logo-icon">📈</div>
+                  <div class="xs-footer-logo-text">XSpring Dealer Suite</div>
+                </div>
+                <div class="xs-footer-description">
+                  แพลตฟอร์มจำลองการซื้อขายและเครื่องมือ Quant Research
+                  สำหรับการศึกษา วิเคราะห์ และทดสอบกลยุทธ์
+                </div>
+              </div>
+              <div>
+                <div class="xs-footer-heading">การซื้อขาย</div>
+                <a class="xs-footer-link" href="#trading">ซื้อ / ขาย</a>
+                <a class="xs-footer-link" href="#portfolio">Portfolio</a>
+                <a class="xs-footer-link" href="#watchlist">Watchlist</a>
+                <a class="xs-footer-link" href="#orders">Orders &amp; History</a>
+              </div>
+              <div>
+                <div class="xs-footer-heading">Quant Research</div>
+                <a class="xs-footer-link" href="#quant">Quant Research Lab</a>
+                <a class="xs-footer-link" href="#shadow">Shadow Mode</a>
+                <a class="xs-footer-link" href="#backtest">Backtest</a>
+                <a class="xs-footer-link" href="#risk">Risk &amp; Stress</a>
+              </div>
+              <div>
+                <div class="xs-footer-heading">เครื่องมือ</div>
+                <a class="xs-footer-link" href="#market">Market Overview</a>
+                <a class="xs-footer-link" href="#orderbook">Order Book</a>
+                <a class="xs-footer-link" href="#reports">Reports</a>
+                <a class="xs-footer-link" href="#settings">Settings</a>
+              </div>
+              <div>
+                <div class="xs-footer-heading">ช่วยเหลือ</div>
+                <a class="xs-footer-link" href="#guide">คู่มือการใช้งาน</a>
+                <a class="xs-footer-link" href="#about">เกี่ยวกับระบบ</a>
+                <a class="xs-footer-link" href="#privacy">ความเป็นส่วนตัว</a>
+                <a class="xs-footer-link" href="#contact">ติดต่อ</a>
+              </div>
+            </div>
+            <div class="xs-footer-bottom">
+              <div class="xs-footer-copy">© 2026 XSpring Dealer Suite · Research &amp; Simulation Platform</div>
+              <div class="xs-footer-status"><span class="xs-footer-status-dot"></span>ระบบพร้อมใช้งาน</div>
+            </div>
+          </div>
+        </footer>
+        """,
+        unsafe_allow_html=True,
+    )
+
 def _main_body() -> None:
     # Unlock Web Audio on the user's first real click/tap so order SFX can
     # play after Streamlit reruns without being blocked by browser autoplay.
@@ -16371,6 +16492,9 @@ def _main_body() -> None:
             render_tab4(cfg, data, market_df=market_df)
 
     render_ai_fab()
+
+    # Site footer — เพิ่มเป็นชั้น UI แยก ไม่แตะ routing/logic เดิม
+    render_site_footer()
 
     st.markdown(
         f"<div class='xs-foot'>XSpring Dealer Suite · Model v{MODEL_VERSION} · "
