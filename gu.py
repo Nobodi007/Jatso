@@ -6851,11 +6851,9 @@ def _render_nc_planner_results (cfg :dict [str ,Any ],data :pd .DataFrame ,asset
 
 
 def render_tab2 (cfg :dict [str ,Any ],data :pd .DataFrame ,data_err :Optional [str ])->None :
-    st .markdown (
-    "ตอบคำถามที่ผู้บริหารถามจริง:\n\n"
-    "> **\"ถ้าธุรกรรมเดือนละ X ล้าน ต้องดำรงเหรียญเท่าไหร่ เงินสดเท่าไหร่ "
-    "NC เหลือเท่าไหร่ ผ่านเกณฑ์ไหม และทุนที่มีรับได้สูงสุดกี่ล้าน\"**"
-    )
+    # Research tab starts directly with the Perpetual Venue Comparison.
+    # The old executive-question prompt was removed to keep the actionable
+    # market comparison at the top of the page.
     if not cfg ["dates_ok"]:
         st .error ("❌ ช่วงวันที่ในแถบซ้ายไม่ถูกต้อง")
         return 
@@ -6872,7 +6870,6 @@ def render_tab2 (cfg :dict [str ,Any ],data :pd .DataFrame ,data_err :Optional [
     # NC Planner results were moved to Risk Center; do not render the old
     # Executive Summary / numeric detail block here anymore.
 
-    st .markdown ("<br>",unsafe_allow_html =True )
     render_perp_venue_table (asset )
 
     # --- FUND FLOW LAYER: อยู่ถัดจาก Perpetual Venue Comparison เพื่อให้ market context ตามหลัง price/opportunity ---
