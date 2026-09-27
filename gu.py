@@ -8023,6 +8023,97 @@ def _open_user_guide() -> None:
     st.session_state["open_user_guide"] = True
 
 
+def _open_about_system() -> None:
+    st.session_state["open_about_system"] = True
+
+
+def _about_system_dialog_body() -> None:
+    st.markdown("""
+    <style>
+    .about-section { margin-bottom: 22px; }
+    .about-section h4 { color:#0ecb81; font-size:.95rem; font-weight:800; margin-bottom:8px; display:flex; align-items:center; gap:8px; }
+    .about-section p, .about-section li { color:#c4cad3; font-size:.85rem; line-height:1.7; }
+    .about-section ul { margin:6px 0 0 0; padding-left:20px; }
+    .about-tag { display:inline-block; background:rgba(14,203,129,.1); color:#0ecb81; border:1px solid rgba(14,203,129,.25); border-radius:6px; padding:2px 8px; font-size:.7rem; font-weight:700; margin:2px 5px 2px 0; }
+    .about-flow { background:#11151a; border:1px solid #2b3139; border-radius:12px; padding:14px 16px; margin:8px 0 18px 0; color:#c4cad3; font-size:.82rem; line-height:1.8; }
+    .about-note { color:#848e9c; font-size:.76rem; line-height:1.65; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.caption("ภาพรวม XSpring Dealer Suite — ระบบจำลอง / วิจัย / วิเคราะห์พอร์ต และชั้นข้อมูลที่เชื่อมต่อกัน")
+
+    st.markdown("""
+    <div class="about-section">
+      <h4>🏗️ ระบบนี้คืออะไร</h4>
+      <p>XSpring Dealer Suite เป็นแพลตฟอร์มจำลองและวิเคราะห์สำหรับงาน Dealer, Portfolio, Risk, Liquidity และ Quant Research
+      โดยรวมหน้าซื้อขายจำลอง, Backtest, Portfolio/Wallet, Risk Analytics, Stress Test และ Research tools ไว้ในระบบเดียว</p>
+      <div class="about-flow">
+        <span class="about-tag">Streamlit UI</span> → <span class="about-tag">Simulation / Execution Engine</span> →
+        <span class="about-tag">Portfolio Ledger</span> → <span class="about-tag">Risk / NC / Quant</span> →
+        <span class="about-tag">Reports / Research</span>
+      </div>
+    </div>
+
+    <div class="about-section">
+      <h4>📦 ระบบหลักที่มีอยู่ในแอป</h4>
+      <ul>
+        <li><b>Backtest Simulator</b> — จำลอง Dealer P&amp;L, spread, premium, hedge cost, drawdown และ performance</li>
+        <li><b>Liquidity &amp; Capital Planner</b> — วางแผนสภาพคล่อง, Safety Stock, NC และ NC Buffer</li>
+        <li><b>Exchange UI Simulator</b> — ซื้อ/ขาย, Limit Order, order simulation, quote, fee และ hedge logic</li>
+        <li><b>Portfolio &amp; Wallet</b> — holdings, ฝาก/ถอน, Watchlist, Orders &amp; History และ Portfolio Calendar</li>
+        <li><b>Risk Center / Portfolio Intelligence</b> — volatility, concentration, drawdown, attribution และ fee analytics</li>
+        <li><b>Quant Research Lab</b> — Shadow Mode, Decision Log, Stress Lab, Monte Carlo, PBO/DSR และ research readiness</li>
+        <li><b>System Health Center</b> — ตรวจสถานะ Portfolio State, Market Data, Supabase, NC Snapshot และ Quant Engine</li>
+      </ul>
+    </div>
+
+    <div class="about-section">
+      <h4>🔌 ระบบและแหล่งข้อมูลที่เชื่อมต่อ</h4>
+      <ul>
+        <li><b>Streamlit</b> — UI, navigation, dialogs, session state และการรันแอป</li>
+        <li><b>Supabase</b> — cloud persistence สำหรับข้อมูลระบบที่รองรับ โดยมี local-file fallback เมื่อไม่มี cloud client</li>
+        <li><b>Bitkub</b> — ใช้เป็นกระดาน/บริบทตลาดหลักของ Exchange UI และข้อมูล BTC/THB ในส่วนที่เกี่ยวข้อง</li>
+        <li><b>Binance</b> — ใช้ข้อมูลตลาด/klines และข้อมูล futures บางโมดูล โดยบางส่วนเรียกจาก browser โดยตรงเพื่อหลีกเลี่ยงข้อจำกัดของ server</li>
+        <li><b>CoinGecko</b> — ใช้ข้อมูล market cap และ mapping ของสินทรัพย์ใน Fund Flow</li>
+        <li><b>Yahoo Finance / yfinance</b> — ใช้เป็นแหล่งข้อมูลราคาตลาดและข้อมูลประกอบ Backtest/Analytics บางส่วน</li>
+        <li><b>CryptoCompare + RSS</b> — แหล่งข่าวคริปโต โดยมี RSS จาก CoinDesk และ Cointelegraph เป็น fallback/แหล่งเสริม</li>
+        <li><b>Telegram integration</b> — รองรับการแชร์ remote configuration และนำออเดอร์ Telegram เข้าสู่ Exchange Ledger/engine เดียวกับเว็บ</li>
+      </ul>
+    </div>
+
+    <div class="about-section">
+      <h4>🔄 ข้อมูลไหลระหว่างระบบอย่างไร</h4>
+      <p>ค่าพารามิเตอร์ของ Dealer และการจำลองถูกใช้ร่วมกันระหว่าง Exchange, Backtest, Liquidity/NC และ Quant modules
+      ขณะที่ Portfolio Ledger เก็บสถานะ holdings และ orders เพื่อให้ Risk/Analytics และ Decision/Research modules นำไปวิเคราะห์ต่อได้</p>
+      <p>เมื่อเปิดใช้ Supabase ระบบสามารถเก็บ state/config บน cloud และใช้ actor ของผู้ใช้แยกข้อมูลออกจากกัน ส่วนกรณีที่ไม่มี Supabase ระบบมี local fallback ตามที่กำหนดไว้</p>
+    </div>
+
+    <div class="about-section">
+      <h4>🛡️ การออกแบบด้านความปลอดภัยและการทดสอบ</h4>
+      <ul>
+        <li>มี <b>Guest Mode</b> และ role/profile state สำหรับแยกบริบทการใช้งาน</li>
+        <li>มี <b>System Health Center</b> สำหรับตรวจข้อมูลค้างและสถานะ cloud persistence</li>
+        <li>Quant/Shadow/Stress layers แยกจาก live execution และใช้สำหรับการวิจัย/ทดสอบ</li>
+        <li>ระบบมี local fallback สำหรับข้อมูลบางส่วนเมื่อ cloud service ไม่พร้อม</li>
+      </ul>
+    </div>
+
+    <div class="about-section">
+      <h4>⚠️ ขอบเขตการใช้งาน</h4>
+      <p class="about-note">ข้อมูลและผลลัพธ์ในระบบเป็นข้อมูลตลาด/ข้อมูลจำลองและแบบจำลองเพื่อการวิเคราะห์และวางแผนภายใน
+      ไม่ควรตีความเป็นคำแนะนำการลงทุนหรือการรับรอง compliance และบางแหล่งข้อมูลอาจมี latency, rate limit หรือถูกจำกัดตามเครือข่ายของผู้ให้บริการ</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.divider()
+    if st.button("ปิดหน้าต่างนี้", key="about_close_btn", use_container_width=True):
+        st.rerun()
+
+
+def about_system_dialog() -> None:
+    st.dialog("ℹ️ เกี่ยวกับระบบ XSpring Dealer Suite", width="large")(_about_system_dialog_body)()
+
+
 def _user_guide_dialog_body() -> None:
     st.markdown("""
     <style>
@@ -16321,7 +16412,7 @@ def render_site_footer() -> None:
             st.button("คู่มือการใช้งาน", key="footer_guide", use_container_width=True,
                       on_click=_open_user_guide)
             st.button("เกี่ยวกับระบบ", key="footer_about", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_SYSTEM_HEALTH,))
+                      on_click=_open_about_system)
             st.button("ความเป็นส่วนตัว", key="footer_privacy", use_container_width=True,
                       on_click=_footer_go_to, args=(NAV_SYSTEM_HEALTH,))
             st.markdown(
@@ -16764,6 +16855,10 @@ def _main_body() -> None:
     # User guide dialog — เปิดทับหน้าปัจจุบันโดยไม่เปลี่ยน navigation state
     if st.session_state.pop("open_user_guide", False):
         user_guide_dialog()
+
+    # About-system dialog — เปิดทับหน้าปัจจุบันโดยไม่เปลี่ยน navigation state
+    if st.session_state.pop("open_about_system", False):
+        about_system_dialog()
 
     # Site footer — เพิ่มเป็นชั้น UI แยก ไม่แตะ routing/logic เดิม
     render_site_footer()
