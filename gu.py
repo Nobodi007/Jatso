@@ -16065,7 +16065,7 @@ def render_site_footer() -> None:
             width:44px; height:44px; border-radius:10px; display:flex; align-items:center; justify-content:center;
             background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.10); font-size:19px;
         }
-        .st-key-xs_footer .xs-footer-logo-text { color:#f5f7fa; font-size:20px; font-weight:800; letter-spacing:-.25px; line-height:1.45; white-space:normal; max-width:190px; }
+        .st-key-xs_footer .xs-footer-logo-text { color:#f5f7fa; font-size:20px; font-weight:800; letter-spacing:-.25px; line-height:1.45; white-space:normal; max-width:230px; }
         .st-key-xs_footer .xs-footer-description { color:rgba(255,255,255,.56); font-size:13px; line-height:1.85; max-width:290px; }
         .st-key-xs_footer .xs-footer-heading { color:#f5f7fa; font-size:14px; font-weight:800; margin:0 0 17px 0; line-height:1.4; }
         .st-key-xs_footer .xs-footer-bottom {
@@ -16127,7 +16127,7 @@ def render_site_footer() -> None:
 
     with st.container(key="xs_footer"):
         st.markdown('<div class="xs-footer-wrap"><div class="xs-footer-inner">', unsafe_allow_html=True)
-        c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1], gap="medium")
+        c1, c2, c3, c4, c5 = st.columns([1.25, 1, 1, 1, 1], gap="medium")
 
         with c1:
             st.markdown(
