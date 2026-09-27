@@ -17131,6 +17131,19 @@ def _main_body ()->None :
     remote_config =None if is_guest_mode ()else load_remote_config (email )
     apply_remote_config_to_widgets (remote_config )
 
+    # Resolve the current navigation BEFORE deciding whether the Backtest
+    # sidebar should be visible. v70 referenced current_nav here before the
+    # compact navigation block initialized it, which caused UnboundLocalError.
+    nav_labels_all =list (NAV_LABELS )+[NAV_AUTO_DCA ]
+    current_nav =st .session_state .get ("main_nav",NAV_DASHBOARD )
+    if current_nav in QUANT_RESEARCH_LEGACY_NAVS :
+        st .session_state ["quant_research_section"]=current_nav 
+        current_nav =NAV_QUANT_RESEARCH 
+        st .session_state ["main_nav"]=NAV_QUANT_RESEARCH 
+    if current_nav not in nav_labels_all and current_nav !=NAV_NEWS :
+        current_nav =NAV_DASHBOARD 
+        st .session_state ["main_nav"]=current_nav 
+
     # Backtest Settings are only relevant to the Backtest tab. Keep the
     # existing config/state logic intact, but do not show the sidebar on
     # unrelated pages.
@@ -17203,21 +17216,8 @@ def _main_body ()->None :
         # แทนแถบแท็บยาว ๆ ด้วยปุ่มเล็กเพียงปุ่มเดียว เมื่อกดจึงเปิดรายการ
         # หน้าทั้งหมดให้เลือก ช่วยลดความรกของ header และยังคงใช้ main_nav เดิม
         # เพื่อให้ routing / state ของทุกหน้าทำงานเหมือนเดิม
-    nav_labels_all =list (NAV_LABELS )+[NAV_AUTO_DCA ]
-    current_nav =st .session_state .get ("main_nav",NAV_DASHBOARD )
-    # Migrate sessions that were left on one of the old Quant top-level pages.
-    if current_nav in QUANT_RESEARCH_LEGACY_NAVS :
-        st .session_state ["quant_research_section"]=current_nav 
-        current_nav =NAV_QUANT_RESEARCH 
-        st .session_state ["main_nav"]=NAV_QUANT_RESEARCH 
-    if current_nav not in nav_labels_all and current_nav !=NAV_NEWS :
-        current_nav =NAV_DASHBOARD 
-        st .session_state ["main_nav"]=current_nav 
-
-        # Keep the legacy routing variable in sync with the compact navigation.
-        # The desktop route below still uses `nav`, so it must be defined before
-        # the route dispatch.  Previously the compact-nav refactor only created
-        # `current_nav`, which caused NameError: nav on Streamlit Cloud.
+    # Keep the legacy routing variable in sync with the compact navigation.
+    # The desktop route below still uses `nav`.
     nav =current_nav 
 
     with st .container (key ="desktop_navigation"):
