@@ -9599,10 +9599,14 @@ def render_tab4 (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :pd .DataF
         # ---------------- ฟังก์ชัน AI ----------------
 
 AI_SYSTEM =(
-"คุณคือผู้ช่วยในแอป Nobody Dealer Suite (เครื่องมือจำลอง Backtest, วางแผนสภาพคล่องและเงินกองทุน NC, "
-"จำลองหน้าเทรด และกระเป๋าเงินจำลอง) ตอบเป็นภาษาไทย สั้น กระชับ ไม่เกิน 4-5 ประโยค ภาษาง่าย "
-"อธิบายความหมายของตัวเลขและวิธีใช้งานแอปได้ แต่ห้ามแนะนำว่าควรซื้อเหรียญไหน ห้ามให้คำแนะนำลงทุน "
-"และห้ามรับรอง compliance ถ้าถามนอกเรื่อง ให้ปฏิเสธสุภาพแล้วชวนกลับมาเรื่องแอป"
+"คุณคือ Nobody AI Portfolio Copilot ผู้ช่วยวิเคราะห์พอร์ตจริงในแอป Nobody Dealer Suite "
+"ตอบเป็นภาษาไทย กระชับ อ่านง่าย และใช้ข้อมูล Portfolio Context ที่ระบบแนบให้เป็นแหล่งตัวเลขหลัก "
+"เมื่อผู้ใช้ถามเรื่องพอร์ต ให้ตอบจากข้อมูลจริงที่แนบมา เช่น มูลค่าพอร์ต เงินสด Holdings Unrealized P&L "
+"Allocation Exposure NC Buffer และเหรียญที่กำไร/ขาดทุนมากที่สุด โดยห้ามสร้างตัวเลขเอง "
+"ถ้าข้อมูลใดไม่มีหรือคำนวณไม่ได้ ให้บอกตรง ๆ ว่าไม่มีข้อมูลนั้น "
+"ห้ามแนะนำว่าควรซื้อ/ขายเหรียญ ห้ามทำนายราคา และห้ามรับรอง compliance "
+"ถ้าถามเรื่องทั่วไปของระบบ ให้ตอบตามความรู้เกี่ยวกับแอปได้ตามปกติ "
+"เวลาพูดถึงตัวเลขสำคัญ ให้ระบุหน่วยให้ชัด และถ้าข้อมูลเป็น snapshot ให้บอกว่าเป็นข้อมูล ณ เวลาที่ระบบระบุ"
 )
 
 def ask_ai (messages ,api_key ,system_override :Optional [str ]=None ):
@@ -9829,11 +9833,11 @@ def render_ledger_anomaly_detector (cfg :dict [str ,Any ],bt :pd .DataFrame )->N
 
 
 AI_SUGGESTIONS =[
-"Max Drawdown กับ Win Rate ในหน้า Backtest หมายถึงอะไร",
-"FX Limit Hit คืออะไร และกระทบกำไรยังไง",
-"NC กับ NC Buffer คืออะไร ทำไมต้องดำรงขั้นต่ำ",
-"Hedge กับ Dealer Spread ทำงานยังไง",
-"หน้า Exchange UI Simulator ใช้ซื้อ/ขายและสุ่มออเดอร์ยังไง",
+"พอร์ตตอนนี้เป็นยังไงบ้าง",
+"เหรียญไหนกำไร/ขาดทุนมากสุด",
+"Allocation และ Exposure ตอนนี้เป็นยังไง",
+"NC กับ NC Buffer ตอนนี้เป็นเท่าไหร่",
+"สรุปพอร์ตตอนนี้ให้หน่อย",
 ]
 
 def _ai_queue (q :str )->None :
@@ -9849,7 +9853,127 @@ def _ai_bubble (role :str ,text :str )->str :
 def _ai_clear ()->None :
     st .session_state ["chat_messages"]=[]
 
-def render_ai_fab ()->None :
+
+def _build_ai_portfolio_context (cfg :dict [str ,Any ],data :pd .DataFrame ,
+market_df :Optional [pd .DataFrame ])->dict [str ,Any ]:
+    """สร้าง Portfolio Context แบบ read-only สำหรับ Gemini จาก state/ledger จริง
+    โดยไม่ให้ AI เป็นคนคำนวณยอดพอร์ตเอง.
+    """
+    sim =st .session_state .get ("sim",{}) or {}
+    if not isinstance (sim ,dict ):
+        sim ={}
+
+    usdthb =FALLBACK_USDTHB
+    if isinstance (data ,pd .DataFrame )and not data .empty and "USDTHB"in data .columns :
+        try :
+            usdthb =float (data ["USDTHB"].iloc [-1 ])
+        except Exception :
+            pass
+
+    prices :dict [str ,float ]={"THB":1.0}
+    if isinstance (market_df ,pd .DataFrame )and not market_df .empty :
+        for _ ,r in market_df .iterrows ():
+            try :
+                sym =str (r .get ("symbol","")).upper ()
+                px =float (r .get ("price_usd",0 )or 0 )*usdthb
+                if sym and px >0 :
+                    prices [sym]=px
+            except (TypeError ,ValueError ):
+                continue
+
+    asset =str (cfg .get ("asset","BTC")).upper ()
+    if isinstance (data ,pd .DataFrame )and not data .empty and "Global_USD"in data .columns :
+        try :
+            prices [asset]=float (data ["Global_USD"].iloc [-1 ])*usdthb
+        except Exception :
+            pass
+
+    try :
+        snap =portfolio_snapshot (sim ,prices )
+    except Exception as exc :
+        return {
+        "available":False ,
+        "error":f"สร้าง Portfolio Snapshot ไม่สำเร็จ: {exc}",
+        }
+
+    # Risk/NC context is best-effort; Portfolio Snapshot remains usable even if
+    # the dealer-risk context cannot be built from the current market history.
+    risk =None
+    risk_error =""
+    try :
+        built =build_dealer_ctx (cfg ,data ) if isinstance (data ,pd .DataFrame )else None
+        if built is not None :
+            ctx ,target_stock_thb =built
+            risk =compute_risk_snapshot (cfg ,sim ,ctx ,target_stock_thb ,prices )
+    except Exception as exc :
+        risk_error =str (exc)
+
+    rows =snap .get ("rows",[]) or []
+    holdings =[
+    {
+    "asset":str (r .get ("asset","" )).upper (),
+    "qty":float (r .get ("qty",0 )or 0 ),
+    "price_thb":float (r .get ("price",0 )or 0 ),
+    "market_value_thb":float (r .get ("market_value",0 )or 0 ),
+    "cost_basis_thb":float (r .get ("cost_basis",0 )or 0 ),
+    "unrealized_pnl_thb":float (r .get ("unrealized_pnl",0 )or 0 ),
+    "unrealized_pnl_pct":float (r .get ("pnl_pct",0 )or 0 ),
+    "allocation_pct":float (r .get ("allocation_pct",0 )or 0 ),
+    }
+    for r in rows
+    ]
+    holdings_sorted_pnl =sorted (holdings ,key =lambda r :r ["unrealized_pnl_thb"])
+    top_gainer =max (holdings ,key =lambda r :r ["unrealized_pnl_thb"])if holdings else None
+    top_loser =min (holdings ,key =lambda r :r ["unrealized_pnl_thb"])if holdings else None
+
+    exposure ={}
+    nc ={}
+    if risk is not None :
+        exposure =dict (risk .get ("exposure_by",{}) or {})
+        nc_cards =[c for c in (risk .get ("cards",[]) or [])if str (c .get ("title",""))=="NC Buffer"]
+        if nc_cards :
+            nc =dict (nc_cards [0])
+
+    timestamp =""
+    if isinstance (data ,pd .DataFrame )and not data .empty :
+        try :
+            timestamp =pd .Timestamp (data .index [-1])
+            if timestamp .tzinfo is None :
+                timestamp =timestamp .tz_localize ("Asia/Bangkok")
+            else :
+                timestamp =timestamp .tz_convert ("Asia/Bangkok")
+            timestamp =timestamp .strftime ("%Y-%m-%d %H:%M:%S %Z")
+        except Exception :
+            timestamp =str (data .index [-1])
+
+    context = {
+    "available":True ,
+    "as_of":timestamp ,
+    "portfolio":{
+    "total_value_thb":float (snap .get ("total_value_thb",0 )or 0 ),
+    "cash_thb":float (snap .get ("cash_thb",0 )or 0 ),
+    "market_value_thb":float (snap .get ("market_value_thb",0 )or 0 ),
+    "invested_cost_thb":float (snap .get ("invested_cost_thb",0 )or 0 ),
+    "realized_pnl_thb":float (snap .get ("realized_pnl_thb",0 )or 0 ),
+    "unrealized_pnl_thb":float (snap .get ("unrealized_pnl_thb",0 )or 0 ),
+    "total_pnl_thb":float (snap .get ("total_pnl_thb",0 )or 0 ),
+    "pnl_pct_on_invested_cost":float (snap .get ("pnl_pct",0 )or 0 ),
+    "fees_thb":float (snap .get ("fees_thb",0 )or 0 ),
+    },
+    "holdings":holdings ,
+    "top_gainer":top_gainer ,
+    "top_loser":top_loser ,
+    "exposure_vs_target_thb":{str (k):float (v )for k ,v in exposure .items ()},
+    "nc_buffer":nc ,
+    "orders_count":len (sim .get ("orders",[])or []),
+    "risk_context_available":risk is not None ,
+    }
+    if risk_error :
+        context ["risk_context_note"]="NC/Exposure บางส่วนคำนวณไม่ได้จากข้อมูลตลาดปัจจุบัน: "+risk_error
+    return context
+
+def render_ai_fab (cfg :Optional [dict [str ,Any ]]=None ,data :Optional [pd .DataFrame ]=None ,
+market_df :Optional [pd .DataFrame ]=None )->None :
     try :
         api_key =st .secrets ["gemini_api_key"]
     except Exception :
@@ -9896,8 +10020,30 @@ def render_ai_fab ()->None :
                 sug_ph .empty ()
                 hist .append ({"role":"user","content":question })
                 draw ()
-                with st .spinner ("กำลังคิด…"):
-                    ans =ask_ai (hist ,api_key )
+
+                # Attach a compact, server-side Portfolio Context to the AI request.
+                # The context is not rendered into the chat bubble, so the UI stays clean.
+                ai_messages =list (hist )
+                if cfg is not None and isinstance (data ,pd .DataFrame ):
+                    try :
+                        portfolio_ctx =_build_ai_portfolio_context (cfg ,data ,market_df )
+                        context_text =json .dumps (portfolio_ctx ,ensure_ascii =False ,indent =2 )
+                        ai_messages [-1 ]={
+                        "role":"user",
+                        "content":(
+                        question +
+                        "\n\n[PRIVATE PORTFOLIO CONTEXT — ใช้ตัวเลขชุดนี้เป็น source of truth; "
+                        "ห้ามสร้างตัวเลขใหม่\n"+context_text+"\nEND PORTFOLIO CONTEXT]"
+                        ),
+                        }
+                    except Exception as exc :
+                        ai_messages [-1 ]={
+                        "role":"user",
+                        "content":question+f"\n\n[Portfolio Context unavailable: {exc}]",
+                        }
+
+                with st .spinner ("กำลังคิดจากข้อมูลพอร์ตจริง…"):
+                    ans =ask_ai (ai_messages ,api_key )
                 hist .append ({"role":"assistant","content":ans })
             draw ()
 
@@ -11001,68 +11147,12 @@ def _mobile_home_goto (tab_label :str )->None :
     st .session_state ["mobile_nav"]=tab_label 
 
 
-
-def _build_portfolio_performance_df_v56(sim, orders, initial_capital):
-    """Build Portfolio Performance data from current/legacy order schemas.
-    Kept above mobile/desktop renderers so the helper is always defined before main().
-    """
-    empty = pd.DataFrame(columns=["วันที่", "equity"])
-    try:
-        # Prefer portfolio snapshots when they are available.
-        snaps = sim.get("portfolio_snapshots", []) if isinstance(sim, dict) else []
-        rows = []
-        if isinstance(snaps, list):
-            for snap in snaps:
-                if not isinstance(snap, dict):
-                    continue
-                dt = pd.to_datetime(snap.get("timestamp") or snap.get("date"), errors="coerce")
-                val = pd.to_numeric(snap.get("total_value_thb"), errors="coerce")
-                if pd.notna(dt) and pd.notna(val):
-                    rows.append((dt, float(val)))
-        if len(rows) >= 2:
-            df = pd.DataFrame(rows, columns=["วันที่", "equity"]).sort_values("วันที่")
-            return df.drop_duplicates("วันที่", keep="last").reset_index(drop=True)
-
-        if not orders:
-            return empty
-
-        odf = pd.DataFrame(orders).copy()
-        # Current Telegram/portfolio schema first, then legacy Thai schema.
-        ds = odf["timestamp"] if "timestamp" in odf.columns else odf.get("วันที่", odf.get("date"))
-        if ds is None:
-            return empty
-        odf["วันที่"] = pd.to_datetime(ds, errors="coerce")
-
-        if "realized_pnl_thb" in odf.columns:
-            ps = odf["realized_pnl_thb"]
-        elif "กำไรออเดอร์" in odf.columns:
-            ps = odf["กำไรออเดอร์"]
-        elif "realized_pnl" in odf.columns:
-            ps = odf["realized_pnl"]
-        else:
-            ps = 0.0
-        odf["pnl"] = pd.to_numeric(ps, errors="coerce").fillna(0.0)
-        odf = odf.dropna(subset=["วันที่"]).sort_values("วันที่")
-        if odf.empty:
-            return empty
-
-        # One point per day keeps the chart readable and avoids duplicate timestamps.
-        daily = odf.groupby(odf["วันที่"].dt.date, as_index=False)["pnl"].sum()
-        daily["วันที่"] = pd.to_datetime(daily["วันที่"])
-        daily["equity"] = float(initial_capital) + daily["pnl"].cumsum()
-        start = daily["วันที่"].iloc[0] - pd.Timedelta(days=1)
-        start_row = pd.DataFrame({"วันที่": [start], "equity": [float(initial_capital)]})
-        return pd.concat([start_row, daily[["วันที่", "equity"]]], ignore_index=True)
-    except Exception:
-        return empty
-
 def render_mobile_home (cfg :dict [str ,Any ],data :pd .DataFrame )->None :
     sim =st .session_state .get ("sim",{})or {}
     asset =str (cfg .get ("asset","BTC"))
     cust_thb =float (sim .get ("customer_thb",1_000_000.0 )or 0.0 )
     cust_coins =sim .get ("customer_coins",{})or {}
     orders =sim .get ("orders",[])if isinstance (sim ,dict )else []
-    initial_capital =float (sim .get ("initial_capital_thb",1_000_000.0 )or 1_000_000.0 )
 
     usdthb_now =1.0 
     try :
@@ -11102,51 +11192,70 @@ def render_mobile_home (cfg :dict [str ,Any ],data :pd .DataFrame )->None :
     holdings .sort (key =lambda h :h ["value"],reverse =True )
 
     total_value =cust_thb +coins_value 
-
-    # Mobile ใช้ตัวชี้วัดเดียวกับ Desktop: การขึ้น/ลงของเหรียญที่ถืออยู่
-    # ไม่ผูกกับทุนเริ่มต้น จึงไม่เปลี่ยนเพราะเติมเงินเข้ากระเป๋า
-    try :
-        _coin_snap =portfolio_snapshot (sim ,price_thb_map )
-        coin_pnl_thb =float (_coin_snap .get ("unrealized_pnl_thb",0.0 )or 0.0 )
-        coin_cost_thb =float (_coin_snap .get ("invested_cost_thb",0.0 )or 0.0 )
-    except Exception :
-        coin_pnl_thb =0.0 
-        coin_cost_thb =0.0 
-
-    coin_change_pct =(coin_pnl_thb /coin_cost_thb *100.0 )if coin_cost_thb >0 else 0.0 
+    initial_capital =1_000_000.0 # ทุนเริ่มต้นของกระเป๋าจำลอง
+    change_thb =total_value -initial_capital 
+    change_pct =(change_thb /initial_capital *100 )if initial_capital else 0.0 
 
     hour =pd .Timestamp .now (tz ="Asia/Bangkok").hour 
     greeting ="สวัสดีตอนเช้า"if hour <12 else ("สวัสดีตอนบ่าย"if hour <18 else "สวัสดีตอนเย็น")
 
-    change_cls ="mobile-green"if coin_pnl_thb >=0 else "mobile-red"
-    change_sign ="+"if coin_pnl_thb >=0 else ""
+    change_cls ="mobile-green"if change_thb >=0 else "mobile-red"
+    change_sign ="+"if change_thb >=0 else ""
 
     st .markdown (
     f'<div class="mobile-home-greet">{greeting } 👋</div>'
     f'<div class="mobile-home-port-label">มูลค่าพอร์ตทั้งหมด</div>'
     f'<div class="mobile-home-port-value">฿{total_value :,.0f}</div>'
-    f'<div class="mobile-home-port-change {change_cls }">{change_sign }{coin_change_pct :.2f}% '
-    f'({_mobile_money (coin_pnl_thb ,True )}) การขึ้น/ลงของเหรียญในพอร์ต</div>',
+    f'<div class="mobile-home-port-change {change_cls }">{change_sign }{change_pct :.2f}% '
+    f'({_mobile_money (change_thb ,True )}) เทียบทุนเริ่มต้น</div>',
     unsafe_allow_html =True ,
     )
 
-    # ---- กราฟ Portfolio Performance ----
+    # ---- กราฟ Portfolio Performance (สร้างจากกำไรสะสมของออเดอร์จริง) ----
     st .markdown ('<div class="mobile-home-chart-card">'
-    '<div class="mobile-home-chart-title">📈 Portfolio Performance</div>',unsafe_allow_html =True )
-    plot_df =_build_portfolio_performance_df_v56(sim,orders,initial_capital) if go is not None else pd.DataFrame()
-    if not plot_df.empty:
+    '<div class="mobile-home-chart-title">📈 Portfolio Performance</div>',
+    unsafe_allow_html =True )
+    if orders :
         try :
-            marker_mode="lines+markers"if len(plot_df)<=8 else "lines"
-            ymin,ymax=float(plot_df["equity"].min()),float(plot_df["equity"].max())
-            span=max(ymax-ymin,abs(float(initial_capital))*0.005,1.0); pad=span*0.18
-            fig=go.Figure(go.Scatter(x=plot_df["วันที่"],y=plot_df["equity"],mode=marker_mode,line=dict(color="#0ecb81",width=2.2),marker=dict(size=6),fill="tozeroy",fillcolor="rgba(14,203,129,0.12)"))
-            fig.update_layout(template="plotly_dark",height=170,margin=dict(t=4,b=4,l=4,r=4),showlegend=False,xaxis=dict(visible=False),yaxis=dict(visible=False,range=[ymin-pad,ymax+pad]),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False},key="portfolio_performance_mobile")
-        except Exception:
-            st.markdown('<div class="mobile-home-chart-empty">ไม่สามารถแสดงกราฟได้ในขณะนี้</div>',unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="mobile-home-chart-empty">ยังไม่มีข้อมูล Portfolio Performance</div>',unsafe_allow_html=True)
-    st.markdown('</div>',unsafe_allow_html=True)
+            odf =pd .DataFrame (orders )
+            odf ["วันที่"]=pd .to_datetime (odf .get ("วันที่"),errors ="coerce")
+            odf =odf .dropna (subset =["วันที่"]).sort_values ("วันที่")
+            odf ["กำไรออเดอร์"]=pd .to_numeric (odf .get ("กำไรออเดอร์",0 ),errors ="coerce").fillna (0.0 )
+            # Aggregate orders by day. The source ledger stores dates without time, so
+            # plotting every order separately can collapse the x-axis to microseconds.
+            daily =(odf .groupby ("วันที่",as_index =False )["กำไรออเดอร์"].sum ()
+            .sort_values ("วันที่"))
+            daily ["equity"]=initial_capital +daily ["กำไรออเดอร์"].cumsum ()
+            # Add a starting point so the portfolio line has a visible baseline.
+            start_date =daily ["วันที่"].iloc [0 ]-pd .Timedelta (days =1 )
+            plot_df =pd .concat ([
+            pd .DataFrame ({"วันที่":[start_date ],"equity":[initial_capital ]}),
+            daily [["วันที่","equity"]],
+            ],ignore_index =True )
+            marker_mode ="lines+markers"if len (plot_df )<=8 else "lines"
+            ymin ,ymax =float (plot_df ["equity"].min ()),float (plot_df ["equity"].max ())
+            span =max (ymax -ymin ,initial_capital *0.005 ,1.0 )
+            pad =span *0.18 
+            fig =go .Figure (go .Scatter (
+            x =plot_df ["วันที่"],y =plot_df ["equity"],mode =marker_mode ,
+            line =dict (color ="#0ecb81",width =2.2 ),
+            marker =dict (size =6 ),
+            fill ="tozeroy",fillcolor ="rgba(14,203,129,0.12)",
+            ))
+            fig .update_layout (
+            template ="plotly_dark",height =170 ,margin =dict (t =4 ,b =4 ,l =4 ,r =4 ),
+            showlegend =False ,xaxis =dict (visible =False ),
+            yaxis =dict (visible =False ,range =[ymin -pad ,ymax +pad ]),
+            paper_bgcolor ="rgba(0,0,0,0)",plot_bgcolor ="rgba(0,0,0,0)",
+            )
+            st .plotly_chart (fig ,use_container_width =True ,config ={"displayModeBar":False })
+        except Exception :
+            st .markdown ('<div class="mobile-home-chart-empty">ไม่สามารถแสดงกราฟได้ในขณะนี้</div>',
+            unsafe_allow_html =True )
+    else :
+        st .markdown ('<div class="mobile-home-chart-empty">ยังไม่มีประวัติการเทรด — '
+        'เริ่มซื้อขายที่แท็บ Trade เพื่อดูกราฟผลงาน</div>',unsafe_allow_html =True )
+    st .markdown ('</div>',unsafe_allow_html =True )
 
     # ---- รายการสินทรัพย์ ----
     st .markdown ('<div class="mobile-home-section-label">สินทรัพย์</div>',unsafe_allow_html =True )
@@ -14960,47 +15069,6 @@ def render_experiment_tracker (cfg :dict [str ,Any ],data :pd .DataFrame ,market
             _vnext_save_json_list (_EXPERIMENT_LOCAL ,"quant_experiments",experiments )
             st .rerun ()
 
-def _build_portfolio_performance_df(sim, orders, initial_capital):
-    """Build chart data from portfolio snapshots, or fall back to order P&L.
-    Supports both English and legacy Thai ledger field names.
-    """
-    try:
-        snaps = sim.get("portfolio_snapshots", []) if isinstance(sim, dict) else []
-        rows = []
-        for s in snaps if isinstance(snaps, list) else []:
-            if not isinstance(s, dict):
-                continue
-            dt = pd.to_datetime(s.get("timestamp") or s.get("date"), errors="coerce")
-            val = pd.to_numeric(s.get("total_value_thb"), errors="coerce")
-            if pd.notna(dt) and pd.notna(val):
-                rows.append((dt, float(val)))
-        if len(rows) >= 2:
-            df = pd.DataFrame(rows, columns=["วันที่", "equity"]).sort_values("วันที่")
-            return df.drop_duplicates("วันที่", keep="last").reset_index(drop=True)
-        if not orders:
-            return pd.DataFrame(columns=["วันที่", "equity"])
-        odf = pd.DataFrame(orders).copy()
-        ds = odf.get("timestamp")
-        if ds is None: ds = odf.get("วันที่")
-        if ds is None: ds = odf.get("date")
-        odf["วันที่"] = pd.to_datetime(ds, errors="coerce")
-        ps = odf.get("realized_pnl_thb")
-        if ps is None: ps = odf.get("กำไรออเดอร์")
-        if ps is None: ps = odf.get("realized_pnl")
-        if ps is None: ps = 0.0
-        odf["pnl"] = pd.to_numeric(ps, errors="coerce").fillna(0.0)
-        odf = odf.dropna(subset=["วันที่"]).sort_values("วันที่")
-        if odf.empty:
-            return pd.DataFrame(columns=["วันที่", "equity"])
-        daily = odf.groupby(odf["วันที่"].dt.date, as_index=False)["pnl"].sum()
-        daily["วันที่"] = pd.to_datetime(daily["วันที่"])
-        daily["equity"] = float(initial_capital) + daily["pnl"].cumsum()
-        start = daily["วันที่"].iloc[0] - pd.Timedelta(days=1)
-        return pd.concat([pd.DataFrame({"วันที่":[start],"equity":[float(initial_capital)]}), daily[["วันที่","equity"]]], ignore_index=True)
-    except Exception:
-        return pd.DataFrame(columns=["วันที่", "equity"])
-
-
 def render_dashboard (cfg :dict [str ,Any ],data :pd .DataFrame ,
 market_df :Optional [pd .DataFrame ]=None )->None :
     st .markdown (DASHBOARD_CSS ,unsafe_allow_html =True )
@@ -15010,7 +15078,6 @@ market_df :Optional [pd .DataFrame ]=None )->None :
     cust_thb =float (sim .get ("customer_thb",1_000_000.0 )or 0.0 )
     cust_coins =sim .get ("customer_coins",{})or {}
     orders =sim .get ("orders",[])if isinstance (sim ,dict )else []
-    initial_capital =float (sim .get ("initial_capital_thb",1_000_000.0 )or 1_000_000.0 )
 
     usdthb_now =1.0 
     try :
@@ -15044,25 +15111,15 @@ market_df :Optional [pd .DataFrame ]=None )->None :
     holdings .sort (key =lambda h :h ["value"],reverse =True )
 
     total_value =cust_thb +coins_value 
-
-    # แสดงผลการขึ้น/ลงของ "เหรียญที่ถืออยู่" แทนผลตอบแทนเทียบทุนเริ่มต้น
-    # ดังนั้นการเติมเงินเข้า Customer THB Wallet จะไม่ทำให้ % นี้กระโดด
-    # ใช้ Unrealized P&L จาก cost basis ของเหรียญใน Portfolio โดยตรง
-    try :
-        _coin_snap =portfolio_snapshot (sim ,price_thb_map )
-        coin_pnl_thb =float (_coin_snap .get ("unrealized_pnl_thb",0.0 )or 0.0 )
-        coin_cost_thb =float (_coin_snap .get ("invested_cost_thb",0.0 )or 0.0 )
-    except Exception :
-        coin_pnl_thb =0.0 
-        coin_cost_thb =0.0 
-
-    coin_change_pct =(coin_pnl_thb /coin_cost_thb *100.0 )if coin_cost_thb >0 else 0.0 
+    initial_capital =1_000_000.0 
+    change_thb =total_value -initial_capital 
+    change_pct =(change_thb /initial_capital *100 )if initial_capital else 0.0 
 
     hour =pd .Timestamp .now (tz ="Asia/Bangkok").hour 
     greeting ="Good morning"if hour <12 else ("Good afternoon"if hour <18 else "Good evening")
 
-    change_cls ="up"if coin_pnl_thb >=0 else "down"
-    change_sign ="+"if coin_pnl_thb >=0 else ""
+    change_cls ="up"if change_thb >=0 else "down"
+    change_sign ="+"if change_thb >=0 else ""
 
     d_name =st .session_state .get ("current_role")# เผื่ออยากดึงชื่อจริง ปรับตามที่มึงเก็บไว้
 
@@ -15071,8 +15128,8 @@ market_df :Optional [pd .DataFrame ]=None )->None :
     f'<div class="greet">{greeting } 👋</div>'
     f'<div class="label">Portfolio</div>'
     f'<div class="value">฿{total_value :,.0f}</div>'
-    f'<div class="change {change_cls}">{change_sign}{coin_change_pct :.2f}% '
-    f'({fmt_baht (coin_pnl_thb ,force_sign =True )}) การขึ้น/ลงของเหรียญในพอร์ต</div>'
+    f'<div class="change {change_cls }">{change_sign }{change_pct :.2f}% '
+    f'({fmt_baht (change_thb ,force_sign =True )}) เทียบทุนเริ่มต้น</div>'
     f'</div>',
     unsafe_allow_html =True ,
     )
@@ -15085,23 +15142,51 @@ market_df :Optional [pd .DataFrame ]=None )->None :
     # ฟีเจอร์ AI ห้ามทำให้ Dashboard หลักล่ม
         pass 
 
-    # ---- Portfolio Performance chart ----
+        # ---- Portfolio Performance chart ----
     st .markdown ('<div class="dash-chart-card">'
-    '<div class="dash-chart-title">📈 Portfolio Performance</div>',unsafe_allow_html =True )
-    plot_df =_build_portfolio_performance_df_v56(sim,orders,initial_capital) if go is not None else pd.DataFrame()
-    if not plot_df.empty:
+    '<div class="dash-chart-title">📈 Portfolio Performance</div>',
+    unsafe_allow_html =True )
+    if orders :
         try :
-            marker_mode ="lines+markers"if len(plot_df)<=8 else "lines"
-            ymin,ymax =float(plot_df["equity"].min()),float(plot_df["equity"].max())
-            span=max(ymax-ymin,abs(float(initial_capital))*0.005,1.0); pad=span*0.18
-            fig=go.Figure(go.Scatter(x=plot_df["วันที่"],y=plot_df["equity"],mode=marker_mode,line=dict(color="#0ecb81",width=2.4),marker=dict(size=7),fill="tozeroy",fillcolor="rgba(14,203,129,0.12)"))
-            fig.update_layout(template="plotly_dark",height=320,margin=dict(t=10,b=10,l=10,r=10),showlegend=False,hovermode="x unified",yaxis_title="THB",yaxis=dict(range=[ymin-pad,ymax+pad]),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig,**WIDE,key="portfolio_performance_desktop")
-        except Exception:
-            st.markdown('<div class="dash-chart-empty">ไม่สามารถแสดงกราฟได้ในขณะนี้</div>',unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="dash-chart-empty">ยังไม่มีข้อมูล Portfolio Performance</div>',unsafe_allow_html=True)
-    st.markdown('</div>',unsafe_allow_html=True)
+            odf =pd .DataFrame (orders )
+            odf ["วันที่"]=pd .to_datetime (odf .get ("วันที่"),errors ="coerce")
+            odf =odf .dropna (subset =["วันที่"]).sort_values ("วันที่")
+            odf ["กำไรออเดอร์"]=pd .to_numeric (odf .get ("กำไรออเดอร์",0 ),errors ="coerce").fillna (0.0 )
+            # Aggregate the ledger to daily P&L. Orders currently carry a date (not a
+            # timestamp), so duplicate dates otherwise produce a collapsed microsecond axis.
+            daily =(odf .groupby ("วันที่",as_index =False )["กำไรออเดอร์"].sum ()
+            .sort_values ("วันที่"))
+            daily ["equity"]=initial_capital +daily ["กำไรออเดอร์"].cumsum ()
+            start_date =daily ["วันที่"].iloc [0 ]-pd .Timedelta (days =1 )
+            plot_df =pd .concat ([
+            pd .DataFrame ({"วันที่":[start_date ],"equity":[initial_capital ]}),
+            daily [["วันที่","equity"]],
+            ],ignore_index =True )
+            marker_mode ="lines+markers"if len (plot_df )<=8 else "lines"
+            ymin ,ymax =float (plot_df ["equity"].min ()),float (plot_df ["equity"].max ())
+            span =max (ymax -ymin ,initial_capital *0.005 ,1.0 )
+            pad =span *0.18 
+            fig =go .Figure (go .Scatter (
+            x =plot_df ["วันที่"],y =plot_df ["equity"],mode =marker_mode ,
+            line =dict (color ="#0ecb81",width =2.4 ),
+            marker =dict (size =7 ),
+            fill ="tozeroy",fillcolor ="rgba(14,203,129,0.12)",
+            ))
+            fig .update_layout (
+            template ="plotly_dark",height =320 ,margin =dict (t =10 ,b =10 ,l =10 ,r =10 ),
+            showlegend =False ,hovermode ="x unified",
+            yaxis_title ="THB",yaxis =dict (range =[ymin -pad ,ymax +pad ]),
+            paper_bgcolor ="rgba(0,0,0,0)",plot_bgcolor ="rgba(0,0,0,0)",
+            )
+            st .plotly_chart (fig ,**WIDE )
+        except Exception :
+            st .markdown ('<div class="dash-chart-empty">ไม่สามารถแสดงกราฟได้ในขณะนี้</div>',
+            unsafe_allow_html =True )
+    else :
+        st .markdown ('<div class="dash-chart-empty">ยังไม่มีประวัติการเทรด — '
+        'เริ่มซื้อขายที่ Exchange UI Simulator เพื่อดูกราฟผลงาน</div>',
+        unsafe_allow_html =True )
+    st .markdown ('</div>',unsafe_allow_html =True )
 
     # ---- Layout: Assets (ซ้าย) + Quick Actions (ขวา) ----
     col_assets ,col_side =st .columns ([2.4 ,1 ],gap ="large")
@@ -16862,7 +16947,7 @@ def _main_body ()->None :
         else :
             render_tab4 (cfg ,data ,market_df =market_df )
 
-    render_ai_fab ()
+    render_ai_fab (cfg ,data ,market_df )
 
     # User guide dialog — เปิดทับหน้าปัจจุบันโดยไม่เปลี่ยน navigation state
     if st .session_state .pop ("open_user_guide",False ):
