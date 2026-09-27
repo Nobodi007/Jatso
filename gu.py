@@ -17440,6 +17440,110 @@ market_df :Optional [pd .DataFrame ]=None )->None :
 
 
 
+    # ---- AI Portfolio Narrator (ข้อความเท่านั้น) ----
+    try :
+        _render_ai_daily_portfolio_brief (cfg ,data ,market_df)
+    except Exception as _e :
+    # ฟีเจอร์ AI ห้ามทำให้ Dashboard หลักล่ม
+        pass 
+
+    # ---- Portfolio Decision Engine / Anomaly Detector ----
+    try:
+        render_portfolio_decision_engine(sim, price_thb_map, pct_map)
+        render_portfolio_anomaly_detector(sim, price_thb_map, pct_map)
+    except Exception:
+        pass
+
+    # ---- Portfolio Performance chart ----
+    st .markdown ('<div class="dash-chart-card">'
+    '<div class="dash-chart-title">📈 Portfolio Performance</div>',unsafe_allow_html =True )
+    plot_df =_build_portfolio_performance_df(sim,orders,initial_capital) if go is not None else pd.DataFrame()
+    if not plot_df.empty:
+        try :
+            marker_mode ="lines+markers"if len(plot_df)<=8 else "lines"
+            ymin,ymax =float(plot_df["equity"].min()),float(plot_df["equity"].max())
+            span=max(ymax-ymin,abs(float(initial_capital))*0.005,1.0); pad=span*0.18
+            fig=go.Figure(go.Scatter(x=plot_df["วันที่"],y=plot_df["equity"],mode=marker_mode,line=dict(color="#0ecb81",width=2.4),marker=dict(size=7),fill="tozeroy",fillcolor="rgba(14,203,129,0.12)"))
+            fig.update_layout(template="plotly_dark",height=320,margin=dict(t=10,b=10,l=10,r=10),showlegend=False,hovermode="x unified",yaxis_title="THB",yaxis=dict(range=[ymin-pad,ymax+pad]),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)")
+            st.plotly_chart(fig,**WIDE,key="portfolio_performance_desktop")
+        except Exception:
+            st.markdown('<div class="dash-chart-empty">ไม่สามารถแสดงกราฟได้ในขณะนี้</div>',unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="dash-chart-empty">ยังไม่มีข้อมูล Portfolio Performance</div>',unsafe_allow_html=True)
+    st.markdown('</div>',unsafe_allow_html=True)
+
+    # ---- Layout: Assets (ซ้าย) + Quick Actions (ขวา) ----
+    col_assets ,col_side =st .columns ([2.4 ,1 ],gap ="large")
+
+    with col_assets :
+        section ("🪙 สินทรัพย์")
+        if holdings :
+            for h in holdings :
+                sym =h ["sym"]
+                pct =h ["pct"]
+                pct_txt =f'{"+"if (pct or 0 )>=0 else ""}{pct :.2f}%'if pct is not None else "—"
+                pct_cls ="up"if (pct or 0 )>=0 else "down"
+                logo =get_coin_logo (sym )
+                logo_html =(f'<img class="dash-asset-logo" src="{logo }" alt="{sym }">'
+                if logo else f'<div class="dash-asset-logo-fallback">{sym [:1 ]}</div>')
+                st .markdown (
+                f'<div class="dash-asset-row">{logo_html }'
+                f'<div class="dash-asset-main">'
+                f'<div class="dash-asset-sym">{sym }</div>'
+                f'<div class="dash-asset-name">{COIN_NAMES .get (sym ,sym )} · '
+                f'{h ["qty"]:,.6f} {sym }</div></div>'
+                f'<div class="dash-asset-right">'
+                f'<div class="dash-asset-val">{fmt_baht (h ["value"])}</div>'
+                f'<div class="dash-asset-pct {pct_cls }">{pct_txt }</div></div></div>',
+                unsafe_allow_html =True ,
+                )
+        else :
+            st .caption ("ยังไม่มีสินทรัพย์คริปโตในพอร์ต")
+
+        st .markdown (
+        f'<div class="dash-cash-row"><span>Cash (THB)</span>'
+        f'<b>{fmt_baht (cust_thb )}</b></div>',
+        unsafe_allow_html =True ,
+        )
+
+    with col_side :
+        section ("⚡ เมนูด่วน")
+        with st .container (key ="dash_qa_bt"):
+            if st .button ("📊 Backtest",key ="dash_go_bt",**WIDE ,
+            on_click =_dash_goto ,args =(NAV_LABELS [1 ],)):
+                pass 
+        st .write ("")
+        with st .container (key ="dash_qa_planner"):
+            if st .button ("🧮 Planner",key ="dash_go_planner",**WIDE ,
+            on_click =_dash_goto ,args =(NAV_LABELS [2 ],)):
+                pass 
+        st .write ("")
+        with st .container (key ="dash_qa_trade"):
+            if st .button ("🛒 Trade",key ="dash_go_trade",**WIDE ,
+            on_click =_dash_goto ,args =(NAV_EXCHANGE ,)):
+                pass 
+        st .write ("")
+        with st .container (key ="dash_qa_wallet"):
+            if st .button ("💼 Wallet",key ="dash_go_wallet",**WIDE ,
+            on_click =_dash_goto ,args =(NAV_LABELS [4 ],)):
+                pass 
+        st .write ("")
+        with st .container (key ="dash_qa_risk"):
+            if st .button ("🚨 Risk Center",key ="dash_go_risk",**WIDE ,
+            on_click =_dash_goto ,args =(NAV_RISK ,)):
+                pass 
+        st .write ("")
+        with st .container (key ="dash_qa_intel"):
+            if st .button ("🧠 Intelligence",key ="dash_go_intel",**WIDE ,
+            on_click =_dash_goto ,args =(NAV_INTELLIGENCE ,)):
+                pass 
+
+
+                # =========================================================================
+                # V-NEXT — MODEL GOVERNANCE / PROMOTION GATE
+                # =========================================================================
+
+
 def _portfolio_state_at_cutoff(sim: dict[str, Any], price_thb_map: Mapping[str, float], cutoff: pd.Timestamp) -> dict[str, Any]:
     """Replay portfolio ledger up to cutoff to estimate historical allocation."""
     ensure_portfolio_ledger(sim)
@@ -17551,109 +17655,6 @@ def render_portfolio_anomaly_detector(sim: dict[str, Any], price_thb_map: Mappin
         else:
             st.info("ยังไม่พบ anomaly ตามเกณฑ์ปัจจุบัน")
         st.caption("Anomaly เป็นการตรวจจับจาก Ledger / Orders และราคาปัจจุบันแบบ read-only · ไม่ใช่คำแนะนำการลงทุน")
-
-    # ---- AI Portfolio Narrator (ข้อความเท่านั้น) ----
-    try :
-        _render_ai_daily_portfolio_brief (cfg ,data ,market_df)
-    except Exception as _e :
-    # ฟีเจอร์ AI ห้ามทำให้ Dashboard หลักล่ม
-        pass 
-
-    # ---- Portfolio Decision Engine / Anomaly Detector ----
-    try:
-        render_portfolio_decision_engine(sim, price_thb_map, pct_map)
-        render_portfolio_anomaly_detector(sim, price_thb_map, pct_map)
-    except Exception:
-        pass
-
-    # ---- Portfolio Performance chart ----
-    st .markdown ('<div class="dash-chart-card">'
-    '<div class="dash-chart-title">📈 Portfolio Performance</div>',unsafe_allow_html =True )
-    plot_df =_build_portfolio_performance_df(sim,orders,initial_capital) if go is not None else pd.DataFrame()
-    if not plot_df.empty:
-        try :
-            marker_mode ="lines+markers"if len(plot_df)<=8 else "lines"
-            ymin,ymax =float(plot_df["equity"].min()),float(plot_df["equity"].max())
-            span=max(ymax-ymin,abs(float(initial_capital))*0.005,1.0); pad=span*0.18
-            fig=go.Figure(go.Scatter(x=plot_df["วันที่"],y=plot_df["equity"],mode=marker_mode,line=dict(color="#0ecb81",width=2.4),marker=dict(size=7),fill="tozeroy",fillcolor="rgba(14,203,129,0.12)"))
-            fig.update_layout(template="plotly_dark",height=320,margin=dict(t=10,b=10,l=10,r=10),showlegend=False,hovermode="x unified",yaxis_title="THB",yaxis=dict(range=[ymin-pad,ymax+pad]),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig,**WIDE,key="portfolio_performance_desktop")
-        except Exception:
-            st.markdown('<div class="dash-chart-empty">ไม่สามารถแสดงกราฟได้ในขณะนี้</div>',unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="dash-chart-empty">ยังไม่มีข้อมูล Portfolio Performance</div>',unsafe_allow_html=True)
-    st.markdown('</div>',unsafe_allow_html=True)
-
-    # ---- Layout: Assets (ซ้าย) + Quick Actions (ขวา) ----
-    col_assets ,col_side =st .columns ([2.4 ,1 ],gap ="large")
-
-    with col_assets :
-        section ("🪙 สินทรัพย์")
-        if holdings :
-            for h in holdings :
-                sym =h ["sym"]
-                pct =h ["pct"]
-                pct_txt =f'{"+"if (pct or 0 )>=0 else ""}{pct :.2f}%'if pct is not None else "—"
-                pct_cls ="up"if (pct or 0 )>=0 else "down"
-                logo =get_coin_logo (sym )
-                logo_html =(f'<img class="dash-asset-logo" src="{logo }" alt="{sym }">'
-                if logo else f'<div class="dash-asset-logo-fallback">{sym [:1 ]}</div>')
-                st .markdown (
-                f'<div class="dash-asset-row">{logo_html }'
-                f'<div class="dash-asset-main">'
-                f'<div class="dash-asset-sym">{sym }</div>'
-                f'<div class="dash-asset-name">{COIN_NAMES .get (sym ,sym )} · '
-                f'{h ["qty"]:,.6f} {sym }</div></div>'
-                f'<div class="dash-asset-right">'
-                f'<div class="dash-asset-val">{fmt_baht (h ["value"])}</div>'
-                f'<div class="dash-asset-pct {pct_cls }">{pct_txt }</div></div></div>',
-                unsafe_allow_html =True ,
-                )
-        else :
-            st .caption ("ยังไม่มีสินทรัพย์คริปโตในพอร์ต")
-
-        st .markdown (
-        f'<div class="dash-cash-row"><span>Cash (THB)</span>'
-        f'<b>{fmt_baht (cust_thb )}</b></div>',
-        unsafe_allow_html =True ,
-        )
-
-    with col_side :
-        section ("⚡ เมนูด่วน")
-        with st .container (key ="dash_qa_bt"):
-            if st .button ("📊 Backtest",key ="dash_go_bt",**WIDE ,
-            on_click =_dash_goto ,args =(NAV_LABELS [1 ],)):
-                pass 
-        st .write ("")
-        with st .container (key ="dash_qa_planner"):
-            if st .button ("🧮 Planner",key ="dash_go_planner",**WIDE ,
-            on_click =_dash_goto ,args =(NAV_LABELS [2 ],)):
-                pass 
-        st .write ("")
-        with st .container (key ="dash_qa_trade"):
-            if st .button ("🛒 Trade",key ="dash_go_trade",**WIDE ,
-            on_click =_dash_goto ,args =(NAV_EXCHANGE ,)):
-                pass 
-        st .write ("")
-        with st .container (key ="dash_qa_wallet"):
-            if st .button ("💼 Wallet",key ="dash_go_wallet",**WIDE ,
-            on_click =_dash_goto ,args =(NAV_LABELS [4 ],)):
-                pass 
-        st .write ("")
-        with st .container (key ="dash_qa_risk"):
-            if st .button ("🚨 Risk Center",key ="dash_go_risk",**WIDE ,
-            on_click =_dash_goto ,args =(NAV_RISK ,)):
-                pass 
-        st .write ("")
-        with st .container (key ="dash_qa_intel"):
-            if st .button ("🧠 Intelligence",key ="dash_go_intel",**WIDE ,
-            on_click =_dash_goto ,args =(NAV_INTELLIGENCE ,)):
-                pass 
-
-
-                # =========================================================================
-                # V-NEXT — MODEL GOVERNANCE / PROMOTION GATE
-                # =========================================================================
 
 def _vnext_transaction_cost_analysis (rows :list [dict [str ,Any ]],fee_per_side :float ,slippage_bps :float ,spread_pct :float )->dict [str ,Any ]:
     """Research-only gross-to-net analysis for Shadow observations.
