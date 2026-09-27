@@ -7427,7 +7427,8 @@ else:
 
 
 def _dca_create_plan(
-    sim: dict[str, Any], asset: str, amount_thb: float, freq: str, hour: int, minute: int
+    sim: dict[str, Any], asset: str, amount_thb: float, freq: str, hour: int, minute: int,
+    anchor_day: Optional[int] = None, anchor_weekday: Optional[int] = None,
 ) -> dict[str, Any]:
     now = _dca_now()
     plan = {
@@ -7437,8 +7438,8 @@ def _dca_create_plan(
         "freq": str(freq),
         "hour": int(hour),
         "minute": int(minute),
-        "anchor_weekday": int(now.weekday()),
-        "anchor_day": int(now.day),
+        "anchor_weekday": int(now.weekday() if anchor_weekday is None else anchor_weekday),
+        "anchor_day": int(now.day if anchor_day is None else anchor_day),
         "enabled": True,
         "created_at": _dca_iso(now),
         "last_attempt_at": None,
@@ -9616,6 +9617,7 @@ AI_SYSTEM =(
 "เมื่อผู้ใช้ถามเรื่อง Risk เช่น ตอนนี้พอร์ตเสี่ยงตรงไหน ให้ใช้ risk_copilot.facts เป็น source of truth และครอบคลุม Concentration, Exposure, NC, NC Buffer, Hedge/Unhedged, Liquidity/CEX, FX Limit และ Drawdown เท่าที่ข้อมูลมี"
 "ต้องแยกคำตอบเป็น 2 ชั้น: [ข้อเท็จจริงจากระบบ] คือค่าที่ส่งมาจาก Risk Center และ [การตีความของ AI] คือคำอธิบายความสัมพันธ์/ความหมายของตัวเลขเท่านั้น; ห้ามเขียนการตีความเหมือนเป็นค่าที่ระบบตรวจพบ"
 "ถ้าข้อมูล Risk ตัวใดไม่มี ให้ระบุว่าไม่มีข้อมูล ไม่เดา และห้ามสรุปว่าพอร์ตปลอดภัยหรือไม่ปลอดภัยจากตัวเลขที่ไม่มี"
+"ถ้าผู้ใช้ขอสร้าง Auto DCA ให้ใช้ Auto DCA Assistant ซึ่งต้องมีการยืนยันจากผู้ใช้ก่อนสร้างแผนจริงเสมอ"
 )
 
 def ask_ai (messages ,api_key ,system_override :Optional [str ]=None ):
@@ -9850,6 +9852,7 @@ AI_SUGGESTIONS =[
 "NC กับ NC Buffer ตอนนี้เป็นเท่าไหร่",
 "สรุปพอร์ตตอนนี้ให้หน่อย",
 "ตอนนี้พอร์ตเสี่ยงตรงไหน",
+"ตั้ง DCA BTC เดือนละ 5,000 บาท ทุกวันที่ 1 เวลา 10 โมง",
 ]
 
 def _ai_queue (q :str )->None :
@@ -10122,6 +10125,148 @@ market_df :Optional [pd .DataFrame ])->dict [str ,Any ]:
         context ["risk_context_note"]="NC/Exposure บางส่วนคำนวณไม่ได้จากข้อมูลตลาดปัจจุบัน: "+risk_error
     return context
 
+DCA_AI_SYSTEM = (
+"คุณคือ Auto DCA Assistant ของ Nobody. หน้าที่คืออ่านข้อความของผู้ใช้แล้วแปลงคำขอ Auto DCA เป็น JSON เท่านั้น "
+"ห้ามสร้าง/ยืนยัน/execute แผน และห้ามเรียกเครื่องมือใด ๆ. "
+"รองรับ asset เฉพาะ BTC, ETH, SOL, DOGE, ADA, HBAR, LINK, XLM, XRP, USDT, USDC "
+"แต่ Auto DCA หน้า live จะไม่รับ stablecoin ดังนั้นถ้าเป็น USDT/USDC ให้รายงานว่า unsupported. "
+"frequency ต้องเป็นหนึ่งใน daily, weekly, monthly. "
+"daily ไม่ต้องมี day_of_month หรือ weekday. weekly ต้องมี weekday 0=จันทร์ ... 6=อาทิตย์ ถ้าผู้ใช้ระบุ. "
+"monthly ต้องมี day_of_month 1-31 ถ้าผู้ใช้ระบุ. "
+"hour ต้อง 0-23 และ minute ต้อง 0,15,30,45 สำหรับ scheduler ปัจจุบัน. "
+"จำนวนเงินต้องเป็น THB และเป็นตัวเลข. ถ้าข้อมูลสำคัญขาด ให้ใส่ชื่อ field ที่ขาดใน missing และอย่าเดาค่า. "
+"ตอบ JSON object เดียวตาม schema นี้: "
+'{"is_dca":true,"asset":"BTC","amount_thb":5000,"frequency":"monthly",'
+'"day_of_month":1,"weekday":null,"hour":10,"minute":0,"missing":[],"reason":""}'
+"ถ้าไม่ใช่คำขอ Auto DCA ให้ is_dca=false และ missing=[] reason='not_dca'. "
+"ถ้าผู้ใช้พูดว่า 5k ให้แปลงเป็น 5000; ห้ามตีความคำอื่นที่ไม่ชัดเป็นตัวเลข. "
+"ถ้าพูดว่า 10 โมง ให้ hour=10, minute=0. "
+)
+
+
+def _looks_like_dca_request(text: str) -> bool:
+    t = str(text or '').lower()
+    if 'dca' in t or 'auto dca' in t:
+        return True
+    freq_words = ('ทุกวัน', 'รายวัน', 'ทุกสัปดาห์', 'รายสัปดาห์', 'ทุกเดือน', 'รายเดือน', 'เดือนละ', 'สัปดาห์ละ', 'วันละ')
+    return any(w in t for w in freq_words) and bool(re.search(r'\d', t))
+
+
+def _parse_dca_ai_json(raw: str) -> Optional[dict[str, Any]]:
+    try:
+        txt = str(raw or '').strip()
+        txt = re.sub(r'^```(?:json)?\s*', '', txt, flags=re.I)
+        txt = re.sub(r'\s*```$', '', txt).strip()
+        obj = json.loads(txt)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
+
+def _weekday_from_thai(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        n = int(value)
+        return n if 0 <= n <= 6 else None
+    t = str(value).strip().lower()
+    names = {
+        'จันทร์': 0, 'วันจันทร์': 0,
+        'อังคาร': 1, 'วันอังคาร': 1,
+        'พุธ': 2, 'วันพุธ': 2,
+        'พฤหัส': 3, 'พฤหัสบดี': 3, 'วันพฤหัส': 3, 'วันพฤหัสบดี': 3,
+        'ศุกร์': 4, 'วันศุกร์': 4,
+        'เสาร์': 5, 'วันเสาร์': 5,
+        'อาทิตย์': 6, 'วันอาทิตย์': 6,
+    }
+    return names.get(t)
+
+
+def _normalize_dca_intent(obj: Optional[dict[str, Any]]) -> tuple[Optional[dict[str, Any]], list[str]]:
+    if not isinstance(obj, dict) or not obj.get('is_dca'):
+        return None, ['ไม่พบคำขอ Auto DCA ที่ชัดเจน']
+
+    asset = str(obj.get('asset') or '').upper().strip()
+    if asset not in SUPPORTED_ASSETS or asset in STABLECOINS:
+        return None, [f'เหรียญ {asset or "ไม่ระบุ"} ยังไม่รองรับ Auto DCA Live']
+
+    try:
+        amount = float(obj.get('amount_thb'))
+    except (TypeError, ValueError):
+        amount = 0.0
+    try:
+        hour = int(obj.get('hour'))
+        minute = int(obj.get('minute', 0))
+    except (TypeError, ValueError):
+        hour, minute = -1, -1
+
+    freq_map = {'daily': 'รายวัน', 'weekly': 'รายสัปดาห์', 'monthly': 'รายเดือน'}
+    freq = freq_map.get(str(obj.get('frequency') or '').lower().strip())
+    missing = [str(x) for x in (obj.get('missing') or []) if str(x).strip()]
+
+    if amount < MIN_TRADE_THB:
+        missing.append(f'จำนวนเงินต้องไม่น้อยกว่า {MIN_TRADE_THB:,.0f} THB')
+    if hour < 0 or hour > 23:
+        missing.append('เวลา (ชั่วโมง)')
+    if minute not in (0, 15, 30, 45):
+        missing.append('นาทีต้องเป็น 00, 15, 30 หรือ 45')
+    if freq is None:
+        missing.append('ความถี่ (รายวัน/รายสัปดาห์/รายเดือน)')
+
+    day = None
+    weekday = None
+    if freq == 'รายเดือน':
+        try:
+            day = int(obj.get('day_of_month'))
+        except (TypeError, ValueError):
+            day = None
+        if day is None or not 1 <= day <= 31:
+            missing.append('วันที่ของเดือน 1-31')
+    elif freq == 'รายสัปดาห์':
+        weekday = _weekday_from_thai(obj.get('weekday'))
+        if weekday is None:
+            missing.append('วันในสัปดาห์')
+
+    if missing:
+        # preserve order while removing duplicates
+        return None, list(dict.fromkeys(missing))
+
+    return {
+        'asset': asset,
+        'amount_thb': amount,
+        'freq': freq,
+        'hour': hour,
+        'minute': minute,
+        'anchor_day': day,
+        'anchor_weekday': weekday,
+    }, []
+
+
+def _ai_dca_parse_request(question: str, api_key: str) -> tuple[Optional[dict[str, Any]], list[str]]:
+    raw = ask_ai([{'role': 'user', 'content': str(question)}], api_key, system_override=DCA_AI_SYSTEM)
+    parsed = _parse_dca_ai_json(raw)
+    return _normalize_dca_intent(parsed)
+
+
+def _dca_pending_text(plan: dict[str, Any]) -> str:
+    freq = plan.get('freq', '—')
+    schedule = ''
+    if freq == 'รายเดือน':
+        schedule = f"วันที่ {int(plan.get('anchor_day', 1))} ของทุกเดือน"
+    elif freq == 'รายสัปดาห์':
+        names = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์']
+        schedule = f"ทุกวัน{names[int(plan.get('anchor_weekday', 0))]}"
+    else:
+        schedule = 'ทุกวัน'
+    return (
+        f"Asset: {plan.get('asset')}\n"
+        f"Amount: {float(plan.get('amount_thb', 0)):,.2f} THB\n"
+        f"Frequency: {freq} · {schedule}\n"
+        f"Time: {int(plan.get('hour', 0)):02d}:{int(plan.get('minute', 0)):02d}\n"
+        "Status: Pending confirmation"
+    )
+
+
 def render_ai_fab (cfg :Optional [dict [str ,Any ]]=None ,data :Optional [pd .DataFrame ]=None ,
 market_df :Optional [pd .DataFrame ]=None )->None :
     try :
@@ -10130,13 +10275,61 @@ market_df :Optional [pd .DataFrame ]=None )->None :
         api_key =os .environ .get ("GEMINI_API_KEY","")
 
     hist =st .session_state .setdefault ("chat_messages",[])
-    pending =st .session_state .pop ("ai_pending",None )
+    pending =st .session_state .get ("ai_dca_pending")
 
     with st .container (key ="ai_fab"):
         with st .popover ("💬 ถาม AI"):
             if not api_key or api_key .startswith ("AIza..."):
                 st .warning ("ยังไม่ได้ตั้ง `gemini_api_key` ใน Secrets")
-                return 
+                return
+
+            # -----------------------------------------------------------------
+            # AUTO DCA ASSISTANT — AI only prepares a draft. No plan is written
+            # until the user explicitly presses "ยืนยันสร้าง Auto DCA".
+            # -----------------------------------------------------------------
+            if isinstance (pending,dict):
+                st.markdown ("### 🤖 Auto DCA Assistant")
+                st.caption ("สถานะ: Pending confirmation — AI ยังไม่ได้สร้างแผนจริง")
+                st.code (_dca_pending_text (pending),language =None )
+                st.warning (
+                    "การกดยืนยันจะเขียนแผน Auto DCA เข้า simulated wallet/portfolio "
+                    "และให้ scheduler ทำรายการตามรอบที่กำหนด"
+                )
+                pc1 ,pc2 =st.columns (2 )
+                with pc1:
+                    if st.button ("✅ ยืนยันสร้าง Auto DCA",key ="ai_dca_confirm",type ="primary",**WIDE):
+                        sim =st.session_state .get ("sim",{})
+                        if not isinstance (sim,dict) or not can_trade ():
+                            st.error ("บัญชีนี้ไม่มีสิทธิ์สร้าง Auto DCA")
+                        else:
+                            plan =_dca_create_plan (
+                                sim,
+                                str (pending ["asset"]),
+                                float (pending ["amount_thb"]),
+                                str (pending ["freq"]),
+                                int (pending ["hour"]),
+                                int (pending ["minute"]),
+                                anchor_day =pending .get ("anchor_day"),
+                                anchor_weekday =pending .get ("anchor_weekday"),
+                            )
+                            save_sim_state (sim)
+                            st.session_state ["sim"] =sim
+                            st.session_state .pop ("ai_dca_pending",None)
+                            hist.append ({
+                                "role":"assistant",
+                                "content":(
+                                    "✅ ยืนยันสร้าง Auto DCA แล้ว\n\n"+
+                                    _dca_pending_text ({**plan,"freq":plan.get("freq")})+
+                                    f"\n\nPlan ID: {plan.get('id')}"
+                                ),
+                            })
+                            st.success (f"สร้าง Auto DCA สำเร็จ · {plan.get('id')}")
+                            st.rerun ()
+                with pc2:
+                    if st.button ("✖ ยกเลิก",key ="ai_dca_cancel",**WIDE):
+                        st.session_state .pop ("ai_dca_pending",None)
+                        hist.append ({"role":"assistant","content":"ยกเลิกคำขอ Auto DCA แล้ว — ยังไม่มีการสร้างแผนใด ๆ"})
+                        st.rerun ()
 
             box =st .container (height =380 ,border =False )
             with box :
@@ -10151,7 +10344,6 @@ market_df :Optional [pd .DataFrame ]=None )->None :
                     ph .markdown ('<div class="ai-empty">ลองกดคำถามด้านล่าง หรือพิมพ์เองได้เลย</div>',
                     unsafe_allow_html =True )
 
-                    # ปุ่มคำถามตัวอย่าง (แสดงเฉพาะตอนยังไม่เริ่มคุย)
             if not hist and not pending :
                 with sug_ph .container ():
                     for i ,s in enumerate (AI_SUGGESTIONS ):
@@ -10164,38 +10356,87 @@ market_df :Optional [pd .DataFrame ]=None )->None :
                 placeholder ="พิมพ์ข้อความ…")
                 sent =c2 .form_submit_button ("ส่ง")
 
-            question =q .strip ()if (sent and q .strip ())else pending 
+            question =q .strip ()if (sent and q .strip ())else st .session_state .pop ("ai_pending",None)
 
             if question :
                 sug_ph .empty ()
                 hist .append ({"role":"user","content":question })
                 draw ()
 
-                # Attach a compact, server-side Portfolio Context to the AI request.
-                # Daily P&L attribution is included when the question is about today's move.
-                # The context is not rendered into the chat bubble, so the UI stays clean.
-                ai_messages =list (hist )
-                if cfg is not None and isinstance (data ,pd .DataFrame ):
-                    try :
-                        portfolio_ctx =_build_ai_portfolio_context (cfg ,data ,market_df )
-                        context_text =json .dumps (portfolio_ctx ,ensure_ascii =False ,indent =2 )
-                        ai_messages [-1 ]={
-                        "role":"user",
-                        "content":(
-                        question +
-                        "\n\n[PRIVATE PORTFOLIO CONTEXT — ใช้ตัวเลขชุดนี้เป็น source of truth; "
-                        "ห้ามสร้างตัวเลขใหม่\n"+context_text+"\nEND PORTFOLIO CONTEXT]"
-                        ),
-                        }
-                    except Exception as exc :
-                        ai_messages [-1 ]={
-                        "role":"user",
-                        "content":question+f"\n\n[Portfolio Context unavailable: {exc}]",
-                        }
+                # DCA requests go through a dedicated parser. The parser only
+                # creates a draft; execution is impossible until confirmation.
+                if _looks_like_dca_request (question):
+                    with st .spinner ("AI กำลังแปลงคำสั่ง Auto DCA…"):
+                        dca_plan, dca_missing =_ai_dca_parse_request (question,api_key)
 
-                with st .spinner ("กำลังคิดจากข้อมูลพอร์ตจริง…"):
-                    ans =ask_ai (ai_messages ,api_key )
-                hist .append ({"role":"assistant","content":ans })
+                    if dca_plan is not None:
+                        st.session_state ["ai_dca_pending"] =dca_plan
+                        hist .append ({
+                            "role":"assistant",
+                            "content":(
+                                "ผมแปลงคำสั่ง Auto DCA ให้แล้ว แต่ยังไม่สร้างแผนจริง\n\n"+
+                                _dca_pending_text (dca_plan)+
+                                "\n\nกด **ยืนยันสร้าง Auto DCA** ด้านบนเมื่อรายละเอียดถูกต้อง"
+                            ),
+                        })
+                    elif dca_missing and dca_missing != ['ไม่พบคำขอ Auto DCA ที่ชัดเจน']:
+                        hist .append ({
+                            "role":"assistant",
+                            "content":(
+                                "ผมเข้าใจว่าเป็นคำขอ Auto DCA แต่ข้อมูลยังไม่ครบ:\n"+
+                                "\n".join (f"• {x}" for x in dca_missing)+
+                                "\n\nส่งรายละเอียดเพิ่มได้เลย — ระบบจะยังไม่สร้างแผนจนกว่าจะยืนยัน"
+                            ),
+                        })
+                    else:
+                        # If the dedicated parser cannot classify it, fall back
+                        # to normal Copilot chat instead of silently guessing.
+                        ai_messages =list (hist )
+                        if cfg is not None and isinstance (data ,pd .DataFrame ):
+                            try :
+                                portfolio_ctx =_build_ai_portfolio_context (cfg ,data ,market_df )
+                                context_text =json .dumps (portfolio_ctx ,ensure_ascii =False ,indent =2 )
+                                ai_messages [-1 ]={
+                                "role":"user",
+                                "content":(
+                                question +
+                                "\n\n[PRIVATE PORTFOLIO CONTEXT — ใช้ตัวเลขชุดนี้เป็น source of truth; "
+                                "ห้ามสร้างตัวเลขใหม่\n"+context_text+"\nEND PORTFOLIO CONTEXT]"
+                                ),
+                                }
+                            except Exception as exc :
+                                ai_messages [-1 ]={
+                                "role":"user",
+                                "content":question+f"\n\n[Portfolio Context unavailable: {exc}]",
+                                }
+                        with st .spinner ("กำลังคิดจากข้อมูลพอร์ตจริง…"):
+                            ans =ask_ai (ai_messages ,api_key )
+                        hist .append ({"role":"assistant","content":ans })
+                else :
+                    # Existing Portfolio/Risk Copilot path remains unchanged.
+                    ai_messages =list (hist )
+                    if cfg is not None and isinstance (data ,pd .DataFrame ):
+                        try :
+                            portfolio_ctx =_build_ai_portfolio_context (cfg ,data ,market_df )
+                            context_text =json .dumps (portfolio_ctx ,ensure_ascii =False ,indent =2 )
+                            ai_messages [-1 ]={
+                            "role":"user",
+                            "content":(
+                            question +
+                            "\n\n[PRIVATE PORTFOLIO CONTEXT — ใช้ตัวเลขชุดนี้เป็น source of truth; "
+                            "ห้ามสร้างตัวเลขใหม่\n"+context_text+"\nEND PORTFOLIO CONTEXT]"
+                            ),
+                            }
+                        except Exception as exc :
+                            ai_messages [-1 ]={
+                            "role":"user",
+                            "content":question+f"\n\n[Portfolio Context unavailable: {exc}]",
+                            }
+
+                    with st .spinner ("กำลังคิดจากข้อมูลพอร์ตจริง…"):
+                        ans =ask_ai (ai_messages ,api_key )
+                    hist .append ({"role":"assistant","content":ans })
+
             draw ()
 
             if hist :
