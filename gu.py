@@ -16199,6 +16199,45 @@ def render_site_footer() -> None:
         }
         .st-key-xs_footer .stColumn { min-width: 0 !important; }
 
+        /* --- st.link_button: ให้หน้าตาเหมือนปุ่ม footer อื่น ๆ --- */
+        .st-key-xs_footer [data-testid="stElementContainer"]:has([data-testid="stLinkButton"]) {
+            margin: 0 0 11px 0 !important;
+            padding: 0 !important;
+            min-height: 0 !important;
+        }
+        .st-key-xs_footer [data-testid="stLinkButton"] {
+            width: 100% !important;
+        }
+        .st-key-xs_footer [data-testid="stLinkButton"] a {
+            display: flex !important;
+            justify-content: flex-start !important;
+            align-items: center !important;
+            text-align: left !important;
+            width: 100% !important;
+            min-height: 0 !important;
+            height: auto !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            border: 0 !important;
+            border-radius: 0 !important;
+            background: transparent !important;
+            color: #6ea8fe !important;
+            box-shadow: none !important;
+            font-size: 13px !important;
+            font-weight: 400 !important;
+            line-height: 1.55 !important;
+            text-decoration: none !important;
+        }
+        .st-key-xs_footer [data-testid="stLinkButton"] a p {
+            margin: 0 !important;
+            text-align: left !important;
+        }
+        .st-key-xs_footer [data-testid="stLinkButton"] a:hover {
+            color: #9dc4ff !important;
+            text-decoration: underline !important;
+            background: transparent !important;
+        }
+
         @media (max-width:900px) {
             .st-key-xs_footer .xs-footer-wrap { padding:32px 22px 20px; }
         }
@@ -16271,8 +16310,7 @@ def render_site_footer() -> None:
                       on_click=_footer_go_to, args=(NAV_SYSTEM_HEALTH,))
             st.button("ความเป็นส่วนตัว", key="footer_privacy", use_container_width=True,
                       on_click=_footer_go_to, args=(NAV_SYSTEM_HEALTH,))
-            st.button("ติดต่อ", key="footer_contact", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_SYSTEM_HEALTH,))
+            st.link_button("ติดต่อ", DEV_LINKEDIN, use_container_width=True)
 
         st.markdown(
             '<div class="xs-footer-bottom">'
