@@ -16882,6 +16882,7 @@ def render_site_footer ()->None :
         .st-key-xs_footer [data-testid="stButton"] { margin: 0 !important; padding: 0 !important; min-height: 0 !important; text-align: left !important; }
         .st-key-xs_footer [data-testid="stElementContainer"]:has([data-testid="stButton"]) { margin: 0 0 11px 0 !important; padding: 0 !important; min-height: 0 !important; text-align: left !important; }
         .st-key-xs_footer [data-testid="stVerticalBlock"] { gap: 0 !important; }
+        .st-key-xs_footer .xs-footer-logout-spacer { height: 68px !important; width: 1px; }
         /* Force Streamlit internal flex layout to the left. */
         .st-key-xs_footer [data-testid="stButton"] {
             width: 100% !important;
@@ -16975,6 +16976,11 @@ def render_site_footer ()->None :
             '<div class="xs-footer-description">'
             'แพลตฟอร์มจำลองการซื้อขายและเครื่องมือ Quant Research สำหรับการศึกษา วิเคราะห์ และทดสอบกลยุทธ์'
             '</div></div>',
+            unsafe_allow_html =True ,
+            )
+            # Intentional vertical spacer: place logout in the blank area below the brand description.
+            st .markdown (
+            '<div class="xs-footer-logout-spacer"></div>',
             unsafe_allow_html =True ,
             )
             st .button (
