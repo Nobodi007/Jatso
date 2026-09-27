@@ -6168,6 +6168,211 @@ run();
 </script></body></html>"""
 
 
+
+def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
+    """Server-rendered fallback for the Global Perpetual table.
+
+    The original table uses a components.html iframe/JS renderer.  Keep the
+    visual table available even when an embedded iframe is suppressed or fails
+    to execute in a deployed Streamlit session.
+    """
+    valid = [r for r in rows if r.get("price") is not None]
+    if not valid:
+        st.warning("ไม่พบข้อมูล Global Perpetual ในขณะนี้")
+        return
+
+    prices = [float(r["price"]) for r in valid]
+    turnovers = [float(r["turnover"]) for r in valid if r.get("turnover") is not None]
+    vwap = (sum(float(r["price"]) * float(r.get("turnover") or 0.0) for r in valid) /
+            sum(float(r.get("turnover") or 0.0) for r in valid)) if sum(float(r.get("turnover") or 0.0) for r in valid) > 0 else sum(prices) / len(prices)
+    max_dev = max(max(abs((float(r["price"]) / vwap - 1.0) * 100.0) for r in valid), 0.001)
+    total_turn = sum(float(r.get("turnover") or 0.0) for r in valid)
+    low = min(valid, key=lambda r: float(r["price"]))
+    high = max(valid, key=lambda r: float(r["price"]))
+    spread_pct = (float(high["price"]) / float(low["price"]) - 1.0) * 100.0 if float(low["price"]) else 0.0
+
+    # Preserve the same 0.02% arb-highlight threshold used by the JS table.
+    low_name = str(low.get("exchange", "")) if spread_pct >= 0.02 else ""
+    high_name = str(high.get("exchange", "")) if spread_pct >= 0.02 else ""
+
+    def esc(x: Any) -> str:
+        return _html.escape(str(x))
+
+    def money(x: Any) -> str:
+        try:
+            v = float(x)
+            if v >= 1_000_000_000:
+                return f"${v/1_000_000_000:.2f}B"
+            if v >= 1_000_000:
+                return f"${v/1_000_000:.2f}M"
+            if v >= 1_000:
+                return f"${v/1_000:.2f}K"
+            return f"${v:,.2f}"
+        except Exception:
+            return "—"
+
+    def liquidity(turnover: float | None) -> tuple[str, str]:
+        # Same proxy thresholds used by the existing liquidity intelligence.
+        t = float(turnover or 0.0)
+        if t >= 2_500_000_000:
+            return "High", "#0ecb81"
+        if t >= 500_000_000:
+            return "Medium", "#f0b90b"
+        return "Low", "#f6465d"
+
+    css = """
+    <style>
+      .nobody-pv-wrap{border:1px solid #2b3139;border-radius:10px;overflow:hidden;background:#0d1117;margin:0 0 12px 0}
+      .nobody-pv{width:100%;border-collapse:collapse;font-family:Arial,sans-serif;color:#eaecef;font-size:14px}
+      .nobody-pv th{background:#171b20;color:#848e9c;text-align:left;font-weight:700;padding:11px 14px;border-bottom:1px solid #2b3139;white-space:nowrap}
+      .nobody-pv td{padding:13px 14px;border-bottom:1px solid #252a31;vertical-align:middle}
+      .nobody-pv tr:last-child td{border-bottom:0}
+      .nobody-pv .venue{font-weight:700;font-size:15px;white-space:nowrap}
+      .nobody-pv .symbol{color:#2f8cff;white-space:nowrap}
+      .nobody-pv .chg-up{color:#0ecb81;font-weight:700}.nobody-pv .chg-down{color:#f6465d;font-weight:700}
+      .nobody-pv .bar{height:6px;background:#242a31;border-radius:8px;min-width:90px;position:relative;overflow:hidden}
+      .nobody-pv .bar i{display:block;height:100%;border-radius:8px;position:absolute;left:50%;transform:translateX(-50%)}
+      .nobody-pv .buy{background:rgba(14,203,129,.12);box-shadow:inset 3px 0 #0ecb81}
+      .nobody-pv .sell{background:rgba(246,70,93,.10);box-shadow:inset 3px 0 #f6465d}
+      .nobody-pv .arb-buy{color:#0ecb81;font-size:11px;font-weight:700}.nobody-pv .arb-sell{color:#f6465d;font-size:11px;font-weight:700}
+      .nobody-pv .share{height:5px;background:#20252c;border-radius:5px;margin-top:5px;overflow:hidden}.nobody-pv .share i{display:block;height:100%;background:#2f8cff;border-radius:5px}
+      .nobody-pv .liq{display:inline-block;padding:4px 8px;border:1px solid currentColor;border-radius:6px;font-size:12px;font-weight:700}.nobody-pv .liqline{height:4px;background:#242a31;border-radius:4px;margin-top:6px;overflow:hidden}.nobody-pv .liqline i{display:block;height:100%;border-radius:4px}
+      .nobody-pv .muted{color:#848e9c;font-size:11px;margin-top:3px}.nobody-pv .via{display:inline-block;color:#848e9c;border:1px solid #2b3139;border-radius:4px;padding:2px 5px;font-size:10px;margin-left:8px}
+    </style>
+    """
+    body=[]
+    for r in valid:
+        p=float(r["price"]); chg=r.get("chg"); turn=float(r.get("turnover") or 0.0)
+        dev=(p/vwap-1.0)*100.0
+        width=min(42.0, abs(dev)/max_dev*42.0)
+        color="#0ecb81" if dev <= 0 else "#f6465d"
+        chg_html="—" if chg is None else f"<span class='{ 'chg-up' if float(chg)>=0 else 'chg-down' }'>{float(chg):+.2f}%</span>"
+        share=(turn/total_turn*100.0) if total_turn else 0.0
+        role_html=""
+        row_class=""
+        if low_name and str(r.get("exchange"))==low_name:
+            row_class="buy"; role_html="<div class='arb-buy'>🟢 ซื้อที่นี่</div>"
+        elif high_name and str(r.get("exchange"))==high_name:
+            row_class="sell"; role_html="<div class='arb-sell'>🔴 ขายที่นี่</div>"
+        liq_name, liq_color=liquidity(turn)
+        liq_width={"High":100,"Medium":60,"Low":25}[liq_name]
+        body.append(f"""
+        <tr class='{row_class}'>
+          <td class='venue'>{esc(r.get('exchange','—'))}{'<span class="via">via browser</span>' if r.get('via')=='browser' else ''}{role_html}</td>
+          <td class='symbol'>{esc(r.get('symbol','—'))}</td>
+          <td>{p:,.1f}</td>
+          <td>{chg_html}</td>
+          <td><div style='display:flex;align-items:center;gap:7px'><div class='bar'><i style='width:{width:.1f}%;background:{color}'></i></div><span style='color:{color};font-size:12px'>{dev:+.3f}%</span></div></td>
+          <td><div style='font-size:15px'>{money(turn)}</div><div class='share'><i style='width:{min(100,share):.1f}%'></i></div><div class='muted'>{share:.1f}% ของตลาด</div></td>
+          <td><span class='liq' style='color:{liq_color}'>{liq_name}</span><div class='liqline'><i style='width:{liq_width}%;background:{liq_color}'></i></div></td>
+        </tr>""")
+    html = css + "<div class='nobody-pv-wrap'><table class='nobody-pv'><thead><tr><th>Exchange</th><th>Symbol</th><th>Price($)</th><th>Chg 24H(%)</th><th>vs VWAP</th><th>Turnover 24h</th><th>Liquidity</th></tr></thead><tbody>" + "".join(body) + "</tbody></table></div>"
+    st.markdown(html, unsafe_allow_html=True)
+
+def _render_global_perp_coin_tabs(default_base: str = "BTC") -> str:
+    """Coin switcher styled as real tabs, with coin logos.
+
+    The control is intentionally rendered as a horizontal tab strip rather
+    than a row of action buttons.  The selected coin is stored in Streamlit
+    session state and drives the Global Perpetual comparison below.
+    """
+    choices = [a for a in SUPPORTED_ASSETS if a not in STABLECOINS]
+    if not choices:
+        choices = ["BTC"]
+    if default_base not in choices:
+        default_base = choices[0]
+
+    current = st.session_state.get("pv_coin_tab", default_base)
+    if current not in choices:
+        current = default_base
+
+    st.markdown("""
+    <style>
+      /* Nobody — Global Perpetual coin tabs */
+      div[data-testid="stRadio"]:has(input[value="BTC"]) > div:first-child {
+        display:flex !important;
+        gap:6px !important;
+        flex-wrap:nowrap !important;
+        overflow-x:auto !important;
+        padding:2px 0 0 0 !important;
+        scrollbar-width:none !important;
+      }
+      div[data-testid="stRadio"]:has(input[value="BTC"]) > div:first-child::-webkit-scrollbar{display:none}
+      div[data-testid="stRadio"]:has(input[value="BTC"]) label[data-baseweb="radio"] {
+        min-width:96px !important;
+        height:48px !important;
+        padding:0 14px !important;
+        margin:0 !important;
+        border:1px solid #2b3139 !important;
+        border-radius:10px 10px 0 0 !important;
+        background:#11151b !important;
+        color:#9aa4b2 !important;
+        display:flex !important;
+        align-items:center !important;
+        justify-content:center !important;
+        transition:all .16s ease !important;
+        cursor:pointer !important;
+        position:relative !important;
+      }
+      div[data-testid="stRadio"]:has(input[value="BTC"]) label[data-baseweb="radio"]:hover {
+        background:#171c23 !important;
+        color:#eaecef !important;
+        border-color:#3a424d !important;
+      }
+      div[data-testid="stRadio"]:has(input[value="BTC"]) label[data-baseweb="radio"]:has(input:checked) {
+        background:#171d24 !important;
+        color:#f4f6f8 !important;
+        border-color:#2f8cff !important;
+        box-shadow:inset 0 -3px 0 #2f8cff !important;
+      }
+      div[data-testid="stRadio"]:has(input[value="BTC"]) label[data-baseweb="radio"] > div:first-child {
+        display:none !important;
+      }
+      div[data-testid="stRadio"]:has(input[value="BTC"]) label[data-baseweb="radio"] > div:last-child {
+        display:flex !important;
+        align-items:center !important;
+        justify-content:center !important;
+        gap:8px !important;
+        font-weight:700 !important;
+        font-size:14px !important;
+      }
+      /* Coin logos — one per tab, matching the canonical Nobody logo URLs. */
+      div[data-testid="stRadio"]:has(input[value="BTC"]) label[data-baseweb="radio"] > div:last-child::before {
+        content:"";
+        width:22px;
+        height:22px;
+        flex:0 0 22px;
+        border-radius:50%;
+        background-size:cover;
+        background-position:center;
+        background-repeat:no-repeat;
+        background-image:url("https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/btc.png");
+      }
+      div[data-testid="stRadio"]:has(input[value="BTC"]) label:nth-of-type(2) > div:last-child::before { background-image:url("https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/eth.png"); }
+      div[data-testid="stRadio"]:has(input[value="BTC"]) label:nth-of-type(3) > div:last-child::before { background-image:url("https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/sol.png"); }
+      div[data-testid="stRadio"]:has(input[value="BTC"]) label:nth-of-type(4) > div:last-child::before { background-image:url("https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/doge.png"); }
+      div[data-testid="stRadio"]:has(input[value="BTC"]) label:nth-of-type(5) > div:last-child::before { background-image:url("https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/ada.png"); }
+      div[data-testid="stRadio"]:has(input[value="BTC"]) label:nth-of-type(6) > div:last-child::before { background-image:url("https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/hbar.png"); }
+      div[data-testid="stRadio"]:has(input[value="BTC"]) label:nth-of-type(7) > div:last-child::before { background-image:url("https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/link.png"); }
+      div[data-testid="stRadio"]:has(input[value="BTC"]) label:nth-of-type(8) > div:last-child::before { background-image:url("https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/xlm.png"); }
+      div[data-testid="stRadio"]:has(input[value="BTC"]) label:nth-of-type(9) > div:last-child::before { background-image:url("https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/xrp.png"); }
+      div[data-testid="stRadio"]:has(input[value="BTC"]) + div { margin-top:-8px !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # HTML attributes cannot be attached directly to st.radio; the scoped
+    # wrapper is selected through the nearby heading/key below.
+    selected = st.radio(
+        "เหรียญ",
+        choices,
+        index=choices.index(current),
+        horizontal=True,
+        key="pv_coin_tab",
+        label_visibility="collapsed",
+    )
+    return selected
+
+
 def render_perp_venue_table (base :str ="BTC")->None :
     # Fetch/build the venue rows first so the comparison table is the first
     # visual element in this section.  Analysis controls/cards follow below.
@@ -6199,7 +6404,27 @@ def render_perp_venue_table (base :str ="BTC")->None :
         )
         )
 
-    section (f"🌐 เทียบราคา {base } — Global Perpetual")
+    section ("🌐 เทียบราคา — Global Perpetual")
+
+    # Real tab-style coin switcher.  It replaces the loose control area with
+    # compact navigation and keeps the selected coin as the source of truth.
+    selected_base = _render_global_perp_coin_tabs(base)
+    if selected_base != base:
+        base = selected_base
+        df, ts = fetch_perp_venues(base)
+        rows = []
+        for _, r in df.iterrows():
+            v = meta.get(r["exchange"], {})
+            rows.append(dict(
+                exchange=r["exchange"], symbol=r["symbol"], url=r["url"],
+                bg=v.get("bg"), fg=v.get("fg"), tx=v.get("tx"),
+                logo=v.get("logo", ""), note=v.get("note"),
+                price=_num(r["price"]), chg=_num(r["chg"]),
+                turnover=_num(r["turnover"]),
+                err=r["err"] if isinstance(r["err"], str) else None,
+                via=r["via"] if isinstance(r["via"], str) else None,
+                market_type="perp",
+            ))
 
     # Render the comparison table directly under its contextual header.
     payload =json .dumps (
@@ -6207,11 +6432,9 @@ def render_perp_venue_table (base :str ="BTC")->None :
     ensure_ascii =False ,
     ).replace ("</","<\/")
 
-    components .html (
-    _PV_HTML .replace ("__PAYLOAD__",payload ),
-    height =120 +72 *len (rows ),
-    scrolling =False ,
-    )
+    # Render server-side so the comparison table cannot disappear when the
+    # embedded components iframe/JS is suppressed by a deployed browser.
+    _render_perp_venue_table_static(rows)
 
     c_cap ,c_btn =st .columns ([8 ,2 ])
     with c_btn :
