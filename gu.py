@@ -1677,6 +1677,38 @@ def to_csv_bytes_with_assumptions(df: pd.DataFrame, assumptions: Mapping[str, An
 # LAYER 3 — UI THEME & COMPONENTS
 # =========================================================================
 
+COMPACT_HEADER_CSS = """
+<style>
+/* ซ่อนเฉพาะ toolbar ฝั่งขวาบนของ Streamlit Cloud */
+[data-testid="stToolbar"] {
+    display: none !important;
+}
+.stAppDeployButton {
+    display: none !important;
+}
+#MainMenu {
+    visibility: hidden !important;
+}
+
+/* คงปุ่มพับ/กาง sidebar ไว้ตามปกติ */
+[data-testid="stHeader"] {
+    height: auto !important;
+    min-height: 0 !important;
+    visibility: visible !important;
+    background: transparent !important;
+}
+[data-testid="collapsedControl"] {
+    visibility: visible !important;
+    display: flex !important;
+}
+
+/* ลดช่องว่างด้านบนของเนื้อหา */
+.block-container {
+    padding-top: 0.8rem !important;
+}
+</style>
+"""
+
 THEME_CSS = """
 <style>
     .stApp, .main, [data-testid="stAppViewContainer"], [data-testid="stMain"] { transform: none !important; }
@@ -8931,6 +8963,7 @@ def render_investor_share_manager(cfg: dict[str, Any], sim: dict[str, Any],
 
 def render_investor_public_view(token: str) -> None:
     st.set_page_config(page_title="Investor View — XSpring", page_icon="📈", layout="centered")
+    st.markdown(COMPACT_HEADER_CSS, unsafe_allow_html=True)
     st.markdown(THEME_CSS, unsafe_allow_html=True)
     record = load_investor_share(token)
     ok, reason = is_share_valid(record)
