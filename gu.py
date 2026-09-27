@@ -9603,6 +9603,9 @@ AI_SYSTEM =(
 "ตอบเป็นภาษาไทย กระชับ อ่านง่าย และใช้ข้อมูล Portfolio Context ที่ระบบแนบให้เป็นแหล่งตัวเลขหลัก "
 "เมื่อผู้ใช้ถามเรื่องพอร์ต ให้ตอบจากข้อมูลจริงที่แนบมา เช่น มูลค่าพอร์ต เงินสด Holdings Unrealized P&L "
 "Allocation Exposure NC Buffer และเหรียญที่กำไร/ขาดทุนมากที่สุด โดยห้ามสร้างตัวเลขเอง "
+"ถ้าผู้ใช้ถามว่า P&L วันนี้ทำไมบวก/ลบ ให้ใช้ daily_pnl_thb ของแต่ละเหรียญเป็นตัวหลัก "
+"อธิบายเป็นรายเหรียญว่า price change วันนี้กระทบพอร์ตประมาณเท่าไร ระบุทั้งตัวที่ลากลงและตัวที่ช่วยชดเชย "
+"และสรุป net daily portfolio P&L จากข้อมูลที่ระบบคำนวณให้ หากข้อมูล daily price change ไม่มี ให้บอกว่าไม่สามารถคำนวณผลกระทบรายวันได้ "
 "ถ้าข้อมูลใดไม่มีหรือคำนวณไม่ได้ ให้บอกตรง ๆ ว่าไม่มีข้อมูลนั้น "
 "ห้ามแนะนำว่าควรซื้อ/ขายเหรียญ ห้ามทำนายราคา และห้ามรับรอง compliance "
 "ถ้าถามเรื่องทั่วไปของระบบ ให้ตอบตามความรู้เกี่ยวกับแอปได้ตามปกติ "
@@ -9834,6 +9837,8 @@ def render_ledger_anomaly_detector (cfg :dict [str ,Any ],bt :pd .DataFrame )->N
 
 AI_SUGGESTIONS =[
 "พอร์ตตอนนี้เป็นยังไงบ้าง",
+"ทำไม P&L วันนี้ติดลบ",
+"เหรียญไหนวันนี้ลากพอร์ตลงมากสุด",
 "เหรียญไหนกำไร/ขาดทุนมากสุด",
 "Allocation และ Exposure ตอนนี้เป็นยังไง",
 "NC กับ NC Buffer ตอนนี้เป็นเท่าไหร่",
@@ -9922,9 +9927,53 @@ market_df :Optional [pd .DataFrame ])->dict [str ,Any ]:
     }
     for r in rows
     ]
-    holdings_sorted_pnl =sorted (holdings ,key =lambda r :r ["unrealized_pnl_thb"])
-    top_gainer =max (holdings ,key =lambda r :r ["unrealized_pnl_thb"])if holdings else None
-    top_loser =min (holdings ,key =lambda r :r ["unrealized_pnl_thb"])if holdings else None
+    # Daily P&L attribution: estimate today's mark-to-market impact from each
+    # coin's current price and its current-day percentage move.  This is kept
+    # separate from unrealized P&L/cost basis so capital deposits do not distort
+    # the daily explanation.
+    pct_change_map :dict [str ,float ]={}
+    if isinstance (market_df ,pd .DataFrame )and not market_df .empty :
+        for _ ,r in market_df .iterrows ():
+            try :
+                sym =str (r .get ("symbol","" )).upper ()
+                if sym :
+                    pct_change_map [sym]=float (r .get ("pct_change",0 )or 0 )
+            except (TypeError ,ValueError ):
+                continue
+
+    # The configured primary asset may not be present in market_df.  Derive its
+    # day move from the two latest observations when the historical series has it.
+    if asset not in pct_change_map and isinstance (data ,pd .DataFrame )and len (data )>=2 and "Global_USD" in data .columns :
+        try :
+            prev_px=float (data ["Global_USD"].iloc [-2])
+            cur_px=float (data ["Global_USD"].iloc [-1])
+            if prev_px > 0 :
+                pct_change_map [asset]=(cur_px / prev_px - 1.0) * 100.0
+        except (TypeError ,ValueError ,IndexError ):
+            pass
+
+    daily_rows=[]
+    daily_pnl_total=0.0
+    for h in holdings :
+        sym=str (h ["asset"]).upper ()
+        pct_today=pct_change_map.get (sym )
+        daily_pnl=None
+        prior_price=None
+        if pct_today is not None and abs (1.0 + pct_today / 100.0)>1e-12 :
+            # current = previous * (1 + daily_return)
+            prior_price=float (h ["price_thb"]) / (1.0 + pct_today / 100.0)
+            daily_pnl=float (h ["qty"]) * (float (h ["price_thb"]) - prior_price)
+            daily_pnl_total +=daily_pnl
+        row=dict (h )
+        row ["daily_pct_change"]=pct_today
+        row ["daily_pnl_thb"]=daily_pnl
+        row ["prior_price_thb"]=prior_price
+        daily_rows.append (row )
+
+    holdings=daily_rows
+    daily_available=[r for r in holdings if r.get ("daily_pnl_thb") is not None]
+    daily_drag=max (daily_available ,key =lambda r :r ["daily_pnl_thb"]) if daily_available else None
+    daily_loser=min (daily_available ,key =lambda r :r ["daily_pnl_thb"]) if daily_available else None
 
     exposure ={}
     nc ={}
@@ -9963,6 +10012,26 @@ market_df :Optional [pd .DataFrame ])->dict [str ,Any ]:
     "holdings":holdings ,
     "top_gainer":top_gainer ,
     "top_loser":top_loser ,
+    "daily_pnl":{
+    "available":bool (daily_available ),
+    "net_daily_pnl_thb":float (daily_pnl_total ),
+    "contributors":sorted (
+    [
+    {
+    "asset":str (r ["asset"]).upper (),
+    "daily_pct_change":r .get ("daily_pct_change"),
+    "daily_pnl_thb":r .get ("daily_pnl_thb"),
+    "market_value_thb":float (r .get ("market_value_thb",0 )or 0 ),
+    }
+    for r in daily_available
+    ],
+    key =lambda r :float (r .get ("daily_pnl_thb",0 )or 0 ),
+    reverse =True ,
+    ),
+    "biggest_positive_contributor":daily_drag ,
+    "biggest_negative_contributor":daily_loser ,
+    "method":"current price + current-day percentage move; mark-to-market only",
+    },
     "exposure_vs_target_thb":{str (k):float (v )for k ,v in exposure .items ()},
     "nc_buffer":nc ,
     "orders_count":len (sim .get ("orders",[])or []),
@@ -10022,6 +10091,7 @@ market_df :Optional [pd .DataFrame ]=None )->None :
                 draw ()
 
                 # Attach a compact, server-side Portfolio Context to the AI request.
+                # Daily P&L attribution is included when the question is about today's move.
                 # The context is not rendered into the chat bubble, so the UI stays clean.
                 ai_messages =list (hist )
                 if cfg is not None and isinstance (data ,pd .DataFrame ):
