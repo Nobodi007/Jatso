@@ -16022,17 +16022,24 @@ def render_quant_research_hub(cfg: dict[str, Any], data: pd.DataFrame, market_df
 
 def _footer_go_to(nav: str, *, portfolio_section: str | None = None,
                   quant_section: str | None = None) -> None:
-    """Route a Footer button to the same top-level navigation used by the app."""
+    """Route Footer clicks through the app's existing navigation state."""
+    # Keep the same top-level navigation state used by the desktop menu.
     st.session_state["main_nav"] = nav
+    st.session_state["main_nav_tabs"] = nav
+    st.session_state.pop("main_nav_tabs_news", None)
+
+    # Optional inner-page targets.
     if portfolio_section is not None:
         st.session_state["portfolio_footer_target"] = portfolio_section
     else:
         st.session_state.pop("portfolio_footer_target", None)
+
     if quant_section is not None:
         st.session_state["quant_research_section"] = quant_section
     elif nav != NAV_QUANT_RESEARCH:
         st.session_state.pop("quant_research_section", None)
-    # Callback execution is followed by Streamlit's normal rerun.
+
+    # Streamlit automatically reruns after the callback.
 
 def render_site_footer() -> None:
     """Responsive XSpring footer with real Streamlit navigation buttons."""
