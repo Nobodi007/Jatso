@@ -7665,10 +7665,12 @@ def render_auto_dca(
             st.markdown('</div>', unsafe_allow_html=True)
 
     if asset_choices:
-        cards = asset_choices[:8]
+        # แสดงเฉพาะ 5 เหรียญแรก เพื่อให้การ์ดมีพื้นที่พอดีและไม่เบียดกัน
+        # ลำดับจะตาม SUPPORTED_ASSETS: BTC, ETH, SOL, DOGE, ADA
+        cards = asset_choices[:5]
         performance = _fetch_dca_asset_performance(tuple(cards))
         st.markdown('<div class="dca-assets"><div class="dca-assets-title">เหรียญที่รองรับ Auto DCA</div>', unsafe_allow_html=True)
-        card_cols = st.columns(len(cards), gap="small")
+        card_cols = st.columns(5, gap="medium")
         for col, coin in zip(card_cols, cards):
             perf = performance.get(coin, {})
             logo = get_coin_logo(coin)
