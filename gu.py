@@ -9610,6 +9610,7 @@ AI_SYSTEM =(
 "ห้ามแนะนำว่าควรซื้อ/ขายเหรียญ ห้ามทำนายราคา และห้ามรับรอง compliance "
 "ถ้าถามเรื่องทั่วไปของระบบ ให้ตอบตามความรู้เกี่ยวกับแอปได้ตามปกติ "
 "เวลาพูดถึงตัวเลขสำคัญ ให้ระบุหน่วยให้ชัด และถ้าข้อมูลเป็น snapshot ให้บอกว่าเป็นข้อมูล ณ เวลาที่ระบบระบุ"
+"เมื่อได้รับ [PRIVATE PORTFOLIO CONTEXT] ให้ใช้ข้อมูลนั้นเป็น source of truth สำหรับ Allocation, Exposure, Holdings และ Daily P&L; หาก context มี available=true ห้ามตอบว่าไม่สามารถเข้าถึงพอร์ต และห้ามสร้างตัวเลขที่ไม่มีใน context"
 )
 
 def ask_ai (messages ,api_key ,system_override :Optional [str ]=None ):
@@ -9971,9 +9972,31 @@ market_df :Optional [pd .DataFrame ])->dict [str ,Any ]:
         daily_rows.append (row )
 
     holdings=daily_rows
+
+    # Rankers used by the AI context.  v61 referenced these names before
+    # defining them, which caused the whole Portfolio Context builder to
+    # throw and the UI to report "Portfolio Context unavailable".
+    # Keep the ranking deterministic and based only on server-calculated
+    # portfolio numbers; Gemini never calculates these itself.
+    ranked_holdings=[r for r in holdings if float (r.get ("market_value_thb",0.0) or 0.0)>0]
+    top_gainer=(max (ranked_holdings ,key =lambda r :float (r.get ("unrealized_pnl_thb",0.0) or 0.0))
+                if ranked_holdings else None)
+    top_loser=(min (ranked_holdings ,key =lambda r :float (r.get ("unrealized_pnl_thb",0.0) or 0.0))
+               if ranked_holdings else None)
+
     daily_available=[r for r in holdings if r.get ("daily_pnl_thb") is not None]
     daily_drag=max (daily_available ,key =lambda r :r ["daily_pnl_thb"]) if daily_available else None
     daily_loser=min (daily_available ,key =lambda r :r ["daily_pnl_thb"]) if daily_available else None
+
+    # Allocation is the actual share of total portfolio value. Exposure is
+    # the deviation from the dealer target stock value, both calculated here
+    # so the model only explains the supplied figures.
+    allocation_total_pct=sum (float (r.get ("allocation_pct",0.0) or 0.0) for r in holdings)
+    allocation=[{
+        "asset":str (r.get ("asset","")).upper (),
+        "market_value_thb":float (r.get ("market_value_thb",0.0) or 0.0),
+        "allocation_pct":float (r.get ("allocation_pct",0.0) or 0.0),
+    } for r in sorted (holdings ,key =lambda r :float (r.get ("allocation_pct",0.0) or 0.0),reverse =True)]
 
     exposure ={}
     nc ={}
@@ -10032,7 +10055,11 @@ market_df :Optional [pd .DataFrame ])->dict [str ,Any ]:
     "biggest_negative_contributor":daily_loser ,
     "method":"current price + current-day percentage move; mark-to-market only",
     },
+    "allocation":allocation ,
+    "allocation_total_pct":float (allocation_total_pct),
     "exposure_vs_target_thb":{str (k):float (v )for k ,v in exposure .items ()},
+    "exposure_total_abs_thb":float (sum (abs (float (v )) for v in exposure .values ())),
+    "exposure_net_thb":float (sum (float (v ) for v in exposure .values ())),
     "nc_buffer":nc ,
     "orders_count":len (sim .get ("orders",[])or []),
     "risk_context_available":risk is not None ,
