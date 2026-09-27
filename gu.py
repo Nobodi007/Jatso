@@ -16848,8 +16848,14 @@ def render_site_footer ()->None :
         .st-key-xs_footer [data-testid="stButton"] button[kind="secondary"] {
             color:#7c8695 !important;
         }
-        .st-key-xs_footer .st-key-footer_logout_btn {
+        /* The logout button is a Streamlit element container.
+           Target that real container so the generic footer rule below cannot pull it back up. */
+        .st-key-xs_footer [data-testid="stElementContainer"]:has(.st-key-footer_logout_btn) {
             margin-top:52px !important;
+            margin-bottom:11px !important;
+        }
+        .st-key-xs_footer .st-key-footer_logout_btn {
+            margin-top:0 !important;
         }
         .st-key-xs_footer .st-key-footer_logout_btn button {
             color:#9aa3af !important;
