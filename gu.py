@@ -7460,6 +7460,49 @@ def _dca_cancel_plan(sim: dict[str, Any], plan_id: str) -> bool:
     return changed
 
 
+@_cache_data(ttl=900, show_spinner=False)
+def _fetch_dca_asset_performance(assets: tuple[str, ...]) -> dict[str, dict[str, float | None]]:
+    """Return descriptive trailing 1Y/6M price returns for the Auto DCA asset cards."""
+    end = pd.Timestamp.today().normalize()
+    start = end - pd.Timedelta(days=390)
+
+    def _one(sym: str) -> tuple[str, dict[str, float | None]]:
+        out: dict[str, float | None] = {"1y": None, "6m": None}
+        try:
+            raw = yf.download(
+                f"{sym}-USD",
+                start=start,
+                end=end + pd.Timedelta(days=1),
+                interval="1d",
+                auto_adjust=False,
+                progress=False,
+            )
+            if raw is None or raw.empty:
+                return sym, out
+            if isinstance(raw.columns, pd.MultiIndex):
+                raw.columns = raw.columns.get_level_values(0)
+            if "Close" not in raw.columns:
+                return sym, out
+            px = pd.to_numeric(raw["Close"], errors="coerce").dropna()
+            if len(px) < 2:
+                return sym, out
+            latest = float(px.iloc[-1])
+            if latest <= 0:
+                return sym, out
+
+            for key, days in (("1y", 365), ("6m", 182)):
+                target = px.index[-1] - pd.Timedelta(days=days)
+                prior = px.loc[px.index <= target]
+                if not prior.empty and float(prior.iloc[-1]) > 0:
+                    out[key] = (latest / float(prior.iloc[-1]) - 1.0) * 100.0
+        except Exception:
+            pass
+        return sym, out
+
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(assets)))) as ex:
+        return dict(ex.map(_one, assets))
+
+
 def render_auto_dca(
     cfg: dict[str, Any],
     sim: dict[str, Any],
@@ -7467,32 +7510,39 @@ def render_auto_dca(
     ctx: dict[str, Any],
 ) -> None:
     """Live Auto DCA: scheduled buys directly change the simulated wallet/portfolio."""
-    # Auto DCA dashboard-style layout: form on the left, execution details on
-    # the right, and supported-asset cards along the bottom.
     st.markdown(
         """
         <style>
         .dca-page-head{display:flex;align-items:center;justify-content:space-between;gap:18px;margin:2px 0 14px 0;}
-        .dca-title-wrap{display:flex;align-items:center;gap:10px;}
+        .dca-title-wrap{display:flex;align-items:center;gap:10px;min-width:0;}
         .dca-title{font-size:1.65rem;font-weight:800;line-height:1.2;color:#f1f3f5;}
         .dca-sub{color:#8b949e;font-size:.82rem;margin-top:5px;line-height:1.5;}
         .dca-help{color:#0ecb81;font-size:.82rem;font-weight:700;white-space:nowrap;}
-        .dca-panel{background:#171a1a;border:1px solid #29302d;border-radius:10px;padding:18px 18px 16px 18px;height:100%;box-sizing:border-box;}
-        .dca-panel-title{font-size:1.05rem;font-weight:800;color:#f1f3f5;margin-bottom:14px;display:flex;align-items:center;gap:8px;}
-        .dca-panel-title:before{content:"";display:inline-block;width:2px;height:20px;background:#0ecb81;border-radius:2px;}
-        .dca-step{font-size:.94rem;font-weight:800;color:#f1f3f5;margin:10px 0 9px 0;}
+        .dca-step{font-size:.94rem;font-weight:800;color:#f1f3f5;margin:4px 0 9px 0;}
         .dca-info{background:#111514;border:1px solid #29302d;border-radius:8px;padding:12px 14px;margin-top:10px;color:#aeb6b1;font-size:.82rem;line-height:1.65;}
-        .dca-row{display:flex;justify-content:space-between;gap:16px;padding:8px 0;border-bottom:1px solid #29302d;color:#9aa39e;font-size:.84rem;}
+        .dca-row{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;padding:9px 0;border-bottom:1px solid #29302d;color:#9aa39e;font-size:.84rem;}
         .dca-row:last-child{border-bottom:0;}
-        .dca-row b{color:#f1f3f5;text-align:right;}
-        .dca-live{display:inline-block;background:rgba(14,203,129,.12);border:1px solid rgba(14,203,129,.3);color:#0ecb81;border-radius:6px;padding:3px 8px;font-size:.72rem;font-weight:800;}
-        .dca-assets{margin-top:20px;background:#0ecb81;border-radius:0;padding:16px 0 17px 0;}
-        .dca-assets-title{color:#07130d;font-weight:900;font-size:.9rem;margin:0 18px 10px 18px;}
-        .dca-card{background:#171a1a;border:1px solid #29302d;border-radius:10px;padding:12px 13px;min-height:82px;box-sizing:border-box;}
-        .dca-card-top{display:flex;align-items:center;gap:8px;color:#f1f3f5;font-weight:800;font-size:.92rem;}
-        .dca-card-dot{width:24px;height:24px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:#242a28;font-size:.8rem;}
-        .dca-card-sub{color:#89928d;font-size:.73rem;margin-top:7px;line-height:1.35;}
+        .dca-row b{color:#f1f3f5;text-align:right;max-width:62%;overflow-wrap:anywhere;}
+        .dca-live{display:inline-block;background:rgba(14,203,129,.12);border:1px solid rgba(14,203,129,.3);color:#0ecb81;border-radius:6px;padding:3px 8px;font-size:.72rem;font-weight:800;white-space:normal;}
+        .dca-assets{margin-top:20px;background:#0ecb81;border-radius:0;padding:15px 0 18px 0;overflow:hidden;}
+        .dca-assets-title{color:#07130d;font-weight:900;font-size:.92rem;margin:0 18px 11px 18px;}
+        .dca-card{background:#171a1a;border:1px solid #29302d;border-radius:10px;padding:12px 13px;min-height:150px;height:150px;box-sizing:border-box;overflow:hidden;}
+        .dca-card-top{display:flex;align-items:center;gap:8px;color:#f1f3f5;font-weight:800;font-size:.92rem;line-height:1.2;white-space:nowrap;}
+        .dca-card-logo{width:28px;height:28px;min-width:28px;border-radius:50%;object-fit:cover;display:block;background:#242a28;}
+        .dca-card-name{overflow:hidden;text-overflow:ellipsis;}
+        .dca-card-label{color:#89928d;font-size:.73rem;margin-top:11px;line-height:1.35;white-space:normal;}
+        .dca-card-metric{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-top:5px;color:#89928d;font-size:.72rem;line-height:1.3;}
+        .dca-ret{display:inline-block;border-radius:5px;padding:2px 6px;font-weight:800;font-size:.72rem;white-space:nowrap;}
+        .dca-ret-pos{background:rgba(14,203,129,.16);color:#0ecb81;}
+        .dca-ret-neg{background:rgba(246,70,93,.18);color:#f6465d;}
+        .dca-ret-na{background:rgba(139,148,158,.12);color:#9aa39e;}
         .dca-plan{background:#111514;border:1px solid #29302d;border-radius:9px;padding:10px 12px;margin-top:8px;}
+        @media(max-width:700px){
+          .dca-page-head{align-items:flex-start;}
+          .dca-help{font-size:.74rem;}
+          .dca-title{font-size:1.35rem;}
+          .dca-card{min-height:145px;height:145px;padding:10px;}
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -7501,7 +7551,7 @@ def render_auto_dca(
     st.markdown(
         f'<div class="dca-page-head">'
         f'<div><div class="dca-title-wrap">'
-        f'<img src="{AUTO_DCA_ICON_DATA}" width="30" height="30" style="border-radius:7px;">'
+        f'<img src="{AUTO_DCA_ICON_DATA}" width="30" height="30" style="border-radius:7px;flex:0 0 auto;">'
         f'<div><div class="dca-title">Auto DCA</div>'
         f'<div class="dca-sub">ซื้ออัตโนมัติภายในพอร์ตจำลอง ตามเวลาที่คุณกำหนด จนกว่าจะยกเลิก</div></div>'
         f'</div></div>'
@@ -7521,76 +7571,74 @@ def render_auto_dca(
 
     c_form, c_detail = st.columns([1.45, 1], gap="large")
 
+    # Use native Streamlit bordered containers so the widgets are actually
+    # inside the cards. This avoids the empty boxes / text falling outside the
+    # panel that occurred when raw HTML divs wrapped Streamlit widgets.
     with c_form:
-        st.markdown('<div class="dca-panel">', unsafe_allow_html=True)
-        st.markdown('<div class="dca-panel-title">สร้างคำสั่ง Auto DCA</div>', unsafe_allow_html=True)
-        st.markdown('<div class="dca-step">1. เลือกเหรียญและกรอกจำนวนเงิน</div>', unsafe_allow_html=True)
-        asset_dca = st.selectbox(
-            "เหรียญ", asset_choices,
-            index=asset_choices.index(default_asset) if default_asset in asset_choices else 0,
-            key="dca_asset_live",
-        )
-        amount_dca = comma_number_input(
-            "จำนวนเงินต่อรอบ (THB)", value=1000,
-            min_value=float(MIN_TRADE_THB), key="dca_amount_live",
-        )
-
-        st.markdown('<div class="dca-step">2. กำหนดรอบการทำรายการ</div>', unsafe_allow_html=True)
-        freq = st.radio(
-            "ความถี่", DCA_FREQS, horizontal=True,
-            key="dca_freq_live", label_visibility="collapsed",
-        )
-        th, tm = st.columns(2)
-        with th:
-            hour = st.selectbox(
-                "เวลา (ชั่วโมง)", [f"{h:02d}" for h in range(24)],
-                index=10, key="dca_hh_live",
+        with st.container(border=True):
+            st.markdown('<div class="dca-step">สร้างคำสั่ง Auto DCA</div>', unsafe_allow_html=True)
+            st.markdown('<div class="dca-step">1. เลือกเหรียญและกรอกจำนวนเงิน</div>', unsafe_allow_html=True)
+            asset_dca = st.selectbox(
+                "เหรียญ", asset_choices,
+                index=asset_choices.index(default_asset) if default_asset in asset_choices else 0,
+                key="dca_asset_live",
             )
-        with tm:
-            minute = st.selectbox(
-                "เวลา (นาที)", ["00", "15", "30", "45"],
-                key="dca_mm_live",
+            amount_dca = comma_number_input(
+                "จำนวนเงินต่อรอบ (THB)", value=1000,
+                min_value=float(MIN_TRADE_THB), key="dca_amount_live",
             )
 
-        st.markdown(
-            '<div class="dca-info">'
-            'เมื่อถึงเวลา ระบบจะใช้ <b>ราคาตลาดปัจจุบัน</b> หัก THB จาก Wallet '
-            'แล้วเพิ่มเหรียญเข้า Portfolio ให้อัตโนมัติ'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-        if st.button("▶️ เริ่ม Auto DCA", key="dca_start_live", type="primary", **WIDE):
-            plan = _dca_create_plan(sim, asset_dca, float(amount_dca), freq, int(hour), int(minute))
-            save_sim_state(sim)
-            st.success(
-                f"เริ่มแล้ว {plan['id']} · {asset_dca} {amount_dca:,.2f} THB/{freq} "
-                f"· รอบแรก {plan['next_run_at']}"
+            st.markdown('<div class="dca-step">2. กำหนดรอบการทำรายการ</div>', unsafe_allow_html=True)
+            freq = st.radio(
+                "ความถี่", DCA_FREQS, horizontal=True,
+                key="dca_freq_live", label_visibility="collapsed",
             )
-            st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
+            th, tm = st.columns(2)
+            with th:
+                hour = st.selectbox(
+                    "เวลา (ชั่วโมง)", [f"{h:02d}" for h in range(24)],
+                    index=10, key="dca_hh_live",
+                )
+            with tm:
+                minute = st.selectbox(
+                    "เวลา (นาที)", ["00", "15", "30", "45"],
+                    key="dca_mm_live",
+                )
+
+            st.markdown(
+                '<div class="dca-info">'
+                'เมื่อถึงเวลา ระบบจะใช้ <b>ราคาตลาดปัจจุบัน</b> หัก THB จาก Wallet '
+                'แล้วเพิ่มเหรียญเข้า Portfolio ให้อัตโนมัติ'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            if st.button("▶️ เริ่ม Auto DCA", key="dca_start_live", type="primary", **WIDE):
+                plan = _dca_create_plan(sim, asset_dca, float(amount_dca), freq, int(hour), int(minute))
+                save_sim_state(sim)
+                st.success(
+                    f"เริ่มแล้ว {plan['id']} · {asset_dca} {amount_dca:,.2f} THB/{freq} "
+                    f"· รอบแรก {plan['next_run_at']}"
+                )
+                st.rerun()
 
     with c_detail:
-        st.markdown('<div class="dca-panel">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="dca-panel-title">รายละเอียดคำสั่ง Auto DCA</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            '<div class="dca-row"><span>ประเภทคำสั่ง</span><b>Market Order</b></div>'
-            '<div class="dca-row"><span>ราคา</span><b>ราคาตลาดปัจจุบัน</b></div>'
-            '<div class="dca-row"><span>เงิน</span><b>หักจาก Customer THB Wallet</b></div>'
-            '<div class="dca-row"><span>เหรียญ</span><b>เพิ่มเข้า Customer Portfolio</b></div>'
-            '<div class="dca-row"><span>Ledger</span><b>BUY transaction + Order</b></div>'
-            '<div class="dca-row"><span>สถานะ</span><b><span class="dca-live">ทำซ้ำจนกว่าจะ Cancel</span></b></div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            '<div class="dca-info"><b>ระบบจำลอง</b><br>'
-            'Auto DCA จะไม่ส่งคำสั่งซื้อเงินจริงไปยัง Exchange ภายนอก '
-            'แต่จะ Execute ภายใน Nobody simulated wallet และใช้ Portfolio Ledger เดียวกับหน้า Exchange</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown('<div class="dca-step">รายละเอียดคำสั่ง Auto DCA</div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="dca-row"><span>ประเภทคำสั่ง</span><b>Market Order</b></div>'
+                '<div class="dca-row"><span>ราคา</span><b>ราคาตลาดปัจจุบัน</b></div>'
+                '<div class="dca-row"><span>เงิน</span><b>หักจาก Customer THB Wallet</b></div>'
+                '<div class="dca-row"><span>เหรียญ</span><b>เพิ่มเข้า Customer Portfolio</b></div>'
+                '<div class="dca-row"><span>Ledger</span><b>BUY transaction + Order</b></div>'
+                '<div class="dca-row"><span>สถานะ</span><b><span class="dca-live">ทำซ้ำจนกว่าจะ Cancel</span></b></div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<div class="dca-info"><b>ระบบจำลอง</b><br>'
+                'Auto DCA จะไม่ส่งคำสั่งซื้อเงินจริงไปยัง Exchange ภายนอก '
+                'แต่จะ Execute ภายใน Nobody simulated wallet และใช้ Portfolio Ledger เดียวกับหน้า Exchange</div>',
+                unsafe_allow_html=True,
+            )
 
     plans = [p for p in sim.setdefault("dca_plans", []) if isinstance(p, dict)]
     st.markdown("### แผน Auto DCA ของฉัน")
@@ -7616,22 +7664,35 @@ def render_auto_dca(
                     st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-    # Bottom asset strip, visually similar to the reference design.
     if asset_choices:
-        icon_map = {"BTC":"₿", "ETH":"Ξ", "XRP":"✕", "SOL":"≋", "DOGE":"Ð", "ADA":"₳", "BNB":"B", "USDT":"₮"}
         cards = asset_choices[:8]
+        performance = _fetch_dca_asset_performance(tuple(cards))
         st.markdown('<div class="dca-assets"><div class="dca-assets-title">เหรียญที่รองรับ Auto DCA</div>', unsafe_allow_html=True)
         card_cols = st.columns(len(cards), gap="small")
         for col, coin in zip(card_cols, cards):
+            perf = performance.get(coin, {})
+            logo = get_coin_logo(coin)
             with col:
                 st.markdown(
                     f'<div class="dca-card">'
-                    f'<div class="dca-card-top"><span class="dca-card-dot">{icon_map.get(coin, "●")}</span>{coin}</div>'
-                    f'<div class="dca-card-sub">พร้อมตั้งแผนซื้ออัตโนมัติ<br>ตามรอบที่คุณกำหนด</div>'
+                    f'<div class="dca-card-top"><img class="dca-card-logo" src="{logo}" onerror="this.style.display=\'none\'">'
+                    f'<span class="dca-card-name">{coin}</span></div>'
+                    f'<div class="dca-card-label">ผลตอบแทนย้อนหลัง 1 ปี</div>'
+                    f'{_dca_return_badge(perf.get("1y"))}'
+                    f'<div class="dca-card-label" style="margin-top:7px;">ผลตอบแทนย้อนหลัง 6 เดือน</div>'
+                    f'{_dca_return_badge(perf.get("6m"))}'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
         st.markdown('</div>', unsafe_allow_html=True)
+
+
+def _dca_return_badge(value: float | None) -> str:
+    if value is None or not math.isfinite(float(value)):
+        return '<span class="dca-ret dca-ret-na">—</span>'
+    v = float(value)
+    cls = "dca-ret-pos" if v >= 0 else "dca-ret-neg"
+    return f'<span class="dca-ret {cls}">{v:+.2f}%</span>'
 
 def _parse_amount (text :Any )->float :
     try :
