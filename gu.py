@@ -16022,34 +16022,17 @@ def render_quant_research_hub(cfg: dict[str, Any], data: pd.DataFrame, market_df
 
 def _footer_go_to(nav: str, *, portfolio_section: str | None = None,
                   quant_section: str | None = None) -> None:
-    """Route a Footer button to the exact app page/tab, then let Streamlit
-    perform the normal callback rerun.  Keep the footer's visual design
-    completely independent from routing."""
-    # The desktop launcher ultimately reads `main_nav`, so this is the
-    # canonical state that must change when a footer item is clicked.
+    """Route a Footer button to the same top-level navigation used by the app."""
     st.session_state["main_nav"] = nav
-
-    # Clear any old News navigation state so it cannot override the target.
-    st.session_state.pop("main_nav_tabs_news", None)
-
-    # Keep the legacy navigation key in sync for sessions/builds that still
-    # have it around.  The current compact menu does not depend on it, but
-    # syncing it prevents an old widget value from winning after rerun.
-    st.session_state["main_nav_tabs"] = nav
-
     if portfolio_section is not None:
         st.session_state["portfolio_footer_target"] = portfolio_section
     else:
         st.session_state.pop("portfolio_footer_target", None)
-
     if quant_section is not None:
         st.session_state["quant_research_section"] = quant_section
     elif nav != NAV_QUANT_RESEARCH:
         st.session_state.pop("quant_research_section", None)
-
-    # Do NOT call st.rerun() here.  This function is used as an on_click
-    # callback; Streamlit automatically reruns after the callback completes.
-
+    # Callback execution is followed by Streamlit's normal rerun.
 
 def render_site_footer() -> None:
     """Responsive XSpring footer with real Streamlit navigation buttons."""
