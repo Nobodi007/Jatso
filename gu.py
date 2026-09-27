@@ -5648,6 +5648,79 @@ def render_arb_opportunity_card(highlights: dict, order_size_usd: float = 10_000
     )
 
 
+def render_execution_quality_card(highlights: dict, rows: list[dict[str, Any]], order_size_usd: float = 10_000.0) -> None:
+    """สรุปคุณภาพ opportunity จาก price edge + net edge + turnover liquidity proxy."""
+    if not highlights:
+        return
+    edge = compute_net_arb_edge(
+        highlights["buy_venue"], highlights["buy_price"],
+        highlights["sell_venue"], highlights["sell_price"],
+        order_size_usd,
+    )
+    valid = [r for r in rows if r.get("market_type") != "spot" and not r.get("err") and r.get("turnover")]
+    max_turnover = max((float(r.get("turnover") or 0) for r in valid), default=0.0)
+    by_name = {str(r.get("exchange")): r for r in valid}
+    buy_row = by_name.get(str(highlights["buy_venue"]), {})
+    sell_row = by_name.get(str(highlights["sell_venue"]), {})
+
+    def liq_level(row: dict[str, Any]) -> tuple[str, str]:
+        if max_turnover <= 0:
+            return "Unknown", "#848e9c"
+        share = float(row.get("turnover") or 0) / max_turnover
+        if share >= 0.50:
+            return "High", "#0ecb81"
+        if share >= 0.10:
+            return "Medium", "#F0B90B"
+        return "Low", "#f6465d"
+
+    buy_liq, buy_color = liq_level(buy_row)
+    sell_liq, sell_color = liq_level(sell_row)
+    liq_good = buy_liq in {"High", "Medium"} and sell_liq in {"High", "Medium"}
+    net_good = bool(edge.get("is_profitable"))
+
+    if net_good and liq_good:
+        quality, quality_color = "Good", "#0ecb81"
+        quality_note = "Net edge เป็นบวกและทั้งสองฝั่งมี liquidity proxy อย่างน้อยระดับ Medium"
+    elif net_good:
+        quality, quality_color = "Watch", "#F0B90B"
+        quality_note = "Net edge เป็นบวก แต่มีอย่างน้อยหนึ่งฝั่งที่ liquidity proxy ต่ำ"
+    else:
+        quality, quality_color = "Fragile", "#f6465d"
+        quality_note = "หลังหัก taker fee แล้ว net edge ไม่เป็นบวกตามสมมติฐานปัจจุบัน"
+
+    def check(ok: bool) -> str:
+        return "✓" if ok else "⚠"
+
+    st.markdown(
+        f"""<div style='background:#0f1318;border:1px solid #2b3139;border-radius:10px;padding:13px 16px;margin:0 0 10px;'>
+        <div style='display:flex;justify-content:space-between;align-items:center;gap:12px;'>
+          <div style='font-weight:800;color:#EAECEF;font-size:.92rem;'>🧭 Execution Quality</div>
+          <div style='font-weight:800;color:{quality_color};font-size:.78rem;'>QUALITY: {quality.upper()}</div>
+        </div>
+        <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px;'>
+          <div style='background:#181c23;border-radius:7px;padding:8px 10px;'>
+            <div style='color:#848e9c;font-size:.68rem;'>🟢 BUY · {check(buy_liq != "Low")}</div>
+            <div style='color:#EAECEF;font-weight:700;margin-top:3px;'>{_html.escape(str(highlights["buy_venue"]))}</div>
+            <div style='color:{buy_color};font-size:.75rem;margin-top:2px;'>Liquidity {buy_liq}</div>
+          </div>
+          <div style='background:#181c23;border-radius:7px;padding:8px 10px;'>
+            <div style='color:#848e9c;font-size:.68rem;'>🔴 SELL · {check(sell_liq != "Low")}</div>
+            <div style='color:#EAECEF;font-weight:700;margin-top:3px;'>{_html.escape(str(highlights["sell_venue"]))}</div>
+            <div style='color:{sell_color};font-size:.75rem;margin-top:2px;'>Liquidity {sell_liq}</div>
+          </div>
+          <div style='background:#181c23;border-radius:7px;padding:8px 10px;'>
+            <div style='color:#848e9c;font-size:.68rem;'>NET EDGE · {check(net_good)}</div>
+            <div style='color:{quality_color};font-weight:800;margin-top:3px;'>{edge["net_edge_pct"]:+.3f}%</div>
+            <div style='color:#848e9c;font-size:.70rem;margin-top:2px;'>≈ ${edge["net_edge_usd"]:+,.2f} / ${order_size_usd:,.0f}</div>
+          </div>
+        </div>
+        <div style='color:#848e9c;font-size:.70rem;margin-top:9px;line-height:1.45;'>{quality_note}</div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+    st.caption("Liquidity = proxy จาก 24h Turnover · Execution Quality เป็น research heuristic ไม่ใช่ executable execution score · ไม่รวม bid/ask depth, slippage, funding หรือ transfer cost")
+
+
 _PV_HTML =r"""<!doctype html><html><head><meta charset="utf-8"><style>
 html,body{margin:0;padding:0;background:transparent;color:#EAECEF;
   font-family:"Source Sans Pro",-apple-system,"Segoe UI",Roboto,sans-serif;}
@@ -5927,6 +6000,7 @@ def render_perp_venue_table (base :str ="BTC")->None :
         )
 
     render_arb_opportunity_card (highlights ,float (order_size ))
+    render_execution_quality_card (highlights ,rows ,float (order_size ))
 
     payload =json .dumps (
     dict (base =base ,ts =ts ,rows =rows ),
