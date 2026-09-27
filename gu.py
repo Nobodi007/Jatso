@@ -8903,7 +8903,11 @@ def render_risk_center (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :pd
             risk =_portfolio_risk_metrics (snap ,selected_date)
 
     # NC Planner summary/details live here with the Risk calculation scope.
+    # This block represents the company / capital-safety view.
     _render_nc_planner_results (cfg ,risk_data ,risk_asset ,cp_mode)
+
+    # Explicit boundary: everything below is the user's portfolio risk view.
+    section ("🛡️ ความเสี่ยงพอร์ตของฉัน")
 
     vol =float (risk ["volatility_pct"])
     dd =float (risk ["max_drawdown_pct"])
