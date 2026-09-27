@@ -16046,42 +16046,39 @@ def render_site_footer() -> None:
     st.markdown(
         r"""
         <style>
-        /* Footer visual design — keep real Streamlit buttons/functionality */
         .st-key-xs_footer {
             margin-top: 70px;
             padding: 0 !important;
         }
         .st-key-xs_footer .xs-footer-wrap {
-            width: min(100%, 1630px);
-            margin: 0 auto;
-            padding: 44px 52px 24px;
-            background: linear-gradient(180deg, rgba(255,255,255,.018), rgba(255,255,255,.006));
-            border-top: 1px solid rgba(255,255,255,.10);
+            width: 100%;
+            padding: 40px 40px 22px;
+            background: #0b0e11;
+            border-top: 1px solid #1e2228;
             box-sizing: border-box;
         }
         .st-key-xs_footer .xs-footer-inner { max-width: none; margin: 0 auto; }
-        .st-key-xs_footer .xs-footer-brand { padding-right: 26px; }
-        .st-key-xs_footer .xs-footer-logo { display:flex; align-items:center; gap:14px; margin-bottom:18px; }
+        .st-key-xs_footer .xs-footer-brand { padding-right: 30px; }
+        .st-key-xs_footer .xs-footer-logo { display:flex; align-items:center; gap:12px; margin-bottom:16px; }
         .st-key-xs_footer .xs-footer-logo-icon {
-            width:44px; height:44px; border-radius:10px; display:flex; align-items:center; justify-content:center;
-            background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.10); font-size:19px;
+            width:40px; height:40px; border-radius:9px; display:flex; align-items:center; justify-content:center;
+            background: linear-gradient(135deg,#0ecb81,#0a9c63); font-size:18px;
         }
-        .st-key-xs_footer .xs-footer-logo-text { color:#f5f7fa; font-size:20px; font-weight:800; letter-spacing:-.25px; line-height:1.45; white-space:normal; max-width:230px; }
-        .st-key-xs_footer .xs-footer-description { color:rgba(255,255,255,.56); font-size:13px; line-height:1.85; max-width:290px; }
-        .st-key-xs_footer .xs-footer-heading { color:#f5f7fa; font-size:14px; font-weight:800; margin:0 0 17px 0; line-height:1.4; }
+        .st-key-xs_footer .xs-footer-logo-text { color:#f5f7fa; font-size:17px; font-weight:800; letter-spacing:-.2px; line-height:1.35; max-width:210px; }
+        .st-key-xs_footer .xs-footer-description { color:#7c8695; font-size:12.5px; line-height:1.75; max-width:270px; }
+        .st-key-xs_footer .xs-footer-heading { color:#f5f7fa; font-size:13.5px; font-weight:800; margin:0 0 15px 0; line-height:1.4; }
         .st-key-xs_footer .xs-footer-bottom {
-            margin-top:34px; padding-top:19px; border-top:1px solid rgba(255,255,255,.07);
+            margin-top:30px; padding-top:16px; border-top:1px solid #1e2228;
             display:flex; align-items:center; justify-content:space-between; gap:20px;
         }
-        .st-key-xs_footer .xs-footer-copy { color:rgba(255,255,255,.38); font-size:11px; line-height:1.6; }
-        .st-key-xs_footer .xs-footer-status { display:inline-flex; align-items:center; gap:7px; color:rgba(255,255,255,.48); font-size:11px; }
+        .st-key-xs_footer .xs-footer-copy { color:#5a6270; font-size:11px; }
+        .st-key-xs_footer .xs-footer-status { display:inline-flex; align-items:center; gap:7px; color:#5a6270; font-size:11px; }
         .st-key-xs_footer .xs-footer-status-dot {
-            width:7px; height:7px; border-radius:50%; background:#20c997; box-shadow:0 0 10px rgba(32,201,151,.45);
+            width:7px; height:7px; border-radius:50%; background:#0ecb81; box-shadow:0 0 8px rgba(14,203,129,.55);
         }
 
-        /* IMPORTANT: style only footer buttons, while keeping them clickable */
         .st-key-xs_footer [data-testid="stButton"] { margin: 0 !important; padding: 0 !important; min-height: 0 !important; }
-        .st-key-xs_footer [data-testid="stElementContainer"]:has([data-testid="stButton"]) { margin: 0 0 10px 0 !important; padding: 0 !important; min-height: 0 !important; }
+        .st-key-xs_footer [data-testid="stElementContainer"]:has([data-testid="stButton"]) { margin: 0 0 11px 0 !important; padding: 0 !important; min-height: 0 !important; }
         .st-key-xs_footer [data-testid="stVerticalBlock"] { gap: 0 !important; }
         .st-key-xs_footer [data-testid="stButton"] > button {
             min-height: 0 !important;
@@ -16092,33 +16089,34 @@ def render_site_footer() -> None:
             border: 0 !important;
             border-radius: 0 !important;
             background: transparent !important;
-            color: rgba(255,255,255,.66) !important;
+            color: #6ea8fe !important;
             box-shadow: none !important;
             justify-content: flex-start !important;
             font-size: 13px !important;
             font-weight: 400 !important;
-            line-height: 1.5 !important;
+            line-height: 1.55 !important;
             white-space: normal !important;
             text-align: left !important;
         }
         .st-key-xs_footer [data-testid="stButton"] > button:hover,
         .st-key-xs_footer [data-testid="stButton"] > button:focus,
         .st-key-xs_footer [data-testid="stButton"] > button:active {
-            color: #ffffff !important;
+            color: #9dc4ff !important;
             border: 0 !important;
             background: transparent !important;
             box-shadow: none !important;
+            text-decoration: underline !important;
         }
         .st-key-xs_footer [data-testid="stButton"] > button p { margin: 0 !important; }
         .st-key-xs_footer .stColumn { min-width: 0 !important; }
 
         @media (max-width:900px) {
-            .st-key-xs_footer .xs-footer-wrap { padding:36px 24px 22px; }
+            .st-key-xs_footer .xs-footer-wrap { padding:32px 22px 20px; }
         }
         @media (max-width:640px) {
             .st-key-xs_footer { margin-top:45px; }
-            .st-key-xs_footer .xs-footer-wrap { padding:30px 18px 20px; }
-            .st-key-xs_footer .xs-footer-bottom { margin-top:27px; align-items:flex-start; flex-direction:column; gap:8px; }
+            .st-key-xs_footer .xs-footer-wrap { padding:28px 16px 18px; }
+            .st-key-xs_footer .xs-footer-bottom { margin-top:24px; align-items:flex-start; flex-direction:column; gap:8px; }
             .st-key-xs_footer [data-testid="stButton"] > button { font-size:12px !important; }
         }
         </style>
@@ -16128,7 +16126,7 @@ def render_site_footer() -> None:
 
     with st.container(key="xs_footer"):
         st.markdown('<div class="xs-footer-wrap"><div class="xs-footer-inner">', unsafe_allow_html=True)
-        c1, c2, c3, c4, c5 = st.columns([1.25, 1, 1, 1, 1], gap="large")
+        c1, c2, c3, c4, c5 = st.columns([1.25, 1, 1, 1, 1], gap="medium")
 
         with c1:
             st.markdown(
