@@ -5631,7 +5631,10 @@ table{width:100%;border-collapse:collapse;font-size:.92rem;}
 th{text-align:left;padding:10px 14px;color:#848e9c;font-weight:600;font-size:.78rem;
   border-bottom:1px solid #2b3139;background:#161a1e;}
 td{padding:12px 14px;border-bottom:1px solid #2b3139;font-variant-numeric:tabular-nums;}
-.ex{display:flex;align-items:center;gap:10px;font-weight:600;}
+.ex{display:flex;align-items:center;gap:10px;font-weight:600;min-height:28px;}
+.arb-action{display:block;margin:3px 0 0 38px;font-size:.72rem;font-weight:700;line-height:1.25;white-space:nowrap;}
+.arb-action.buy{color:#0ecb81;}
+.arb-action.sell{color:#f6465d;}
 .logo{width:28px;height:28px;min-width:28px;border-radius:50%;
   border:1px solid #2b3139;background:#161a1e;object-fit:contain;display:block;padding:2px;box-sizing:border-box;}
 .logo-fallback{display:none;align-items:center;justify-content:center;width:28px;height:28px;
@@ -5655,8 +5658,8 @@ a{color:#4c9aff;text-decoration:none;}
 .rank-badge.cheap{background:rgba(14,203,129,.10);color:#0ecb81;}
 tr.arb-buy{background:rgba(14,203,129,.10);border-left:3px solid #0ecb81;}
 tr.arb-sell{background:rgba(246,70,93,.10);border-left:3px solid #f6465d;}
-tr.arb-buy td:first-child::after{content:" 🟢 ซื้อที่นี่";font-size:.68rem;color:#0ecb81;}
-tr.arb-sell td:first-child::after{content:" 🔴 ขายที่นี่";font-size:.68rem;color:#f6465d;}
+/* Arb action labels live inside the exchange cell instead of td::after.
+   This prevents the label from sitting on the table border / being clipped. */
 .note{color:#848e9c;font-size:.78rem;margin-top:8px;line-height:1.5;}
 .hstats-bar{display:flex;gap:20px;flex-wrap:wrap;align-items:center;padding:10px 14px;margin-bottom:10px;background:#161a1e;border:1px solid #2b3139;border-radius:8px;}
 .hstat{display:flex;flex-direction:column;gap:2px;min-width:125px;}
@@ -5853,7 +5856,10 @@ function render(){
       ? ('<span class="logo-wrap"><img class="logo" src="'+esc(r.logo)+'" alt="'+esc(r.exchange)+' logo" loading="lazy" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'inline-flex\';"><span class="logo-fallback" style="background:'+esc(r.bg)+';color:'+esc(r.fg)+'">'+esc(r.tx)+'</span></span>')
       : ('<span class="logo-wrap"><span class="logo-fallback" style="display:inline-flex;background:'+esc(r.bg)+';color:'+esc(r.fg)+'">'+esc(r.tx)+'</span></span>');
     const rowClass = r.arbRole === 'buy' ? 'arb-buy' : (r.arbRole === 'sell' ? 'arb-sell' : '');
-    return '<tr class="'+rowClass+'"><td><div class="ex">'+logo+esc(r.exchange)+badges+via+'</div></td>'
+    const arbAction = r.arbRole === 'buy'
+      ? '<span class="arb-action buy">🟢 ซื้อที่นี่</span>'
+      : (r.arbRole === 'sell' ? '<span class="arb-action sell">🔴 ขายที่นี่</span>' : '');
+    return '<tr class="'+rowClass+'"><td><div class="ex">'+logo+esc(r.exchange)+badges+via+'</div>'+arbAction+'</td>'
       +'<td><a href="'+esc(r.url)+'" target="_blank" rel="noopener">'+esc(r.symbol)+'</a></td>'
       +'<td class="'+flashClass+'">'+p+'</td><td>'+c+'</td><td>'+d+'</td><td>'+t+'</td></tr>';
   }).join('');
