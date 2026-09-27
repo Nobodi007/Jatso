@@ -16848,10 +16848,13 @@ def render_site_footer ()->None :
         .st-key-xs_footer [data-testid="stButton"] button[kind="secondary"] {
             color:#7c8695 !important;
         }
+        .st-key-xs_footer .st-key-footer_logout_btn {
+            margin-top:52px !important;
+        }
         .st-key-xs_footer .st-key-footer_logout_btn button {
             color:#9aa3af !important;
             font-size:12px !important;
-            margin-top:16px !important;
+            margin-top:0 !important;
             padding:0 !important;
             width:auto !important;
         }
