@@ -6073,14 +6073,6 @@ def render_perp_venue_table (base :str ="BTC")->None :
         )
         )
 
-    # Keep the contextual header directly above the comparison table so the
-    # section does not feel visually empty while preserving the table as the
-    # main research surface.
-    st .caption (
-    f"อัปเดต {ts } (เวลาไทย) · Global Perpetual ใช้สำหรับ Arb / VWAP / Ranks"
-    " · บาง venue อาจให้เบราว์เซอร์ดึงข้อมูลซ้ำเมื่อ server fetch ไม่สำเร็จ"
-    )
-
     section (f"🌐 เทียบราคา {base } — Global Perpetual")
 
     # Render the comparison table directly under its contextual header.
