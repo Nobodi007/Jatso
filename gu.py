@@ -5685,10 +5685,10 @@ tr.arb-buy{background:rgba(14,203,129,.10);border-left:3px solid #0ecb81;}
 tr.arb-sell{background:rgba(246,70,93,.10);border-left:3px solid #f6465d;}
 tr.arb-buy td:first-child::after{content:" 🟢 ซื้อที่นี่";font-size:.68rem;color:#0ecb81;}
 tr.arb-sell td:first-child::after{content:" 🔴 ขายที่นี่";font-size:.68rem;color:#f6465d;}
-.note{color:#848e9c;font-size:.78rem;margin-top:8px;line-height:1.5;}
+.liq-badge{display:inline-block;padding:3px 7px;border-radius:5px;font-size:.68rem;font-weight:700;white-space:nowrap}.liq-high{background:rgba(14,203,129,.12);color:#0ecb81;border:1px solid rgba(14,203,129,.25)}.liq-mid{background:rgba(240,185,11,.10);color:#F0B90B;border:1px solid rgba(240,185,11,.22)}.liq-low{background:rgba(246,70,93,.10);color:#f6465d;border:1px solid rgba(246,70,93,.22)}.liq-bar{width:72px;height:4px;background:#2b3139;border-radius:4px;overflow:hidden;margin-top:5px}.liq-fill{height:100%;border-radius:4px}.note{color:#848e9c;font-size:.78rem;margin-top:8px;line-height:1.5;}
 </style></head><body>
 <div class="wrap"><table><thead><tr><th>Exchange</th><th>Symbol</th><th>Price($)</th>
-<th>Chg 24H(%)</th><th>vs VWAP</th><th>Turnover 24h</th></tr></thead><tbody id="tb"></tbody></table></div>
+<th>Chg 24H(%)</th><th>vs VWAP</th><th>Turnover 24h</th><th>Liquidity</th></tr></thead><tbody id="tb"></tbody></table></div>
 <div class="note" id="note"></div>
 <script>
 const D = __PAYLOAD__;
@@ -5748,6 +5748,17 @@ function computeMarketShare(rows){
   return shares;
 }
 
+function liquidityCellHTML(turnover,maxTurnover){
+  if(!(turnover > 0) || !isFinite(turnover) || !(maxTurnover > 0)) return '<span class="mut">—</span>';
+  const share = Number(turnover) / Number(maxTurnover);
+  const pct = Math.max(0, Math.min(share * 100, 100));
+  let label = 'Low', cls = 'liq-low';
+  if(share >= 0.50){ label = 'High'; cls = 'liq-high'; }
+  else if(share >= 0.10){ label = 'Medium'; cls = 'liq-mid'; }
+  const fill = cls === 'liq-high' ? '#0ecb81' : (cls === 'liq-mid' ? '#F0B90B' : '#f6465d');
+  return '<span class="liq-badge '+cls+'">'+label+'</span><div class="liq-bar"><div class="liq-fill" style="width:'+pct.toFixed(1)+'%;background:'+fill+'"></div></div>';
+}
+
 function turnoverCellHTML(turnover,sharePct){
   if(!(turnover > 0) || !isFinite(turnover)) return '<span class="mut">—</span>';
   const barColor = sharePct >= 30 ? '#F0B90B' : (sharePct >= 10 ? '#3B82F6' : '#5e6673');
@@ -5781,6 +5792,8 @@ function render(){
     : 1;
   const shares = computeMarketShare(rows);
   const ranks = computeRanks(rows);
+  const validTurnover = rows.filter(r => r.market_type !== 'spot' && r.turnover && !r.err && isFinite(r.turnover));
+  const maxTurnover = validTurnover.length ? Math.max(...validTurnover.map(r => Number(r.turnover))) : 0;
   let cheapest = null, priciest = null;
   if(valid.length >= 2){
     cheapest = valid.reduce((a,b) => a.price < b.price ? a : b);
@@ -5799,15 +5812,16 @@ function render(){
     const tRank = ranks.turnoverRank[r.exchange];
     const pRank = ranks.priceRank[r.exchange];
     const badges = (r.market_type === 'spot' ? '<span class="rank-badge spot" title="ตลาด Spot ไทย">🇹🇭 Spot</span>' : '') + rankBadgeHTML(tRank,'turnover') + rankBadgeHTML(pRank,'price');
-    let p, c, d, t;
+    let p, c, d, t, l;
     if(r.err){
-      p = c = d = t = '<span class="mut" title="'+esc(r.err)+'">—</span>';
+      p = c = d = t = l = '<span class="mut" title="'+esc(r.err)+'">—</span>';
     } else {
       p = fmtP(r.price);
       c = '<span class="'+(r.chg>=0?'up':'dn')+'">'+(r.chg>=0?'+':'')+r.chg.toFixed(2)+'%</span>'
         + (r.note ? '<span class="mut" style="cursor:help" title="'+esc(r.note)+'"> *</span>' : '');
       d = (r.price && vwap) ? deviationBarHTML(deviationFromVWAP(r.price,vwap),maxAbsDev) : '<span class="mut">—</span>';
       t = turnoverCellHTML(Number(r.turnover),shares[r.exchange] || 0);
+      l = liquidityCellHTML(Number(r.turnover),maxTurnover);
     }
     const logo = r.logo
       ? ('<span class="logo-wrap"><img class="logo" src="'+esc(r.logo)+'" alt="'+esc(r.exchange)+' logo" loading="lazy" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'inline-flex\';"><span class="logo-fallback" style="background:'+esc(r.bg)+';color:'+esc(r.fg)+'">'+esc(r.tx)+'</span></span>')
@@ -5815,14 +5829,14 @@ function render(){
     const rowClass = r.arbRole === 'buy' ? 'arb-buy' : (r.arbRole === 'sell' ? 'arb-sell' : '');
     return '<tr class="'+rowClass+'"><td><div class="ex">'+logo+esc(r.exchange)+badges+via+'</div></td>'
       +'<td><a href="'+esc(r.url)+'" target="_blank" rel="noopener">'+esc(r.symbol)+'</a></td>'
-      +'<td>'+p+'</td><td>'+c+'</td><td>'+d+'</td><td>'+t+'</td></tr>';
+      +'<td>'+p+'</td><td>'+c+'</td><td>'+d+'</td><td>'+t+'</td><td>'+l+'</td></tr>';
   }).join('');
 
   const bad = rows.filter(r => r.err).map(r => r.exchange+' ('+r.err+')');
   const via = {};
   rows.forEach(r => { if(r.via) (via[r.via] = via[r.via]||[]).push(r.exchange); });
 
-  let n = 'อัปเดต '+D.ts+' (เวลาไทย) · เรียงตาม Turnover';
+  let n = 'อัปเดต '+D.ts+' (เวลาไทย) · เรียงตาม Turnover · Liquidity เป็น proxy จาก 24h Turnover';
   if(validForDev.length >= 1 && vwap) n += ' · VWAP ≈ $'+fmtP(vwap);
   if(validForDev.length > 0 && validForDev.length < 4 && vwap) n += ' · ⚠️ VWAP sample เล็ก ('+validForDev.length+' venues)';
   const shareEntries = Object.entries(shares);
