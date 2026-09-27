@@ -5385,97 +5385,135 @@ def _spot_gate(b: str) -> tuple[float, float, float]:
 
 
 def _spot_hyperliquid(b: str) -> tuple[float, float, float]:
-    """Read Hyperliquid Spot using metadata mapping, with L2-book fallback.
+    """Read the real Hyperliquid Spot BTC market without accepting bad quotes.
 
-    Hyperliquid Spot symbols are not always literal ``BTC/USDC``. The metadata
-    universe is the source of truth. If the summary context has a zero/missing
-    mid price, fall back to the actual Spot L2 book for that universe entry so
-    the board never treats a zero price as a valid market quote.
+    Hyperliquid's Spot metadata can contain wrapped/non-canonical token names.
+    For BTC we therefore resolve the pair by token indices, prefer the
+    canonical UBTC/BTC -> USDC market, and reject implausible BTC prices.
+    If the summary context is missing/zero/suspicious, use the actual Spot L2
+    book for that exact universe entry.  A bad/zero quote must never reach the
+    Global Spot VWAP/arb calculations.
     """
-    doc = _http_json("https://api.hyperliquid.xyz/info", {"type": "spotMetaAndAssetCtxs"})
+    target = str(b).upper().strip()
+    doc = _http_json(
+        "https://api.hyperliquid.xyz/info",
+        {"type": "spotMetaAndAssetCtxs"},
+        timeout=8.0,
+    )
     if not isinstance(doc, (list, tuple)) or len(doc) < 2:
-        raise ValueError("Hyperliquid returned an invalid spot metadata payload")
+        raise ValueError("Hyperliquid invalid spotMetaAndAssetCtxs payload")
+
     meta, ctxs = doc[0], doc[1]
-    tokens = meta.get("tokens") or []
-    universe = meta.get("universe") or []
-    target = str(b).upper()
+    tokens = meta.get("tokens") if isinstance(meta, dict) else []
+    universe = meta.get("universe") if isinstance(meta, dict) else []
+    if not isinstance(tokens, list) or not isinstance(universe, list):
+        raise ValueError("Hyperliquid invalid Spot metadata")
 
     token_names = {}
     for t in tokens:
+        if not isinstance(t, dict):
+            continue
         try:
             token_names[int(t.get("index"))] = str(t.get("name") or "").upper()
-        except Exception:
+        except (TypeError, ValueError):
             continue
 
-    match_i = None
-    match_u = None
+    # Resolve the actual BTC/USDC universe entry.  Prefer canonical pairs and
+    # never accept an arbitrary literal "BTC/USDC" if its token indices point
+    # to a different asset.
+    candidates = []
     for i, u in enumerate(universe):
+        if not isinstance(u, dict):
+            continue
         pair_tokens = u.get("tokens") or []
+        if len(pair_tokens) < 2:
+            continue
         try:
-            base_name = token_names.get(int(pair_tokens[0])) if len(pair_tokens) >= 1 else None
-            quote_name = token_names.get(int(pair_tokens[1])) if len(pair_tokens) >= 2 else None
-        except Exception:
-            base_name = quote_name = None
-        name = str(u.get("name") or "").upper()
-        parts = [p.strip() for p in name.split("/") if p.strip()]
-        literal = len(parts) >= 2 and parts[0] == target and parts[1] in {"USDC", "USDT"}
-        alias = target == "BTC" and base_name in {"BTC", "UBTC"} and quote_name in {"USDC", "USDT"}
-        token_match = base_name == target and quote_name in {"USDC", "USDT"}
-        if literal or alias or token_match:
-            match_i, match_u = i, u
-            break
+            base_name = token_names.get(int(pair_tokens[0]), "")
+            quote_name = token_names.get(int(pair_tokens[1]), "")
+        except (TypeError, ValueError):
+            continue
+        if quote_name not in {"USDC", "USDT"}:
+            continue
 
-    if match_i is None or match_u is None:
-        raise ValueError(f"Hyperliquid spot pair not found: {target}")
+        uname = str(u.get("name") or "").upper().strip()
+        parts = [x.strip() for x in uname.split("/") if x.strip()]
+        literal = len(parts) >= 2 and parts[0] in {target, "UBTC"} and parts[1] == "USDC"
+        btc_alias = target == "BTC" and base_name in {"BTC", "UBTC"} and quote_name == "USDC"
+        token_match = base_name == target and quote_name == "USDC"
+        if not (literal or btc_alias or token_match):
+            continue
 
-    c = ctxs[match_i] if match_i < len(ctxs) and isinstance(ctxs[match_i], dict) else {}
+        canonical = bool(u.get("isCanonical"))
+        # Canonical BTC/USDC/UBTC is strongly preferred; the other terms are
+        # only fallbacks when Hyperliquid changes its metadata naming.
+        score = (
+            100 if canonical else 0
+        ) + (
+            20 if base_name == "UBTC" else 10 if base_name == "BTC" else 0
+        ) + (
+            10 if uname in {"UBTC/USDC", "BTC/USDC"} else 0
+        )
+        candidates.append((score, i, u, base_name, quote_name))
+
+    if not candidates:
+        raise ValueError("Hyperliquid BTC Spot pair not found")
+
+    _, match_i, match_u, base_name, quote_name = max(candidates, key=lambda x: x[0])
+    ctx = ctxs[match_i] if isinstance(ctxs, list) and match_i < len(ctxs) and isinstance(ctxs[match_i], dict) else {}
+
+    def _num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+
+    prev = _num(ctx.get("prevDayPx"))
+    turn = _num(ctx.get("dayNtlVlm"))
+
+    # For BTC, anything far below normal BTC scale is invalid.  This guard is
+    # deliberately conservative: it prevents a wrapped-token/metadata mismatch
+    # from becoming a fake $0.0 quote and a false arbitrage winner.
+    def _valid_btc_price(v):
+        return v > 1000.0 if target == "BTC" else v > 0.0
+
     px = 0.0
     for key in ("midPx", "markPx", "oraclePx"):
-        try:
-            v = float(c.get(key) or 0.0)
-        except (TypeError, ValueError):
-            v = 0.0
-        if v > 0:
-            px = v
+        candidate_px = _num(ctx.get(key))
+        if _valid_btc_price(candidate_px):
+            px = candidate_px
             break
 
-    prev = 0.0
-    try:
-        prev = float(c.get("prevDayPx") or 0.0)
-    except (TypeError, ValueError):
-        prev = 0.0
-    turn = 0.0
-    try:
-        turn = float(c.get("dayNtlVlm") or 0.0)
-    except (TypeError, ValueError):
-        turn = 0.0
-
-    # Summary context can legitimately omit a usable mid price. Use the actual
-    # Spot order book as the source of truth instead of accepting zero.
-    if px <= 0:
+    # Always have the exact universe name available for L2.  If the summary
+    # context is zero or suspicious, use the real Spot order book instead.
+    if not _valid_btc_price(px):
         coin = str(match_u.get("name") or "").strip()
         if not coin:
-            # Non-canonical spot pairs can be addressed by @<index>.
             coin = "@" + str(match_u.get("index"))
-        book = _http_json("https://api.hyperliquid.xyz/info", {
-            "type": "spotL2Book",
-            "coin": coin,
-        })
+        book = _http_json(
+            "https://api.hyperliquid.xyz/info",
+            {"type": "spotL2Book", "coin": coin},
+            timeout=8.0,
+        )
         levels = book.get("levels") if isinstance(book, dict) else None
         bids = levels[0] if isinstance(levels, list) and len(levels) >= 1 else []
         asks = levels[1] if isinstance(levels, list) and len(levels) >= 2 else []
-        def best(levels_):
-            vals = []
-            for x in levels_ or []:
-                try:
-                    q = float(x.get("px"))
-                    if q > 0:
-                        vals.append(q)
-                except (TypeError, ValueError, AttributeError):
-                    continue
-            return max(vals) if levels_ is bids else min(vals) if vals else 0.0
-        bid = best(bids)
-        ask = best(asks)
+
+        bid = 0.0
+        ask = 0.0
+        for x in bids or []:
+            if not isinstance(x, dict):
+                continue
+            q = _num(x.get("px"))
+            if _valid_btc_price(q):
+                bid = max(bid, q)
+        for x in asks or []:
+            if not isinstance(x, dict):
+                continue
+            q = _num(x.get("px"))
+            if _valid_btc_price(q):
+                ask = q if ask <= 0 else min(ask, q)
+
         if bid > 0 and ask > 0:
             px = (bid + ask) / 2.0
         elif bid > 0:
@@ -5483,8 +5521,8 @@ def _spot_hyperliquid(b: str) -> tuple[float, float, float]:
         elif ask > 0:
             px = ask
 
-    if px <= 0:
-        raise ValueError("Hyperliquid spot price unavailable")
+    if not _valid_btc_price(px):
+        raise ValueError("Hyperliquid BTC Spot price invalid/unavailable")
 
     chg = ((px / prev) - 1.0) * 100.0 if prev > 0 else 0.0
     return px, chg, turn
