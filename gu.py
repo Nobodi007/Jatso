@@ -19491,31 +19491,33 @@ def _main_body ()->None :
         </style>
         """,unsafe_allow_html =True )
 
-        # ---- จัดกลุ่มเมนูแบบ Bitkub-style mega menu ----
+        # ---- จัดกลุ่มเมนูหลักแบบ Bitkub-style mega menu ----
+        # โครงสร้างนี้เปลี่ยนเฉพาะการจัดวางเมนู/การนำทาง
+        # ไม่แตะ logic ของหน้าและฟังก์ชันภายในแต่ละหน้า
         nav_groups ={
-        "📊 ซื้อขาย & วางแผน":[
-        NAV_LABELS [1 ],# Backtest Simulator
-        NAV_LABELS [2 ],# Liquidity & Capital Planner
+        "📊 ซื้อขาย":[
         NAV_LABELS [3 ],# Exchange UI Simulator
+        NAV_LABELS [1 ],# 5-Year Backtest Simulator
         NAV_LABELS [5 ],# Investment Backtest
+        NAV_LABELS [2 ],# Liquidity & Capital Planner
         ],
         "💼 พอร์ตของฉัน":[
         NAV_LABELS [4 ],# Portfolio & Wallet
+        NAV_LABELS [7 ],# Portfolio Intelligence
         NAV_LABELS [8 ],# What-if Simulator
+        NAV_LABELS [14 ],# Rebalance Simulator
         NAV_LABELS [9 ],# Trading Journal
         NAV_LABELS [10 ],# Portfolio Calendar
-        NAV_LABELS [14 ],# Rebalance Simulator
         NAV_LABELS [17 ],# Customer Timeline
         NAV_LABELS [18 ],# Fund Fact Sheet (Print)
         ],
-        "📈 วิเคราะห์ & ความเสี่ยง":[
-        NAV_LABELS [6 ],# Risk Center
-        NAV_LABELS [7 ],# Portfolio Intelligence
-        NAV_LABELS [11 ],# Fee Analytics
-        NAV_LABELS [12 ],# Correlation & Diversification
-        NAV_LABELS [13 ],# Smart Alerts
+        "📈 วิเคราะห์":[
         NAV_LABELS [15 ],# Performance Analytics
+        NAV_LABELS [12 ],# Correlation & Diversification
         NAV_LABELS [16 ],# Cash Flow Analytics
+        NAV_LABELS [11 ],# Fee Analytics
+        NAV_LABELS [13 ],# Smart Alerts
+        NAV_LABELS [6 ],# Risk Center
         ],
         "🧪 Quant Research":[
         NAV_LABELS [19 ],# Quant Research Lab
