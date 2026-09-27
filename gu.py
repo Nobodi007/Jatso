@@ -5385,19 +5385,52 @@ def _spot_gate(b: str) -> tuple[float, float, float]:
 
 
 def _spot_hyperliquid(b: str) -> tuple[float, float, float]:
+    """Read Hyperliquid Spot using the documented universe/token mapping.
+
+    Hyperliquid Spot does not guarantee that the UI pair name is the literal
+    token name. For example, the documented API can expose BTC/USDC as
+    UBTC/USDC, and non-canonical spot pairs may be named @<index>. The
+    universe entry's token indices are therefore the source of truth.
+    """
     doc = _http_json("https://api.hyperliquid.xyz/info", {"type": "spotMetaAndAssetCtxs"})
-    meta, ctxs = doc
-    target = b.upper()
+    if not isinstance(doc, (list, tuple)) or len(doc) < 2:
+        raise ValueError("Hyperliquid returned an invalid spot metadata payload")
+    meta, ctxs = doc[0], doc[1]
+    tokens = meta.get("tokens") or []
+    universe = meta.get("universe") or []
+    target = str(b).upper()
+
+    token_names = {}
+    for t in tokens:
+        try:
+            token_names[int(t.get("index"))] = str(t.get("name") or "").upper()
+        except Exception:
+            continue
+
     idx = None
-    for i, u in enumerate(meta.get("universe", [])):
+    for i, u in enumerate(universe):
+        if i >= len(ctxs):
+            break
         name = str(u.get("name") or "").upper()
-        if name in {f"{target}/USDC", f"{target}/USDT"} or name.startswith(target + "/"):
+        parts = [p.strip() for p in name.split("/") if p.strip()]
+        pair_tokens = u.get("tokens") or []
+        base_name = token_names.get(int(pair_tokens[0])) if len(pair_tokens) >= 1 else None
+        quote_name = token_names.get(int(pair_tokens[1])) if len(pair_tokens) >= 2 else None
+
+        # Prefer the literal UI pair first. Then accept Hyperliquid's BTC ->
+        # UBTC mapping and finally token-index metadata for non-literal names.
+        literal_match = len(parts) >= 2 and parts[0] == target and parts[1] in {"USDC", "USDT"}
+        btc_alias_match = target == "BTC" and base_name in {"BTC", "UBTC"} and quote_name in {"USDC", "USDT"}
+        token_match = base_name == target and quote_name in {"USDC", "USDT"}
+        if literal_match or btc_alias_match or token_match:
             idx = i
             break
+
     if idx is None:
         raise ValueError(f"Hyperliquid spot pair not found: {target}")
-    c = ctxs[idx]
-    px = float(c.get("midPx") or c.get("markPx") or 0.0)
+
+    c = ctxs[idx] if isinstance(ctxs[idx], dict) else {}
+    px = float(c.get("midPx") or c.get("markPx") or c.get("oraclePx") or 0.0)
     prev = float(c.get("prevDayPx") or 0.0)
     chg = ((px / prev) - 1.0) * 100.0 if prev > 0 else 0.0
     turn = float(c.get("dayNtlVlm") or 0.0)
@@ -5421,13 +5454,55 @@ def _spot_okx_global(b: str) -> tuple[float, float, float]:
 
 
 def _spot_bitunix_global(b: str) -> tuple[float, float, float]:
-    # Bitunix Spot public docs expose latest price directly. The spot ticker
-    # endpoint does not expose the same 24h stats payload as its futures API,
-    # so turnover/change remain unknown rather than being fabricated.
-    d = _http_json(f"https://api.bitunix.com/api/spot/v1/market/last_price?symbol={b.upper()}USDT")
-    if str(d.get("code")) not in {"0", "200"}:
-        raise RuntimeError(str(d.get("msg") or "Bitunix spot error")[:60])
-    return float(d["data"]), None, 0.0
+    """Read Bitunix Spot public price with a documented REST fallback.
+
+    Bitunix documents /api/spot/v1/market/last_price as a public endpoint.
+    Some hosted environments can receive an HTTP 403 from that endpoint, so
+    retry the same public API with browser-like headers and then fall back to
+    the documented Spot K-line endpoint for the latest close. We never invent
+    24h volume/change when the Spot API does not provide them.
+    """
+    symbol = f"{b.upper()}USDT"
+    url = f"https://api.bitunix.com/api/spot/v1/market/last_price?symbol={symbol}"
+    browser_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154.0 Safari/537.36",
+        "Accept": "application/json,text/plain,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.bitunix.com/",
+        "Origin": "https://www.bitunix.com",
+    }
+    last_err = None
+    try:
+        d = _http_json(url, timeout=8.0, extra_headers=browser_headers)
+        if str(d.get("code")) not in {"0", "200"}:
+            raise RuntimeError(str(d.get("msg") or "Bitunix spot error")[:80])
+        px = float(d["data"])
+        if px > 0:
+            return px, None, 0.0
+    except Exception as e:
+        last_err = e
+
+    # Documented Spot K-line endpoint: use the latest close as a price-only
+    # fallback. This still stays Spot and avoids fabricating volume statistics.
+    try:
+        kurl = f"https://api.bitunix.com/api/spot/v1/market/kline?symbol={symbol}&interval=1"
+        kd = _http_json(kurl, timeout=8.0, extra_headers=browser_headers)
+        if str(kd.get("code")) not in {"0", "200"}:
+            raise RuntimeError(str(kd.get("msg") or "Bitunix spot kline error")[:80])
+        data = kd.get("data") or []
+        if isinstance(data, dict):
+            rows = [data]
+        else:
+            rows = list(data)
+        if rows:
+            row = rows[-1]
+            px = float(row.get("close") or row.get("last") or 0.0)
+            if px > 0:
+                return px, None, 0.0
+    except Exception as e:
+        last_err = e
+
+    raise RuntimeError(f"Bitunix Spot unavailable: {type(last_err).__name__ if last_err else 'unknown'}")
 
 
 def _spot_deribit(b: str) -> tuple[float, float, float]:
