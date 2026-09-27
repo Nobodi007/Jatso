@@ -7524,13 +7524,15 @@ def render_auto_dca(
         .dca-row:last-child{border-bottom:0;}
         .dca-row b{color:#f1f3f5;text-align:right;max-width:62%;overflow-wrap:anywhere;}
         .dca-live{display:inline-block;background:rgba(14,203,129,.12);border:1px solid rgba(14,203,129,.3);color:#0ecb81;border-radius:6px;padding:3px 8px;font-size:.72rem;font-weight:800;white-space:normal;}
-        .dca-assets{margin-top:20px;background:#0ecb81;border-radius:0;padding:15px 0 18px 0;overflow:hidden;}
-        .dca-assets-title{color:#07130d;font-weight:900;font-size:.92rem;margin:0 18px 11px 18px;}
-        .dca-card{background:#171a1a;border:1px solid #29302d;border-radius:10px;padding:12px 13px;min-height:150px;height:150px;box-sizing:border-box;overflow:hidden;}
-        .dca-card-top{display:flex;align-items:center;gap:8px;color:#f1f3f5;font-weight:800;font-size:.92rem;line-height:1.2;white-space:nowrap;}
-        .dca-card-logo{width:28px;height:28px;min-width:28px;border-radius:50%;object-fit:cover;display:block;background:#242a28;}
-        .dca-card-name{overflow:hidden;text-overflow:ellipsis;}
-        .dca-card-label{color:#89928d;font-size:.73rem;margin-top:11px;line-height:1.35;white-space:normal;}
+        .dca-assets{margin-top:22px;background:transparent;border:0;padding:0;overflow:visible;}
+        .dca-assets-title{display:inline-flex;align-items:center;gap:8px;color:#f1f3f5;font-weight:800;font-size:.9rem;margin:0 0 12px 0;padding:7px 12px;border:1px solid rgba(14,203,129,.28);background:rgba(14,203,129,.08);border-radius:9px;}
+        .dca-assets-title:before{content:"";display:block;width:4px;height:18px;background:#0ecb81;border-radius:3px;}
+        .dca-card{background:#171a1a;border:1px solid #29302d;border-radius:12px;padding:12px 13px;min-height:142px;height:142px;box-sizing:border-box;overflow:hidden;box-shadow:0 3px 12px rgba(0,0,0,.12);transition:border-color .15s ease,transform .15s ease;}
+        .dca-card:hover{border-color:rgba(14,203,129,.45);transform:translateY(-1px);}
+        .dca-card-top{display:flex;align-items:center;gap:8px;color:#f1f3f5;font-weight:800;font-size:.92rem;line-height:1.2;white-space:nowrap;min-width:0;}
+        .dca-card-logo{width:30px;height:30px;min-width:30px;border-radius:50%;object-fit:cover;display:block;background:#242a28;}
+        .dca-card-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+        .dca-card-label{color:#89928d;font-size:.72rem;margin-top:10px;line-height:1.3;white-space:normal;}
         .dca-card-metric{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-top:5px;color:#89928d;font-size:.72rem;line-height:1.3;}
         .dca-ret{display:inline-block;border-radius:5px;padding:2px 6px;font-weight:800;font-size:.72rem;white-space:nowrap;}
         .dca-ret-pos{background:rgba(14,203,129,.16);color:#0ecb81;}
@@ -7670,7 +7672,7 @@ def render_auto_dca(
         cards = asset_choices[:5]
         performance = _fetch_dca_asset_performance(tuple(cards))
         st.markdown('<div class="dca-assets"><div class="dca-assets-title">เหรียญที่รองรับ Auto DCA</div>', unsafe_allow_html=True)
-        card_cols = st.columns(5, gap="medium")
+        card_cols = st.columns(5, gap="large")
         for col, coin in zip(card_cols, cards):
             perf = performance.get(coin, {})
             logo = get_coin_logo(coin)
