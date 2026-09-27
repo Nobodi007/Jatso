@@ -4853,17 +4853,6 @@ def render_tab1 (cfg :dict [str ,Any ],data :pd .DataFrame ,data_err :Optional [
     trade_vol =cfg ["trade_vol"]
     hedge_fee =cfg ["hedge_fee"]
 
-    # Portfolio context แสดงเฉพาะเมื่อเลือก Backtest 5 ปีเท่านั้น
-    # ไม่แทรกซ้ำใน Dashboard / Backtest ช่วงอื่น
-    ps =cfg .get ("portfolio_snapshot",{})
-    if ps and st .session_state .get ("bt_preset") == "5 ปี":
-        pc1 ,pc2 ,pc3 ,pc4 =st .columns (4 )
-        pc1 .metric ("Portfolio ปัจจุบัน",fmt_baht (ps .get ("total_value_thb",0 )))
-        pc2 .metric ("เงินสด",fmt_baht (ps .get ("cash_thb",0 )))
-        pc3 .metric ("Realized P&L",fmt_baht (ps .get ("realized_pnl_thb",0 ),True ))
-        pc4 .metric ("Unrealized P&L",fmt_baht (ps .get ("unrealized_pnl_thb",0 ),True ))
-        st .caption ("Backtest ใช้ Portfolio ปัจจุบันเป็น context สำหรับเงินทุน/สถานะจริงของผู้ใช้; ผล Backtest ยังคงคำนวณจากช่วงราคาที่เลือก")
-
     bt =data .copy ()
     bt ["Local_THB"]=bt ["Global_USD"]*bt ["USDTHB"]*(1 +cfg ["local_premium"])
     bt ["Coin_Volume"]=trade_vol /bt ["Global_USD"]
@@ -6880,7 +6869,8 @@ def render_tab2 (cfg :dict [str ,Any ],data :pd .DataFrame ,data_err :Optional [
     "Single-Asset (ใช้เหรียญที่เลือกในแถบซ้าย)",
     )
 
-    _render_nc_planner_results (cfg ,data ,asset ,cp_mode )
+    # NC Planner results were moved to Risk Center; do not render the old
+    # Executive Summary / numeric detail block here anymore.
 
     st .markdown ("<br>",unsafe_allow_html =True )
     render_perp_venue_table (asset )
