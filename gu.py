@@ -6465,10 +6465,26 @@ def render_perp_venue_table (base :str ="BTC")->None :
             key =f"arb_size_{base}",
         )
 
-    render_arb_opportunity_card (highlights ,float (order_size ))
-    render_execution_quality_card (highlights ,rows ,float (order_size ))
+    # Compact analysis navigation: keep the venue table as the main view,
+    # then switch between the three analysis panels instead of stacking them.
+    tab_arb, tab_quality, tab_history = st.tabs([
+        "⚡ Arb Opportunity",
+        "🎯 Execution Quality",
+        "📚 Opportunity History",
+    ])
+
+    # Record the snapshot regardless of which tab is currently selected so
+    # persistent history continues collecting in the background.
     _arb_history_record (highlights ,rows ,float (order_size ),base=base)
-    render_arb_history_tracker (base=base)
+
+    with tab_arb:
+        render_arb_opportunity_card (highlights ,float (order_size ))
+
+    with tab_quality:
+        render_execution_quality_card (highlights ,rows ,float (order_size ))
+
+    with tab_history:
+        render_arb_history_tracker (base=base)
 
 
     # ============================================================
