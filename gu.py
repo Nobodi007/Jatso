@@ -9412,6 +9412,48 @@ def render_risk_center (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :pd
         _risk_metric_card ("Cash",f"{cash_pct :.1f}%","THB share of current portfolio",cash_pct ,100 ,cash_tone )
     st .markdown ('</div>',unsafe_allow_html =True )
 
+    # v105 — Portfolio Risk Alert Engine (descriptive only; no buy/sell recommendation)
+    alerts = []
+    if vol >= 60:
+        alerts.append(("🔴", "Volatility", f"Volatility อยู่ที่ {vol:.1f}% · อยู่ในโซนสูงตามเกณฑ์หน้านี้", "red"))
+    elif vol >= 30:
+        alerts.append(("🟡", "Volatility", f"Volatility อยู่ที่ {vol:.1f}% · อยู่ในโซนเฝ้าระวังตามเกณฑ์หน้านี้", "warn"))
+    if abs(dd) >= 25:
+        alerts.append(("🔴", "Drawdown", f"Max Drawdown {dd:+.1f}% · เกิน threshold 25% ที่ใช้แสดงธงเตือน", "red"))
+    elif abs(dd) >= 10:
+        alerts.append(("🟡", "Drawdown", f"Max Drawdown {dd:+.1f}% · อยู่ในโซนเฝ้าระวัง", "warn"))
+    if btc >= 70:
+        alerts.append(("🔴", "Concentration", f"BTC Exposure {btc:.1f}% · สูงกว่า threshold 70%", "red"))
+    elif btc >= 50:
+        alerts.append(("🟡", "Concentration", f"BTC Exposure {btc:.1f}% · อยู่ในโซนเฝ้าระวัง", "warn"))
+    if cash_pct < 10:
+        alerts.append(("🔴", "Liquidity", f"Cash {cash_pct:.1f}% · ต่ำกว่า 10% ของมูลค่าพอร์ต", "red"))
+    elif cash_pct < 20:
+        alerts.append(("🟡", "Liquidity", f"Cash {cash_pct:.1f}% · อยู่ในโซนเฝ้าระวัง", "warn"))
+
+    st.markdown(
+        '<div class="risk-section">'
+        '<div class="risk-section-title">🚨 Risk Alert Engine</div>'
+        '<div class="risk-section-sub">ตรวจจากตัวเลขที่ระบบคำนวณจริง · ไม่มีคำแนะนำซื้อหรือขาย</div>',
+        unsafe_allow_html=True,
+    )
+    if alerts:
+        for icon, title, msg, tone in alerts:
+            border = "rgba(246,70,93,.35)" if tone == "red" else "rgba(240,185,11,.30)"
+            st.markdown(
+                f'<div class="risk-warning" style="border-color:{border};margin-bottom:8px;">'
+                f'<b>{icon} {title}</b><br>{_html.escape(msg)}</div>',
+                unsafe_allow_html=True,
+            )
+    else:
+        st.markdown(
+            '<div class="risk-info"><b>🟢 ไม่มี Alert ตาม Threshold ปัจจุบัน</b><br>'
+            'ค่าหลักของ Portfolio ยังไม่เข้าเกณฑ์ Volatility, Drawdown, Concentration หรือ Cash ที่ตั้งไว้สำหรับการแจ้งเตือน</div>',
+            unsafe_allow_html=True,
+        )
+    st.caption("Threshold เป็นเกณฑ์แสดงสถานะของ Risk Center ไม่ใช่การคาดการณ์ผลตอบแทนหรือคำแนะนำการลงทุน")
+    st.markdown('</div>', unsafe_allow_html=True)
+
     if risk ["concentration"]:
         for item in risk ["concentration"]:
             sym =item ["asset"]
