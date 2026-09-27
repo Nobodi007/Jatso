@@ -9622,8 +9622,13 @@ AI_SYSTEM =(
 )
 
 def ask_ai (messages ,api_key ,system_override :Optional [str ]=None ):
-    AI_MODEL ="gemini-3-flash-preview"
-    url =f"https://generativelanguage.googleapis.com/v1beta/models/{AI_MODEL }:generateContent?key={api_key }"
+    # Primary model + fallbacks. 503/5xx can be transient capacity errors;
+    # do not expose those directly to the user when another Gemini endpoint works.
+    AI_MODELS = [
+        "gemini-3-flash-preview",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash",
+    ]
 
     formatted_messages =[]
     for msg in messages :
@@ -9639,28 +9644,54 @@ def ask_ai (messages ,api_key ,system_override :Optional [str ]=None ):
     }
     }
 
-    req =urllib .request .Request (
-    url ,
-    data =json .dumps (payload ).encode ("utf-8"),
-    headers ={"Content-Type":"application/json"}
-    )
+    last_detail =""
+    last_code =None
 
-    try :
-        with urllib .request .urlopen (req )as response :
-            result =json .loads (response .read ().decode ("utf-8"))
-            return result ["candidates"][0 ]["content"]["parts"][0 ]["text"]
+    for model_index ,AI_MODEL in enumerate (AI_MODELS ):
+        url =f"https://generativelanguage.googleapis.com/v1beta/models/{AI_MODEL }:generateContent?key={api_key }"
+        req =urllib .request .Request (
+        url ,
+        data =json .dumps (payload ).encode ("utf-8"),
+        headers ={"Content-Type":"application/json"}
+        )
 
-    except urllib .error .HTTPError as e :
-        if e .code ==429 :
-            return "ใช้โควตาฟรีครบชั่วคราว รอสักครู่แล้วลองใหม่"
-        try :
-            detail =json .loads (e .read ().decode ("utf-8"))["error"]["message"]
-        except Exception :
-            detail =""
-        return f"เรียก AI ไม่สำเร็จ (HTTP {e .code }) {detail }"
+        for attempt in range (2 ):
+            try :
+                with urllib .request .urlopen (req ,timeout =45 )as response :
+                    result =json .loads (response .read ().decode ("utf-8"))
+                    return result ["candidates"][0 ] ["content"]["parts"][0 ]["text"]
 
-    except Exception as e :
-        return f"ข้อผิดพลาดระบบ: {str (e )}"
+            except urllib .error.HTTPError as e :
+                last_code =e .code
+                try :
+                    raw =e .read ().decode ("utf-8")
+                    detail =json .loads (raw ).get ("error",{}).get ("message","")
+                except Exception :
+                    detail =""
+                last_detail =detail
+
+                # Capacity/rate-limit errors are retryable.  After a short
+                # retry, move to the next model so the UI stays usable.
+                if e .code in (429 ,500 ,502 ,503 ,504 ):
+                    if attempt ==0 :
+                        import time as _time
+                        _time .sleep (0.8 )
+                        continue
+                    break
+
+                return f"เรียก AI ไม่สำเร็จ (HTTP {e .code }) {detail }"
+
+            except Exception as e :
+                last_detail =str (e )
+                if attempt ==0 :
+                    import time as _time
+                    _time .sleep (0.4 )
+                    continue
+                break
+
+    if last_code in (429 ,500 ,502 ,503 ,504 ):
+        return "ตอนนี้บริการ Gemini ไม่พร้อมชั่วคราว ระบบลองโมเดลสำรองแล้ว แต่ยังไม่ได้คำตอบจาก AI"
+    return f"ข้อผิดพลาดระบบ: {last_detail }"
 
         # =========================================================================
         # LEDGER ANOMALY DETECTOR — สถิติ (z-score) + AI สรุปเป็นภาษาคน
