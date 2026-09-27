@@ -6043,13 +6043,8 @@ run();
 
 
 def render_perp_venue_table (base :str ="BTC")->None :
-    section (f"🌐 เทียบราคา {base } — Global Perpetual")
-
-    c_cap ,c_btn =st .columns ([8 ,2 ])
-    with c_btn :
-        if st .button ("🔄 รีเฟรช",key ="pv_refresh",**WIDE ):
-            fetch_perp_venues .clear ()
-
+    # Fetch/build the venue rows first so the comparison table is the first
+    # visual element in this section.  Analysis controls/cards follow below.
     df ,ts =fetch_perp_venues (base )
     meta ={v ["name"]:v for v in _PERP_VENUES }
 
@@ -6078,6 +6073,32 @@ def render_perp_venue_table (base :str ="BTC")->None :
         )
         )
 
+    # Render the comparison table immediately: price / VWAP / turnover / liquidity
+    # are the primary research surface for this section.
+    payload =json .dumps (
+    dict (base =base ,ts =ts ,rows =rows ),
+    ensure_ascii =False ,
+    ).replace ("</","<\\/")
+
+    components .html (
+    _PV_HTML .replace ("__PAYLOAD__",payload ),
+    height =120 +72 *len (rows ),
+    scrolling =False ,
+    )
+
+    st .caption (
+    f"อัปเดต {ts } (เวลาไทย) · Global Perpetual ใช้สำหรับ Arb / VWAP / Ranks"
+    " · บาง venue อาจให้เบราว์เซอร์ดึงข้อมูลซ้ำเมื่อ server fetch ไม่สำเร็จ"
+    )
+
+    section (f"🌐 เทียบราคา {base } — Global Perpetual")
+
+    c_cap ,c_btn =st .columns ([8 ,2 ])
+    with c_btn :
+        if st .button ("🔄 รีเฟรช",key ="pv_refresh",**WIDE ):
+            fetch_perp_venues .clear ()
+            st .rerun ()
+
     # Cross-row arbitrage analysis: observed low/high venue, spread and fee-adjusted edge.
     highlights =compute_arb_highlights (rows )
     badge =compute_spread_badge (rows )
@@ -6105,22 +6126,6 @@ def render_perp_venue_table (base :str ="BTC")->None :
     render_execution_quality_card (highlights ,rows ,float (order_size ))
     _arb_history_record (highlights ,rows ,float (order_size ))
     render_arb_history_tracker ()
-
-    payload =json .dumps (
-    dict (base =base ,ts =ts ,rows =rows ),
-    ensure_ascii =False ,
-    ).replace ("</","<\\/")
-
-    components .html (
-    _PV_HTML .replace ("__PAYLOAD__",payload ),
-    height =120 +72 *len (rows ),
-    scrolling =False ,
-    )
-
-    c_cap .caption (
-    f"อัปเดต {ts } (เวลาไทย) · Global Perpetual ใช้สำหรับ Arb / VWAP / Ranks"
-    " · บาง venue อาจให้เบราว์เซอร์ดึงข้อมูลซ้ำเมื่อ server fetch ไม่สำเร็จ"
-    )
 
 
     # ============================================================
