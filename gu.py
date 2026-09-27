@@ -4853,8 +4853,10 @@ def render_tab1 (cfg :dict [str ,Any ],data :pd .DataFrame ,data_err :Optional [
     trade_vol =cfg ["trade_vol"]
     hedge_fee =cfg ["hedge_fee"]
 
+    # Portfolio context แสดงเฉพาะเมื่อเลือก Backtest 5 ปีเท่านั้น
+    # ไม่แทรกซ้ำใน Dashboard / Backtest ช่วงอื่น
     ps =cfg .get ("portfolio_snapshot",{})
-    if ps :
+    if ps and st .session_state .get ("bt_preset") == "5 ปี":
         pc1 ,pc2 ,pc3 ,pc4 =st .columns (4 )
         pc1 .metric ("Portfolio ปัจจุบัน",fmt_baht (ps .get ("total_value_thb",0 )))
         pc2 .metric ("เงินสด",fmt_baht (ps .get ("cash_thb",0 )))
@@ -9611,6 +9613,9 @@ AI_SYSTEM =(
 "ถ้าถามเรื่องทั่วไปของระบบ ให้ตอบตามความรู้เกี่ยวกับแอปได้ตามปกติ "
 "เวลาพูดถึงตัวเลขสำคัญ ให้ระบุหน่วยให้ชัด และถ้าข้อมูลเป็น snapshot ให้บอกว่าเป็นข้อมูล ณ เวลาที่ระบบระบุ"
 "เมื่อได้รับ [PRIVATE PORTFOLIO CONTEXT] ให้ใช้ข้อมูลนั้นเป็น source of truth สำหรับ Allocation, Exposure, Holdings และ Daily P&L; หาก context มี available=true ห้ามตอบว่าไม่สามารถเข้าถึงพอร์ต และห้ามสร้างตัวเลขที่ไม่มีใน context"
+"เมื่อผู้ใช้ถามเรื่อง Risk เช่น ตอนนี้พอร์ตเสี่ยงตรงไหน ให้ใช้ risk_copilot.facts เป็น source of truth และครอบคลุม Concentration, Exposure, NC, NC Buffer, Hedge/Unhedged, Liquidity/CEX, FX Limit และ Drawdown เท่าที่ข้อมูลมี"
+"ต้องแยกคำตอบเป็น 2 ชั้น: [ข้อเท็จจริงจากระบบ] คือค่าที่ส่งมาจาก Risk Center และ [การตีความของ AI] คือคำอธิบายความสัมพันธ์/ความหมายของตัวเลขเท่านั้น; ห้ามเขียนการตีความเหมือนเป็นค่าที่ระบบตรวจพบ"
+"ถ้าข้อมูล Risk ตัวใดไม่มี ให้ระบุว่าไม่มีข้อมูล ไม่เดา และห้ามสรุปว่าพอร์ตปลอดภัยหรือไม่ปลอดภัยจากตัวเลขที่ไม่มี"
 )
 
 def ask_ai (messages ,api_key ,system_override :Optional [str ]=None ):
@@ -9844,6 +9849,7 @@ AI_SUGGESTIONS =[
 "Allocation และ Exposure ตอนนี้เป็นยังไง",
 "NC กับ NC Buffer ตอนนี้เป็นเท่าไหร่",
 "สรุปพอร์ตตอนนี้ให้หน่อย",
+"ตอนนี้พอร์ตเสี่ยงตรงไหน",
 ]
 
 def _ai_queue (q :str )->None :
@@ -9906,11 +9912,17 @@ market_df :Optional [pd .DataFrame ])->dict [str ,Any ]:
     # the dealer-risk context cannot be built from the current market history.
     risk =None
     risk_error =""
+    risk_metrics =None
     try :
         built =build_dealer_ctx (cfg ,data ) if isinstance (data ,pd .DataFrame )else None
         if built is not None :
             ctx ,target_stock_thb =built
             risk =compute_risk_snapshot (cfg ,sim ,ctx ,target_stock_thb ,prices )
+            try :
+                current_date =pd.to_datetime (data.index[-1])
+                risk_metrics =_portfolio_risk_metrics (snap ,current_date )
+            except Exception :
+                risk_metrics =None
     except Exception as exc :
         risk_error =str (exc)
 
@@ -10018,6 +10030,47 @@ market_df :Optional [pd .DataFrame ])->dict [str ,Any ]:
         except Exception :
             timestamp =str (data .index [-1])
 
+    # Risk Copilot context: server-calculated facts only.  The AI may interpret
+    # these facts, but must not invent or recalculate risk numbers.
+    risk_copilot = {
+    "available":False ,
+    "facts":{},
+    "interpretation_scope":"AI may explain relationships and possible implications, but must label these as AI interpretation."
+    }
+    if risk is not None :
+        rc = risk_copilot["facts"]
+        rc["overall_level"] = risk.get("overall")
+        rc["concentration"] = {
+            "largest_asset": (risk_metrics or {}).get("top_asset",{}),
+            "concentrated_assets_ge_70pct": (risk_metrics or {}).get("concentration",[]),
+            "allocation": (risk_metrics or {}).get("allocation",allocation),
+            "stablecoin_pct": (risk_metrics or {}).get("stablecoin_pct",0.0),
+        }
+        rc["exposure"] = {
+            "by_asset_thb": {str(k):float(v) for k,v in (risk.get("exposure_by",{}) or {}).items()},
+            "gross_exposure_thb":float(risk.get("gross_exposure_thb",0.0)),
+            "net_exposure_thb":float(risk.get("net_exposure_thb",0.0)),
+            "target_stock_thb":float(risk.get("target_stock_thb",0.0)),
+        }
+        rc["nc"] = {
+            "buffer_thb":float((risk.get("nc") or {}).get("buffer",0.0)),
+            "required_thb":float((risk.get("nc") or {}).get("required",0.0)),
+            "level":("critical" if float((risk.get("nc") or {}).get("buffer",0.0)) < 0 else "warning" if float((risk.get("nc") or {}).get("buffer",0.0)) < 0.5*float((risk.get("nc") or {}).get("required",0.0)) else "ok"),
+        }
+        rc["hedge"] = {
+            "unhedged_thb":float(risk.get("unhedged_thb",0.0)),
+            "note":"ระบบ Risk Snapshot ใช้ Unhedged สะสมเป็นตัวแทน exposure ที่ยังไม่ได้ hedge ใน context นี้"
+        }
+        fx_limit=float(risk.get("fx_limit_usd",0.0) or 0.0)
+        fx_used=float(risk.get("fx_used_usd",0.0) or 0.0)
+        cex_limit=float(risk.get("cex_limit_thb",0.0) or 0.0)
+        cex_used=float(risk.get("cex_used_thb",0.0) or 0.0)
+        rc["liquidity"]={"cex_used_thb":cex_used,"cex_limit_thb":cex_limit,"utilization_pct":(cex_used/cex_limit*100.0 if cex_limit>0 else None)}
+        rc["fx_limit"]={"used_usd":fx_used,"limit_usd":fx_limit,"utilization_pct":(fx_used/fx_limit*100.0 if fx_limit>0 else None)}
+        if risk_metrics is not None:
+            rc["drawdown"]={"max_drawdown_pct":float(risk_metrics.get("max_drawdown_pct",0.0)),"volatility_pct":float(risk_metrics.get("volatility_pct",0.0)),"history_days":int(risk_metrics.get("history_days",0) or 0),"history_available":bool(risk_metrics.get("history_available",False))}
+        risk_copilot["available"]=True
+
     context = {
     "available":True ,
     "as_of":timestamp ,
@@ -10063,6 +10116,7 @@ market_df :Optional [pd .DataFrame ])->dict [str ,Any ]:
     "nc_buffer":nc ,
     "orders_count":len (sim .get ("orders",[])or []),
     "risk_context_available":risk is not None ,
+    "risk_copilot":risk_copilot ,
     }
     if risk_error :
         context ["risk_context_note"]="NC/Exposure บางส่วนคำนวณไม่ได้จากข้อมูลตลาดปัจจุบัน: "+risk_error
@@ -17625,7 +17679,12 @@ price_thb :Mapping [str ,float ])->dict [str ,Any ]:
     ]
     overall =max ((c ["level"]for c in cards ),key =lambda l :_RISK_RANK [l ])
     return dict (cards =cards ,overall =overall ,exposure_by =exposure_by ,
-    stock_by =stock_by ,n_orders =len (sim .get ("orders",[])))
+    stock_by =stock_by ,n_orders =len (sim .get ("orders",[])),
+    nc =nc ,fx_used_usd =fx_used ,fx_limit_usd =fx_lim ,
+    cex_used_thb =cex_used ,cex_limit_thb =cex_lim ,
+    unhedged_thb =unhedged ,target_stock_thb =target_stock_thb ,
+    total_stock_thb =total_stock ,total_target_thb =total_target ,
+    gross_exposure_thb =gross_exp ,net_exposure_thb =net_exp)
 
 def _risk_card_html (c :dict [str ,Any ])->str :
     col =RISK_COLOR [c ["level"]]
