@@ -5385,12 +5385,12 @@ def _spot_gate(b: str) -> tuple[float, float, float]:
 
 
 def _spot_hyperliquid(b: str) -> tuple[float, float, float]:
-    """Read Hyperliquid Spot using the documented universe/token mapping.
+    """Read Hyperliquid Spot using metadata mapping, with L2-book fallback.
 
-    Hyperliquid Spot does not guarantee that the UI pair name is the literal
-    token name. For example, the documented API can expose BTC/USDC as
-    UBTC/USDC, and non-canonical spot pairs may be named @<index>. The
-    universe entry's token indices are therefore the source of truth.
+    Hyperliquid Spot symbols are not always literal ``BTC/USDC``. The metadata
+    universe is the source of truth. If the summary context has a zero/missing
+    mid price, fall back to the actual Spot L2 book for that universe entry so
+    the board never treats a zero price as a valid market quote.
     """
     doc = _http_json("https://api.hyperliquid.xyz/info", {"type": "spotMetaAndAssetCtxs"})
     if not isinstance(doc, (list, tuple)) or len(doc) < 2:
@@ -5407,37 +5407,87 @@ def _spot_hyperliquid(b: str) -> tuple[float, float, float]:
         except Exception:
             continue
 
-    idx = None
+    match_i = None
+    match_u = None
     for i, u in enumerate(universe):
-        if i >= len(ctxs):
-            break
+        pair_tokens = u.get("tokens") or []
+        try:
+            base_name = token_names.get(int(pair_tokens[0])) if len(pair_tokens) >= 1 else None
+            quote_name = token_names.get(int(pair_tokens[1])) if len(pair_tokens) >= 2 else None
+        except Exception:
+            base_name = quote_name = None
         name = str(u.get("name") or "").upper()
         parts = [p.strip() for p in name.split("/") if p.strip()]
-        pair_tokens = u.get("tokens") or []
-        base_name = token_names.get(int(pair_tokens[0])) if len(pair_tokens) >= 1 else None
-        quote_name = token_names.get(int(pair_tokens[1])) if len(pair_tokens) >= 2 else None
-
-        # Prefer the literal UI pair first. Then accept Hyperliquid's BTC ->
-        # UBTC mapping and finally token-index metadata for non-literal names.
-        literal_match = len(parts) >= 2 and parts[0] == target and parts[1] in {"USDC", "USDT"}
-        btc_alias_match = target == "BTC" and base_name in {"BTC", "UBTC"} and quote_name in {"USDC", "USDT"}
+        literal = len(parts) >= 2 and parts[0] == target and parts[1] in {"USDC", "USDT"}
+        alias = target == "BTC" and base_name in {"BTC", "UBTC"} and quote_name in {"USDC", "USDT"}
         token_match = base_name == target and quote_name in {"USDC", "USDT"}
-        if literal_match or btc_alias_match or token_match:
-            idx = i
+        if literal or alias or token_match:
+            match_i, match_u = i, u
             break
 
-    if idx is None:
+    if match_i is None or match_u is None:
         raise ValueError(f"Hyperliquid spot pair not found: {target}")
 
-    c = ctxs[idx] if isinstance(ctxs[idx], dict) else {}
-    px = float(c.get("midPx") or c.get("markPx") or c.get("oraclePx") or 0.0)
-    prev = float(c.get("prevDayPx") or 0.0)
-    chg = ((px / prev) - 1.0) * 100.0 if prev > 0 else 0.0
-    turn = float(c.get("dayNtlVlm") or 0.0)
-    if px <= 0:
-        raise ValueError("bad Hyperliquid spot price")
-    return px, chg, turn
+    c = ctxs[match_i] if match_i < len(ctxs) and isinstance(ctxs[match_i], dict) else {}
+    px = 0.0
+    for key in ("midPx", "markPx", "oraclePx"):
+        try:
+            v = float(c.get(key) or 0.0)
+        except (TypeError, ValueError):
+            v = 0.0
+        if v > 0:
+            px = v
+            break
 
+    prev = 0.0
+    try:
+        prev = float(c.get("prevDayPx") or 0.0)
+    except (TypeError, ValueError):
+        prev = 0.0
+    turn = 0.0
+    try:
+        turn = float(c.get("dayNtlVlm") or 0.0)
+    except (TypeError, ValueError):
+        turn = 0.0
+
+    # Summary context can legitimately omit a usable mid price. Use the actual
+    # Spot order book as the source of truth instead of accepting zero.
+    if px <= 0:
+        coin = str(match_u.get("name") or "").strip()
+        if not coin:
+            # Non-canonical spot pairs can be addressed by @<index>.
+            coin = "@" + str(match_u.get("index"))
+        book = _http_json("https://api.hyperliquid.xyz/info", {
+            "type": "spotL2Book",
+            "coin": coin,
+        })
+        levels = book.get("levels") if isinstance(book, dict) else None
+        bids = levels[0] if isinstance(levels, list) and len(levels) >= 1 else []
+        asks = levels[1] if isinstance(levels, list) and len(levels) >= 2 else []
+        def best(levels_):
+            vals = []
+            for x in levels_ or []:
+                try:
+                    q = float(x.get("px"))
+                    if q > 0:
+                        vals.append(q)
+                except (TypeError, ValueError, AttributeError):
+                    continue
+            return max(vals) if levels_ is bids else min(vals) if vals else 0.0
+        bid = best(bids)
+        ask = best(asks)
+        if bid > 0 and ask > 0:
+            px = (bid + ask) / 2.0
+        elif bid > 0:
+            px = bid
+        elif ask > 0:
+            px = ask
+
+    if px <= 0:
+        raise ValueError("Hyperliquid spot price unavailable")
+
+    chg = ((px / prev) - 1.0) * 100.0 if prev > 0 else 0.0
+    return px, chg, turn
 
 def _spot_bitget_global(b: str) -> tuple[float, float, float]:
     d = _http_json(f"https://api.bitget.com/api/v3/market/tickers?category=SPOT&symbol={b.upper()}USDT")
@@ -6654,7 +6704,7 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
     # Keep every configured venue visible. A failed endpoint must not make a
     # venue silently disappear from the board; only valid rows participate in
     # VWAP/ranking/arbitrage calculations.
-    valid = [r for r in rows if r.get("price") is not None and not r.get("err")]
+    valid = [r for r in rows if r.get("price") is not None and not r.get("err") and float(r.get("price") or 0.0) > 0]
     display_rows = list(rows)
     if not display_rows:
         st.warning("ไม่พบ Global Venue ที่ตั้งค่าไว้ในขณะนี้")
