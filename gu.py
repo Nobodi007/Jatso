@@ -5266,6 +5266,7 @@ def _pv_bitunix (b :str )->tuple [float ,float ,float ]:
     return last ,(last /op -1 )*100 ,float (d ["quoteVol"])
 
 
+
     # cg = คำนำหน้าชื่อกระดานใน CoinGlass (ตัวพิมพ์เล็ก ไม่มีจุด/ช่องว่าง)
 _PERP_VENUES =[
 dict (
@@ -5445,7 +5446,7 @@ def fetch_perp_venues (base :str ="BTC")->tuple [pd .DataFrame ,str ]:
     with ThreadPoolExecutor (max_workers =len (_PERP_VENUES ))as ex :
         rows =list (ex .map (one ,_PERP_VENUES ))
 
-    failed =[r for r in rows if r ["err"]]
+    failed =[r for r in rows if r ["err"] and str(r.get("market_type","perp")).lower()=="perp"]
     if failed :
         key =_coinglass_key ()
         cg_rows :list [dict ]=[]
@@ -5503,9 +5504,11 @@ _VENUE_TO_FEE_PRESET = {
 
 
 def _valid_perp_rows(rows: list[dict]) -> list[dict]:
-    """เฉพาะแถวที่มีราคาและไม่มี error เท่านั้น"""
+    """เฉพาะแถว Perpetual ที่มีราคาและไม่มี error เท่านั้น; Spot ไม่ร่วม arb."""
     out = []
     for r in rows:
+        if str(r.get("market_type", "perp")).lower() != "perp":
+            continue
         try:
             price = float(r.get("price"))
         except (TypeError, ValueError):
@@ -5590,35 +5593,58 @@ def compute_net_arb_edge(
 
 
 def render_arb_opportunity_card(highlights: dict, order_size_usd: float = 10_000.0) -> None:
+    """แสดงสรุป opportunity จากราคาที่สังเกตได้จริงของ Global Perpetual เท่านั้น."""
     if not highlights:
         return
+
     edge = compute_net_arb_edge(
         highlights["buy_venue"], highlights["buy_price"],
         highlights["sell_venue"], highlights["sell_price"],
         order_size_usd,
     )
     tone = "#0ecb81" if edge["is_profitable"] else "#f6465d"
-    verdict = "✅ Net edge เป็นบวกหลังหัก fee" if edge["is_profitable"] else "❌ Net edge ติดลบหลังหัก fee"
+    verdict = "NET EDGE +" if edge["is_profitable"] else "NET EDGE -"
+    buy_venue = _html.escape(str(highlights["buy_venue"]))
+    sell_venue = _html.escape(str(highlights["sell_venue"]))
+
     st.markdown(
-        f"<div style='background:#181a20;border:1px solid #2b3139;"
-        f"border-left:3px solid {tone};border-radius:8px;padding:12px 16px;margin:8px 0;'>"
-        f"<div style='font-weight:700;color:{tone};font-size:.85rem;'>{verdict}</div>"
-        f"<div style='font-size:.78rem;color:#b7bdc6;margin-top:6px;line-height:1.7;'>"
-        f"ราคาต่ำสุด <b style='color:#EAECEF'>{_html.escape(str(highlights['buy_venue']))}</b> "
-        f"(${highlights['buy_price']:,.2f}, taker {edge['buy_fee_pct']:.3f}%) → "
-        f"ราคาสูงสุด <b style='color:#EAECEF'>{_html.escape(str(highlights['sell_venue']))}</b> "
-        f"(${highlights['sell_price']:,.2f}, taker {edge['sell_fee_pct']:.3f}%)<br>"
-        f"Gross edge: {edge['gross_edge_pct']:.3f}% · "
-        f"ค่าธรรมเนียมรวม: {edge['total_fee_pct']:.3f}% · "
-        f"<b style='color:{tone}'>Net edge: {edge['net_edge_pct']:+.3f}% "
-        f"(≈ ${edge['net_edge_usd']:+,.2f} ต่อขนาด ${order_size_usd:,.0f})</b>"
-        f"</div></div>",
+        f"""<div style='background:#11151b;border:1px solid #2b3139;border-radius:10px;
+        padding:14px 16px;margin:8px 0 10px;'>
+        <div style='display:flex;justify-content:space-between;align-items:center;gap:12px;'>
+          <div style='font-weight:800;color:#EAECEF;font-size:.95rem;'>⚡ Arb Opportunity</div>
+          <div style='font-weight:800;color:{tone};font-size:.78rem;'>{verdict}</div>
+        </div>
+        <div style='display:grid;grid-template-columns:1.2fr 1.2fr 1fr 1fr;gap:10px;margin-top:12px;'>
+          <div style='background:#181c23;border-radius:7px;padding:9px 11px;'>
+            <div style='color:#848e9c;font-size:.70rem;'>🟢 BUY</div>
+            <div style='color:#EAECEF;font-weight:700;margin-top:3px;'>{buy_venue}</div>
+            <div style='color:#0ecb81;font-size:.82rem;margin-top:2px;'>${highlights["buy_price"]:,.2f}</div>
+          </div>
+          <div style='background:#181c23;border-radius:7px;padding:9px 11px;'>
+            <div style='color:#848e9c;font-size:.70rem;'>🔴 SELL</div>
+            <div style='color:#EAECEF;font-weight:700;margin-top:3px;'>{sell_venue}</div>
+            <div style='color:#f6465d;font-size:.82rem;margin-top:2px;'>${highlights["sell_price"]:,.2f}</div>
+          </div>
+          <div style='background:#181c23;border-radius:7px;padding:9px 11px;'>
+            <div style='color:#848e9c;font-size:.70rem;'>GROSS SPREAD</div>
+            <div style='color:#EAECEF;font-weight:800;margin-top:3px;'>{edge["gross_edge_pct"]:.3f}%</div>
+            <div style='color:#848e9c;font-size:.72rem;margin-top:2px;'>${highlights["spread_abs"]:,.2f}</div>
+          </div>
+          <div style='background:#181c23;border-radius:7px;padding:9px 11px;'>
+            <div style='color:#848e9c;font-size:.70rem;'>NET EDGE</div>
+            <div style='color:{tone};font-weight:800;margin-top:3px;'>{edge["net_edge_pct"]:+.3f}%</div>
+            <div style='color:#848e9c;font-size:.72rem;margin-top:2px;'>≈ ${edge["net_edge_usd"]:+,.2f}</div>
+          </div>
+        </div>
+        <div style='color:#848e9c;font-size:.72rem;margin-top:10px;'>
+          Order size ${order_size_usd:,.0f} · taker fee {edge["buy_fee_pct"]:.3f}% + {edge["sell_fee_pct"]:.3f}%
+        </div>
+        </div>""",
         unsafe_allow_html=True,
     )
     st.caption(
-        "⚠️ เป็น research estimate จาก taker fee เท่านั้น ไม่รวม funding rate, "
-        "เวลา/ค่าธรรมเนียมโอนข้ามกระดาน และ slippage จาก market depth จริง "
-        "ราคาที่ใช้เป็น observed price ไม่ใช่ executable bid/ask"
+        "⚠️ Research estimate จาก observed price + taker fee เท่านั้น · ไม่รวม funding rate, "
+        "ค่าธรรมเนียม/เวลาโอนข้ามกระดาน, slippage และ bid/ask จริง · ไม่ใช่ executable arbitrage quote"
     )
 
 
@@ -5654,6 +5680,7 @@ a{color:#4c9aff;text-decoration:none;}
 .rank-badge{margin-left:5px;font-size:.66rem;font-weight:700;padding:1px 5px;border-radius:4px;white-space:nowrap;}
 .rank-badge.vol{background:rgba(59,130,246,.12);color:#3B82F6;}
 .rank-badge.cheap{background:rgba(14,203,129,.10);color:#0ecb81;}
+.rank-badge.spot{background:rgba(14,203,129,.12);color:#0ecb81;border:1px solid rgba(14,203,129,.25);}
 tr.arb-buy{background:rgba(14,203,129,.10);border-left:3px solid #0ecb81;}
 tr.arb-sell{background:rgba(246,70,93,.10);border-left:3px solid #f6465d;}
 tr.arb-buy td:first-child::after{content:" 🟢 ซื้อที่นี่";font-size:.68rem;color:#0ecb81;}
@@ -5690,7 +5717,7 @@ const JOBS = {
 };
 
 function computeVWAP(rows){
-  const valid = rows.filter(r => r.price && r.turnover && !r.err && isFinite(r.price) && isFinite(r.turnover));
+  const valid = rows.filter(r => r.market_type !== 'spot' && r.price && r.turnover && !r.err && isFinite(r.price) && isFinite(r.turnover));
   if(!valid.length) return null;
   const totalTurnover = valid.reduce((s,r) => s + Number(r.turnover), 0);
   if(totalTurnover <= 0) return null;
@@ -5713,7 +5740,7 @@ function deviationBarHTML(devPct,maxAbsDev){
 }
 
 function computeMarketShare(rows){
-  const valid = rows.filter(r => r.turnover && !r.err && isFinite(r.turnover));
+  const valid = rows.filter(r => r.market_type !== 'spot' && r.turnover && !r.err && isFinite(r.turnover));
   const total = valid.reduce((s,r) => s + Number(r.turnover), 0);
   if(total <= 0) return {};
   const shares = {};
@@ -5728,7 +5755,7 @@ function turnoverCellHTML(turnover,sharePct){
 }
 
 function computeRanks(rows){
-  const valid = rows.filter(r => r.price && !r.err && isFinite(r.price));
+  const valid = rows.filter(r => r.market_type !== 'spot' && r.price && !r.err && isFinite(r.price));
   const byTurnover = [...valid].sort((a,b) => (Number(b.turnover)||0) - (Number(a.turnover)||0));
   const turnoverRank = {};
   byTurnover.forEach((r,i) => { turnoverRank[r.exchange] = i + 1; });
@@ -5746,9 +5773,9 @@ function rankBadgeHTML(rank,kind){
 }
 
 function render(){
-  const valid = rows.filter(r => r.price && !r.err && isFinite(r.price));
+  const valid = rows.filter(r => r.market_type !== 'spot' && r.price && !r.err && isFinite(r.price));
   const vwap = computeVWAP(rows);
-  const validForDev = rows.filter(r => r.price && !r.err && isFinite(r.price));
+  const validForDev = rows.filter(r => r.market_type !== 'spot' && r.price && !r.err && isFinite(r.price));
   const maxAbsDev = validForDev.length && vwap
     ? Math.max(...validForDev.map(r => Math.abs(deviationFromVWAP(r.price,vwap))))
     : 1;
@@ -5763,15 +5790,15 @@ function render(){
   }
   rows.forEach(r => {
     r.arbRole = '';
-    if(cheapest && r.exchange === cheapest.exchange) r.arbRole = 'buy';
-    if(priciest && r.exchange === priciest.exchange) r.arbRole = 'sell';
+    if(r.market_type !== 'spot' && cheapest && r.exchange === cheapest.exchange) r.arbRole = 'buy';
+    if(r.market_type !== 'spot' && priciest && r.exchange === priciest.exchange) r.arbRole = 'sell';
   });
   const list = rows.slice().sort((a,b) => (b.turnover ?? -1) - (a.turnover ?? -1));
   document.getElementById('tb').innerHTML = list.map(r => {
     const via = r.via ? '<span class="via" title="ข้อมูลไม่ได้ดึงตรงจาก server">via '+esc(r.via)+'</span>' : '';
     const tRank = ranks.turnoverRank[r.exchange];
     const pRank = ranks.priceRank[r.exchange];
-    const badges = rankBadgeHTML(tRank,'turnover') + rankBadgeHTML(pRank,'price');
+    const badges = (r.market_type === 'spot' ? '<span class="rank-badge spot" title="ตลาด Spot ไทย">🇹🇭 Spot</span>' : '') + rankBadgeHTML(tRank,'turnover') + rankBadgeHTML(pRank,'price');
     let p, c, d, t;
     if(r.err){
       p = c = d = t = '<span class="mut" title="'+esc(r.err)+'">—</span>';
@@ -5827,7 +5854,7 @@ run();
 
 
 def render_perp_venue_table (base :str ="BTC")->None :
-    section (f"🌐 เทียบราคา {base } Perpetual ข้ามกระดานโลก")
+    section (f"🌐 เทียบราคา {base } — Global Perpetual")
 
     c_cap ,c_btn =st .columns ([8 ,2 ])
     with c_btn :
@@ -5842,7 +5869,7 @@ def render_perp_venue_table (base :str ="BTC")->None :
 
     rows =[]
     for _ ,r in df .iterrows ():
-        v =meta [r ["exchange"]]
+        v =meta .get (r ["exchange"],{})
         rows .append (
         dict (
         exchange =r ["exchange"],
@@ -5858,6 +5885,7 @@ def render_perp_venue_table (base :str ="BTC")->None :
         turnover =_num (r ["turnover"]),
         err =r ["err"]if isinstance (r ["err"],str )else None ,
         via =r ["via"]if isinstance (r ["via"],str )else None ,
+        market_type ="perp",
         )
         )
 
@@ -5898,8 +5926,8 @@ def render_perp_venue_table (base :str ="BTC")->None :
     )
 
     c_cap .caption (
-    f"อัปเดต {ts } (เวลาไทย) · กระดานที่ server ดึงไม่ได้ "
-    "(เช่น Binance บน server ในสหรัฐฯ) จะให้เบราว์เซอร์ของคุณดึงเอง"
+    f"อัปเดต {ts } (เวลาไทย) · Global Perpetual ใช้สำหรับ Arb / VWAP / Ranks"
+    " · บาง venue อาจให้เบราว์เซอร์ดึงข้อมูลซ้ำเมื่อ server fetch ไม่สำเร็จ"
     )
 
 
