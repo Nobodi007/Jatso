@@ -5711,11 +5711,91 @@ def render_execution_quality_card(highlights: dict, rows: list[dict[str, Any]], 
 
 
 
-def _arb_history_record(highlights: Optional[dict], rows: list[dict[str, Any]], order_size_usd: float) -> None:
-    """เก็บ snapshot opportunity แบบ session-local เพื่อดูพฤติกรรมย้อนหลังระหว่าง session."""
+ARB_HISTORY_TABLE = "arb_opportunity_history"
+ARB_HISTORY_LOCAL_PATH = _HERE / "arb_opportunity_history.json"
+
+
+def _arb_history_actor() -> str:
+    """Actor key for persistent Arb history; guests do not write persistent records."""
+    if is_guest_mode():
+        return ""
+    try:
+        actor = str(_current_actor() or "").strip().lower()
+    except Exception:
+        actor = ""
+    return actor if actor and actor != "unknown" else ""
+
+
+def _arb_history_fingerprint(highlights: dict, edge: dict, order_size_usd: float) -> str:
+    payload = {
+        "buy_venue": str(highlights.get("buy_venue")),
+        "sell_venue": str(highlights.get("sell_venue")),
+        "buy_price": round(float(highlights.get("buy_price") or 0), 8),
+        "sell_price": round(float(highlights.get("sell_price") or 0), 8),
+        "gross_edge_pct": round(float(edge.get("gross_edge_pct") or 0), 6),
+        "net_edge_pct": round(float(edge.get("net_edge_pct") or 0), 6),
+        "order_size_usd": round(float(order_size_usd or 0), 2),
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _arb_history_load_local(limit: int = 2000) -> list[dict[str, Any]]:
+    if not ARB_HISTORY_LOCAL_PATH.is_file():
+        return []
+    try:
+        raw = json.loads(ARB_HISTORY_LOCAL_PATH.read_text(encoding="utf-8"))
+        rows = raw if isinstance(raw, list) else []
+        return rows[-limit:]
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def _arb_history_save_local(row: dict[str, Any]) -> None:
+    try:
+        rows = _arb_history_load_local(5000)
+        rows.append(_json_safe(row))
+        rows = rows[-5000:]
+        tmp = ARB_HISTORY_LOCAL_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, ARB_HISTORY_LOCAL_PATH)
+    except Exception:
+        pass
+
+
+def _arb_history_load_persistent(base: str = "BTC", limit: int = 5000) -> tuple[list[dict[str, Any]], str]:
+    """Load persistent history from Supabase; fallback to local JSON when unavailable."""
+    actor = _arb_history_actor()
+    if not actor:
+        return [], "session"
+    sb = _get_supabase()
+    if sb is not None:
+        try:
+            res = (
+                sb.table(ARB_HISTORY_TABLE)
+                .select("*")
+                .eq("actor", actor)
+                .eq("base", str(base))
+                .order("observed_at", desc=True)
+                .limit(int(limit))
+                .execute()
+            )
+            rows = list(res.data or [])
+            rows.reverse()
+            return rows, "supabase"
+        except Exception as exc:
+            st.session_state["arb_history_persistence_error"] = str(exc)
+    local = [r for r in _arb_history_load_local(limit) if str(r.get("actor") or actor) == actor and str(r.get("base") or base) == str(base)]
+    return local, "local"
+
+
+def _arb_history_record(highlights: Optional[dict], rows: list[dict[str, Any]], order_size_usd: float, base: str = "BTC") -> None:
+    """Persist observed Arb opportunity snapshots; Supabase first, local fallback."""
     if not highlights:
         return
     try:
+        actor = _arb_history_actor()
+        if not actor:
+            return
         edge = compute_net_arb_edge(
             highlights["buy_venue"], highlights["buy_price"],
             highlights["sell_venue"], highlights["sell_price"],
@@ -5729,22 +5809,11 @@ def _arb_history_record(highlights: Optional[dict], rows: list[dict[str, Any]], 
         buy_share = float(buy.get("turnover") or 0) / max_turn if max_turn else 0.0
         sell_share = float(sell.get("turnover") or 0) / max_turn if max_turn else 0.0
         now = datetime.now(timezone.utc)
-        fp = (
-            str(highlights.get("buy_venue")), str(highlights.get("sell_venue")),
-            round(float(edge.get("gross_edge_pct", 0.0)), 6),
-            round(float(edge.get("net_edge_pct", 0.0)), 6),
-        )
-        history = st.session_state.setdefault("arb_opportunity_history", [])
-        last = history[-1] if history else None
-        if last and tuple(last.get("fingerprint", ())) == fp:
-            try:
-                last_dt = pd.to_datetime(last.get("timestamp"), utc=True)
-                if (now - last_dt.to_pydatetime()).total_seconds() < 30:
-                    return
-            except Exception:
-                pass
-        history.append({
-            "timestamp": now.isoformat(),
+        fp = _arb_history_fingerprint(highlights, edge, order_size_usd)
+        row = {
+            "actor": actor,
+            "base": str(base),
+            "observed_at": now.isoformat(),
             "buy_venue": str(highlights["buy_venue"]),
             "sell_venue": str(highlights["sell_venue"]),
             "buy_price": float(highlights["buy_price"]),
@@ -5754,43 +5823,98 @@ def _arb_history_record(highlights: Optional[dict], rows: list[dict[str, Any]], 
             "net_edge_usd": float(edge["net_edge_usd"]),
             "buy_liquidity_share": buy_share,
             "sell_liquidity_share": sell_share,
+            "order_size_usd": float(order_size_usd),
             "fingerprint": fp,
-        })
-        del history[:-200]
+        }
+
+        # Keep the old session cache too, so the UI remains responsive if the DB is slow.
+        session_history = st.session_state.setdefault("arb_opportunity_history", [])
+        last = session_history[-1] if session_history else None
+        if not (last and last.get("fingerprint") == fp):
+            session_history.append({**row, "timestamp": row["observed_at"]})
+            del session_history[:-200]
+
+        # Query the latest persistent row for this actor/base and suppress duplicates within 30s.
+        sb = _get_supabase()
+        if sb is not None:
+            try:
+                latest = (
+                    sb.table(ARB_HISTORY_TABLE)
+                    .select("fingerprint,observed_at")
+                    .eq("actor", actor)
+                    .eq("base", str(base))
+                    .order("observed_at", desc=True)
+                    .limit(1)
+                    .execute()
+                )
+                if latest.data:
+                    lr = latest.data[0]
+                    if str(lr.get("fingerprint") or "") == fp:
+                        try:
+                            last_dt = pd.to_datetime(lr.get("observed_at"), utc=True).to_pydatetime()
+                            if (now - last_dt).total_seconds() < 30:
+                                return
+                        except Exception:
+                            pass
+                sb.table(ARB_HISTORY_TABLE).insert(_json_safe(row)).execute()
+                st.session_state["arb_history_persistence_mode"] = "supabase"
+                return
+            except Exception as exc:
+                st.session_state["arb_history_persistence_error"] = str(exc)
+
+        # If Supabase is unavailable or the table has not been created yet, keep a durable local fallback.
+        local_rows = _arb_history_load_local(1)
+        if local_rows:
+            last_local = local_rows[-1]
+            if last_local.get("actor") == actor and last_local.get("base") == str(base) and last_local.get("fingerprint") == fp:
+                try:
+                    last_dt = pd.to_datetime(last_local.get("observed_at"), utc=True).to_pydatetime()
+                    if (now - last_dt).total_seconds() < 30:
+                        return
+                except Exception:
+                    pass
+        _arb_history_save_local(row)
+        st.session_state["arb_history_persistence_mode"] = "local"
     except Exception:
         return
 
 
-def render_arb_history_tracker() -> None:
-    """แสดงประวัติ opportunity ที่สังเกตได้ใน session ปัจจุบัน."""
-    history = st.session_state.get("arb_opportunity_history", [])
+def render_arb_history_tracker(base: str = "BTC") -> None:
+    """Display persistent Arb history for the current user/base."""
+    history, source = _arb_history_load_persistent(base=base, limit=5000)
     if not history:
         return
 
     hdf = pd.DataFrame(history)
     if hdf.empty:
         return
-    hdf["timestamp"] = pd.to_datetime(hdf["timestamp"], utc=True, errors="coerce")
-    hdf = hdf.dropna(subset=["timestamp"]).copy()
+    ts_col = "observed_at" if "observed_at" in hdf.columns else "timestamp"
+    if ts_col not in hdf.columns:
+        return
+    hdf["timestamp"] = pd.to_datetime(hdf[ts_col], utc=True, errors="coerce")
+    hdf = hdf.dropna(subset=["timestamp"]).copy().sort_values("timestamp")
     if hdf.empty:
         return
-    hdf["time_th"] = hdf["timestamp"].dt.tz_convert("Asia/Bangkok").dt.strftime("%H:%M:%S")
+    hdf["time_th"] = hdf["timestamp"].dt.tz_convert("Asia/Bangkok").dt.strftime("%d/%m %H:%M:%S")
 
     st.markdown(
         "<div style='margin:12px 0 7px;font-weight:800;color:#EAECEF;font-size:.94rem;'>"
         "📚 Arb Opportunity History</div>",
         unsafe_allow_html=True,
     )
-    st.caption("เก็บ snapshot จาก session ปัจจุบัน · สูงสุด 200 จุด · ใช้สำหรับดูความถี่และความต่อเนื่องของ opportunity")
+    source_label = "Supabase · persistent" if source == "supabase" else "Local fallback · persistent on same runtime"
+    st.caption(f"{source_label} · {len(hdf):,} snapshots · แยกตามผู้ใช้และ {base}")
 
     latest = hdf.iloc[-1]
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Snapshots", f"{len(hdf):,}")
     c2.metric("Latest Net Edge", f"{float(latest['net_edge_pct']):+.3f}%")
-    c3.metric("Positive Net Edge", f"{int((hdf['net_edge_pct'] > 0).sum()):,}")
-    c4.metric("Best Net Edge", f"{float(hdf['net_edge_pct'].max()):+.3f}%")
+    c3.metric("Positive Net Edge", f"{int((pd.to_numeric(hdf['net_edge_pct'], errors='coerce') > 0).sum()):,}")
+    c4.metric("Best Net Edge", f"{float(pd.to_numeric(hdf['net_edge_pct'], errors='coerce').max()):+.3f}%")
 
-    chart_df = hdf[["timestamp", "net_edge_pct"]].set_index("timestamp").sort_index()
+    chart_df = hdf[["timestamp", "net_edge_pct"]].copy()
+    chart_df["net_edge_pct"] = pd.to_numeric(chart_df["net_edge_pct"], errors="coerce")
+    chart_df = chart_df.dropna().set_index("timestamp")
     if len(chart_df) >= 2:
         st.line_chart(chart_df, height=190, use_container_width=True)
 
@@ -5804,23 +5928,25 @@ def render_arb_history_tracker() -> None:
         "เวลา", "BUY", "SELL", "Gross Spread %", "Net Edge %", "Net USD",
         "BUY Liquidity", "SELL Liquidity",
     ]
-    display["Gross Spread %"] = display["Gross Spread %"].map(lambda x: f"{x:+.3f}%")
-    display["Net Edge %"] = display["Net Edge %"].map(lambda x: f"{x:+.3f}%")
-    display["Net USD"] = display["Net USD"].map(lambda x: f"${x:+,.2f}")
-    display["BUY Liquidity"] = display["BUY Liquidity"].map(lambda x: f"{x*100:.0f}%")
-    display["SELL Liquidity"] = display["SELL Liquidity"].map(lambda x: f"{x*100:.0f}%")
+    display["Gross Spread %"] = display["Gross Spread %"].map(lambda x: f"{float(x):+.3f}%")
+    display["Net Edge %"] = display["Net Edge %"].map(lambda x: f"{float(x):+.3f}%")
+    display["Net USD"] = display["Net USD"].map(lambda x: f"${float(x):+,.2f}")
+    display["BUY Liquidity"] = display["BUY Liquidity"].map(lambda x: f"{float(x)*100:.0f}%")
+    display["SELL Liquidity"] = display["SELL Liquidity"].map(lambda x: f"{float(x)*100:.0f}%")
     st.dataframe(display, hide_index=True, use_container_width=True, height=330)
 
-    csv = hdf.drop(columns=["fingerprint", "time_th"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
+    csv = hdf.drop(columns=["fingerprint", "time_th", "id", "actor", "base"], errors="ignore").to_csv(index=False).encode("utf-8-sig")
     st.download_button(
         "⬇️ Export Arb History CSV",
         data=csv,
-        file_name="nobody_arb_opportunity_history.csv",
+        file_name=f"nobody_arb_opportunity_history_{str(base).lower()}.csv",
         mime="text/csv",
-        key="arb_history_csv",
+        key=f"arb_history_csv_{base}",
     )
 
-    st.caption("หมายเหตุ: history นี้เป็น session-local; หาก Streamlit process/restart ใหม่ ประวัติจะเริ่มใหม่ ไม่ใช่ persistent market database")
+    err = st.session_state.get("arb_history_persistence_error")
+    if err and source != "supabase":
+        st.caption("⚠️ Supabase history table ยังไม่พร้อม จึงใช้ local fallback ชั่วคราว · รัน SQL migration ของ v98 เพื่อเปิด persistent cloud history")
 
 
 _PV_HTML =r"""<!doctype html><html><head><meta charset="utf-8"><style>
@@ -6118,8 +6244,8 @@ def render_perp_venue_table (base :str ="BTC")->None :
 
     render_arb_opportunity_card (highlights ,float (order_size ))
     render_execution_quality_card (highlights ,rows ,float (order_size ))
-    _arb_history_record (highlights ,rows ,float (order_size ))
-    render_arb_history_tracker ()
+    _arb_history_record (highlights ,rows ,float (order_size ),base=base)
+    render_arb_history_tracker (base=base)
 
 
     # ============================================================
