@@ -16557,7 +16557,7 @@ def _main_body() -> None:
         f'<img src="{DEV_AVATAR_B64}" width="40" height="40" '
         f'style="border-radius:50%;object-fit:cover;border:2px solid #2b3139;">'
         f'<div>'
-        f'<div style="color:#EAECEF;font-weight:700;font-size:0.9rem;line-height:1.6;padding-top:2px;">ทำโดย {DEV_NAME}</div>'
+        f'<div style="color:#EAECEF;font-weight:700;font-size:0.9rem;line-height:1.6;padding-top:2px;">Founder {DEV_NAME}</div>'
         f'</div></div>',
         unsafe_allow_html=True,
     )
