@@ -1,5 +1,5 @@
 """
-Nova Dealer Suite — Single-File Build
+Nobody Dealer Suite — Single-File Build
 =========================================
 รวม calculation engine + Streamlit UI ไว้ในไฟล์เดียว แต่ยังแยก "ชั้น" ชัดเจน
 
@@ -1536,7 +1536,7 @@ def fetch_fx_proxy_series (start :Any ,end :Any )->tuple [Optional [pd .Series ]
         "from":t0 ,"to":t1 ,
         })
         url =FX_PROXY ["url"]+("&"if "?"in FX_PROXY ["url"]else "?")+qs 
-        req =urllib .request .Request (url ,headers ={"User-Agent":"NovaDealerSuite"})
+        req =urllib .request .Request (url ,headers ={"User-Agent":"NobodyDealerSuite"})
         with urllib .request .urlopen (req ,timeout =10 )as resp :
             payload =json .loads (resp .read ().decode ("utf-8"))
         return parse_udf_history (payload ),None 
@@ -3024,7 +3024,7 @@ def render_audit_log_sidebar ():
         st .download_button (
         "⬇️ ดาวน์โหลด Audit Log ฉบับเต็ม (CSV)",
         to_csv_bytes (pd .DataFrame (log )),
-        "nova_audit_log.csv",
+        "nobody_audit_log.csv",
         "text/csv",
         **WIDE ,
         )
@@ -4138,7 +4138,7 @@ def qr_code_image_url (data :str ,size :int =220 )->str :
 def _fetch_qr_png_bytes (data :str ,size :int =260 )->Optional [bytes ]:
     try :
         req =urllib .request .Request (qr_code_image_url (data ,size ),
-        headers ={"User-Agent":"NovaDealerSuite"})
+        headers ={"User-Agent":"NobodyDealerSuite"})
         with urllib .request .urlopen (req ,timeout =8 )as resp :
             return resp .read ()
     except Exception :
@@ -4672,7 +4672,7 @@ def render_param_optimizer (cfg :dict [str ,Any ],data :pd .DataFrame )->None :
 
         with st .expander ("ดาวน์โหลดผลลัพธ์ทั้งหมด (CSV)"):
             st .download_button ("⬇️ ผลลัพธ์ Optimizer CSV",to_csv_bytes (res ),
-            "nova_param_optimizer.csv","text/csv",**WIDE )
+            "nobody_param_optimizer.csv","text/csv",**WIDE )
 
             # =========================================================================
             # DYNAMIC SPREAD — เสนอ spread ตามความผันผวน + backtest เทียบ fixed
@@ -4834,10 +4834,10 @@ bt_baseline :Optional [pd .DataFrame ]=None )->None :
         base =_backtest_metrics (bt_baseline if bt_baseline is not None else _backtest_frame (cfg ,data ))
         summary =pd .DataFrame ([{"Metric":k ,"Value":v }for k ,v in base .items ()if k !="frame"])
         excel =_phase2_excel_bytes ({"Backtest":bt_baseline if bt_baseline is not None else _backtest_frame (cfg ,data )},summary )
-        pdf =_phase2_pdf_bytes (f"Nova Dealer Suite — Phase 2 Report ({cfg ['asset']})",summary )
+        pdf =_phase2_pdf_bytes (f"Nobody Dealer Suite — Phase 2 Report ({cfg ['asset']})",summary )
         a ,b =st .columns (2 )
-        a .download_button ("⬇️ Excel Report",excel ,"nova_phase2_report.xlsx","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",**WIDE )
-        b .download_button ("⬇️ PDF Report",pdf ,"nova_phase2_report.pdf","application/pdf",**WIDE )
+        a .download_button ("⬇️ Excel Report",excel ,"nobody_phase2_report.xlsx","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",**WIDE )
+        b .download_button ("⬇️ PDF Report",pdf ,"nobody_phase2_report.pdf","application/pdf",**WIDE )
 
         # ---- 5.2 TAB 1 — BACKTEST ----------------------------------------------
 
@@ -5160,7 +5160,7 @@ def render_tab1 (cfg :dict [str ,Any ],data :pd .DataFrame ,data_err :Optional [
     # =========================================================================
 
 _VENUE_HEADERS ={
-"User-Agent":"Mozilla/5.0 (Nova-Dealer-Suite)",
+"User-Agent":"Mozilla/5.0 (Nobody-Dealer-Suite)",
 "Accept":"application/json",
 }
 
@@ -5674,7 +5674,7 @@ def _news_request (params :dict )->list [dict ]:
         req =urllib .request .Request (
         full_url ,
         headers ={
-        "User-Agent":"Mozilla/5.0 (Nova-Dealer-Suite/1.0)",
+        "User-Agent":"Mozilla/5.0 (Nobody-Dealer-Suite/1.0)",
         "Accept":"application/json",
         },
         )
@@ -5788,7 +5788,7 @@ def fetch_crypto_news_rss (limit :int =30 )->list [dict ]:
     """ดึงข่าวจาก RSS feeds และคืนค่าเฉพาะข่าวที่เกี่ยวข้องกับเหรียญในระบบ."""
     out =[]
     headers ={
-    "User-Agent":"Mozilla/5.0 (Nova-Dealer-Suite/1.0)",
+    "User-Agent":"Mozilla/5.0 (Nobody-Dealer-Suite/1.0)",
     "Accept":"application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
     }
 
@@ -7405,7 +7405,7 @@ def render_backoffice (sim ,cfg ,ctx ,target_stock_thb ,price_thb )->None :
     render_customer_leaderboard (sim ,cfg )
 
     with st .expander ("ดาวน์โหลดสมุดออเดอร์ (CSV)"):
-        st .download_button ("⬇️ Ledger CSV",to_csv_bytes (df ),"nova_ledger.csv","text/csv",**WIDE )
+        st .download_button ("⬇️ Ledger CSV",to_csv_bytes (df ),"nobody_ledger.csv","text/csv",**WIDE )
 
 
 def build_dealer_ctx (cfg :dict [str ,Any ],data :pd .DataFrame )->Optional [tuple [dict [str ,Any ],float ]]:
@@ -8112,12 +8112,12 @@ def _about_system_dialog_body ()->None :
     </style>
     """,unsafe_allow_html =True )
 
-    st .caption ("ภาพรวม Nova Dealer Suite — ระบบจำลอง / วิจัย / วิเคราะห์พอร์ต และชั้นข้อมูลที่เชื่อมต่อกัน")
+    st .caption ("ภาพรวม Nobody Dealer Suite — ระบบจำลอง / วิจัย / วิเคราะห์พอร์ต และชั้นข้อมูลที่เชื่อมต่อกัน")
 
     st .markdown ("""
     <div class="about-section">
       <h4>🏗️ ระบบนี้คืออะไร</h4>
-      <p>Nova Dealer Suite เป็นแพลตฟอร์มจำลองและวิเคราะห์สำหรับงาน Dealer, Portfolio, Risk, Liquidity และ Quant Research
+      <p>Nobody Dealer Suite เป็นแพลตฟอร์มจำลองและวิเคราะห์สำหรับงาน Dealer, Portfolio, Risk, Liquidity และ Quant Research
       โดยรวมหน้าซื้อขายจำลอง, Backtest, Portfolio/Wallet, Risk Analytics, Stress Test และ Research tools ไว้ในระบบเดียว</p>
       <div class="about-flow">
         <span class="about-tag">Streamlit UI</span> → <span class="about-tag">Simulation / Execution Engine</span> →
@@ -8183,7 +8183,7 @@ def _about_system_dialog_body ()->None :
 
 
 def about_system_dialog ()->None :
-    st .dialog ("ℹ️ เกี่ยวกับระบบ Nova Dealer Suite",width ="large")(_about_system_dialog_body )()
+    st .dialog ("ℹ️ เกี่ยวกับระบบ Nobody Dealer Suite",width ="large")(_about_system_dialog_body )()
 
 
 def _user_guide_dialog_body ()->None :
@@ -8197,7 +8197,7 @@ def _user_guide_dialog_body ()->None :
     </style>
     """,unsafe_allow_html =True )
 
-    st .caption ("ภาพรวมการใช้งาน Nova Dealer Suite — คู่มือฉบับย่อสำหรับผู้ใช้ใหม่")
+    st .caption ("ภาพรวมการใช้งาน Nobody Dealer Suite — คู่มือฉบับย่อสำหรับผู้ใช้ใหม่")
 
     st .markdown ("""
     <div class="ug-section">
@@ -8253,7 +8253,7 @@ def _user_guide_dialog_body ()->None :
 
 
 def user_guide_dialog ()->None :
-    st .dialog ("📘 คู่มือการใช้งาน Nova Dealer Suite",width ="large")(_user_guide_dialog_body )()
+    st .dialog ("📘 คู่มือการใช้งาน Nobody Dealer Suite",width ="large")(_user_guide_dialog_body )()
 
 
     # ---- 5.5 TAB 4 — WALLET ------------------------------------------------
@@ -9037,7 +9037,7 @@ def render_portfolio_calendar (cfg :dict [str ,Any ],data :pd .DataFrame ,market
             st .markdown (f'<div class="cal-card"><h4 style="margin:0;color:#eaecef">Snapshot · {selected_day }</h4><div class="cal-detail"><span>Portfolio Value</span><b>฿{float (selected .get ("total_value_thb",0 )or 0 ):,.2f}</b></div><div class="cal-detail"><span>Cash</span><b>฿{float (selected .get ("cash_thb",0 )or 0 ):,.2f}</b></div><div class="cal-detail"><span>Invested Cost</span><b>฿{float (selected .get ("invested_cost_thb",0 )or 0 ):,.2f}</b></div><div class="cal-detail"><span>Unrealized P&L</span><b>฿{float (selected .get ("unrealized_pnl_thb",0 )or 0 ):+,.2f}</b></div><div class="cal-detail"><span>Realized P&L</span><b>฿{float (selected .get ("realized_pnl_thb",0 )or 0 ):+,.2f}</b></div><div class="cal-detail"><span>Fees</span><b>฿{float (selected .get ("fees_thb",0 )or 0 ):,.2f}</b></div></div>',unsafe_allow_html =True )
 
     with st .expander ("📄 Fund Fact Sheet — PDF",expanded =False ):
-        render_fund_factsheet_panel (cfg ,sim ,snap ,fetch_price_data ,fund_name ="Nova Digital Asset Fund")
+        render_fund_factsheet_panel (cfg ,sim ,snap ,fetch_price_data ,fund_name ="Nobody Digital Asset Fund")
 
     with st .expander ("🔗 Shareable Investor View",expanded =False ):
         render_investor_share_manager (cfg ,sim ,snap )
@@ -9069,7 +9069,7 @@ snap :dict [str ,Any ])->None :
     )
 
     c1 ,c2 ,c3 =st .columns (3 )
-    fund_name =c1 .text_input ("ชื่อที่แสดงบนหน้าแชร์",value ="Nova Portfolio",key ="inv_share_name")
+    fund_name =c1 .text_input ("ชื่อที่แสดงบนหน้าแชร์",value ="Nobody Portfolio",key ="inv_share_name")
     show_amounts =c2 .toggle (
     "แสดงมูลค่าจริง (THB)",value =False ,key ="inv_share_amounts",
     help ="ปิด = แชร์เฉพาะ % ผลตอบแทนและสัดส่วน ไม่เปิดเผยมูลค่าเงินจริง",
@@ -9125,7 +9125,7 @@ snap :dict [str ,Any ])->None :
 
 
 def render_investor_public_view (token :str )->None :
-    st .set_page_config (page_title ="Investor View — Nova",page_icon ="📈",layout ="centered")
+    st .set_page_config (page_title ="Investor View — Nobody",page_icon ="📈",layout ="centered")
     st .markdown (COMPACT_HEADER_CSS ,unsafe_allow_html =True )
     st .markdown (THEME_CSS ,unsafe_allow_html =True )
     record =load_investor_share (token )
@@ -9145,7 +9145,7 @@ def render_investor_public_view (token :str )->None :
     f"<div class='xs-hero'><h1>{safe_name }</h1>"
     f"<p>Read-only Investor View · ข้อมูล ณ {as_of } UTC</p>"
     f"<span class='xs-pill'>🔒 Read-only</span>"
-    f"<div class='xs-ver'>สร้างจาก Nova Dealer Suite · ไม่ใช่คำแนะนำการลงทุน</div></div>",
+    f"<div class='xs-ver'>สร้างจาก Nobody Dealer Suite · ไม่ใช่คำแนะนำการลงทุน</div></div>",
     unsafe_allow_html =True ,
     )
 
@@ -9787,7 +9787,7 @@ def render_tab4 (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :pd .DataF
         # ---------------- ฟังก์ชัน AI ----------------
 
 AI_SYSTEM =(
-"คุณคือผู้ช่วยในแอป Nova Dealer Suite (เครื่องมือจำลอง Backtest, วางแผนสภาพคล่องและเงินกองทุน NC, "
+"คุณคือผู้ช่วยในแอป Nobody Dealer Suite (เครื่องมือจำลอง Backtest, วางแผนสภาพคล่องและเงินกองทุน NC, "
 "จำลองหน้าเทรด และกระเป๋าเงินจำลอง) ตอบเป็นภาษาไทย สั้น กระชับ ไม่เกิน 4-5 ประโยค ภาษาง่าย "
 "อธิบายความหมายของตัวเลขและวิธีใช้งานแอปได้ แต่ห้ามแนะนำว่าควรซื้อเหรียญไหน ห้ามให้คำแนะนำลงทุน "
 "และห้ามรับรอง compliance ถ้าถามนอกเรื่อง ให้ปฏิเสธสุภาพแล้วชวนกลับมาเรื่องแอป"
@@ -10404,7 +10404,7 @@ def render_customer_leaderboard (sim :dict [str ,Any ],cfg :dict [str ,Any ])->N
         st .caption ("Spread แนะนำเป็นเพียงข้อเสนอเชิงสถิติ (base + markout × ความมั่นใจ, ไม่เกินเพดาน) "
         "— ต้องให้คนตัดสินใจก่อนใช้จริง และระวัง false positive เมื่อมีลูกค้าจำนวนมาก")
         st .download_button ("⬇️ Leaderboard CSV",to_csv_bytes (lb ),
-        "nova_customer_leaderboard.csv","text/csv",**WIDE )
+        "nobody_customer_leaderboard.csv","text/csv",**WIDE )
 
     with t_seg :
         by =st .radio ("จัดกลุ่มตาม",["กลุ่มตามขนาด","ช่องทาง","Segment (โมเดลจำลอง)"],
@@ -12031,7 +12031,7 @@ def render_mobile_settings ()->None :
     st .toggle ("แจ้งเตือน Order",value =True ,key ="mobile_order_alert")
     st .toggle ("แจ้งเตือน Risk",value =True ,key ="mobile_risk_alert")
     st .divider ()
-    st .caption (f"Nova Dealer Suite · Model v{MODEL_VERSION }")
+    st .caption (f"Nobody Dealer Suite · Model v{MODEL_VERSION }")
 
 
 MOBILE_HOME_CSS =r'''<style>
@@ -13723,7 +13723,7 @@ logo_bytes :Optional [bytes ]=None )->bytes :
 
 def render_fund_factsheet_panel (cfg :dict [str ,Any ],sim :dict [str ,Any ],snap :dict [str ,Any ],
 fetch_price_data_fn :Any ,
-fund_name :str ="Nova Digital Asset Fund")->None :
+fund_name :str ="Nobody Digital Asset Fund")->None :
     st .markdown ("#### 📄 Fund Fact Sheet (PDF)")
     if not HAS_MPL :
         st .warning ("ต้องติดตั้ง matplotlib ก่อนใช้งาน: `pip install matplotlib`")
@@ -13756,7 +13756,7 @@ fund_name :str ="Nova Digital Asset Fund")->None :
 
     pdf_bytes =st .session_state .get ("fs_pdf_bytes")
     if pdf_bytes :
-        fname =str (st .session_state .get ("fs_pdf_name",fund_name )).strip ().replace (" ","_")or "Nova_Fund"
+        fname =str (st .session_state .get ("fs_pdf_name",fund_name )).strip ().replace (" ","_")or "Nobody_Fund"
         st .download_button ("⬇️ ดาวน์โหลด Fund Fact Sheet (PDF)",pdf_bytes ,
         f"{fname }_factsheet_{datetime .now ().strftime ('%Y%m%d')}.pdf",
         "application/pdf",use_container_width =True )
@@ -16312,7 +16312,7 @@ quant_section :str |None =None )->None :
         # Streamlit automatically reruns after the callback.
 
 def render_site_footer ()->None :
-    """Responsive Nova footer with real Streamlit navigation buttons."""
+    """Responsive Nobody footer with real Streamlit navigation buttons."""
     st .markdown (
     r"""
         <style>
@@ -16438,7 +16438,7 @@ def render_site_footer ()->None :
             '<div class="xs-footer-brand">'
             '<div class="xs-footer-logo">'
             '<div class="xs-footer-logo-icon">📈</div>'
-            '<div class="xs-footer-logo-text">Nova Dealer Suite</div>'
+            '<div class="xs-footer-logo-text">Nobody Dealer Suite</div>'
             '</div>'
             '<div class="xs-footer-description">'
             'แพลตฟอร์มจำลองการซื้อขายและเครื่องมือ Quant Research สำหรับการศึกษา วิเคราะห์ และทดสอบกลยุทธ์'
@@ -16494,7 +16494,7 @@ def render_site_footer ()->None :
 
         st .markdown (
         '<div class="xs-footer-bottom">'
-        '<div class="xs-footer-copy">© 2026 Nova Dealer Suite · Research &amp; Simulation Platform</div>'
+        '<div class="xs-footer-copy">© 2026 Nobody Dealer Suite · Research &amp; Simulation Platform</div>'
         '<div class="xs-footer-status"><span class="xs-footer-status-dot"></span>ระบบพร้อมใช้งาน</div>'
         '</div></div></div>',
         unsafe_allow_html =True ,
@@ -16910,7 +16910,7 @@ def _main_body ()->None :
             if _metrics ["history"].empty or len (_metrics ["history"])<2 :
                 st .info ("ต้องมี Portfolio Snapshot อย่างน้อย 2 วันก่อน — ไปที่ Portfolio Calendar แล้วกด '📸 บันทึก Snapshot ตอนนี้'")
             else :
-                render_print_report ("Nova Digital Asset Fund",cfg ,sim ,_snap ,_metrics )
+                render_print_report ("Nobody Digital Asset Fund",cfg ,sim ,_snap ,_metrics )
         elif nav ==NAV_SIMPLE :
             from simple_backtest import render_simple_backtest 
             render_simple_backtest (
@@ -16940,7 +16940,7 @@ def _main_body ()->None :
     render_site_footer ()
 
     st .markdown (
-    f"<div class='xs-foot'>Nova Dealer Suite · Model v{MODEL_VERSION } · "
+    f"<div class='xs-foot'>Nobody Dealer Suite · Model v{MODEL_VERSION } · "
     f"Config {CONFIG_INFO ['sha256']or 'built-in defaults'} · "
     "Planning model เพื่อการวางแผนภายในเท่านั้น "
     "ไม่ใช่เครื่องมือรับรอง compliance</div>",
@@ -16950,7 +16950,7 @@ def _main_body ()->None :
 
 def show_profile_setup_page (email :str ):
     st .subheader ("ตั้งค่าโปรไฟล์ของคุณ")
-    st .caption ("ระบบต้องการข้อมูลพื้นฐานก่อนเข้าใช้งาน Nova Dealer Suite")
+    st .caption ("ระบบต้องการข้อมูลพื้นฐานก่อนเข้าใช้งาน Nobody Dealer Suite")
 
     default_name =getattr (st .user ,"name",email .split ("@")[0 ])
     name_input =st .text_input ("ชื่อที่แสดง (Display Name)",value =default_name )
@@ -17112,7 +17112,7 @@ def require_login ()->bool :
             <div class="login-brand">
               <div class="login-icon">♻️</div>
               <div class="login-kicker">Crypto Dealer OS</div>
-              <div class="login-title">Nova <span>Dealer Suite</span></div>
+              <div class="login-title">Nobody <span>Dealer Suite</span></div>
               <div class="login-sub">
                 ระบบจำลองและวางแผนสภาพคล่องสำหรับ Dealer คริปโท —
                 ล็อกอินเพื่อเข้าใช้งาน Backtest, Liquidity Planner และ Exchange Simulator
@@ -17147,7 +17147,7 @@ def require_login ()->bool :
                 )
                 st .caption ("โหมด Guest: ข้อมูลทั้งหมดจะหายทันทีเมื่อออกจากระบบ และไม่ถูกบันทึกไว้ที่ไหน")
                 st .markdown (
-                f'<div class="login-foot">Nova Dealer Suite · Model v{MODEL_VERSION }</div>',
+                f'<div class="login-foot">Nobody Dealer Suite · Model v{MODEL_VERSION }</div>',
                 unsafe_allow_html =True ,
                 )
 
@@ -17185,7 +17185,7 @@ def main ()->None :
         return 
 
     st .set_page_config (
-    page_title ="Nova Dealer Suite",
+    page_title ="Nobody Dealer Suite",
     page_icon ="\u267b\ufe0f",
     layout ="wide",
     initial_sidebar_state ="expanded",
