@@ -6664,15 +6664,11 @@ def render_tab2 (cfg :dict [str ,Any ],data :pd .DataFrame ,data_err :Optional [
 
     asset =cfg ["asset"]
 
-        # --- FUND FLOW LAYER: อยู่ในแท็บ Liquidity ---
-    with st .expander ("💧 Cryptocurrency Fund Flow",expanded =False ):
-        render_fund_flow_section (cfg )
-
-    section ("🎛️ โหมดคำนวณความเสี่ยง")
-    cp_mode =st .radio (
-    "เลือกโหมด",
-    ["Single-Asset (ใช้เหรียญที่เลือกในแถบซ้าย)","Multi-Asset Portfolio"],
-    horizontal =True ,key ="cp_mode",
+    # Risk Calculation Mode is controlled from Risk Center so the planner below
+    # reuses the same global scope selection without rendering a duplicate control.
+    cp_mode =st .session_state .get (
+    "cp_mode",
+    "Single-Asset (ใช้เหรียญที่เลือกในแถบซ้าย)",
     )
 
     rp =None 
@@ -6882,6 +6878,10 @@ def render_tab2 (cfg :dict [str ,Any ],data :pd .DataFrame ,data_err :Optional [
 
     st .markdown ("<br>",unsafe_allow_html =True )
     render_perp_venue_table (asset )
+
+    # --- FUND FLOW LAYER: อยู่ถัดจาก Perpetual Venue Comparison เพื่อให้ market context ตามหลัง price/opportunity ---
+    with st .expander ("💧 Cryptocurrency Fund Flow",expanded =False ):
+        render_fund_flow_section (cfg )
 
 
 
@@ -8857,6 +8857,17 @@ def render_risk_center (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :pd
     '<p>ภาพรวมความผันผวน การกระจุกตัว และการถอยตัวของพอร์ตจากข้อมูลปัจจุบัน</p>'
     '</div>',
     unsafe_allow_html =True ,
+    )
+
+    # Global risk scope selector. Risk / NC Planner reuses this same value.
+    section ("🎛️ โหมดคำนวณความเสี่ยง")
+    st .radio (
+    "เลือกโหมด",
+    ["Single-Asset (ใช้เหรียญที่เลือกในแถบซ้าย)","Multi-Asset Portfolio"],
+    horizontal =True ,key ="cp_mode",
+    )
+    st .caption (
+    "โหมดนี้จะถูกใช้ร่วมกับ Risk / NC Planner โดยไม่ต้องเลือกซ้ำในหน้าคำนวณ"
     )
 
     vol =float (risk ["volatility_pct"])
