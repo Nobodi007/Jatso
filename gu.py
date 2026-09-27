@@ -16941,6 +16941,662 @@ def main ()->None :
         except Exception :
             pass 
 
+
+# Restored core functions from v36 to preserve existing app modules.
+
+def _dca_schedule_dates (idx :pd .Index ,freq_label :str ,months :int )->list [pd .Timestamp ]:
+    """สร้างรายการวันที่ที่จะ 'ซื้อ' ตามความถี่ ภายในกรอบเวลาย้อนหลัง N เดือนจากวันล่าสุด"""
+    if idx is None or len (idx )==0 :
+        return []
+    idx =pd .DatetimeIndex (idx ).sort_values ()
+    end =idx .max ()
+    start =end -pd .DateOffset (months =int (max (1 ,months )))
+    window =idx [(idx >=start )&(idx <=end )]
+    if len (window )==0 :
+        return []
+    if freq_label =="รายวัน":
+        return list (window )
+    if freq_label =="รายสัปดาห์":
+        out ,last =[],None 
+        for d in window :
+            if last is None or (d -last ).days >=7 :
+                out .append (d )
+                last =d 
+        return out 
+    out ,seen =[],set ()
+    for d in window :
+        key =(d .year ,d .month )
+        if key not in seen :
+            seen .add (key )
+            out .append (d )
+    return out
+
+def _dca_preview (data :pd .DataFrame ,cfg :dict [str ,Any ],amount_thb :float ,
+freq_label :str ,months :int )->Optional [dict [str ,Any ]]:
+    """คำนวณผลลัพธ์ย้อนหลังแบบ pure โดยใช้ราคา quote เดียวกับที่ลูกค้าจริงจะได้"""
+    dates =_dca_schedule_dates (data .index ,freq_label ,months )
+    if not dates :
+        return None 
+    fee =LOCAL_TRADING_FEE_PCT 
+    total_invested ,total_coins =0.0 ,0.0 
+    rows =[]
+    for d in dates :
+        row =data .loc [d ]
+        spot ,fx =float (row ["Global_USD"]),float (row ["USDTHB"])
+        mid =spot *fx *(1 +cfg ["local_premium"])
+        quote =mid *(1 +cfg ["dealer_spread"])
+        settlement =amount_thb *(1 -fee )
+        coins =settlement /quote if quote >0 else 0.0 
+        total_invested +=amount_thb 
+        total_coins +=coins 
+        rows .append ({
+        "วันที่":d .strftime ("%Y-%m-%d"),
+        "ราคาที่ได้ (THB)":quote ,
+        f"{cfg ['asset']} ที่ได้รอบนี้":coins ,
+        "ลงทุนสะสม (THB)":total_invested ,
+        })
+    last_row =data .iloc [-1 ]
+    cur_mid =(float (last_row ["Global_USD"])*float (last_row ["USDTHB"])
+    *(1 +cfg ["local_premium"]))
+    current_value =total_coins *cur_mid 
+    pnl =current_value -total_invested 
+    pnl_pct =(pnl /total_invested *100 )if total_invested >0 else 0.0 
+    avg_cost =(total_invested /total_coins )if total_coins >0 else 0.0 
+    return dict (dates =dates ,n_rounds =len (dates ),total_invested =total_invested ,
+    total_coins =total_coins ,current_value =current_value ,pnl =pnl ,
+    pnl_pct =pnl_pct ,avg_cost =avg_cost ,cur_price =cur_mid ,
+    ledger =pd .DataFrame (rows ))
+
+def _dca_confirm_backfill (sim :dict [str ,Any ],dates :list [pd .Timestamp ],
+amount_thb :float ,data :pd .DataFrame ,
+ctx :dict [str ,Any ])->int :
+    """ยิงคำสั่งซื้อจริงตามตารางวันที่ ผ่าน execute_order"""
+    n =0 
+    for d in dates :
+        if amount_thb >float (sim .get ("customer_thb",0.0 ))+1e-9 :
+            break 
+        _push_undo_snapshot (sim )
+        execute_order (sim ,"buy",amount_thb ,d ,data .loc [d ],ctx ,affect_wallet =True )
+        n +=1 
+    return n
+
+def _bo_fig (fig ,h =300 ,title =""):
+    fig .update_layout (template ="plotly_dark",height =h ,title =dict (text =title ,font =dict (size =13 )),
+    margin =dict (t =36 ,b =20 ,l =10 ,r =10 ),
+    paper_bgcolor ="rgba(0,0,0,0)",plot_bgcolor ="rgba(0,0,0,0)",
+    showlegend =False )
+    return fig
+
+def render_backoffice (sim ,cfg ,ctx ,target_stock_thb ,price_thb )->None :
+    orders =sim .get ("orders",[])
+    if not orders :
+        st .info ("ยังไม่มีออเดอร์ — กดซื้อ/ขาย หรือสุ่มออเดอร์เพื่อดูข้อมูลหลังบ้าน")
+        return 
+    df =pd .DataFrame (orders )
+    df .index =range (1 ,len (df )+1 )
+    rej =df ["ผลด่าน"].astype (str ).str .startswith ("Reject")
+    ok =df [~rej ]
+
+    # ---------- คำนวณ ----------
+    inv_rows =[]
+    for c ,qty in sim ["inv_coins"].items ():
+        px =float (price_thb .get (c ,0.0 ))
+        val =float (qty )*px 
+        inv_rows .append ({"เหรียญ":c ,"จำนวน":float (qty ),"มูลค่า (THB)":val ,
+        "Target (THB)":target_stock_thb ,"Exposure (THB)":val -target_stock_thb })
+    inv =pd .DataFrame (inv_rows )
+    pnl_c =ok .groupby ("เหรียญ")["กำไรออเดอร์"].sum ()
+    cnt_c =df .groupby ("เหรียญ").size ()
+    rej_c =df [rej ].groupby ("เหรียญ").size ()
+    inv ["กำไร (THB)"]=inv ["เหรียญ"].map (pnl_c ).fillna (0.0 )
+    inv ["ออเดอร์"]=inv ["เหรียญ"].map (cnt_c ).fillna (0 ).astype (int )
+    inv ["ถูกปฏิเสธ"]=inv ["เหรียญ"].map (rej_c ).fillna (0 ).astype (int )
+
+    total_stock =float (inv ["มูลค่า (THB)"].clip (lower =0 ).sum ())
+    total_target =target_stock_thb *max (1 ,len (inv ))
+    net_exposure =float (inv ["Exposure (THB)"].sum ())
+    gross_exposure =float (inv ["Exposure (THB)"].abs ().sum ())
+
+    nc =nc_snapshot (total_stock ,ctx ["capital"],ctx ["cex_margin"],ctx ["liab"],
+    ctx ["h_crypto"],ctx ["h_cex"],ctx ["fixed_min_nc"],
+    ctx ["trading_risk_rate"],ctx ["daily_volume_thb"],ctx ["custody_rate"])
+    nc_util =nc ["required"]/nc ["actual"]if nc ["actual"]>0 else 9.99 
+
+    gross_vol =float (ok ["มูลค่า (บาท)"].sum ())
+    buy_vol =float (ok .loc [ok ["ฝั่ง"]=="ซื้อ","มูลค่า (บาท)"].sum ())
+    sell_vol =gross_vol -buy_vol 
+    revenue ,cost =float (ok ["รายได้"].sum ()),float (ok ["ต้นทุน"].sum ())
+    net_pnl =float (sim ["pnl_thb"])
+
+    wins =int ((ok ["กำไรออเดอร์"]>0 ).sum ())
+    win_rate =wins /len (ok )*100 if len (ok )else 0.0 
+    partial =int ((ok ["Unhedged (บาท)"]>0 ).sum ())
+    hedge_cov =(1 -gross_exposure /total_target )*100 if total_target >0 else 100.0 
+
+    cur_m =pd .to_datetime (sim .get ("current_date")).strftime ("%Y-%m")
+    fx_used =float (sim .get ("fx_used_usd_by_month",{}).get (cur_m ,0.0 ))
+    fx_lim =float (cfg ["fx_limit_max"])
+    cex_used ,cex_lim =float (sim ["cex_used_thb"]),float (ctx ["cex_liquidity_thb"])
+
+    # ---------- การ์ด แถว 1 ----------
+    section ("📦 สถานะหลังบ้าน")
+    r1 =st .columns (4 )
+    metric_card (r1 [0 ],f"สต็อกรวม {len (inv )} เหรียญ",fmt_baht (total_stock ),None ,
+    f"{total_stock /total_target *100 :,.0f}% ของเป้า {fmt_baht (total_target )}")
+    metric_card (r1 [1 ],"โควตา Outbound FX ที่ใช้",f"$ {fx_used :,.0f}",None ,
+    f"เหลือ $ {max (0 ,fx_lim -fx_used ):,.0f} จาก $ {fx_lim :,.0f}")
+    metric_card (r1 [2 ],"CEX Liquidity ที่ใช้",fmt_baht (cex_used ),None ,
+    f"เหลือ {fmt_baht (max (0 ,cex_lim -cex_used ))} จาก {fmt_baht (cex_lim )}")
+    metric_card (r1 [3 ],"กำไรสะสมของ Dealer",fmt_baht (net_pnl ,True ),net_pnl ,
+    f"{len (df )} ออเดอร์ · เฉลี่ย {fmt_baht (net_pnl /len (df ),True )}/ออเดอร์")
+
+    # ---------- การ์ด แถว 2 (เพิ่มใหม่) ----------
+    r2 =st .columns (4 )
+    metric_card (r2 [0 ],"Net Exposure (ส่วนต่างจาก target)",fmt_baht (net_exposure ,True ),
+    -abs (net_exposure )if abs (net_exposure )>1 else 0 ,
+    f"Gross {fmt_baht (gross_exposure )} · Hedge Coverage {hedge_cov :,.1f}%")
+    metric_card (r2 [1 ],"Gross Volume",fmt_baht (gross_vol ),None ,
+    f"ซื้อ {fmt_baht (buy_vol )} · ขาย {fmt_baht (sell_vol )}")
+    metric_card (r2 [2 ],"Revenue / Cost",fmt_baht (revenue -cost ,True ),revenue -cost ,
+    f"รายได้ {fmt_baht (revenue )} · ต้นทุน {fmt_baht (cost )}")
+    metric_card (r2 [3 ],"Win Rate / Reject",f"{win_rate :.1f}%",None ,
+    f"ปฏิเสธ {int (rej .sum ())} · Hedge ไม่ครบ {partial } ออเดอร์")
+
+    # ---------- Gauges ----------
+    g =st .columns (4 )
+    with g [0 ]:
+        gauge_bar ("โควตา Outbound FX",fx_used ,fx_lim ,f"{fx_used /fx_lim *100 :.0f}%"if fx_lim else "-",
+        f"ใช้ ${fx_used :,.0f} / ${fx_lim :,.0f}")
+    with g [1 ]:
+        gauge_bar ("CEX Liquidity",cex_used ,cex_lim ,f"{cex_used /cex_lim *100 :.0f}%"if cex_lim else "-",
+        f"ใช้ {fmt_baht (cex_used )} / {fmt_baht (cex_lim )}")
+    with g [2 ]:
+        gauge_bar ("NC Utilization (NC ขั้นต่ำ ÷ NC จริง)",nc_util ,1.0 ,f"{nc_util *100 :.0f}%",
+        f"Buffer {fmt_baht (nc ['buffer'],True )}")
+    with g [3 ]:
+        gauge_bar ("Exposure ÷ Target",gross_exposure ,total_target ,
+        f"{gross_exposure /total_target *100 :.0f}%"if total_target else "-",
+        f"Gross {fmt_baht (gross_exposure )}")
+
+    if ctx .get ("hot_breach"):
+        verdict_box (True ,"Hot Wallet เกินเพดาน","สัดส่วน Hot Wallet สูงกว่าเกณฑ์ที่กำหนด",warn =True )
+
+        # ---------- ตารางต่อเหรียญ ----------
+    section ("🪙 สถานะรายเหรียญ")
+    st .dataframe (inv .sort_values ("มูลค่า (THB)",ascending =False ).reset_index (drop =True ),
+    height =min (420 ,40 +35 *len (inv )),**WIDE )
+
+    # ---------- กราฟ ----------
+    section ("📈 กราฟหลังบ้าน")
+    x =df .index 
+    c1 ,c2 =st .columns (2 )
+    f =go .Figure (go .Scatter (x =x ,y =df ["กำไรออเดอร์"].cumsum (),line =dict (color ="#0ecb81",width =2 ),
+    fill ="tozeroy",fillcolor ="rgba(14,203,129,0.12)"))
+    c1 .plotly_chart (_bo_fig (f ,300 ,"กำไรสะสมรายออเดอร์ (THB)"),**WIDE )
+
+    f =go .Figure (go .Scatter (x =x ,y =df ["FX ใช้สะสม (USD)"],line =dict (color ="#3B82F6",width =2 )))
+    f .add_hline (y =fx_lim ,line =dict (color ="#f6465d",dash ="dash"),annotation_text ="FX Limit")
+    c2 .plotly_chart (_bo_fig (f ,300 ,"โควตา Outbound FX ที่ใช้ไป (USD)"),**WIDE )
+
+    c3 ,c4 =st .columns (2 )
+    f =go .Figure (go .Scatter (x =x ,y =df ["CEX Liquidity ใช้สะสม (บาท)"],line =dict (color ="#9945FF",width =2 )))
+    f .add_hline (y =cex_lim ,line =dict (color ="#f6465d",dash ="dash"),annotation_text ="CEX Liquidity")
+    c3 .plotly_chart (_bo_fig (f ,300 ,"CEX Liquidity ที่ใช้ไป (THB)"),**WIDE )
+
+    f =go .Figure (go .Scatter (x =x ,y =df ["NC Buffer"],line =dict (color ="#fcd535",width =2 )))
+    f .add_hline (y =0 ,line =dict (color ="#f6465d",dash ="dash"),annotation_text ="ขั้นต่ำ")
+    c4 .plotly_chart (_bo_fig (f ,300 ,"NC Buffer หลังแต่ละออเดอร์ (THB)"),**WIDE )
+
+    # --- กราฟที่เพิ่มใหม่ ---
+    c5 ,c6 =st .columns (2 )
+    f =go .Figure (go .Bar (x =inv ["เหรียญ"],y =inv ["กำไร (THB)"],
+    marker_color =["#0ecb81"if v >=0 else "#f6465d"for v in inv ["กำไร (THB)"]]))
+    c5 .plotly_chart (_bo_fig (f ,300 ,"กำไรแยกตามเหรียญ (THB)"),**WIDE )
+
+    f =go .Figure (go .Bar (x =inv ["เหรียญ"],y =inv ["Exposure (THB)"],
+    marker_color =["#fcd535"if v >=0 else "#f6465d"for v in inv ["Exposure (THB)"]]))
+    f .add_hline (y =0 ,line =dict (color ="#848e9c"))
+    c6 .plotly_chart (_bo_fig (f ,300 ,"Exposure แยกตามเหรียญ (+ถือเกิน / −ขาด)"),**WIDE )
+
+    c7 ,c8 =st .columns (2 )
+    vol =ok .pivot_table (index ="เหรียญ",columns ="ฝั่ง",values ="มูลค่า (บาท)",aggfunc ="sum",fill_value =0 )
+    f =go .Figure ()
+    if "ซื้อ"in vol :
+        f .add_trace (go .Bar (name ="ซื้อ",x =vol .index ,y =vol ["ซื้อ"],marker_color ="#0ecb81"))
+    if "ขาย"in vol :
+        f .add_trace (go .Bar (name ="ขาย",x =vol .index ,y =vol ["ขาย"],marker_color ="#f6465d"))
+    f .update_layout (barmode ="group")
+    c7 .plotly_chart (_bo_fig (f ,300 ,"Buy / Sell Volume แยกตามเหรียญ (THB)").update_layout (showlegend =True ),**WIDE )
+
+    rc =ok .groupby ("เหรียญ")[["รายได้","ต้นทุน"]].sum ()
+    f =go .Figure ([go .Bar (name ="รายได้",x =rc .index ,y =rc ["รายได้"],marker_color ="#0ecb81"),
+    go .Bar (name ="ต้นทุน",x =rc .index ,y =-rc ["ต้นทุน"],marker_color ="#f6465d")])
+    f .update_layout (barmode ="relative")
+    c8 .plotly_chart (_bo_fig (f ,300 ,"Revenue vs Cost แยกตามเหรียญ (THB)").update_layout (showlegend =True ),**WIDE )
+
+    m =ok .assign (เดือน =pd .to_datetime (ok ["วันที่"]).dt .to_period ("M").astype (str )).groupby ("เดือน")["Hedge (USD)"].sum ()
+    f =go .Figure (go .Bar (x =m .index ,y =m .values ,marker_color ="#3B82F6"))
+    f .add_hline (y =fx_lim ,line =dict (color ="#f6465d",dash ="dash"),annotation_text ="FX Limit/เดือน")
+    st .plotly_chart (_bo_fig (f ,280 ,"การใช้ FX รายเดือนเทียบ Limit (USD)"),**WIDE )
+
+    render_customer_leaderboard (sim ,cfg )
+
+    with st .expander ("ดาวน์โหลดสมุดออเดอร์ (CSV)"):
+        st .download_button ("⬇️ Ledger CSV",to_csv_bytes (df ),"nobody_ledger.csv","text/csv",**WIDE )
+
+def _ratio_level (r :float ,warn :float =0.70 ,crit :float =0.90 )->str :
+    return "crit"if r >=crit else ("warn"if r >=warn else "ok")
+
+def compute_risk_snapshot (cfg :dict [str ,Any ],sim :dict [str ,Any ],ctx :dict [str ,Any ],
+target_stock_thb :float ,
+price_thb :Mapping [str ,float ])->dict [str ,Any ]:
+    inv ={c :float (q )for c ,q in sim .get ("inv_coins",{}).items ()}
+    stock_by ={c :max (0.0 ,q )*float (price_thb .get (c ,0.0 ))for c ,q in inv .items ()}
+    exposure_by ={c :v -target_stock_thb for c ,v in stock_by .items ()}
+    total_stock =sum (stock_by .values ())
+    total_target =target_stock_thb *max (1 ,len (inv ))
+    gross_exp =sum (abs (v )for v in exposure_by .values ())
+    net_exp =sum (exposure_by .values ())
+
+    nc =nc_snapshot (total_stock ,ctx ["capital"],ctx ["cex_margin"],ctx ["liab"],
+    ctx ["h_crypto"],ctx ["h_cex"],ctx ["fixed_min_nc"],
+    ctx ["trading_risk_rate"],ctx ["daily_volume_thb"],ctx ["custody_rate"])
+
+    try :
+        cur_m =pd .to_datetime (sim .get ("current_date")).strftime ("%Y-%m")
+    except Exception :
+        cur_m =""
+    fx_used =float (sim .get ("fx_used_usd_by_month",{}).get (cur_m ,0.0 ))
+    fx_lim =float (cfg ["fx_limit_max"])
+    cex_used =float (sim .get ("cex_used_thb",0.0 ))
+    cex_lim =float (ctx ["cex_liquidity_thb"])
+    unhedged =float (sim .get ("unhedged_thb",0.0 ))
+
+    # NC level
+    if nc ["buffer"]<0 :
+        nc_lv ="crit"
+    elif nc ["buffer"]<0.5 *nc ["required"]:
+        nc_lv ="warn"
+    else :
+        nc_lv ="ok"
+
+    fx_r =fx_used /fx_lim if fx_lim >0 else 0.0 
+    cex_r =cex_used /cex_lim if cex_lim >0 else 0.0 
+    exp_r =gross_exp /total_target if total_target >0 else 0.0 
+    unh_r =unhedged /total_target if total_target >0 else 0.0 
+
+    cards =[
+    dict (title ="NC Buffer",level =nc_lv ,value =fmt_baht (nc ["buffer"],True ),
+    sub =f"ขั้นต่ำ {fmt_baht (nc ['required'])}"),
+    dict (title ="FX Quota (เดือนนี้)",level =_ratio_level (fx_r ),
+    value =f"{fx_r *100 :.0f}%",sub =f"${fx_used :,.0f} / ${fx_lim :,.0f}"),
+    dict (title ="CEX Liquidity",level =_ratio_level (cex_r ),
+    value =f"{cex_r *100 :.0f}%",
+    sub =f"{fmt_baht (cex_used )} / {fmt_baht (cex_lim )}"),
+    dict (title ="Gross Exposure ÷ Target",level =_ratio_level (exp_r ,0.25 ,0.50 ),
+    value =f"{exp_r *100 :.0f}%",
+    sub =f"Net {fmt_baht (net_exp ,True )}"),
+    dict (title ="Unhedged สะสม",level =_ratio_level (unh_r ,0.05 ,0.15 ),
+    value =fmt_baht (unhedged ),sub =f"{unh_r *100 :.1f}% ของ target รวม"),
+    ]
+    overall =max ((c ["level"]for c in cards ),key =lambda l :_RISK_RANK [l ])
+    return dict (cards =cards ,overall =overall ,exposure_by =exposure_by ,
+    stock_by =stock_by ,n_orders =len (sim .get ("orders",[])))
+
+def _risk_card_html (c :dict [str ,Any ])->str :
+    col =RISK_COLOR [c ["level"]]
+    return (f"<div style='background:#181a20;border:1px solid #2b3139;"
+    f"border-top:3px solid {col };border-radius:8px;padding:12px 14px;'>"
+    f"<div style='font-size:.75rem;color:#848e9c;'>{RISK_ICON [c ['level']]} {c ['title']}</div>"
+    f"<div style='font-size:1.35rem;font-weight:700;color:{col };margin-top:4px;"
+    f"font-variant-numeric:tabular-nums;'>{c ['value']}</div>"
+    f"<div style='font-size:.72rem;color:#5e6673;margin-top:2px;'>{c ['sub']}</div></div>")
+
+def _risk_dashboard_body (cfg ,ctx ,target_stock_thb ,price_thb )->None :
+    sim =st .session_state .get ("sim")
+    if not isinstance (sim ,dict ):
+        st .info ("ยังไม่มีข้อมูล sim")
+        return 
+    snap =compute_risk_snapshot (cfg ,sim ,ctx ,target_stock_thb ,price_thb )
+    ov =snap ["overall"]
+    msg ={"ok":"ระบบอยู่ในเกณฑ์ปกติ","warn":"มีตัวชี้วัดที่ต้องเฝ้าระวัง",
+    "crit":"มีตัวชี้วัดวิกฤติ ต้องตรวจสอบทันที"}[ov ]
+    verdict_box (ov !="crit",f"สถานะรวม: {msg }",
+    f"อัปเดต {pd .Timestamp .now (tz ='Asia/Bangkok').strftime ('%H:%M:%S')} · "
+    f"{snap ['n_orders']} ออเดอร์ในสมุด",warn =(ov =="warn"))
+
+    cols =st .columns (len (snap ["cards"]))
+    for col ,c in zip (cols ,snap ["cards"]):
+        col .markdown (_risk_card_html (c ),unsafe_allow_html =True )
+
+    if snap ["exposure_by"]:
+        rows =[{"เหรียญ":c ,"สต็อก (THB)":snap ["stock_by"][c ],
+        "Exposure vs Target (THB)":v }
+        for c ,v in snap ["exposure_by"].items ()]
+        st .dataframe (pd .DataFrame (rows ).sort_values ("Exposure vs Target (THB)",
+        key =lambda s :s .abs (),ascending =False ),
+        height =min (300 ,40 +35 *len (rows )),**WIDE )
+
+def compare_hedge_rules (sim ,cfg ,ctx ,target_stock_thb ,coins ,n_orders ,seed ,
+amt_min ,amt_max ,rules :dict )->pd .DataFrame :
+    rows =[]
+    for name ,(trig ,vblk )in rules .items ():
+        s2 =copy .deepcopy (sim )
+        s2 .update (orders =[],pnl_thb =0.0 ,fx_used_usd =0.0 ,fx_used_usd_by_month ={},
+        cex_used_thb =0.0 ,unhedged_thb =0.0 ,open_orders =[])
+        c2 ={**ctx ,"hedge_trigger_pct":trig ,"hedge_vol_block_pct":vblk }
+        run_random_batch (s2 ,cfg ,c2 ,target_stock_thb ,coins ,n_orders ,seed ,
+        amt_min ,amt_max )
+        o =pd .DataFrame (s2 ["orders"])
+        if o .empty :
+            continue 
+        rej =o ["ผลด่าน"].astype (str ).str .startswith ("Reject")
+        ok =o [~rej ]
+        expo =(ok ["สต็อกคงเหลือ"]*ok ["ราคาที่ลูกค้าได้"]-target_stock_thb ).abs ()
+        rows .append ({
+        "กฎ":name ,
+        "Net P&L":float (s2 ["pnl_thb"]),
+        "ต้นทุน Hedge+Slippage":float (ok ["ต้นทุน"].sum ()),
+        "จำนวนครั้งที่ hedge":int ((ok ["Hedge (เหรียญ)"]>0 ).sum ()),
+        "Hedge USD รวม":float (ok ["Hedge (USD)"].sum ()),
+        "Exposure เฉลี่ย (THB)":float (expo .mean ())if len (expo )else 0.0 ,
+        "Exposure สูงสุด (THB)":float (expo .max ())if len (expo )else 0.0 ,
+        "ถูกปฏิเสธ":int (rej .sum ()),
+        "NC Buffer ต่ำสุด":float (ok ["NC Buffer"].min ())if len (ok )else 0.0 ,
+        })
+    return pd .DataFrame (rows )
+
+def render_hedge_rule_lab (sim ,cfg ,ctx ,target_stock_thb )->None :
+    with st .expander ("🛡️ Hedge Rule Lab — เทียบกฎ Auto-Hedge",expanded =False ):
+        st .caption (
+        "รันออเดอร์สุ่มชุดเดียวกัน (seed เดียวกัน) ผ่าน engine จริงภายใต้กฎต่างกัน · "
+        "ไม่แตะสมุดออเดอร์จริง (ทำงานบนสำเนา) · Exposure เป็นค่าประมาณไว้เทียบกฎเท่านั้น")
+        coins =st .multiselect ("เหรียญ",SUPPORTED_ASSETS ,default =["BTC","ETH"],key ="hr_coins")
+        c1 ,c2 ,c3 ,c4 =st .columns (4 )
+        n_orders =c1 .number_input ("จำนวนออเดอร์",value =100 ,min_value =10 ,step =10 ,key ="hr_n")
+        seed =c2 .number_input ("Seed",value =11 ,step =1 ,key ="hr_seed")
+        amt_min =c3 .number_input ("ยอดต่ำสุด (THB)",value =1000.0 ,min_value =float (MIN_TRADE_THB ),
+        step =500.0 ,key ="hr_min")
+        amt_max =c4 .number_input ("ยอดสูงสุด (THB)",value =500000.0 ,min_value =float (MIN_TRADE_THB ),
+        step =10000.0 ,key ="hr_max")
+        rules =dict (HEDGE_RULE_PRESETS )
+        rules ["กฎปัจจุบันใน sidebar"]=(cfg .get ("hedge_trigger_pct",0.0 ),
+        cfg .get ("hedge_vol_block_pct",0.0 ))
+        if st .button ("🛡️ รันเปรียบเทียบ",key ="hr_run",disabled =not coins ,**WIDE ):
+            with st .spinner ("กำลังรันหลายกฎ…"):
+                st .session_state ["hr_result"]=compare_hedge_rules (
+                sim ,cfg ,ctx ,target_stock_thb ,coins ,n_orders ,seed ,
+                amt_min ,amt_max ,rules )
+        res =st .session_state .get ("hr_result")
+        if res is not None and not res .empty :
+            st .dataframe (res ,**WIDE )
+            fig =go .Figure ()
+            fig .add_trace (go .Bar (name ="Net P&L",x =res ["กฎ"],y =res ["Net P&L"],
+            marker_color ="#0ecb81"))
+            fig .add_trace (go .Bar (name ="Exposure เฉลี่ย",x =res ["กฎ"],
+            y =res ["Exposure เฉลี่ย (THB)"],marker_color ="#f6465d"))
+            fig .update_layout (template ="plotly_dark",height =320 ,barmode ="group",
+            margin =dict (t =20 ,b =20 ),paper_bgcolor ="rgba(0,0,0,0)",
+            plot_bgcolor ="rgba(0,0,0,0)")
+            st .plotly_chart (fig ,**WIDE )
+
+def render_tab3 (cfg :dict [str ,Any ],data :pd .DataFrame ,data_err :Optional [str ],
+price_lookup :Optional [dict [str ,float ]]=None ,
+market_df :Optional [pd .DataFrame ]=None )->None :
+
+    if data .empty :
+        st .error (f"⚠️ ต้องโหลดราคาจริงก่อนถึงจะจำลองได้: {data_err or 'ไม่สามารถโหลดข้อมูลได้'}")
+        return 
+
+    asset =cfg ["asset"]
+    built =build_dealer_ctx (cfg ,data )
+    if built is None :
+        st .error (f"ข้อมูลย้อนหลังน้อยกว่า {MIN_RISK_SAMPLE_DAYS } วัน — กรุณาเลือกช่วงเวลาให้ยาวขึ้น")
+        return 
+    ctx ,target_stock_thb =built 
+
+    signature =sim_config_signature (ctx ,target_stock_thb ,cfg ["start_date"],cfg ["end_date"])
+
+    if "sim"not in st .session_state :
+        first_day =pd .to_datetime (data .index [-1 ])
+        st .session_state .sim =sim_defaults (
+        asset ,first_day ,data .loc [first_day ,"Global_USD"],
+        data .loc [first_day ,"USDTHB"],target_stock_thb )
+        st .session_state .sim_steps =[]
+
+    current_date_val =pd .to_datetime (data .index [-1 ])# ราคาปัจจุบันเสมอ
+    st .session_state .sim ["current_date"]=current_date_val 
+
+    spot_usd_current =float (data .loc [current_date_val ,"Global_USD"])
+    usdthb_current =float (data .loc [current_date_val ,"USDTHB"])
+
+    sim =sim_normalize_state (st .session_state .sim ,asset ,current_date_val ,spot_usd_current ,usdthb_current ,target_stock_thb )
+    st .session_state .sim =sim 
+
+    # Telegram /confirm อัปเดต customer wallet เองแล้ว
+    # ตรงนี้จึงเติมเฉพาะ dealer-side ledger ให้ใช้ schema เดียวกับ Exchange Simulator
+    sync_telegram_orders_to_exchange_ledger (
+    sim ,
+    data ,
+    current_date_val ,
+    ctx ,
+    target_stock_thb ,
+    price_lookup =price_lookup ,
+    )
+
+    mid_now =spot_usd_current *usdthb_current *(1 +cfg ["local_premium"])
+
+    check_open_orders (sim ,mid_now *(1 +cfg ["dealer_spread"]),
+    mid_now *(1 -cfg ["dealer_spread"]),data ,current_date_val ,ctx )
+
+    row_now =data .loc [current_date_val ]
+    fx_adj =usdthb_current *(1 +cfg ["local_premium"])
+    high_24h =float (row_now ["Day_High"])*fx_adj 
+    low_24h =float (row_now ["Day_Low"])*fx_adj 
+    vol_24h_thb =cfg ["daily_volume_thb"]
+    if market_df is not None and not market_df .empty :
+        _r =market_df [market_df ["symbol"]==asset ]
+        if not _r .empty :
+            vol_24h_thb =float (_r ["volume"].iloc [0 ])*usdthb_current 
+
+    pct_24h =None 
+    if market_df is not None and not market_df .empty :
+        m_row =market_df [market_df ["symbol"]==asset ]
+        if not m_row .empty :
+            pct_24h =float (m_row ["pct_change"].iloc [0 ])
+    if pct_24h is None :
+        pct_txt ,pct_cls ="เปลี่ยน 24H —",""
+    else :
+        pct_txt =f"เปลี่ยน 24H {'+'if pct_24h >=0 else ''}{pct_24h :.2f}%"
+        pct_cls ="ex-green"if pct_24h >=0 else "ex-red"
+
+        # --- TOP HEADER BAR ---
+    top_bar_html =f"""<div class="ex-header">
+        <div style="display:flex; align-items:center; gap:12px;">
+            {coin_icon_html (asset ,40 )}
+            <div class="ex-stat">
+                <span style="font-size:1.4rem; font-weight:700; color:#EAECEF;">{asset }/THB</span>
+                <span style="font-size:0.8rem; font-weight:600;" class="{pct_cls }">{pct_txt }</span>
+            </div>
+        </div>
+        <div class="ex-stat"><span class="ex-stat-label">ราคาล่าสุด (THB)</span><span class="ex-stat-val ex-green">{mid_now :,.2f}</span></div>
+        <div class="ex-stat"><span class="ex-stat-label">สูงสุด 24H (THB)</span><span class="ex-stat-val">{high_24h :,.2f}</span></div>
+        <div class="ex-stat"><span class="ex-stat-label">ต่ำสุด 24H (THB)</span><span class="ex-stat-val">{low_24h :,.2f}</span></div>
+        <div class="ex-stat"><span class="ex-stat-label">ปริมาณ 24H (THB)</span><span class="ex-stat-val">{fmt_num (vol_24h_thb )}</span></div>
+        <div class="ex-stat"><span class="ex-stat-label">วันที่ (ปัจจุบัน)</span><span class="ex-stat-val" style="color:#fcd535;">{current_date_val .strftime ('%Y-%m-%d')}</span></div>
+    </div>"""
+    st .markdown (top_bar_html ,unsafe_allow_html =True )
+
+    # --- MAIN LAYOUT: Market | Chart + Order Panel + Tabs ---
+    col_left ,col_center =st .columns ([2.6 ,7.4 ],gap ="small")
+
+    with col_left :
+        st .markdown ('<div style="font-size:1.15rem; font-weight:700; color:#EAECEF; margin-bottom:12px; display:flex; align-items:center; gap:8px;">🌍 ภาพรวมตลาด (Market)</div>',unsafe_allow_html =True )
+        m_df =market_df if market_df is not None else pd .DataFrame ()
+        sub1 ,sub2 ,sub3 ,sub4 =st .tabs (["⭐","ปริมาณ","▲ เพิ่ม","▼ ลด"])
+        for sub ,mode in zip ((sub1 ,sub2 ,sub3 ,sub4 ),
+        ("favorite","volume","top_gain","top_loss")):
+            with sub :
+                try :
+                    cont =st .container (height =480 ,border =False )
+                except Exception :
+                    cont =st .container ()
+                with cont :
+                    render_market_column_view (m_df ,mode ,asset ,usdthb_current )
+
+    with col_center :
+    # สลับ TradingView / 3D Order Book ในพื้นที่เดียวกัน
+    # เมื่อเปิดเว็บ/เริ่ม session ใหม่ ค่าเริ่มต้นจะเป็น TradingView เสมอ
+        chart_view =st .radio (
+        "มุมมอง",
+        ["📈 TradingView","📊 3D Order Book"],
+        index =0 ,
+        horizontal =True ,
+        key ="exchange_chart_view",
+        label_visibility ="collapsed",
+        )
+
+        if chart_view =="📈 TradingView":
+            local_sym =TV_LOCAL_SYMBOL .get (asset ,f"BITKUB:{asset }THB")
+            render_tradingview (
+            local_sym ,
+            f"tv_center_{asset }",
+            460 ,
+            studies =["MAExp@tv-basicstudies"],
+            )
+        else :
+            try :
+                render_orderbook_3d (
+                symbol =f"{asset .lower ()}_thb",
+                title =f"3D Order Book — {asset }/THB",
+                limit =20 ,
+                )
+            except Exception as exc :
+                st .warning (f"3D Order Book ใช้งานไม่ได้: {exc }")
+
+        with st .container (border =True ):
+            _order_panel_live (cfg ,sim ,asset ,mid_now ,data ,current_date_val ,ctx )
+
+        with st .expander ("🎲 เครื่องมือจำลอง — สุ่มออเดอร์ / รีเซ็ต",expanded =False ):
+            st .caption ("สุ่มออเดอร์ = ลูกค้าคนอื่นในตลาด ไม่แตะกระเป๋าของคุณ · "
+            "สุ่มทั้งเหรียญ วันที่ ฝั่งซื้อ/ขาย และจำนวนเงิน · "
+            "รีเซ็ตจะล้างทุกอย่างรวมถึงกระเป๋า")
+            coins_pick =st .multiselect ("เหรียญที่ให้สุ่ม",SUPPORTED_ASSETS ,
+            default =SUPPORTED_ASSETS ,key ="sim_coins")
+            b1 ,b2 ,b3 =st .columns (3 )
+            n_orders =b1 .number_input ("จำนวนออเดอร์สุ่ม",value =20 ,min_value =1 ,
+            step =10 ,key ="sim_n")
+            seed =b2 .number_input ("Random seed",value =42 ,step =1 ,key ="sim_seed")
+            run_batch =b3 .button ("🎲 สุ่มออเดอร์ (Auto-Run)",key ="sim_batch",disabled =not can_trade (),**WIDE )
+            a1 ,a2 =st .columns (2 )
+            amt_min =a1 .number_input ("ยอดต่ำสุด/ออเดอร์ (THB)",value =50.0 ,
+            min_value =float (MIN_TRADE_THB ),step =50.0 ,
+            key ="sim_amt_min")
+            amt_max =a2 .number_input ("ยอดสูงสุด/ออเดอร์ (THB)",value =100000.0 ,
+            min_value =float (MIN_TRADE_THB ),step =1000.0 ,
+            key ="sim_amt_max")
+            reset =st .button ("♻️ ล้างระบบใหม่",key ="sim_reset",disabled =not can_trade (),**WIDE )
+            summ =st .session_state .get ("sim_batch_summary")
+            if summ :
+                st .caption (summ )
+
+        if reset :
+            first_day =pd .to_datetime (data .index [-1 ])
+            st .session_state .sim =sim_defaults (
+            asset ,first_day ,data .loc [first_day ,"Global_USD"],
+            data .loc [first_day ,"USDTHB"],target_stock_thb )
+            st .session_state .sim_signature =signature 
+            st .session_state .sim_steps =[]
+
+            st .session_state ["favorite_tickers"]=[]
+            try :
+                save_favorites ([])
+            except OSError :
+                pass 
+
+            st .rerun ()
+
+        if run_batch :
+            if not coins_pick :
+                st .warning ("เลือกอย่างน้อย 1 เหรียญ")
+            else :
+                steps_ ,counts ,skipped =run_random_batch (
+                sim ,cfg ,ctx ,target_stock_thb ,coins_pick ,
+                n_orders ,seed ,amt_min ,amt_max )
+                st .session_state .sim_steps =steps_ 
+                txt ="สุ่มแล้ว: "+", ".join (f"{k } {v }"for k ,v in sorted (counts .items ()))
+                if skipped :
+                    txt +=f" · โหลดราคาไม่ได้: {', '.join (skipped )}"
+                st .session_state .sim_batch_summary =txt 
+                st .rerun ()
+
+
+        render_hedge_rule_lab (sim ,cfg ,ctx ,target_stock_thb )
+
+        st .markdown ('<div style="margin-top:14px;"></div>',unsafe_allow_html =True )
+        t_risk ,t_route ,t_ledger ,t_wallet ,t_dca =st .tabs (
+        ["📡 Risk Dashboard","🚀 System Routing","📒 สมุดออเดอร์ (Ledger)",
+        "🏢 Back Office","🔄 Auto DCA"])
+
+        with t_risk :
+            _pt ={r ["symbol"]:float (r ["price_usd"])*usdthb_current 
+            for _ ,r in (market_df if market_df is not None else pd .DataFrame ()).iterrows ()}
+            _pt [asset ]=spot_usd_current *usdthb_current 
+            _risk_dashboard_live (cfg ,ctx ,target_stock_thb ,_pt )
+
+        with t_route :
+            steps_now =st .session_state .get ("sim_steps",[])
+            if not steps_now :
+                st .info ("ยังไม่มีออเดอร์ — กดซื้อ/ขายด้านบนเพื่อดูระบบเดินงานทีละด่าน")
+            else :
+                render_timeline (steps_now )
+                render_binance_price_check (asset ,spot_usd_current )
+
+        with t_ledger :
+            if not sim ["orders"]:
+                st .caption ("ยังไม่มีข้อมูลการเทรด")
+            else :
+                led =pd .DataFrame (sim ["orders"])
+                if st .checkbox (f"แสดงเฉพาะ {asset }",key ="led_only_asset"):
+                    led =led [led ["เหรียญ"]==asset ]
+
+                    # Keep the Exchange Ledger in the same compact column layout
+                    # as the native Exchange transaction table. Telegram is only
+                    # another order source; it must not create a different table.
+                ledger_columns =[
+                "วันที่","ฝั่ง","เหรียญ","มูลค่า (บาท)",
+                "ราคาที่ลูกค้าได้","เหรียญที่ส่งมอบ",
+                "Hedge (เหรียญ)","Hedge (USD)",
+                "CEX Liquidity ใช้ (บาท)","Unhedged (บาท)",
+                "Market Edge","ต้นทุน","ผลด่าน","รายได้",
+                "กำไรออเดอร์","FX ใช้สะสม (USD)",
+                "มูลค่า (บาท)","CEX Liquidity ใช้สะสม (บาท)",
+                "สต็อกคงเหลือ","NC Buffer","Exchange",
+                "Order ID","เวลา","สถานะ","ประเภท","Source",
+                "ค่าธรรมเนียม",
+                ]
+                # Remove duplicate labels while preserving the first occurrence.
+                seen =set ()
+                ordered =[]
+                for col in ledger_columns :
+                    if col in led .columns and col not in seen :
+                        ordered .append (col )
+                        seen .add (col )
+                ordered .extend ([col for col in led .columns if col not in seen ])
+                led =led [ordered ]
+
+                led .index =range (1 ,len (led )+1 )
+                st .dataframe (led .sort_index (ascending =False ),height =240 ,**WIDE )
+
+        with t_wallet :
+            price_thb ={r ["symbol"]:float (r ["price_usd"])*usdthb_current 
+            for _ ,r in (market_df if market_df is not None else pd .DataFrame ()).iterrows ()}
+            price_thb [asset ]=spot_usd_current *usdthb_current 
+            render_backoffice (sim ,cfg ,ctx ,target_stock_thb ,price_thb )
+
+        with t_dca :
+            render_auto_dca (cfg ,sim ,data ,ctx )
+
 if __name__ =="__main__":
     if not HAS_UI :
         raise SystemExit ("ต้องติดตั้ง UI stack ก่อน: pip install streamlit plotly yfinance pillow")
