@@ -7119,6 +7119,151 @@ def render_arb_intelligence_analytics(base: str = "BTC") -> None:
     st.dataframe(matrix[["Category", "Snapshots"]], use_container_width=True, hide_index=True)
     st.caption("Liquidity ใช้ 24h Turnover เป็น proxy เดิมของระบบ · Quality Matrix เป็น research heuristic ไม่ใช่ executable execution score")
 
+
+def render_spot_liquidity_heatmap(rows: list[dict[str, Any]]) -> None:
+    """Compact Global Spot liquidity heatmap + price-vs-liquidity view.
+
+    Liquidity is intentionally a turnover-based proxy. Only valid positive-price
+    rows participate; failed venues remain visible in the main board but are not
+    assigned a fake liquidity score here.
+    """
+    valid = [
+        r for r in rows
+        if r.get("price") is not None
+        and not r.get("err")
+        and float(r.get("price") or 0.0) > 0
+    ]
+    if not valid:
+        return
+
+    total_turn = sum(max(0.0, float(r.get("turnover") or 0.0)) for r in valid)
+    if total_turn <= 0:
+        return
+
+    items = []
+    for r in valid:
+        turn = max(0.0, float(r.get("turnover") or 0.0))
+        share = turn / total_turn * 100.0
+        items.append({
+            "exchange": str(r.get("exchange") or "-"),
+            "price": float(r.get("price") or 0.0),
+            "turnover": turn,
+            "share": share,
+            "logo": str(r.get("logo") or ""),
+            "via": str(r.get("via") or ""),
+        })
+
+    items.sort(key=lambda x: x["share"], reverse=True)
+    max_share = max((x["share"] for x in items), default=1.0) or 1.0
+    prices = [x["price"] for x in items]
+    vwap = sum(x["price"] * x["turnover"] for x in items) / total_turn
+
+    def fmt_turn(v: float) -> str:
+        if v >= 1_000_000_000:
+            return f"${v/1_000_000_000:.2f}B"
+        if v >= 1_000_000:
+            return f"${v/1_000_000:.1f}M"
+        if v >= 1_000:
+            return f"${v/1_000:.1f}K"
+        return f"${v:,.0f}"
+
+    def level(share: float) -> tuple[str, str]:
+        if share >= 30:
+            return "High", "#0ecb81"
+        if share >= 10:
+            return "Medium", "#f0b90b"
+        return "Low", "#848e9c"
+
+    def esc(x: Any) -> str:
+        return _html.escape(str(x))
+
+    # Normalize bar lengths against the most liquid venue. This is deliberately
+    # relative, while the percentage at right remains the exact market share.
+    heat_rows = []
+    for x in items:
+        lvl, color = level(x["share"])
+        width = max(3.0, min(100.0, x["share"] / max_share * 100.0))
+        heat_rows.append(
+            f"<div class='liq-row'>"
+            f"<div class='liq-name'>{esc(x['exchange'])}</div>"
+            f"<div class='liq-track'><div class='liq-fill' style='width:{width:.1f}%;background:{color};'></div></div>"
+            f"<div class='liq-share'>{x['share']:.1f}%</div>"
+            f"<div class='liq-level' style='color:{color}'>{lvl}</div>"
+            f"</div>"
+        )
+
+    # Price-vs-liquidity view: distance from Spot VWAP is paired with liquidity
+    # share, making cheap/expensive-but-thin venues immediately visible.
+    by_price = sorted(items, key=lambda x: x["price"])
+    price_rows = []
+    for x in by_price:
+        dev = (x["price"] / vwap - 1.0) * 100.0 if vwap > 0 else 0.0
+        lvl, color = level(x["share"])
+        if dev <= -0.02:
+            dev_color = "#0ecb81"
+            dev_label = f"{dev:+.3f}%"
+        elif dev >= 0.02:
+            dev_color = "#f6465d"
+            dev_label = f"{dev:+.3f}%"
+        else:
+            dev_color = "#848e9c"
+            dev_label = f"{dev:+.3f}%"
+        price_rows.append(
+            f"<div class='pv-row'>"
+            f"<div class='pv-ex'>{esc(x['exchange'])}</div>"
+            f"<div class='pv-price'>${x['price']:,.2f}</div>"
+            f"<div class='pv-dev' style='color:{dev_color}'>{dev_label}</div>"
+            f"<div class='pv-mini'><div class='pv-mini-track'><div class='pv-mini-fill' style='width:{max(3.0,min(100.0,x['share']/max_share*100.0)):.1f}%;background:{color};'></div></div><span>{x['share']:.1f}%</span></div>"
+            f"</div>"
+        )
+
+    html = f"""
+    <style>
+      .liq-wrap{{margin:14px 0 10px;border:1px solid #2b3139;border-radius:14px;background:linear-gradient(135deg,rgba(22,26,30,.98),rgba(14,18,23,.98));padding:16px 16px 14px;}}
+      .liq-head{{display:flex;align-items:end;justify-content:space-between;gap:12px;margin-bottom:12px;}}
+      .liq-title{{font-size:1.02rem;font-weight:800;color:#EAECEF;}}
+      .liq-sub{{font-size:.76rem;color:#848e9c;margin-top:4px;}}
+      .liq-vwap{{font-size:.78rem;color:#B7BDC6;text-align:right;white-space:nowrap;}}
+      .liq-grid{{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;}}
+      .liq-panel{{border:1px solid #2b3139;border-radius:11px;background:rgba(11,14,17,.55);padding:12px;min-width:0;}}
+      .liq-panel-title{{font-weight:800;color:#EAECEF;font-size:.86rem;margin-bottom:10px;}}
+      .liq-row{{display:grid;grid-template-columns:88px minmax(60px,1fr) 48px 52px;gap:8px;align-items:center;margin:8px 0;}}
+      .liq-name,.pv-ex{{font-size:.78rem;color:#D1D5DB;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}}
+      .liq-track,.pv-mini-track{{height:8px;background:#20252b;border-radius:999px;overflow:hidden;}}
+      .liq-fill,.pv-mini-fill{{height:100%;border-radius:999px;}}
+      .liq-share{{font-size:.74rem;color:#B7BDC6;text-align:right;}}
+      .liq-level{{font-size:.7rem;font-weight:800;text-align:right;}}
+      .pv-row{{display:grid;grid-template-columns:82px 86px 62px minmax(70px,1fr);gap:7px;align-items:center;margin:8px 0;}}
+      .pv-price{{font-size:.73rem;color:#D1D5DB;text-align:right;}}
+      .pv-dev{{font-size:.72rem;font-weight:800;text-align:right;}}
+      .pv-mini{{display:flex;align-items:center;gap:6px;min-width:0;}}
+      .pv-mini-track{{flex:1;min-width:20px;height:7px;}}
+      .pv-mini span{{font-size:.68rem;color:#848e9c;width:34px;text-align:right;}}
+      .liq-note{{margin-top:10px;color:#5e6673;font-size:.72rem;line-height:1.5;}}
+      @media(max-width:760px){{.liq-grid{{grid-template-columns:1fr;}}.liq-row{{grid-template-columns:78px minmax(50px,1fr) 44px 48px;}}.pv-row{{grid-template-columns:72px 78px 58px minmax(60px,1fr);}}}}
+    </style>
+    <div class='liq-wrap'>
+      <div class='liq-head'>
+        <div><div class='liq-title'>💧 Global Spot Liquidity Heatmap</div>
+        <div class='liq-sub'>24h Turnover share · liquidity proxy · {len(items)} กระดานที่มีข้อมูลราคาและ turnover</div></div>
+        <div class='liq-vwap'>Spot VWAP<br><b>${vwap:,.2f}</b></div>
+      </div>
+      <div class='liq-grid'>
+        <div class='liq-panel'>
+          <div class='liq-panel-title'>🌊 Global Spot Liquidity</div>
+          {''.join(heat_rows)}
+        </div>
+        <div class='liq-panel'>
+          <div class='liq-panel-title'>🎯 Price vs Liquidity</div>
+          {''.join(price_rows)}
+        </div>
+      </div>
+      <div class='liq-note'>Liquidity = สัดส่วน 24h Turnover ของกระดานที่มีข้อมูล · Price vs Liquidity แสดงส่วนเบี่ยงเบนจาก Spot VWAP เพื่อให้เห็นกรณี “ราคาน่าสนใจแต่ liquidity ต่ำ” · ไม่ใช่ bid/ask depth และไม่ใช่ executable execution score</div>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
+
 def render_perp_venue_table (base :str ="BTC")->None :
     # Fetch/build the venue rows first so the comparison table is the first
     # visual element in this section.  Analysis controls/cards follow below.
@@ -7188,6 +7333,10 @@ def render_perp_venue_table (base :str ="BTC")->None :
     # Render server-side so the comparison table cannot disappear when the
     # embedded components iframe/JS is suppressed by a deployed browser.
     _render_perp_venue_table_static(rows)
+
+    # Liquidity intelligence sits directly below the venue board so the user
+    # can compare market depth proxy and price deviation before the analysis tabs.
+    render_spot_liquidity_heatmap(rows)
 
     # All venues are Spot now, so the board-level highlight compares Spot
     # venues directly and feeds the same observed-price analysis/history.
