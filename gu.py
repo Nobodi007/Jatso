@@ -8027,6 +8027,79 @@ def _open_about_system() -> None:
     st.session_state["open_about_system"] = True
 
 
+def _open_privacy() -> None:
+    st.session_state["open_privacy"] = True
+
+
+def _privacy_dialog_body() -> None:
+    st.markdown("""
+    <style>
+    .privacy-section { margin-bottom: 22px; }
+    .privacy-section h4 { color:#0ecb81; font-size:.95rem; font-weight:800; margin-bottom:8px; display:flex; align-items:center; gap:8px; }
+    .privacy-section p, .privacy-section li { color:#c4cad3; font-size:.85rem; line-height:1.7; }
+    .privacy-section ul { margin:6px 0 0 0; padding-left:20px; }
+    .privacy-box { background:#11151a; border:1px solid #2b3139; border-radius:12px; padding:14px 16px; margin:8px 0 18px 0; color:#c4cad3; font-size:.82rem; line-height:1.8; }
+    .privacy-note { color:#848e9c; font-size:.76rem; line-height:1.65; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.caption("ข้อมูลอะไรถูกใช้ เก็บไว้ที่ไหน และข้อมูลส่วนใดเชื่อมต่อกับบริการภายนอก")
+
+    st.markdown("""
+    <div class="privacy-section">
+      <h4>🔐 เราเก็บข้อมูลอะไร</h4>
+      <ul>
+        <li><b>บัญชีผู้ใช้</b> — email, ชื่อที่แสดง, role และรูปโปรไฟล์ที่ผู้ใช้เลือกบันทึก</li>
+        <li><b>สถานะพอร์ตจำลอง</b> — ยอดสินทรัพย์, orders, holdings และค่าจำลองที่จำเป็นต่อการใช้งานต่อเนื่อง</li>
+        <li><b>Audit Log</b> — เวลา, actor/session, model version และการเปลี่ยนพารามิเตอร์ของระบบที่ถูกบันทึกเพื่อการตรวจสอบย้อนหลัง</li>
+        <li><b>ข้อมูลวิจัย</b> — Shadow/Decision/Scenario และผลการจำลองตามฟังก์ชันที่ผู้ใช้เปิดใช้งาน</li>
+      </ul>
+    </div>
+
+    <div class="privacy-section">
+      <h4>☁️ ข้อมูลถูกเก็บไว้ที่ไหน</h4>
+      <div class="privacy-box">
+        <b>เมื่อเปิดใช้ Supabase:</b> ข้อมูล state/profile/audit ที่รองรับจะถูกเก็บในฐานข้อมูล cloud และ sim state จะผูกกับ actor ของผู้ใช้<br>
+        <b>เมื่อไม่มี Supabase หรือเชื่อมต่อไม่ได้:</b> ระบบมี local fallback เช่น <code>user_profiles.json</code>, <code>sim_state.json</code> และ <code>audit_log.jsonl</code> ตามการตั้งค่าของระบบ
+      </div>
+      <p class="privacy-note">Guest Mode จะไม่บันทึก profile และ audit/simulation state แบบผู้ใช้ล็อกอินตาม logic ของระบบ</p>
+    </div>
+
+    <div class="privacy-section">
+      <h4>🌐 การส่งข้อมูลไปยังบริการภายนอก</h4>
+      <ul>
+        <li>ข้อมูลตลาดถูกเรียกจากผู้ให้บริการข้อมูล/Exchange ที่โมดูลนั้นใช้งาน เช่น Bitkub, Binance, CoinGecko และ Yahoo Finance</li>
+        <li>ข่าวคริปโตมาจาก CryptoCompare และ RSS feeds ที่ระบบกำหนด เช่น CoinDesk / Cointelegraph</li>
+        <li>โมดูล Telegram รองรับการส่ง/รับ remote configuration และข้อมูลออเดอร์ตาม integration ที่เปิดใช้งาน</li>
+        <li>บริการภายนอกแต่ละรายมีนโยบายข้อมูลและข้อจำกัดของตนเอง ระบบนี้ไม่ได้ควบคุมนโยบายของผู้ให้บริการเหล่านั้น</li>
+      </ul>
+    </div>
+
+    <div class="privacy-section">
+      <h4>🧩 ข้อมูลที่ไม่ควรใส่ในระบบ</h4>
+      <p>อย่าใส่รหัสผ่าน, API secret, private key, seed phrase หรือข้อมูลลับที่ไม่จำเป็นลงในช่องข้อความ, note, export หรือ screenshot ของระบบ</p>
+    </div>
+
+    <div class="privacy-section">
+      <h4>🧹 การควบคุมข้อมูล</h4>
+      <p>ข้อมูลที่ระบบเก็บขึ้นอยู่กับโหมดและบริการที่เปิดใช้งาน การลบข้อมูลบน cloud หรือ local storage ต้องดำเนินการที่แหล่งจัดเก็บนั้นโดยตรงตามสิทธิ์ของผู้ดูแลระบบ</p>
+    </div>
+
+    <div class="privacy-section">
+      <h4>⚠️ ข้อควรรู้</h4>
+      <p class="privacy-note">หน้านี้อธิบายการทำงานของแอปตาม implementation ปัจจุบัน ไม่ใช่นโยบายความเป็นส่วนตัวทางกฎหมาย และการเชื่อมต่อภายนอกอาจเปลี่ยนแปลงตาม configuration, API และผู้ให้บริการ</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.divider()
+    if st.button("ปิดหน้าต่างนี้", key="privacy_close_btn", use_container_width=True):
+        st.rerun()
+
+
+def privacy_dialog() -> None:
+    st.dialog("🔒 ความเป็นส่วนตัวและข้อมูล", width="large")(_privacy_dialog_body)()
+
+
 def _about_system_dialog_body() -> None:
     st.markdown("""
     <style>
@@ -16414,7 +16487,7 @@ def render_site_footer() -> None:
             st.button("เกี่ยวกับระบบ", key="footer_about", use_container_width=True,
                       on_click=_open_about_system)
             st.button("ความเป็นส่วนตัว", key="footer_privacy", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_SYSTEM_HEALTH,))
+                      on_click=_open_privacy)
             st.markdown(
                 f'<a href="{DEV_LINKEDIN}" target="_blank" rel="noopener noreferrer" class="xs-footer-link">ติดต่อ คุณNobodi สุดเท่</a>',
                 unsafe_allow_html=True,
@@ -16859,6 +16932,10 @@ def _main_body() -> None:
     # About-system dialog — เปิดทับหน้าปัจจุบันโดยไม่เปลี่ยน navigation state
     if st.session_state.pop("open_about_system", False):
         about_system_dialog()
+
+    # Privacy dialog — เปิดทับหน้าปัจจุบันโดยไม่เปลี่ยน navigation state
+    if st.session_state.pop("open_privacy", False):
+        privacy_dialog()
 
     # Site footer — เพิ่มเป็นชั้น UI แยก ไม่แตะ routing/logic เดิม
     render_site_footer()
