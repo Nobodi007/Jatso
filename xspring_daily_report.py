@@ -1450,6 +1450,7 @@ NAV_PERFORMANCE =NAV_LABELS [15 ]
 NAV_CASHFLOW =NAV_LABELS [16 ]
 NAV_TIMELINE =NAV_LABELS [17 ]
 NAV_FACTSHEET_PRINT =NAV_LABELS [18 ]
+NAV_AUTO_DCA ="🤖 Auto DCA (Live)"
 # These two research tools live inside Quant Research Lab rather than the
 # top-level navigation. Keep stable labels for routing/session migration.
 NAV_STRESS_LAB ="🧪 Scenario Stress Lab"
@@ -16338,7 +16339,7 @@ def _main_body ()->None :
         # แทนแถบแท็บยาว ๆ ด้วยปุ่มเล็กเพียงปุ่มเดียว เมื่อกดจึงเปิดรายการ
         # หน้าทั้งหมดให้เลือก ช่วยลดความรกของ header และยังคงใช้ main_nav เดิม
         # เพื่อให้ routing / state ของทุกหน้าทำงานเหมือนเดิม
-    nav_labels_all =list (NAV_LABELS )
+    nav_labels_all =list (NAV_LABELS )+[NAV_AUTO_DCA ]
     current_nav =st .session_state .get ("main_nav",NAV_DASHBOARD )
     # Migrate sessions that were left on one of the old Quant top-level pages.
     if current_nav in QUANT_RESEARCH_LEGACY_NAVS :
@@ -16434,6 +16435,7 @@ def _main_body ()->None :
         NAV_LABELS [2 ],# Liquidity & Capital Planner
         NAV_LABELS [3 ],# Exchange UI Simulator
         NAV_LABELS [5 ],# Investment Backtest
+        NAV_AUTO_DCA ,# Live Auto DCA
         ],
         "💼 พอร์ตของฉัน":[
         NAV_LABELS [4 ],# Portfolio & Wallet
@@ -16608,6 +16610,10 @@ def _main_body ()->None :
             fee_pct =LOCAL_TRADING_FEE_PCT ,
             premium =cfg ["local_premium"],
             )
+        elif nav ==NAV_AUTO_DCA :
+            sim =st .session_state .get ("sim",{})or {}
+            ensure_portfolio_ledger (sim )
+            render_auto_dca (cfg ,sim ,data ,{})
         else :
             render_tab4 (cfg ,data ,market_df =market_df )
 
