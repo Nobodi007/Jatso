@@ -16347,6 +16347,161 @@ def render_site_footer ()->None :
         )
 
 
+
+# =========================================================================
+# CUSTOM HELP MENU — คู่มือ / ระบบ / ความเป็นส่วนตัว / ประวัติ
+# =========================================================================
+HELP_MENU_CSS = """
+<style>
+.st-key-help_menu_btn button {
+    background: transparent !important;
+    border: 1px solid #2b3139 !important;
+    color: #c4cad3 !important;
+    border-radius: 9px !important;
+    font-size: .82rem !important;
+    font-weight: 650 !important;
+    padding: 6px 14px !important;
+}
+.st-key-help_menu_btn button:hover {
+    border-color: #0ecb81 !important;
+    color: #0ecb81 !important;
+}
+div[data-testid="stPopoverBody"] {
+    width: min(470px, 94vw) !important;
+    max-height: 78vh !important;
+    overflow-y: auto !important;
+    background: #181a20 !important;
+    border: 1px solid #2b3139 !important;
+    border-radius: 14px !important;
+    padding: 14px !important;
+}
+.help-menu-title {
+    color:#EAECEF; font-size:.80rem; font-weight:750;
+    letter-spacing:.02em; margin:3px 0 9px 2px;
+}
+.profile-card-head {
+    display:flex; align-items:center; gap:12px;
+    padding:4px 0 12px; border-bottom:1px solid #2b3139; margin-bottom:11px;
+}
+.profile-photo {
+    width:58px; height:58px; border-radius:50%; object-fit:cover;
+    flex:0 0 58px; border:2px solid #0ecb81;
+}
+.profile-photo-placeholder {
+    width:58px; height:58px; border-radius:50%; flex:0 0 58px;
+    border:2px dashed #3a414c; display:flex; align-items:center;
+    justify-content:center; font-size:1.25rem; color:#5e6673; background:#111318;
+}
+.profile-name {color:#EAECEF; font-weight:800; font-size:1rem;}
+.profile-nick {color:#0ecb81; font-size:.76rem; font-weight:650;}
+.profile-title {color:#848e9c; font-size:.73rem; margin-top:2px; line-height:1.45;}
+.profile-section-label {color:#848e9c; font-size:.68rem; font-weight:750;
+    letter-spacing:.05em; margin:13px 0 5px;}
+.profile-bio {color:#c4cad3; font-size:.80rem; line-height:1.62;}
+.profile-ach {display:flex; gap:9px; padding:7px 0; border-bottom:1px solid #1f232a;}
+.profile-ach:last-child {border-bottom:none;}
+.profile-ach-icon {font-size:1rem; flex:0 0 21px;}
+.profile-ach-title {color:#EAECEF; font-size:.79rem; font-weight:700; line-height:1.35;}
+.profile-ach-detail {color:#848e9c; font-size:.71rem; margin-top:2px; line-height:1.4;}
+.profile-meta-row {display:flex; justify-content:space-between; gap:10px; color:#848e9c;
+    font-size:.73rem; padding:5px 0; border-bottom:1px dashed #1f232a;}
+.profile-meta-row b {color:#EAECEF; font-weight:600; text-align:right; line-height:1.45;}
+.profile-contact-btn {display:block; text-align:center; margin-top:13px;
+    background:#0ecb81; color:#0b0e11 !important; font-weight:750;
+    font-size:.82rem; padding:8px 0; border-radius:9px; text-decoration:none !important;}
+.profile-contact-btn:hover {background:#12e08f;}
+</style>
+"""
+
+_HELP_PROFILE = {
+    "name":"Thiraphat Niyom", "nickname":"คุณ Nobodi",
+    "title":"Independent Trader · Finance & Investment Student",
+    "email":"teerapat30204@gmail.com",
+    "phone":"090-155-6855",
+    "linkedin":"https://www.linkedin.com/in/thiraphat-niyom-11044727b",
+    "education":"University of the Thai Chamber of Commerce · Finance and Investment (GPA 3.70, First Class Honors)",
+    "licenses":"IC Complex 1 No.141971 (สำนักงาน ก.ล.ต.) · CFP – Module 1 (Completed)",
+    "bio":"นักเทรดอิสระในตลาด CFD (Gold, Forex) เน้นวิเคราะห์ด้วย Smart Money Concepts และ Fibonacci Retracement พร้อมบริหารความเสี่ยงอย่างมีวินัย เคยเป็น Investment Analyst & Trading Consultant แบบ Freelance ดูแลกลุ่มลูกค้ากว่า 50 คน และผ่านการฝึกงานตำแหน่ง Support Marketing ที่ Finansia Syrus Securities PCL",
+    "achievements":[
+        ("🏆","แชมป์ HERO STOCK LEARNING Season 6 @UTCC","พอร์ตเริ่มต้น 10 ล้านบาท ทำกำไร +162% (Feb–Apr 2026)"),
+        ("🏆","แชมป์ HERO STOCK LEARNING Season 5 @UTCC","พอร์ตเริ่มต้น 10 ล้านบาท ทำกำไร +151.97% (Jan–Apr 2025)"),
+        ("🥈","BYD Build a Stock Portfolio","พอร์ตเริ่มต้น 5 ล้านบาท ทำกำไร +97% (Sep–Oct 2025)"),
+        ("🥇","Rookie Award Year 1 | ESG Stock Trading Competition","รางวัลผลตอบแทนดีที่สุดของนักศึกษาปี 1 (Sep–Nov 2023)"),
+        ("🎖️","2nd Place, Best ESG Trade Strategy","บูรณาการปัจจัย ESG เข้ากับกลยุทธ์การเทรดที่ทำกำไรได้จริง"),
+    ],
+    "skills_hard":"Financial Statement Analysis, Options Strategies (Covered Call, Cash-Secured Put), DCF / Reverse DCF Model, Asset Allocation & Portfolio Management, Advanced Technical & Fundamental Analysis",
+    "skills_tools":"Bloomberg Terminal, Advanced Trading Platforms, Microsoft Office Suite, Canva",
+}
+
+def _render_help_guide_tab():
+    st.markdown('<div class="help-menu-title">📘 คู่มือการใช้งาน</div>', unsafe_allow_html=True)
+    st.markdown("""
+- **📊 Backtest Simulator** — ทดสอบกลยุทธ์ย้อนหลังด้วยข้อมูลราคา
+- **🧮 Liquidity & Capital Planner** — วางแผนเงินกองทุนและสภาพคล่อง
+- **🛒 Exchange UI Simulator** — จำลองการซื้อขายและการจัดการคำสั่ง
+- **💼 Portfolio & Wallet** — ติดตามพอร์ต ต้นทุน และ P&L
+- **🤖 Auto DCA** — ตั้งแผนซื้ออัตโนมัติตามเหรียญ จำนวนเงิน และรอบที่กำหนด
+
+ต้องการความช่วยเหลือเพิ่มเติม สามารถใช้ **AI Chat** มุมขวาล่างได้
+""")
+
+def _render_help_system_tab():
+    st.markdown('<div class="help-menu-title">⚙️ เกี่ยวกับระบบ</div>', unsafe_allow_html=True)
+    st.markdown("""
+**Nobody Dealer Suite** เป็นระบบจำลองและวิเคราะห์การทำงานของ Crypto Dealer สำหรับการศึกษาและการวางแผน
+
+- ข้อมูลตลาดเชื่อมต่อจากแหล่งข้อมูลภายนอกที่ระบบรองรับ
+- Exchange Simulator เป็นการจำลอง ไม่ใช่การซื้อขายจริง
+- Portfolio / Risk / Quant ใช้ข้อมูลจาก simulated state และ market data
+- Auto DCA ทำงานกับ **กระเป๋าจำลอง** และบันทึก Order + Portfolio Ledger
+
+> ระบบจำลองนี้ไม่ใช่คำแนะนำการลงทุนและไม่ใช่เครื่องมือรับรอง compliance
+""")
+
+def _render_help_privacy_tab():
+    st.markdown('<div class="help-menu-title">🔒 ความเป็นส่วนตัว</div>', unsafe_allow_html=True)
+    st.markdown("""
+- โหมด Guest ใช้ simulated state ของ session และข้อมูลจะหายเมื่อจบ session
+- บัญชีที่ล็อกอินสามารถเก็บข้อมูลที่จำเป็นสำหรับการใช้งานต่อเนื่องผ่านระบบที่ตั้งค่าไว้
+- ระบบไม่ควรใส่รหัสผ่านหรือ secret ลงในหน้าแอปโดยตรง
+- การเชื่อมต่อบริการภายนอกขึ้นอยู่กับ configuration / secrets ของระบบ
+- ผู้ใช้ควรตรวจสอบการตั้งค่าการจัดเก็บข้อมูลของ deployment ก่อนใช้งานจริง
+""")
+
+def _render_help_profile_tab(photo_src=None):
+    p=_HELP_PROFILE
+    photo_html=(f'<img class="profile-photo" src="{_html.escape(str(photo_src), quote=True)}" alt="profile">'
+                if photo_src else '<div class="profile-photo-placeholder">👤</div>')
+    achievements=''.join(
+        f'<div class="profile-ach"><div class="profile-ach-icon">{icon}</div><div>'
+        f'<div class="profile-ach-title">{title}</div><div class="profile-ach-detail">{detail}</div></div></div>'
+        for icon,title,detail in p["achievements"])
+    st.markdown(f"""
+<div class="profile-card-head">{photo_html}<div>
+<div class="profile-name">{_html.escape(p['name'])} <span class="profile-nick">({_html.escape(p['nickname'])})</span></div>
+<div class="profile-title">{_html.escape(p['title'])}</div></div></div>
+<div class="profile-bio">{_html.escape(p['bio'])}</div>
+<div class="profile-section-label">🏆 ผลงานเด่น</div>{achievements}
+<div class="profile-section-label">🎓 การศึกษา & ใบอนุญาต</div>
+<div class="profile-meta-row"><span>การศึกษา</span><b>{_html.escape(p['education'])}</b></div>
+<div class="profile-meta-row"><span>ใบอนุญาต</span><b>{_html.escape(p['licenses'])}</b></div>
+<div class="profile-section-label">🛠️ ทักษะ</div>
+<div class="profile-meta-row"><span>Hard Skills</span><b>{_html.escape(p['skills_hard'])}</b></div>
+<div class="profile-meta-row"><span>เครื่องมือ</span><b>{_html.escape(p['skills_tools'])}</b></div>
+<a class="profile-contact-btn" href="{_html.escape(p['linkedin'], quote=True)}" target="_blank">🔗 ดูโปรไฟล์ LinkedIn เต็ม</a>
+""", unsafe_allow_html=True)
+    st.caption(f"📩 {p['email']} · 📱 {p['phone']}")
+
+def render_help_menu(photo_src=None):
+    st.markdown(HELP_MENU_CSS, unsafe_allow_html=True)
+    with st.container(key="help_menu_btn"):
+        with st.popover("❓ ช่วยเหลือ", use_container_width=False):
+            tab1,tab2,tab3,tab4=st.tabs(["📘 คู่มือ","⚙️ ระบบ","🔒 ส่วนตัว","🧑 ประวัติ"])
+            with tab1: _render_help_guide_tab()
+            with tab2: _render_help_system_tab()
+            with tab3: _render_help_privacy_tab()
+            with tab4: _render_help_profile_tab(photo_src)
+
 def _main_body ()->None :
 # Unlock Web Audio on the user's first real click/tap so order SFX can
 # play after Streamlit reruns without being blocked by browser autoplay.
@@ -16409,21 +16564,19 @@ def _main_body ()->None :
         with top_news :
             st .markdown ('<div style="height:8px;"></div>',unsafe_allow_html =True )
             news_active =st .session_state .get ("main_nav")==NAV_NEWS 
-            # ปุ่มข่าวให้เล็กและอยู่กึ่งกลาง ไม่กินพื้นที่ทั้งคอลัมน์
-            _ ,news_btn ,_ =st .columns ([1.6 ,2.2 ,1.6 ])
-            with news_btn :
-                if st .button (
-                "📰 ข่าว",
-                key ="top_news_btn",
-                type ="primary"if news_active else "secondary",
-                use_container_width =True ,
-                ):
-                    current =st .session_state .get ("main_nav")
-                    if current in [x for x in NAV_LABELS if x !=NAV_NEWS ]:
-                        st .session_state ["news_last_tab"]=current 
-                    st .session_state ["main_nav"]=NAV_NEWS 
-                    st .session_state .pop ("main_nav_tabs_news",None )
-                    st .rerun ()
+            # ข่าว + เมนูช่วยเหลือแบบ custom
+            _ ,news_btn,help_btn,_ =st .columns ([0.65,1.8,1.8,0.65])
+            with news_btn:
+                if st .button("📰 ข่าว",key="top_news_btn",type="primary" if news_active else "secondary",use_container_width=True):
+                    current=st .session_state .get("main_nav")
+                    if current in [x for x in NAV_LABELS if x != NAV_NEWS]:
+                        st .session_state["news_last_tab"]=current
+                    st .session_state["main_nav"]=NAV_NEWS
+                    st .session_state .pop("main_nav_tabs_news",None)
+                    st .rerun()
+            with help_btn:
+                _help_photo = f"data:image/png;base64,{avatar_b64}" if avatar_b64 and not avatar_b64.startswith("http") else (avatar_b64 or DEV_AVATAR_B64)
+                render_help_menu(photo_src=_help_photo)
 
         with top_r :
             if avatar_b64 :
