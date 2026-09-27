@@ -6227,7 +6227,7 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
       .nobody-pv th{background:#171b20;color:#848e9c;text-align:left;font-weight:700;padding:11px 14px;border-bottom:1px solid #2b3139;white-space:nowrap}
       .nobody-pv td{padding:13px 14px;border-bottom:1px solid #252a31;vertical-align:middle}
       .nobody-pv tr:last-child td{border-bottom:0}
-      .nobody-pv .venue{font-weight:700;font-size:15px;white-space:nowrap}
+      .nobody-pv .venue{font-weight:700;font-size:15px;white-space:nowrap}.nobody-pv .venuebox{display:flex;align-items:center;gap:9px}.nobody-pv .venue-logo{width:28px;height:28px;border-radius:50%;object-fit:cover;background:#171b20;border:1px solid #2b3139;flex:0 0 28px}
       .nobody-pv .symbol{color:#2f8cff;white-space:nowrap}
       .nobody-pv .chg-up{color:#0ecb81;font-weight:700}.nobody-pv .chg-down{color:#f6465d;font-weight:700}
       .nobody-pv .bar{height:6px;background:#242a31;border-radius:8px;min-width:90px;position:relative;overflow:hidden}
@@ -6258,7 +6258,7 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
         liq_width={"High":100,"Medium":60,"Low":25}[liq_name]
         body.append(f"""
         <tr class='{row_class}'>
-          <td class='venue'>{esc(r.get('exchange','—'))}{'<span class="via">via browser</span>' if r.get('via')=='browser' else ''}{role_html}</td>
+          <td class='venue'><div class='venuebox'>{('<img class="venue-logo" src="'+esc(r.get('logo',''))+'" onerror="this.style.display=\'none\'" />') if r.get('logo') else ''}<div>{esc(r.get('exchange','—'))}{'<span class="via">via browser</span>' if r.get('via')=='browser' else ''}{role_html}</div></div></td>
           <td class='symbol'>{esc(r.get('symbol','—'))}</td>
           <td>{p:,.1f}</td>
           <td>{chg_html}</td>
@@ -6406,11 +6406,16 @@ def render_perp_venue_table (base :str ="BTC")->None :
 
     section ("🌐 เทียบราคา — Global Perpetual")
 
-    # Real tab-style coin switcher.  It replaces the loose control area with
-    # compact navigation and keeps the selected coin as the source of truth.
-    selected_base = _render_global_perp_coin_tabs(base)
-    if selected_base != base:
-        base = selected_base
+    # The exchange comparison table is the hero element.  Read the selected
+    # coin from session state first, then render the coin tabs underneath it.
+    # Streamlit reruns after a tab click, so the next run fetches the newly
+    # selected coin before the table is rendered.
+    choices = [a for a in SUPPORTED_ASSETS if a not in STABLECOINS] or ["BTC"]
+    current_base = st.session_state.get("pv_coin_tab", base)
+    if current_base not in choices:
+        current_base = base if base in choices else choices[0]
+    if current_base != base:
+        base = current_base
         df, ts = fetch_perp_venues(base)
         rows = []
         for _, r in df.iterrows():
@@ -6426,7 +6431,8 @@ def render_perp_venue_table (base :str ="BTC")->None :
                 market_type="perp",
             ))
 
-    # Render the comparison table directly under its contextual header.
+    # Render the comparison table first so exchange logos/venues remain the
+    # visual focus of this section.
     payload =json .dumps (
     dict (base =base ,ts =ts ,rows =rows ),
     ensure_ascii =False ,
@@ -6435,6 +6441,10 @@ def render_perp_venue_table (base :str ="BTC")->None :
     # Render server-side so the comparison table cannot disappear when the
     # embedded components iframe/JS is suppressed by a deployed browser.
     _render_perp_venue_table_static(rows)
+
+    # Coin tabs intentionally sit BELOW the exchange board.  The board stays
+    # focused on venue comparison while the tabs control which asset is shown.
+    _render_global_perp_coin_tabs(base)
 
     c_cap ,c_btn =st .columns ([8 ,2 ])
     with c_btn :
