@@ -9412,135 +9412,125 @@ def render_risk_center (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :pd
         _risk_metric_card ("Cash",f"{cash_pct :.1f}%","THB share of current portfolio",cash_pct ,100 ,cash_tone )
     st .markdown ('</div>',unsafe_allow_html =True )
 
-    # v106 — Portfolio Risk Alert Engine
-    # Keep the alert logic descriptive: it flags system-defined thresholds only.
-    # Important fix: Concentration is based on the largest non-cash asset, not BTC alone.
+    # v107 — Portfolio Risk Alert Engine — polished / unified layout
+    # Concentration is based on the largest non-cash asset. Cash is evaluated separately.
     non_cash = [x for x in risk.get("allocation", []) if str(x.get("asset", "")).upper() != "THB"]
-    top_non_cash = max(non_cash, key=lambda x: float(x.get("pct", 0.0) or 0.0), default={"asset": "—", "pct": 0.0})
+    top_non_cash = max(
+        non_cash,
+        key=lambda x: float(x.get("pct", 0.0) or 0.0),
+        default={"asset": "—", "pct": 0.0},
+    )
     concentration_pct = float(top_non_cash.get("pct", 0.0) or 0.0)
     concentration_asset = str(top_non_cash.get("asset", "—") or "—").upper()
 
-    alerts = []
-    if vol >= 60:
-        alerts.append(("🔴", "Volatility", f"Volatility {vol:.1f}% · สูงกว่า threshold 60%", "red"))
-    elif vol >= 30:
-        alerts.append(("🟡", "Volatility", f"Volatility {vol:.1f}% · อยู่ในโซนเฝ้าระวัง 30–59.9%", "warn"))
+    def _alert_level(value, watch, high, *, inverse=False):
+        """Return system status tone for a threshold-only risk check."""
+        if inverse:
+            if value < high:
+                return "red", "HIGH"
+            if value < watch:
+                return "warn", "WATCH"
+            return "ok", "OK"
+        if value >= high:
+            return "red", "HIGH"
+        if value >= watch:
+            return "warn", "WATCH"
+        return "ok", "OK"
 
-    if abs(dd) >= 25:
-        alerts.append(("🔴", "Drawdown", f"Max Drawdown {dd:+.1f}% · สูงกว่า threshold 25%", "red"))
-    elif abs(dd) >= 10:
-        alerts.append(("🟡", "Drawdown", f"Max Drawdown {dd:+.1f}% · อยู่ในโซนเฝ้าระวัง 10–24.9%", "warn"))
+    checks = []
 
-    if concentration_pct >= 70:
-        alerts.append(("🔴", "Concentration", f"{concentration_asset} {concentration_pct:.1f}% ของพอร์ต · สูงกว่า threshold 70%", "red"))
-    elif concentration_pct >= 50:
-        alerts.append(("🟡", "Concentration", f"{concentration_asset} {concentration_pct:.1f}% ของพอร์ต · อยู่ในโซนเฝ้าระวัง 50–69.9%", "warn"))
+    tone, level = _alert_level(vol, 30, 60)
+    checks.append(("Volatility", f"{vol:.1f}%", "30% watch · 60% high", tone, level))
 
-    if btc >= 70:
-        alerts.append(("🔴", "BTC Exposure", f"BTC {btc:.1f}% ของพอร์ต · สูงกว่า threshold 70%", "red"))
-    elif btc >= 50:
-        alerts.append(("🟡", "BTC Exposure", f"BTC {btc:.1f}% ของพอร์ต · อยู่ในโซนเฝ้าระวัง 50–69.9%", "warn"))
+    tone, level = _alert_level(abs(dd), 10, 25)
+    checks.append(("Max Drawdown", f"{dd:+.1f}%", "10% watch · 25% high", tone, level))
 
-    if cash_pct < 10:
-        alerts.append(("🔴", "Cash", f"Cash {cash_pct:.1f}% · ต่ำกว่า threshold 10%", "red"))
-    elif cash_pct < 20:
-        alerts.append(("🟡", "Cash", f"Cash {cash_pct:.1f}% · อยู่ในโซนเฝ้าระวังต่ำกว่า 20%", "warn"))
+    tone, level = _alert_level(concentration_pct, 50, 70)
+    checks.append(("Concentration", f"{concentration_pct:.1f}%", f"{concentration_asset} · 50% watch · 70% high", tone, level))
+
+    tone, level = _alert_level(btc, 50, 70)
+    checks.append(("BTC Exposure", f"{btc:.1f}%", "50% watch · 70% high", tone, level))
+
+    tone, level = _alert_level(cash_pct, 20, 10, inverse=True)
+    checks.append(("Cash", f"{cash_pct:.1f}%", "<20% watch · <10% high", tone, level))
+
+    active_alerts = [x for x in checks if x[4] != "OK"]
+    high_count = sum(1 for x in checks if x[4] == "HIGH")
+    watch_count = sum(1 for x in checks if x[4] == "WATCH")
 
     st.markdown(
         """
         <style>
-        .risk-alert-engine{margin-top:18px;padding:20px 22px 16px;border-radius:18px;}
-        .risk-alert-engine .risk-section-title{margin-bottom:4px;}
-        .risk-alert-engine .risk-section-sub{margin-bottom:14px;}
-        .risk-alert-summary{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 13px;margin-bottom:10px;border:1px solid #2b3139;border-radius:12px;background:#15191f;color:#c8ced8;font-size:.82rem;}
-        .risk-alert-summary span{color:#7f8998;font-size:.74rem;}
-        .risk-alert-item{min-height:78px;padding:12px 14px;margin-bottom:10px;border:1px solid #2b3139;border-radius:13px;background:#15191f;}
-        .risk-alert-item-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;color:#e7eaf0;font-size:.84rem;}
-        .risk-alert-item-head span{font-size:.64rem;font-weight:800;letter-spacing:.08em;color:#9aa3b1;padding:3px 7px;border-radius:999px;background:#1e232b;}
-        .risk-alert-item-msg{color:#9ca5b3;font-size:.76rem;line-height:1.45;}
-        .risk-alert-ok{padding:13px 15px;border:1px solid rgba(52,211,153,.20);border-radius:13px;background:rgba(52,211,153,.055);margin-bottom:10px;}
-        .risk-alert-ok-title{font-weight:800;color:#b8c2cf;font-size:.84rem;margin-bottom:3px;}
-        .risk-alert-ok-msg{color:#7f8998;font-size:.75rem;line-height:1.45;}
-        .risk-alert-legend{display:flex;flex-wrap:wrap;gap:8px 18px;padding:9px 2px 0;color:#737d8d;font-size:.68rem;}
-        .risk-alert-legend b{color:#aab2be;}
-        @media (max-width:700px){
-            .risk-alert-summary{align-items:flex-start;flex-direction:column;gap:3px;}
-            .risk-alert-item{min-height:auto;}
-        }
+        .risk-alert-engine{margin-top:18px;padding:18px 20px 15px;border-radius:18px;background:#0f1115;border:1px solid #2b3139;}
+        .risk-alert-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:14px;}
+        .risk-alert-kicker{font-size:.66rem;letter-spacing:.10em;text-transform:uppercase;color:#687282;font-weight:800;margin-bottom:4px;}
+        .risk-alert-title{font-size:1.02rem;font-weight:850;color:#eef1f5;line-height:1.25;}
+        .risk-alert-sub{font-size:.73rem;color:#788291;margin-top:4px;line-height:1.45;}
+        .risk-alert-total{min-width:104px;text-align:right;padding-top:1px;}
+        .risk-alert-total-num{font-size:1.25rem;font-weight:850;color:#eef1f5;line-height:1;}
+        .risk-alert-total-label{font-size:.62rem;color:#687282;margin-top:4px;}
+        .risk-alert-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;}
+        .risk-alert-summary-card{padding:9px 11px;border:1px solid #282e37;border-radius:11px;background:#15191f;}
+        .risk-alert-summary-label{font-size:.61rem;color:#717b8b;text-transform:uppercase;letter-spacing:.07em;}
+        .risk-alert-summary-value{font-size:.92rem;font-weight:850;color:#e8ebf0;margin-top:2px;}
+        .risk-alert-checks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;}
+        .risk-alert-check{min-height:84px;padding:11px 12px;border:1px solid #292f38;border-radius:12px;background:#14181e;}
+        .risk-alert-check-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:7px;}
+        .risk-alert-check-name{font-size:.76rem;font-weight:800;color:#dfe3e9;}
+        .risk-alert-badge{font-size:.58rem;font-weight:900;letter-spacing:.06em;padding:3px 6px;border-radius:999px;}
+        .risk-alert-badge-ok{color:#6ee7b7;background:rgba(52,211,153,.09);border:1px solid rgba(52,211,153,.16);}
+        .risk-alert-badge-warn{color:#f5c84b;background:rgba(240,185,11,.09);border:1px solid rgba(240,185,11,.16);}
+        .risk-alert-badge-red{color:#ff8091;background:rgba(246,70,93,.09);border:1px solid rgba(246,70,93,.16);}
+        .risk-alert-check-value{font-size:1rem;font-weight:850;color:#f0f2f5;line-height:1.15;}
+        .risk-alert-check-note{font-size:.63rem;color:#727d8c;margin-top:5px;line-height:1.35;}
+        .risk-alert-foot{display:flex;justify-content:space-between;gap:12px;margin-top:11px;padding-top:10px;border-top:1px solid #242a32;color:#687282;font-size:.63rem;line-height:1.4;}
+        .risk-alert-foot b{color:#9aa3af;}
+        @media(max-width:900px){.risk-alert-checks{grid-template-columns:repeat(2,minmax(0,1fr));}}
+        @media(max-width:600px){.risk-alert-head{flex-direction:column;gap:8px}.risk-alert-total{text-align:left}.risk-alert-summary{grid-template-columns:1fr 1fr}.risk-alert-checks{grid-template-columns:1fr}.risk-alert-foot{flex-direction:column;gap:4px}}
         </style>
         """,
         unsafe_allow_html=True,
     )
 
     st.markdown(
-        '<div class="risk-section risk-alert-engine">'
-        '<div class="risk-section-title">🚨 Risk Alert Engine</div>'
-        '<div class="risk-section-sub">ตรวจจากตัวเลขที่ระบบคำนวณจริง · แยกสถานะตาม Threshold · ไม่มีคำแนะนำซื้อหรือขาย</div>',
-        unsafe_allow_html=True,
-    )
-
-    if alerts:
-        st.markdown(
-            f'<div class="risk-alert-summary"><b>พบ {len(alerts)} รายการที่เข้าเกณฑ์</b>'
-            '<span>ตรวจสอบตาม Threshold ด้านล่าง</span></div>',
-            unsafe_allow_html=True,
-        )
-        alert_cols = st.columns(2, gap="small")
-        for idx, (icon, title, msg, tone) in enumerate(alerts):
-            border = "rgba(246,70,93,.38)" if tone == "red" else "rgba(240,185,11,.34)"
-            with alert_cols[idx % 2]:
-                st.markdown(
-                    f'<div class="risk-alert-item risk-alert-{tone}" style="border-color:{border};">'
-                    f'<div class="risk-alert-item-head"><b>{icon} {title}</b>'
-                    f'<span>{"HIGH" if tone == "red" else "WATCH"}</span></div>'
-                    f'<div class="risk-alert-item-msg">{_html.escape(msg)}</div>'
-                    '</div>',
-                    unsafe_allow_html=True,
-                )
-    else:
-        st.markdown(
-            '<div class="risk-alert-ok">'
-            '<div class="risk-alert-ok-title">🟢 ไม่มี Alert ตาม Threshold ปัจจุบัน</div>'
-            '<div class="risk-alert-ok-msg">Volatility, Drawdown, Concentration, BTC Exposure และ Cash ยังไม่เข้าเกณฑ์แจ้งเตือน</div>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-    st.markdown(
-        '<div class="risk-alert-legend">'
-        '<span><b>🔴 HIGH</b> เกิน threshold หลัก</span>'
-        '<span><b>🟡 WATCH</b> เข้าโซนเฝ้าระวัง</span>'
-        '<span><b>🟢 OK</b> ยังไม่เข้าเกณฑ์</span>'
+        '<div class="risk-alert-engine">'
+        '<div class="risk-alert-head">'
+        '<div><div class="risk-alert-kicker">Portfolio monitoring</div>'
+        '<div class="risk-alert-title">🚨 Risk Alert Engine</div>'
+        '<div class="risk-alert-sub">ตรวจจากตัวเลขที่ระบบคำนวณจริง · Threshold เป็นสถานะเฝ้าระวัง ไม่ใช่คำแนะนำซื้อหรือขาย</div></div>'
+        f'<div class="risk-alert-total"><div class="risk-alert-total-num">{len(active_alerts)}</div><div class="risk-alert-total-label">ACTIVE ALERTS</div></div>'
         '</div>',
         unsafe_allow_html=True,
     )
-    st.caption("Threshold เป็นเกณฑ์แสดงสถานะของ Risk Center ไม่ใช่การคาดการณ์ผลตอบแทนหรือคำแนะนำการลงทุน")
-    st.markdown('</div>', unsafe_allow_html=True)
 
-    if risk ["concentration"]:
-        for item in risk ["concentration"]:
-            sym =item ["asset"]
-            st .markdown (
-            f'<div class="risk-warning"><b>⚠ Concentration</b><br>'
-            f'{_html .escape (sym )} คิดเป็น <b>{item ["pct"]:.1f}%</b> ของพอร์ตทั้งหมด</div>',
-            unsafe_allow_html =True ,
-            )
-    elif non_cash:
-        st .markdown (
-        f'<div class="risk-info"><b>Concentration</b><br>'
-        f'สินทรัพย์เสี่ยงที่มีสัดส่วนสูงสุดคือ <b>{_html .escape (concentration_asset)}</b> ที่ {concentration_pct:.1f}% ของพอร์ต · '
-        'ยังไม่ถึงเกณฑ์ 70% ที่ใช้เป็นธงเตือนในหน้านี้</div>',
-        unsafe_allow_html =True ,
+    st.markdown(
+        f'<div class="risk-alert-summary">'
+        f'<div class="risk-alert-summary-card"><div class="risk-alert-summary-label">Active</div><div class="risk-alert-summary-value">{len(active_alerts)}</div></div>'
+        f'<div class="risk-alert-summary-card"><div class="risk-alert-summary-label">High</div><div class="risk-alert-summary-value">{high_count}</div></div>'
+        f'<div class="risk-alert-summary-card"><div class="risk-alert-summary-label">Watch</div><div class="risk-alert-summary-value">{watch_count}</div></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    check_html = ['<div class="risk-alert-checks">']
+    for title, value, note, tone, level in checks:
+        check_html.append(
+            f'<div class="risk-alert-check">'
+            f'<div class="risk-alert-check-head"><span class="risk-alert-check-name">{_html.escape(title)}</span>'
+            f'<span class="risk-alert-badge risk-alert-badge-{tone}">{level}</span></div>'
+            f'<div class="risk-alert-check-value">{_html.escape(value)}</div>'
+            f'<div class="risk-alert-check-note">{_html.escape(note)}</div>'
+            '</div>'
         )
-    else:
-        if risk ["allocation"]:
-            st .markdown (
-            '<div class="risk-info"><b>Concentration</b><br>'
-            'ยังไม่มีสินทรัพย์เสี่ยงในพอร์ตสำหรับคำนวณ Concentration · เงินสด THB แสดงแยกใน Cash</div>',
-            unsafe_allow_html =True ,
-            )
-        else:
-            st .info ("ยังไม่มีสินทรัพย์ใน Portfolio จึงยังไม่มีความเสี่ยงจากการกระจุกตัวให้ประเมิน")
+    check_html.append('</div>')
+    st.markdown(''.join(check_html), unsafe_allow_html=True)
+
+    status_text = "ทุกตัวชี้วัดยังอยู่ในระดับ OK" if not active_alerts else f"กำลังติดตาม {len(active_alerts)} ตัวชี้วัดที่เข้าโซน WATCH/HIGH"
+    st.markdown(
+        f'<div class="risk-alert-foot"><span><b>{_html.escape(status_text)}</b></span>'
+        '<span>🔴 HIGH · 🟡 WATCH · 🟢 OK</span></div></div>',
+        unsafe_allow_html=True,
+    )
 
     st .markdown (
     '<div class="risk-section">'
