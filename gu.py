@@ -16361,8 +16361,6 @@ def _main_body() -> None:
         f'style="border-radius:50%;object-fit:cover;border:2px solid #2b3139;">'
         f'<div>'
         f'<div style="color:#EAECEF;font-weight:700;font-size:0.9rem;line-height:1.6;padding-top:2px;">ทำโดย {DEV_NAME}</div>'
-        f'<a href="{DEV_LINKEDIN}" target="_blank" '
-        f'style="color:#0ecb81;font-size:0.75rem;text-decoration:none;line-height:1.6;">🔗 ดูโปรไฟล์ LinkedIn</a>'
         f'</div></div>',
         unsafe_allow_html=True,
     )
