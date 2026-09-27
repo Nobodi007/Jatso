@@ -1431,6 +1431,7 @@ NAV_LABELS = [
     "🕒 Customer Timeline",
     "🖨️ Fund Fact Sheet (Print)",
     "🧪 Quant Research Lab",
+    "🩺 System Health Center",
 ]
 NAV_DASHBOARD = NAV_LABELS[0]
 NAV_EXCHANGE = NAV_LABELS[3]
@@ -1454,6 +1455,7 @@ NAV_FACTSHEET_PRINT = NAV_LABELS[18]
 NAV_STRESS_LAB = "🧪 Scenario Stress Lab"
 NAV_HEALTH_SCORE = "🩺 Portfolio Health Score"
 NAV_QUANT_RESEARCH = NAV_LABELS[19]
+NAV_SYSTEM_HEALTH = NAV_LABELS[20]
 
 # Quant Research pages live under one top-level menu.  Their internal labels
 # stay stable so old session state and direct routing can be migrated safely.
@@ -1468,6 +1470,7 @@ NAV_RESEARCH_REPORT = "🧾 Quant Research Report"
 NAV_SYNTHETIC_LAB = "🧬 Synthetic Market Lab"
 NAV_HMM_RESEARCH = "🌡️ HMM Production Research"
 NAV_FINAL_QUANT_REVIEW = "🚦 Final Quant Production Review"
+NAV_DECISION_LOG = "📘 Portfolio Decision Log"
 
 QUANT_RESEARCH_PAGES = [
     NAV_RESEARCH_SCORECARD,
@@ -1483,6 +1486,7 @@ QUANT_RESEARCH_PAGES = [
     NAV_SYNTHETIC_LAB,
     NAV_HMM_RESEARCH,
     NAV_FINAL_QUANT_REVIEW,
+    NAV_DECISION_LOG,
 ]
 QUANT_RESEARCH_LEGACY_NAVS = set(QUANT_RESEARCH_PAGES)
 
@@ -13862,6 +13866,62 @@ def _vnext_research_scorecard(cfg: dict[str, Any], data: pd.DataFrame) -> dict[s
     rsk,rku=_mom(rr); ssk,sku=_mom(synth); return {"ic_momentum":ic_mom,"ic_volatility":ic_vol,"wfe":wfe,"param_cv":param_cv,"oos_sharpe":oos_sharpe,"stress_moment_gap":abs(rsk-ssk)+abs(rku-sku),"folds":len(wf)}
 
 
+
+def _vnext_integrated_evidence_scorecard(cfg: dict[str, Any], data: pd.DataFrame,
+                                         market_df: Optional[pd.DataFrame] = None) -> dict[str, Any]:
+    """Integrate existing research artifacts into one evidence matrix.
+
+    This is an evidence-completeness view, not a model-quality verdict. It reuses
+    existing engines and never changes portfolio or execution state.
+    """
+    research = _vnext_research_scorecard(cfg, data) if isinstance(data, pd.DataFrame) else {}
+    health = _vnext_portfolio_health(cfg, data, market_df) if isinstance(data, pd.DataFrame) and not data.empty else {}
+
+    shadow = _vnext_load_json_list(_SHADOW_LOCAL, "shadow") if "_SHADOW_LOCAL" in globals() else []
+    evaluated = [r for r in shadow if isinstance(r, dict) and r.get("evaluated")]
+    directional = [r for r in evaluated if str(r.get("signal", "")).upper() in {"BUY-BIAS", "SELL-BIAS"}]
+    correct = [r for r in directional if r.get("directional_correct") is not None]
+    hit = float(np.mean([bool(r.get("directional_correct")) for r in correct])) if correct else float("nan")
+
+    # DSR uses the same evaluated shadow return series already used by PBO/DSR Lab.
+    shadow_returns = _vnext_shadow_return_series(evaluated, 0.0) if evaluated else np.array([])
+    dsr = _vnext_deflated_sharpe(shadow_returns, max(1, len(evaluated))) if len(shadow_returns) >= 2 else {}
+    pbo = _vnext_pbo_cscv(evaluated, [0.50, 0.55, 0.60, 0.65, 0.70]) if evaluated else {}
+
+    rows = []
+    def add(name, status, value, source, note):
+        rows.append({"Evidence": name, "Status": status, "Value": value, "Source": source, "Note": note})
+
+    ic = max(abs(float(research.get("ic_momentum", 0.0) or 0.0)), abs(float(research.get("ic_volatility", 0.0) or 0.0)))
+    add("Feature IC", "PASS" if ic >= 0.05 else "REVIEW", f"{ic:.3f}", "Research Scorecard", "|IC| ≥ 0.05")
+    wfe = research.get("wfe", float("nan"))
+    add("Walk-Forward Efficiency", "PASS" if np.isfinite(wfe) and wfe >= 0.50 else "REVIEW",
+        f"{wfe:.2f}" if np.isfinite(wfe) else "—", "Research Scorecard", "WFE ≥ 0.50")
+    pcv = research.get("param_cv", float("nan"))
+    add("Parameter Stability", "PASS" if np.isfinite(pcv) and pcv < 0.30 else "REVIEW",
+        f"{pcv:.2f}" if np.isfinite(pcv) else "—", "Research Scorecard", "CV < 0.30")
+    oos = research.get("oos_sharpe", float("nan"))
+    add("OOS Sharpe", "PASS" if np.isfinite(oos) and oos > 0 else "REVIEW",
+        f"{oos:.2f}" if np.isfinite(oos) else "—", "Research Scorecard", "> 0")
+    add("Shadow OOS Sample", "PASS" if len(evaluated) >= 20 else "REVIEW", f"{len(evaluated)}", "Shadow Mode", "≥ 20 evaluated observations")
+    add("Shadow Directional Hit", "PASS" if np.isfinite(hit) and hit >= 0.50 else "REVIEW",
+        f"{hit:.1%}" if np.isfinite(hit) else "—", "Shadow Mode", "≥ 50% — descriptive only")
+    pbo_v = pbo.get("pbo") if isinstance(pbo, dict) else None
+    add("PBO", "PASS" if pbo_v is not None and np.isfinite(pbo_v) and pbo_v < 0.50 else "REVIEW",
+        f"{pbo_v:.1%}" if pbo_v is not None and np.isfinite(pbo_v) else "—", "PBO / DSR Lab", "lower selection-bias estimate is preferable")
+    dsr_prob = dsr.get("probability") if isinstance(dsr, dict) else None
+    add("DSR Probability", "PASS" if dsr_prob is not None and np.isfinite(dsr_prob) and dsr_prob >= 0.95 else "REVIEW",
+        f"{dsr_prob:.1%}" if dsr_prob is not None and np.isfinite(dsr_prob) else "—", "PBO / DSR Lab", "≥ 95% research threshold")
+    health_score = health.get("score") if isinstance(health, dict) else None
+    add("Portfolio Health", "PASS" if health_score is not None and float(health_score) >= 60 else "REVIEW",
+        f"{float(health_score):.0f}/100" if health_score is not None else "—", "Portfolio Health", "≥ 60")
+
+    passed = sum(r["Status"] == "PASS" for r in rows)
+    return {"rows": rows, "passed": passed, "total": len(rows),
+            "coverage": passed / max(len(rows), 1) * 100.0,
+            "evaluated": len(evaluated), "directional": len(directional),
+            "hit": hit, "pbo": pbo, "dsr": dsr, "health": health}
+
 def render_research_scorecard(cfg: dict[str, Any], data: pd.DataFrame, market_df: Optional[pd.DataFrame] = None) -> None:
     st.markdown("## 🔬 Research Scorecard"); st.caption("ตรวจคุณภาพ feature + out-of-sample robustness + parameter stability + synthetic sanity check จากข้อมูลชุดเดียวกับ Backtest")
     if not isinstance(data,pd.DataFrame) or data.empty or "Global_USD" not in data.columns: st.warning("ยังไม่มี price history เพียงพอสำหรับ Research Scorecard"); return
@@ -13875,6 +13935,20 @@ def render_research_scorecard(cfg: dict[str, Any], data: pd.DataFrame, market_df
     st.markdown("### 🧪 Evidence")
     st.dataframe(pd.DataFrame([{"Check":"Momentum IC → 5D Forward Return","Value":f"{r['ic_momentum']:.4f}","Reference":"|IC| ≥ 0.05"},{"Check":"Volatility IC → |5D Forward Return|","Value":f"{r['ic_volatility']:.4f}","Reference":"ใช้ดู signal direction/strength"},{"Check":"Walk-Forward Efficiency","Value":f"{r['wfe']:.4f}" if np.isfinite(r['wfe']) else "—","Reference":"> 0.50"},{"Check":"Parameter Stability CV","Value":f"{r['param_cv']:.4f}" if np.isfinite(r['param_cv']) else "—","Reference":"< 0.30"},{"Check":"Synthetic Moment Gap","Value":f"{r['stress_moment_gap']:.4f}","Reference":"ต่ำลง = distribution ใกล้กันขึ้น"}]), **WIDE)
     st.info("Scorecard นี้เป็น research gate: Feature IC และ Walk-Forward ใช้ข้อมูลอดีต และ OOS fold แยกจากช่วง optimize แล้ว แต่ synthetic sanity check เป็น Gaussian baseline แบบง่าย ยังไม่ใช่ GARCH/EGARCH/t-Copula เต็มรูปแบบ")
+
+    # v22: integrate the existing Shadow / PBO / DSR / Health evidence without
+    # creating another navigation item or changing any execution behavior.
+    st.markdown("### 🧾 Integrated Evidence Matrix — v22")
+    try:
+        ev = _vnext_integrated_evidence_scorecard(cfg, data, market_df)
+        a, b, c = st.columns(3)
+        a.metric("Evidence Coverage", f"{ev['coverage']:.0f}%")
+        b.metric("Evidence Passed", f"{ev['passed']}/{ev['total']}")
+        c.metric("Shadow OOS", ev["evaluated"])
+        st.dataframe(pd.DataFrame(ev["rows"]), use_container_width=True, hide_index=True)
+        st.caption("Coverage = จำนวน evidence checks ที่ผ่านเกณฑ์ที่กำหนด ไม่ใช่คะแนนความสามารถทำกำไร และไม่ใช่ใบอนุญาตให้เปิด Live Trading")
+    except Exception as exc:
+        st.warning(f"Integrated Evidence Matrix ยังไม่พร้อม: {exc}")
 
 
 
@@ -14059,6 +14133,7 @@ def render_production_readiness_gate(cfg: dict[str, Any], data: pd.DataFrame,
 
 _SHADOW_LOCAL = _HERE / "quant_shadow_log.json"
 _EXPERIMENT_LOCAL = _HERE / "quant_experiments.json"
+_DECISION_LOCAL = _HERE / "portfolio_decision_log.json"
 
 
 def _vnext_load_json_list(path: Path, key: str) -> list[dict[str, Any]]:
@@ -14147,110 +14222,458 @@ def _vnext_shadow_auto_capture(cfg: dict[str, Any], data: pd.DataFrame) -> tuple
 
 
 def _vnext_shadow_evaluate(rows: list[dict[str, Any]], data: pd.DataFrame) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Evaluate completed observations using the next available market close; no look-ahead in the signal itself."""
+    """Evaluate completed Shadow observations at multiple forward horizons.
+    Signal features are fixed at observation time; outcomes use only later market closes.
+    """
     if not rows or not isinstance(data, pd.DataFrame) or data.empty or "Global_USD" not in data.columns:
-        return rows, {"evaluated": 0, "correct": 0, "accuracy": None}
+        return rows, {"evaluated": 0, "correct": 0, "accuracy": None, "horizons": {}}
     px = pd.to_numeric(data["Global_USD"], errors="coerce").dropna()
     if len(px) < 2:
-        return rows, {"evaluated": 0, "correct": 0, "accuracy": None}
+        return rows, {"evaluated": 0, "correct": 0, "accuracy": None, "horizons": {}}
     idx_dates = [pd.Timestamp(x).strftime("%Y-%m-%d") for x in px.index]
-    price_by_date = {d: float(v) for d, v in zip(idx_dates, px.values)}
     dates = list(dict.fromkeys(idx_dates))
+    price_by_date = {d: float(v) for d, v in zip(idx_dates, px.values)}
+    pos_by_date = {d: i for i, d in enumerate(dates)}
+    horizons = (1, 3, 5, 20)
     changed = False
-    evaluated = correct = 0
-    for r in rows:
-        if r.get("evaluated"):
-            if r.get("outcome_1d") is not None:
-                evaluated += 1
-                if bool(r.get("correct")):
-                    correct += 1
-            continue
-        d = str(r.get("market_date", ""))
-        if d not in dates:
-            continue
-        pos = dates.index(d)
-        if pos >= len(dates) - 1:
-            continue
-        p0, p1 = price_by_date[d], price_by_date[dates[pos + 1]]
-        outcome = p1 / p0 - 1.0 if p0 else 0.0
-        sig = str(r.get("signal", "HOLD"))
-        # HOLD is evaluated as neutral; directional signals are correct only when next-day direction agrees.
+
+    def _is_correct(sig: str, outcome: float) -> bool:
         if sig == "BUY-BIAS":
-            ok = outcome > 0
-        elif sig == "SELL-BIAS":
-            ok = outcome < 0
-        else:
-            ok = abs(outcome) < 0.005
-        r["next_market_date"] = dates[pos + 1]
-        r["outcome_1d"] = float(outcome)
-        r["correct"] = bool(ok)
-        r["evaluated"] = True
-        changed = True
-        evaluated += 1
-        correct += int(ok)
+            return outcome > 0
+        if sig == "SELL-BIAS":
+            return outcome < 0
+        return abs(outcome) < 0.005
+
+    for r in rows:
+        d = str(r.get("market_date", ""))
+        pos = pos_by_date.get(d)
+        if pos is None:
+            continue
+        p0 = price_by_date.get(d)
+        if not p0:
+            continue
+        sig = str(r.get("signal", "HOLD"))
+        for h in horizons:
+            key = f"outcome_{h}d"
+            if r.get(key) is not None:
+                continue
+            target_pos = pos + h
+            if target_pos >= len(dates):
+                continue
+            target_date = dates[target_pos]
+            p1 = price_by_date.get(target_date)
+            if p1 is None:
+                continue
+            outcome = p1 / p0 - 1.0
+            r[key] = float(outcome)
+            r[f"correct_{h}d"] = bool(_is_correct(sig, outcome))
+            r[f"target_date_{h}d"] = target_date
+            changed = True
+        if r.get("outcome_1d") is not None:
+            r["evaluated"] = True
     if changed:
         _vnext_save_json_list(_SHADOW_LOCAL, "quant_shadow_log", rows)
-    acc = correct / evaluated if evaluated else None
-    return rows, {"evaluated": evaluated, "correct": correct, "accuracy": acc}
+
+    horizon_stats = {}
+    for h in horizons:
+        key = f"outcome_{h}d"
+        ck = f"correct_{h}d"
+        done = [r for r in rows if r.get(key) is not None]
+        if done:
+            horizon_stats[h] = {
+                "evaluated": len(done),
+                "correct": int(sum(bool(r.get(ck)) for r in done)),
+                "accuracy": float(sum(bool(r.get(ck)) for r in done) / len(done)),
+                "avg_return": float(np.mean([float(r.get(key) or 0.0) for r in done])),
+            }
+        else:
+            horizon_stats[h] = {"evaluated": 0, "correct": 0, "accuracy": None, "avg_return": None}
+    one = horizon_stats[1]
+    return rows, {
+        "evaluated": int(one["evaluated"]), "correct": int(one["correct"]),
+        "accuracy": one["accuracy"], "horizons": horizon_stats,
+    }
 
 
 def _vnext_shadow_performance(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Build an observation-only OOS performance view from completed Shadow rows.
-    BUY-BIAS earns next-day return, SELL-BIAS earns the inverse, HOLD is flat.
-    This is a research diagnostic, not an executable strategy result.
-    """
-    evaluated = [r for r in rows if r.get("evaluated") and r.get("outcome_1d") is not None]
-    if not evaluated:
-        return {"rows": pd.DataFrame(), "evaluated": 0, "hit_rate": None, "cum_return": 0.0, "by_signal": []}
-
+    """Build an observation-only OOS dashboard across 1D/3D/5D/20D horizons."""
+    horizons = (1, 3, 5, 20)
     work = []
-    for r in evaluated:
-        sig = str(r.get("signal", "HOLD"))
-        outcome = float(r.get("outcome_1d") or 0.0)
-        if sig == "BUY-BIAS":
-            strategy_ret = outcome
-        elif sig == "SELL-BIAS":
-            strategy_ret = -outcome
-        else:
-            strategy_ret = 0.0
+    for r in rows:
+        if r.get("outcome_1d") is None:
+            continue
         work.append({
             "market_date": str(r.get("market_date", "")),
-            "signal": sig,
+            "signal": str(r.get("signal", "HOLD")),
             "confidence": float(r.get("confidence") or 0.0),
-            "outcome_1d": outcome,
-            "strategy_return": strategy_ret,
-            "correct": bool(r.get("correct", False)),
+            **{f"outcome_{h}d": r.get(f"outcome_{h}d") for h in horizons},
+            **{f"correct_{h}d": r.get(f"correct_{h}d") for h in horizons},
         })
+    if not work:
+        return {"rows": pd.DataFrame(), "evaluated": 0, "hit_rate": None, "cum_return": 0.0, "by_signal": [], "horizons": {}}
+
     df = pd.DataFrame(work)
     df["_date"] = pd.to_datetime(df["market_date"], errors="coerce")
     df = df.sort_values(["_date", "market_date"]).drop_duplicates(subset=["market_date"], keep="last").reset_index(drop=True)
-    df["cum_strategy"] = (1.0 + df["strategy_return"]).cumprod() - 1.0
-    df["cum_market"] = (1.0 + df["outcome_1d"]).cumprod() - 1.0
+    # Research return is shown for each horizon independently; this is not an executed P&L series.
+    for h in horizons:
+        ok = pd.to_numeric(df[f"outcome_{h}d"], errors="coerce")
+        sig = df["signal"]
+        df[f"research_return_{h}d"] = np.where(sig.eq("BUY-BIAS"), ok, np.where(sig.eq("SELL-BIAS"), -ok, 0.0))
+        df[f"cum_strategy_{h}d"] = (1.0 + df[f"research_return_{h}d"].fillna(0.0)).cumprod() - 1.0
 
     by_signal = []
     for sig in ["BUY-BIAS", "SELL-BIAS", "HOLD"]:
         g = df[df["signal"] == sig]
         if g.empty:
             continue
-        by_signal.append({
-            "Signal": sig,
-            "Count": int(len(g)),
-            "Hit Rate": float(g["correct"].mean()),
-            "Avg 1D Return": float(g["outcome_1d"].mean()),
-            "Research Return": float(g["strategy_return"].sum()),
-        })
+        row = {"Signal": sig, "Count": int(len(g))}
+        for h in horizons:
+            cg = g[f"correct_{h}d"].dropna()
+            og = pd.to_numeric(g[f"outcome_{h}d"], errors="coerce").dropna()
+            row[f"{h}D Hit Rate"] = float(cg.mean()) if not cg.empty else np.nan
+            row[f"{h}D Avg Return"] = float(og.mean()) if not og.empty else np.nan
+        by_signal.append(row)
+
+    horizons_out = {}
+    for h in horizons:
+        cg = df[f"correct_{h}d"].dropna()
+        og = pd.to_numeric(df[f"outcome_{h}d"], errors="coerce").dropna()
+        horizons_out[h] = {
+            "evaluated": int(len(og)),
+            "hit_rate": float(cg.mean()) if not cg.empty else None,
+            "avg_return": float(og.mean()) if not og.empty else None,
+            "research_return": float(df[f"cum_strategy_{h}d"].dropna().iloc[-1]) if df[f"cum_strategy_{h}d"].notna().any() else 0.0,
+        }
+
+    # Confidence calibration: compare predicted confidence buckets with realized 1D directional accuracy.
+    cal = []
+    d1 = df[df["correct_1d"].notna()].copy()
+    if not d1.empty:
+        d1["Confidence Bucket"] = pd.cut(d1["confidence"].clip(0, 1), bins=[-0.001, 0.40, 0.60, 0.80, 1.001], labels=["0–40%", "40–60%", "60–80%", "80–100%"])
+        for bucket, g in d1.groupby("Confidence Bucket", observed=False):
+            if len(g):
+                cal.append({"Confidence Bucket": str(bucket), "Observations": int(len(g)), "Predicted Avg": float(g["confidence"].mean()), "1D Hit Rate": float(g["correct_1d"].mean())})
+
     return {
-        "rows": df,
-        "evaluated": int(len(df)),
-        "hit_rate": float(df["correct"].mean()),
-        "cum_return": float(df["cum_strategy"].iloc[-1]),
-        "by_signal": by_signal,
+        "rows": df, "evaluated": int(len(df)),
+        "hit_rate": horizons_out[1]["hit_rate"], "cum_return": horizons_out[1]["research_return"],
+        "by_signal": by_signal, "horizons": horizons_out, "calibration": cal,
     }
 
 
+
+def _vnext_decision_portfolio_snapshot(cfg: dict[str, Any], data: pd.DataFrame, market_df: Optional[pd.DataFrame]) -> dict[str, Any]:
+    """Build a compact read-only portfolio context for the Decision Log."""
+    sim = st.session_state.get("sim", {}) or {}
+    usdthb = 1.0
+    if isinstance(data, pd.DataFrame) and not data.empty and "USDTHB" in data.columns:
+        try:
+            usdthb = float(data["USDTHB"].iloc[-1])
+        except (TypeError, ValueError, IndexError):
+            pass
+    prices = {"THB": 1.0}
+    if isinstance(market_df, pd.DataFrame) and not market_df.empty:
+        for _, row in market_df.iterrows():
+            try:
+                sym = str(row.get("symbol", "")).upper()
+                px = float(row.get("price_usd", 0) or 0)
+                if sym and px > 0:
+                    prices[sym] = px * usdthb
+            except (TypeError, ValueError):
+                continue
+    asset = str(cfg.get("asset", "BTC")).upper()
+    if isinstance(data, pd.DataFrame) and not data.empty and "Global_USD" in data.columns:
+        try:
+            prices[asset] = float(data["Global_USD"].iloc[-1]) * usdthb
+        except (TypeError, ValueError, IndexError):
+            pass
+    try:
+        snap = portfolio_snapshot(sim, prices)
+    except Exception:
+        snap = {}
+    return {
+        "portfolio_value_thb": float(snap.get("total_value", 0) or 0),
+        "cash_thb": float(snap.get("cash_thb", sim.get("customer_thb", 0)) or 0),
+        "unrealized_pnl_thb": float(snap.get("unrealized_pnl", 0) or 0),
+    }
+
+
+def _vnext_decision_record(cfg: dict[str, Any], data: pd.DataFrame,
+                           market_df: Optional[pd.DataFrame], sig: dict[str, Any],
+                           source: str = "auto") -> dict[str, Any]:
+    """Create one human-reviewable system decision snapshot; never executes trades."""
+    market_date = _vnext_shadow_market_date(data)
+    nc = {}
+    try:
+        nc = _snapshot_payload(cfg, data) or {}
+    except Exception:
+        nc = {}
+    port = _vnext_decision_portfolio_snapshot(cfg, data, market_df)
+    return {
+        "id": uuid.uuid4().hex[:12],
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "market_date": market_date,
+        "actor": _current_actor(),
+        "source": source,
+        "signal": sig.get("signal", "HOLD"),
+        "confidence": sig.get("confidence"),
+        "reason": sig.get("reason", ""),
+        "price_usd": sig.get("price"),
+        "momentum_20d": sig.get("momentum_20d"),
+        "vol_20d": sig.get("vol_20d"),
+        "portfolio_value_thb": port["portfolio_value_thb"],
+        "cash_thb": port["cash_thb"],
+        "unrealized_pnl_thb": port["unrealized_pnl_thb"],
+        "nc_required_thb": nc.get("nc_required"),
+        "nc_actual_thb": nc.get("nc_actual"),
+        "nc_buffer_thb": nc.get("nc_buffer"),
+        "follow_up_1d": None,
+        "follow_up_3d": None,
+        "follow_up_7d": None,
+        "review_note": "",
+    }
+
+
+def _vnext_decision_auto_capture(cfg: dict[str, Any], data: pd.DataFrame,
+                                 market_df: Optional[pd.DataFrame], sig: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
+    rows = _vnext_load_json_list(_DECISION_LOCAL, "portfolio_decision_log")
+    market_date = _vnext_shadow_market_date(data)
+    actor = _current_actor()
+    if any(str(r.get("market_date")) == str(market_date) and str(r.get("actor")) == actor for r in rows if isinstance(r, dict)):
+        return rows, False
+    row = _vnext_decision_record(cfg, data, market_df, sig, source="auto")
+    rows.append(row)
+    _vnext_save_json_list(_DECISION_LOCAL, "portfolio_decision_log", rows)
+    return rows, True
+
+
+def _vnext_link_decision_outcomes(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """Link Decision Log rows to the matching Shadow OOS outcomes.
+
+    Matching is intentionally limited to the same actor + market date so a
+    research observation from another actor/session cannot be attached to a
+    portfolio decision by accident. This is read-only research bookkeeping;
+    it never executes orders or changes portfolio balances.
+    """
+    shadow_rows = _vnext_load_json_list(_SHADOW_LOCAL, "quant_shadow_log")
+    if not rows or not shadow_rows:
+        return rows, 0
+    index = {}
+    for r in shadow_rows:
+        if not isinstance(r, dict):
+            continue
+        key = (str(r.get("actor", "")), str(r.get("market_date", "")))
+        index[key] = r
+
+    changed = 0
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        key = (str(r.get("actor", "")), str(r.get("market_date", "")))
+        shadow = index.get(key)
+        if not shadow:
+            continue
+        for h in (1, 3, 5, 20):
+            outcome_key = f"outcome_{h}d"
+            correct_key = f"correct_{h}d"
+            target_key = f"target_date_{h}d"
+            new_values = {
+                f"follow_up_{h}d": shadow.get(outcome_key),
+                f"follow_up_{h}d_correct": shadow.get(correct_key),
+                f"follow_up_{h}d_target_date": shadow.get(target_key),
+            }
+            for k, v in new_values.items():
+                if r.get(k) != v:
+                    r[k] = v
+                    changed += 1
+        r["shadow_linked"] = True
+        r["shadow_signal"] = shadow.get("signal")
+    return rows, changed
+
+
+def render_portfolio_decision_log(cfg: dict[str, Any], data: pd.DataFrame,
+                                  market_df: Optional[pd.DataFrame] = None) -> None:
+    st.markdown("## 📘 Portfolio Decision Log")
+    st.caption("บันทึกสิ่งที่ระบบเห็น ณ เวลานั้น เพื่อให้ย้อนตรวจเหตุผลและผลลัพธ์ได้ — ไม่ใช่คำสั่งซื้อขาย")
+    sig = _vnext_shadow_signal(cfg, data)
+    rows, auto_saved = _vnext_decision_auto_capture(cfg, data, market_df, sig)
+    rows, linked_changes = _vnext_link_decision_outcomes(rows)
+    if linked_changes:
+        _vnext_save_json_list(_DECISION_LOCAL, "portfolio_decision_log", rows)
+    if auto_saved:
+        st.success(f"บันทึก Decision Snapshot ประจำวัน {_vnext_shadow_market_date(data)} แล้ว")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Signal", str(sig.get("signal", "HOLD")))
+    c2.metric("Confidence", f"{float(sig.get('confidence', 0) or 0)*100:.0f}%")
+    c3.metric("Portfolio", f"฿{float(rows[-1].get('portfolio_value_thb', 0) or 0):,.0f}" if rows else "—")
+    c4.metric("NC Buffer", f"฿{float(rows[-1].get('nc_buffer_thb', 0) or 0):,.0f}" if rows and rows[-1].get("nc_buffer_thb") is not None else "—")
+
+    st.info("ทุกแถวเป็น historical observation ของระบบและ portfolio context ในเวลานั้น — ไม่มี execute_order(), ไม่มี hedge และไม่มีการเปลี่ยนยอดเงินจริง")
+
+    with st.expander("📝 บันทึก Decision เพิ่มแบบ Manual", expanded=False):
+        note = st.text_area("Review note", value="", key="vnext_decision_note")
+        if st.button("📘 บันทึก Decision Snapshot", key="vnext_decision_manual"):
+            row = _vnext_decision_record(cfg, data, market_df, sig, source="manual")
+            row["review_note"] = note.strip()
+            rows.append(row)
+            _vnext_save_json_list(_DECISION_LOCAL, "portfolio_decision_log", rows)
+            st.success("บันทึก Decision Snapshot แล้ว")
+            st.rerun()
+
+    if not rows:
+        st.info("ยังไม่มี Decision Log")
+        return
+
+    view = pd.DataFrame(rows[-100:][::-1])
+    cols = [
+        "market_date", "signal", "confidence", "reason", "price_usd",
+        "portfolio_value_thb", "cash_thb", "unrealized_pnl_thb",
+        "nc_required_thb", "nc_buffer_thb",
+        "follow_up_1d", "follow_up_3d", "follow_up_5d", "follow_up_20d",
+        "source", "review_note",
+    ]
+    cols = [c for c in cols if c in view.columns]
+    st.markdown("### 📜 Decision History")
+    st.dataframe(view[cols], **WIDE)
+
+    st.markdown("### 📈 Decision Outcome Link")
+    linked = [r for r in rows if isinstance(r, dict) and r.get("shadow_linked")]
+    if linked:
+        latest = linked[-1]
+        outcome_rows = []
+        for h in (1, 3, 5, 20):
+            val = latest.get(f"follow_up_{h}d")
+            if val is None:
+                status = "รอข้อมูล"
+                ret = None
+            else:
+                status = "ถูกทาง" if latest.get(f"follow_up_{h}d_correct") else "สวนทาง"
+                ret = float(val) * 100
+            outcome_rows.append({"Horizon": f"{h}D", "Target Date": latest.get(f"follow_up_{h}d_target_date"),
+                                 "Forward Return %": ret, "Directional Result": status})
+        st.caption("เชื่อมผลจาก Shadow OOS ของ actor + market date เดียวกัน · ไม่ใช่ผลการซื้อขายจริง")
+        st.dataframe(pd.DataFrame(outcome_rows), **WIDE)
+    else:
+        st.info("ยังไม่มี Shadow OOS ที่ตรงกับ Decision Log — เมื่อมีข้อมูลอนาคต ระบบจะเชื่อมผลให้อัตโนมัติ")
+
+    st.markdown("### 🧭 Decision Review & Attribution")
+    st.caption("สรุป context ของ Decision ที่เลือก และเทียบผล OOS ที่เกิดขึ้นจริง — เป็น research attribution ไม่ใช่การพิสูจน์เหตุและผล")
+
+    # Review the selected decision in one compact panel. This intentionally uses
+    # only fields already captured in the Decision Log; it does not reconstruct
+    # missing historical portfolio state from today's data.
+    review_source_rows = rows[-100:][::-1]
+    review_labels = [
+        f"{r.get('market_date', '—')} · {r.get('signal', 'HOLD')} · {float(r.get('confidence', 0) or 0) * 100:.0f}%"
+        for r in review_source_rows
+    ]
+    review_idx = st.selectbox("เลือก Decision สำหรับ Review", range(len(review_labels)), format_func=lambda i: review_labels[i], key="vnext_decision_review_select")
+    review = review_source_rows[review_idx]
+
+    rc1, rc2, rc3, rc4 = st.columns(4)
+    rc1.metric("Signal", str(review.get("signal", "HOLD")))
+    rc2.metric("Confidence", f"{float(review.get('confidence', 0) or 0) * 100:.0f}%")
+    pv = review.get("portfolio_value_thb")
+    rc3.metric("Portfolio", "—" if pv is None else f"฿{float(pv):,.0f}")
+    nb = review.get("nc_buffer_thb")
+    rc4.metric("NC Buffer", "—" if nb is None else f"฿{float(nb):,.0f}")
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown("**เหตุผลและ Market Context**")
+        st.write(review.get("reason") or "ไม่มีเหตุผลที่บันทึกไว้")
+        ctx = {
+            "Market Date": review.get("market_date"),
+            "Price (USD)": review.get("price_usd"),
+            "Momentum 20D": review.get("momentum_20d"),
+            "Volatility 20D": review.get("vol_20d"),
+            "Source": review.get("source"),
+        }
+        st.dataframe(pd.DataFrame([ctx]), **WIDE)
+    with right:
+        st.markdown("**Portfolio / NC Context ณ ตอนตัดสินใจ**")
+        pctx = {
+            "Portfolio Value THB": review.get("portfolio_value_thb"),
+            "Cash THB": review.get("cash_thb"),
+            "Unrealized P&L THB": review.get("unrealized_pnl_thb"),
+            "NC Required THB": review.get("nc_required_thb"),
+            "NC Actual THB": review.get("nc_actual_thb"),
+            "NC Buffer THB": review.get("nc_buffer_thb"),
+        }
+        st.dataframe(pd.DataFrame([pctx]), **WIDE)
+
+    outcome_review = []
+    for h in (1, 3, 5, 20):
+        val = review.get(f"follow_up_{h}d")
+        correct = review.get(f"follow_up_{h}d_correct")
+        outcome_review.append({
+            "Horizon": f"{h}D",
+            "Forward Return %": None if val is None else float(val) * 100,
+            "Directional Result": "รอข้อมูล" if val is None else ("ถูกทาง" if correct else "สวนทาง"),
+            "Target Date": review.get(f"follow_up_{h}d_target_date"),
+        })
+    st.markdown("**Forward Outcome Review**")
+    st.dataframe(pd.DataFrame(outcome_review), **WIDE)
+
+    # Historical attribution summary: describe associations in the captured
+    # observations only. No causal claim is made.
+    evaluated = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        v = r.get("follow_up_1d")
+        if v is None:
+            continue
+        try:
+            evaluated.append({
+                "signal": str(r.get("signal", "HOLD")),
+                "confidence": float(r.get("confidence") or 0),
+                "return_1d": float(v),
+                "correct_1d": r.get("follow_up_1d_correct"),
+                "nc_buffer": r.get("nc_buffer_thb"),
+            })
+        except (TypeError, ValueError):
+            continue
+    if evaluated:
+        edf = pd.DataFrame(evaluated)
+        a, b = st.columns(2)
+        with a:
+            by_sig = edf.groupby("signal", dropna=False).agg(
+                Observations=("return_1d", "count"),
+                Avg_1D_Return=("return_1d", "mean"),
+                Hit_Rate=("correct_1d", "mean"),
+            ).reset_index()
+            by_sig = by_sig.rename(columns={"signal": "Signal", "Avg_1D_Return": "Avg 1D Return", "Hit_Rate": "1D Hit Rate"})
+            st.markdown("**ผลตาม Signal (1D)**")
+            st.dataframe(by_sig, **WIDE)
+        with b:
+            edf["Confidence Bucket"] = pd.cut(edf["confidence"].clip(0, 1), bins=[-0.001, 0.40, 0.60, 0.80, 1.001], labels=["0–40%", "40–60%", "60–80%", "80–100%"])
+            by_conf = edf.groupby("Confidence Bucket", observed=False).agg(
+                Observations=("return_1d", "count"),
+                Avg_Confidence=("confidence", "mean"),
+                Avg_1D_Return=("return_1d", "mean"),
+                Hit_Rate=("correct_1d", "mean"),
+            ).reset_index()
+            by_conf = by_conf.rename(columns={"Avg_Confidence": "Avg Confidence", "Avg_1D_Return": "Avg 1D Return", "Hit_Rate": "1D Hit Rate"})
+            st.markdown("**ผลตาม Confidence (1D)**")
+            st.dataframe(by_conf, **WIDE)
+    else:
+        st.info("ยังไม่มี Decision ที่มี 1D Outcome เพียงพอสำหรับทำ attribution summary")
+
+    st.markdown("### 🔎 Selected Decision")
+    labels = [
+        f"{r.get('market_date', '—')} · {r.get('signal', 'HOLD')} · {float(r.get('confidence', 0) or 0) * 100:.0f}%"
+        for r in rows[-100:][::-1]
+    ]
+    selected_idx = st.selectbox("เลือกวันที่", range(len(labels)), format_func=lambda i: labels[i], key="vnext_decision_select")
+    selected_row = rows[-100:][::-1][selected_idx]
+    st.json(selected_row)
+
 def render_shadow_mode(cfg: dict[str, Any], data: pd.DataFrame, market_df: Optional[pd.DataFrame] = None) -> None:
     st.markdown("## 🕶️ Shadow Mode")
-    st.caption("รันระบบวิเคราะห์คู่ขนานโดยไม่ส่งคำสั่งจริง — บันทึกวันละครั้งและตรวจผลวันถัดไปแบบ OOS")
+    st.caption("รันระบบวิเคราะห์คู่ขนานโดยไม่ส่งคำสั่งจริง — บันทึกวันละครั้งและประเมินผล OOS หลายระยะ")
     sig = _vnext_shadow_signal(cfg, data)
     rows, auto_saved = _vnext_shadow_auto_capture(cfg, data)
     rows, stats = _vnext_shadow_evaluate(rows, data)
@@ -14262,47 +14685,69 @@ def render_shadow_mode(cfg: dict[str, Any], data: pd.DataFrame, market_df: Optio
     if auto_saved:
         st.success(f"บันทึก Shadow Observation ประจำวัน {_vnext_shadow_market_date(data)} แล้ว")
     st.info("Observation เท่านั้น: ไม่มี execute_order(), ไม่มี hedge และไม่เปลี่ยนยอดเงินจริง")
-    e1, e2, e3 = st.columns(3)
-    e1.metric("OOS Evaluated", int(stats.get("evaluated", 0)))
-    e2.metric("Directional Correct", int(stats.get("correct", 0)))
-    acc = stats.get("accuracy")
-    e3.metric("Hit Rate", "—" if acc is None else f"{acc*100:.1f}%")
+
+    hstats = stats.get("horizons", {})
+    cols = st.columns(4)
+    for col, h in zip(cols, (1, 3, 5, 20)):
+        hs = hstats.get(h, {})
+        hr = hs.get("accuracy")
+        col.metric(f"{h}D OOS Hit Rate", "—" if hr is None else f"{hr*100:.1f}%", delta=f"{int(hs.get('evaluated', 0))} obs")
+
     if st.button("📸 บันทึก Shadow Observation เพิ่ม", key="vnext_shadow_capture"):
         rows = _vnext_load_json_list(_SHADOW_LOCAL, "quant_shadow_log")
         rows.append({"timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"), "market_date": _vnext_shadow_market_date(data),
                      "actor": _current_actor(), "source": "manual", "signal": sig.get("signal"), "confidence": sig.get("confidence"),
                      "reason": sig.get("reason"), "price_usd": sig.get("price"), "momentum_20d": sig.get("momentum_20d"),
                      "return_1d": sig.get("return_1d"), "vol_20d": sig.get("vol_20d"), "dealer_spread": cfg.get("dealer_spread"),
-                     "outcome_1d": None, "evaluated": False})
+                     "outcome_1d": None, "outcome_3d": None, "outcome_5d": None, "outcome_20d": None, "evaluated": False})
         _vnext_save_json_list(_SHADOW_LOCAL, "quant_shadow_log", rows)
         st.success("บันทึก Shadow Observation แล้ว — ไม่ได้ส่งคำสั่งใด ๆ")
+        st.rerun()
+
     rows = _vnext_load_json_list(_SHADOW_LOCAL, "quant_shadow_log")
-    if rows:
-        perf = _vnext_shadow_performance(rows)
-        st.markdown("### 📈 Shadow Performance Dashboard")
-        st.caption("สรุป OOS ที่ประเมินผลแล้วเท่านั้น · BUY/SELL เป็น directional research return · ไม่ใช่ผลการซื้อขายจริง")
-        p1, p2, p3, p4 = st.columns(4)
-        p1.metric("OOS Observations", f"{perf['evaluated']:,}")
-        p2.metric("Overall Hit Rate", "—" if perf["hit_rate"] is None else f"{perf['hit_rate']*100:.1f}%")
-        p3.metric("Cumulative Research Return", f"{perf['cum_return']*100:+.2f}%")
-        sig_counts = pd.Series([str(r.get("signal", "HOLD")) for r in rows if r.get("evaluated")]).value_counts()
-        p4.metric("Directional Signals", f"{int(sig_counts.get('BUY-BIAS', 0) + sig_counts.get('SELL-BIAS', 0)):,}")
+    if not rows:
+        st.info("ยังไม่มี Shadow Observation — ระบบจะบันทึกให้อัตโนมัติวันละ 1 ครั้งเมื่อมีสัญญาณเพียงพอ")
+        return
+    perf = _vnext_shadow_performance(rows)
+    st.markdown("### 📈 Shadow Performance Dashboard")
+    st.caption("ประเมินจากราคาหลังวันสังเกตการณ์เท่านั้น · เป็น research diagnostic ไม่ใช่ผลการซื้อขายจริง")
 
-        pdf = perf["rows"]
-        if not pdf.empty and go is not None:
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=pdf["_date"], y=pdf["cum_strategy"] * 100, mode="lines+markers", name="Shadow Research Return"))
-            fig.add_trace(go.Scatter(x=pdf["_date"], y=pdf["cum_market"] * 100, mode="lines", name="Underlying 1D Return"))
-            fig.update_layout(height=360, margin=dict(l=10, r=10, t=35, b=10), yaxis_title="Cumulative %", xaxis_title="Market Date", hovermode="x unified")
-            st.plotly_chart(fig, use_container_width=True, key="vnext_shadow_performance_chart")
+    if perf["horizons"]:
+        table = []
+        for h in (1, 3, 5, 20):
+            x = perf["horizons"].get(h, {})
+            table.append({"Horizon": f"{h}D", "OOS Observations": x.get("evaluated", 0),
+                          "Hit Rate": None if x.get("hit_rate") is None else x.get("hit_rate") * 100,
+                          "Avg Forward Return": None if x.get("avg_return") is None else x.get("avg_return") * 100,
+                          "Research Return": x.get("research_return", 0) * 100})
+        st.dataframe(pd.DataFrame(table), **WIDE)
 
-        if perf["by_signal"]:
-            st.dataframe(pd.DataFrame(perf["by_signal"]).assign(**{"Hit Rate": lambda x: x["Hit Rate"] * 100, "Avg 1D Return": lambda x: x["Avg 1D Return"] * 100, "Research Return": lambda x: x["Research Return"] * 100}), **WIDE)
+    if perf.get("calibration"):
+        st.markdown("### 🎯 Confidence Calibration")
+        st.caption("เทียบ Confidence ที่ระบบประกาศตอนบันทึก กับ 1D directional hit rate ที่เกิดขึ้นจริง")
+        cal_df = pd.DataFrame(perf["calibration"])
+        cal_df["Predicted Avg"] = cal_df["Predicted Avg"] * 100
+        cal_df["1D Hit Rate"] = cal_df["1D Hit Rate"] * 100
+        st.dataframe(cal_df, **WIDE)
 
-        st.markdown("### 📜 Shadow History")
-        view = pd.DataFrame(rows[-100:][::-1])
-        cols = [c for c in ["market_date", "signal", "confidence", "price_usd", "outcome_1d", "correct", "source"] if c in view.columns]
-        st.dataframe(view[cols], **WIDE)
+    pdf = perf["rows"]
+    if not pdf.empty and go is not None:
+        fig = go.Figure()
+        for h in (1, 5, 20):
+            fig.add_trace(go.Scatter(x=pdf["_date"], y=pdf[f"cum_strategy_{h}d"] * 100, mode="lines", name=f"Shadow {h}D"))
+        fig.update_layout(height=360, margin=dict(l=10, r=10, t=35, b=10), yaxis_title="Cumulative Research %", xaxis_title="Market Date", hovermode="x unified")
+        st.plotly_chart(fig, use_container_width=True, key="vnext_shadow_multihorizon_chart")
+
+    if perf["by_signal"]:
+        sig_df = pd.DataFrame(perf["by_signal"])
+        for c in [c for c in sig_df.columns if "Hit Rate" in c or "Avg Return" in c]:
+            sig_df[c] = sig_df[c] * 100
+        st.dataframe(sig_df, **WIDE)
+
+    st.markdown("### 📜 Shadow History")
+    view = pd.DataFrame(rows[-100:][::-1])
+    cols = [c for c in ["market_date", "signal", "confidence", "price_usd", "outcome_1d", "outcome_3d", "outcome_5d", "outcome_20d", "source"] if c in view.columns]
+    st.dataframe(view[cols], **WIDE)
 
 
 def render_experiment_tracker(cfg: dict[str, Any], data: pd.DataFrame, market_df: Optional[pd.DataFrame] = None) -> None:
@@ -15359,6 +15804,99 @@ def render_final_quant_production_review(cfg: dict[str,Any], data: pd.DataFrame,
     st.checkbox("Shadow Mode reviewed without live execution",key="final_review_shadow")
     st.info("Final Review เป็น governance layer เท่านั้น. ไม่เปิด live execution และไม่เปลี่ยน execution_order / wallet state")
 
+def _vnext_health_age_minutes(value: Any) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        ts = pd.to_datetime(value, utc=True, errors="coerce")
+        if pd.isna(ts):
+            return None
+        return max(0.0, (pd.Timestamp.now(tz="UTC") - ts).total_seconds() / 60.0)
+    except Exception:
+        return None
+
+
+def _vnext_system_health(cfg: dict[str, Any], sim: dict[str, Any], data: Optional[pd.DataFrame], market_df: Optional[pd.DataFrame]) -> list[dict[str, Any]]:
+    checks: list[dict[str, Any]] = []
+    state_ok = isinstance(sim, dict) and bool(sim)
+    checks.append({"name": "Portfolio State", "status": "🟢 OK" if state_ok else "🔴 ERROR", "detail": "โหลด sim state ได้" if state_ok else "ไม่พบ sim state"})
+    if is_guest_mode():
+        checks.append({"name": "Supabase", "status": "🟡 GUEST", "detail": "Guest mode — ไม่ตรวจ cloud persistence"})
+    else:
+        sb = _get_supabase()
+        if sb is None:
+            checks.append({"name": "Supabase", "status": "🟡 FALLBACK", "detail": "ไม่มี Supabase client — ระบบจะใช้ fallback ตามที่ตั้งไว้"})
+        else:
+            try:
+                sb.table("sim_state").select("actor").eq("actor", _current_actor()).limit(1).execute()
+                checks.append({"name": "Supabase", "status": "🟢 OK", "detail": "เชื่อมต่อและอ่าน sim_state ได้"})
+            except Exception:
+                checks.append({"name": "Supabase", "status": "🔴 ERROR", "detail": "เชื่อมต่อ/อ่าน sim_state ไม่สำเร็จ"})
+    md_ok = isinstance(market_df, pd.DataFrame) and not market_df.empty
+    md_age = None
+    if md_ok:
+        for c in ["Date", "Datetime", "timestamp", "Timestamp", "date"]:
+            if c in market_df.columns:
+                md_age = _vnext_health_age_minutes(market_df[c].iloc[-1])
+                break
+        if md_age is None and isinstance(market_df.index, pd.DatetimeIndex):
+            md_age = _vnext_health_age_minutes(market_df.index[-1])
+    if not md_ok:
+        checks.append({"name": "Market Data", "status": "🔴 ERROR", "detail": "ไม่มี market data"})
+    elif md_age is not None and md_age > 60:
+        checks.append({"name": "Market Data", "status": "🟠 STALE", "detail": f"ข้อมูลล่าสุดประมาณ {md_age:.0f} นาทีที่แล้ว"})
+    else:
+        detail = "มีข้อมูลตลาดพร้อมใช้" + (f" • ล่าสุด {md_age:.0f} นาทีที่แล้ว" if md_age is not None else "")
+        checks.append({"name": "Market Data", "status": "🟢 OK", "detail": detail})
+    holdings = sim.get("customer_coins", {}) if isinstance(sim, dict) else {}
+    orders = sim.get("orders", []) if isinstance(sim, dict) else []
+    checks.append({"name": "Portfolio Ledger", "status": "🟢 OK" if isinstance(holdings, dict) and isinstance(orders, list) else "🔴 ERROR", "detail": f"ถือครอง {len(holdings)} assets • orders {len(orders)}" if isinstance(holdings, dict) and isinstance(orders, list) else "โครงสร้าง holdings/orders ไม่ถูกต้อง"})
+    try:
+        nc_rows = load_nc_snapshots(limit=1)
+    except Exception:
+        nc_rows = []
+    if not nc_rows:
+        checks.append({"name": "NC Snapshot", "status": "🟡 NO DATA", "detail": "ยังไม่มี NC snapshot ให้ตรวจ"})
+    else:
+        age = _vnext_health_age_minutes(nc_rows[-1].get("snapshot_at"))
+        if age is None:
+            checks.append({"name": "NC Snapshot", "status": "🟡 UNKNOWN", "detail": "มี snapshot แต่ timestamp อ่านไม่ได้"})
+        elif age > 1440:
+            checks.append({"name": "NC Snapshot", "status": "🔴 STALE", "detail": f"snapshot ล่าสุดเก่า {age/1440:.1f} วัน"})
+        elif age > 360:
+            checks.append({"name": "NC Snapshot", "status": "🟠 STALE", "detail": f"snapshot ล่าสุดเก่า {age/60:.1f} ชั่วโมง"})
+        else:
+            checks.append({"name": "NC Snapshot", "status": "🟢 OK", "detail": f"snapshot ล่าสุด {age:.0f} นาทีที่แล้ว"})
+    quant_ok = all(callable(globals().get(n)) for n in ["render_quant_research_hub", "_vnext_deflated_sharpe", "_vnext_pbo_cscv"])
+    checks.append({"name": "Quant Engine", "status": "🟢 OK" if quant_ok else "🔴 ERROR", "detail": "โมดูล Quant หลักพร้อมใช้งาน" if quant_ok else "พบโมดูล Quant หลักหายไป"})
+    return checks
+
+
+def render_system_health_center(cfg: dict[str, Any], sim: dict[str, Any], data: Optional[pd.DataFrame], market_df: Optional[pd.DataFrame] = None) -> None:
+    st.markdown("## 🩺 System Health Center")
+    st.caption("ตรวจสุขภาพข้อมูลและระบบก่อนเชื่อผลลัพธ์ — เน้นจับข้อมูลค้าง/ระบบเชื่อมต่อผิดปกติ")
+    checks = _vnext_system_health(cfg, sim, data, market_df)
+    good = sum(1 for x in checks if x["status"].startswith("🟢"))
+    warn = sum(1 for x in checks if x["status"].startswith(("🟡", "🟠")))
+    bad = sum(1 for x in checks if x["status"].startswith("🔴"))
+    a, b, c = st.columns(3)
+    a.metric("🟢 Healthy", good)
+    b.metric("🟠 / 🟡 Attention", warn)
+    c.metric("🔴 Error", bad)
+    st.dataframe(pd.DataFrame([{"System": x["name"], "Status": x["status"], "Detail": x["detail"]} for x in checks]), use_container_width=True, hide_index=True)
+    if bad:
+        st.error("พบระบบที่มีปัญหา — ควรแก้ก่อนใช้ข้อมูลชุดนี้เป็นฐานในการตัดสินใจ")
+    elif warn:
+        st.warning("ระบบหลักยังทำงานได้ แต่มีข้อมูล/การเชื่อมต่อที่ควรตรวจสอบ")
+    else:
+        st.success("ระบบหลักและข้อมูลสำคัญอยู่ในสถานะปกติ")
+    with st.expander("รายละเอียดการตรวจ", expanded=False):
+        st.markdown("- **Market Data** ตรวจว่ามีข้อมูลและ timestamp ล่าสุดไม่เก่าเกินไป")
+        st.markdown("- **NC Snapshot** ตรวจความสดของ snapshot เพื่อป้องกันกรณีข้อมูล NC ค้างหลายวัน")
+        st.markdown("- **Supabase** ตรวจการอ่าน `sim_state` โดยไม่แสดง credential หรือ error ดิบ")
+        st.markdown("- **Quant Engine** ตรวจว่าฟังก์ชันหลักของ Quant ยังถูกโหลดอยู่")
+
+
 def render_quant_research_hub(cfg: dict[str, Any], data: pd.DataFrame, market_df: Optional[pd.DataFrame] = None) -> None:
     """Single entry point for all Quant Research tools.
 
@@ -15384,6 +15922,7 @@ def render_quant_research_hub(cfg: dict[str, Any], data: pd.DataFrame, market_df
             NAV_SHADOW_MODE,
             NAV_EXPERIMENT_TRACKER,
             NAV_MODEL_GOVERNANCE,
+            NAV_DECISION_LOG,
         ],
         "🧬 Models & Simulation": [
             NAV_SYNTHETIC_LAB,
@@ -15442,6 +15981,8 @@ def render_quant_research_hub(cfg: dict[str, Any], data: pd.DataFrame, market_df
         render_experiment_tracker(cfg, data, market_df)
     elif selected == NAV_MODEL_GOVERNANCE:
         render_model_governance(cfg, data, market_df)
+    elif selected == NAV_DECISION_LOG:
+        render_portfolio_decision_log(cfg, data, market_df)
     elif selected == NAV_TRANSACTION_COST_LAB:
         render_transaction_cost_lab(cfg, data, market_df)
     elif selected == NAV_PBO_DSR_LAB:
@@ -15793,6 +16334,8 @@ def _main_body() -> None:
             render_customer_timeline(cfg, data, market_df)
         elif nav == NAV_QUANT_RESEARCH:
             render_quant_research_hub(cfg, data, market_df)
+        elif nav == NAV_SYSTEM_HEALTH:
+            render_system_health_center(cfg, st.session_state.get("sim", {}), data, market_df)
         elif nav == NAV_FACTSHEET_PRINT:
             sim = st.session_state.get("sim", {}) or {}
             ensure_portfolio_ledger(sim)
