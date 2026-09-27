@@ -6345,16 +6345,6 @@ def render_tab2 (cfg :dict [str ,Any ],data :pd .DataFrame ,data_err :Optional [
 
     asset =cfg ["asset"]
 
-    ps =cfg .get ("portfolio_snapshot",{})
-    if ps :
-        section ("💼 Live Portfolio Input")
-        pc1 ,pc2 ,pc3 ,pc4 =st .columns (4 )
-        pc1 .metric ("Portfolio Value",fmt_baht (ps .get ("total_value_thb",0 )))
-        pc2 .metric ("Cash",fmt_baht (ps .get ("cash_thb",0 )))
-        pc3 .metric ("Invested Cost",fmt_baht (ps .get ("invested_cost_thb",0 )))
-        pc4 .metric ("Fees",fmt_baht (ps .get ("fees_thb",0 )))
-        st .caption ("Planner อ่าน Holdings/Allocation จาก Portfolio ปัจจุบันเพื่อใช้เป็นข้อมูลตั้งต้นประกอบการวางแผน Multi-Asset")
-
         # --- FUND FLOW LAYER: อยู่ในแท็บ Liquidity ---
     with st .expander ("💧 Cryptocurrency Fund Flow",expanded =False ):
         render_fund_flow_section (cfg )
