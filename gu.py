@@ -6591,8 +6591,138 @@ note :str ="",
     return rec 
 
 
-def portfolio_snapshot (sim :dict [str ,Any ],price_thb_map :Mapping [str ,float ])->dict [str ,Any ]:
+def sync_telegram_orders_to_portfolio_ledger (sim :dict [str ,Any ])->int :
+    """นำ Filled Telegram trades เข้า customer portfolio ledger แบบ idempotent.
+
+    Telegram เป็นผู้แก้ customer wallet + orders ใน shared sim_state อยู่แล้ว
+    ฟังก์ชันนี้จึงเติมเฉพาะ Portfolio Ledger เพื่อให้ Holdings / Allocation /
+    P&L / Transaction History เห็นรายการ Telegram เดียวกัน โดยไม่หักเงิน
+    หรือเหรียญซ้ำอีกครั้ง.
+    """
+    if not isinstance (sim ,dict ):
+        return 0
+
     ensure_portfolio_ledger (sim )
+    orders =sim .get ("orders",[])
+    if not isinstance (orders ,list ):
+        return 0
+
+    ledger =sim .setdefault ("portfolio_ledger",[])
+    existing_ids ={
+    str (tx .get ("external_order_id"))
+    for tx in ledger
+    if isinstance (tx ,dict )and tx .get ("external_order_id")
+    }
+
+    # รองรับกรณีที่มีรายการเก่าจากเวอร์ชันที่ยังไม่มี external_order_id
+    # โดยเช็ก Order ID ใน note/source metadata ซ้ำอีกชั้นหนึ่ง
+    existing_notes ={
+    str (tx .get ("note",""))
+    for tx in ledger
+    if isinstance (tx ,dict )
+    }
+
+    tg_orders =[]
+    for idx ,rec in enumerate (orders ):
+        if not isinstance (rec ,dict ):
+            continue
+        source =str (rec .get ("Source",rec .get ("source",rec .get ("source_system","")))or "").strip ().lower ()
+        if "telegram" not in source:
+            continue
+        status =str (rec .get ("สถานะ",rec .get ("status","Filled"))or "Filled").strip ().lower ()
+        if status not in {"filled","fill","completed","executed","success","successful"}:
+            continue
+        order_id =str (rec .get ("Order ID")or rec .get ("order_id")or "").strip ()
+        if not order_id:
+            continue
+        if order_id in existing_ids or any (order_id in note for note in existing_notes):
+            continue
+        tg_orders .append ((idx ,rec ,order_id))
+
+    if not tg_orders:
+        return 0
+
+    def _order_key (item):
+        _ ,rec ,_ =item
+        try:
+            ts =pd .to_datetime (
+            f"{rec .get ('วันที่','')} {rec .get ('เวลา','')}",
+            errors ="coerce",utc =True ,
+            )
+            if pd .isna (ts ):
+                ts =pd .Timestamp ("1970-01-01",tz ="UTC")
+        except Exception :
+            ts =pd .Timestamp ("1970-01-01",tz ="UTC")
+        return ts
+
+    tg_orders .sort (key =_order_key )
+    added =0
+
+    for _idx ,rec ,order_id in tg_orders :
+        try:
+            side =str (rec .get ("ฝั่ง",rec .get ("side",""))or "").strip ().upper ()
+            if side in {"ซื้อ","BUY"}:
+                side ="BUY"
+            elif side in {"ขาย","SELL"}:
+                side ="SELL"
+            else:
+                continue
+
+            asset =str (rec .get ("เหรียญ",rec .get ("asset",""))or "").strip ().upper ()
+            qty =float (rec .get ("เหรียญที่ส่งมอบ",rec .get ("qty",0.0))or 0.0 )
+            gross =float (rec .get ("มูลค่า (บาท)",rec .get ("gross_thb",0.0))or 0.0 )
+            price =float (rec .get ("ราคาที่ลูกค้าได้",rec .get ("price_thb",0.0))or 0.0 )
+            fee =float (rec .get ("ค่าธรรมเนียม",rec .get ("fee_thb",0.0))or 0.0 )
+        except (TypeError ,ValueError ):
+            continue
+
+        if not asset or qty <=0 or gross <=0 or price <=0:
+            continue
+
+        if side =="BUY":
+            tx =record_portfolio_tx (
+            sim ,"BUY",asset ,qty =qty ,price_thb =price ,
+            gross_thb =gross ,fee_thb =fee ,
+            cash_delta_thb =-gross ,
+            note =f"Telegram BUY — Order ID {order_id}",
+            )
+        else :
+            snap =portfolio_snapshot (sim ,{asset :price },_sync_telegram=False )
+            old_row =next ((r for r in snap .get ("rows",[])if r .get ("asset")==asset ),None )
+            avg_cost =float (old_row .get ("avg_cost",0.0 )or 0.0 )if old_row else 0.0
+            realized =gross -(qty *avg_cost )
+            tx =record_portfolio_tx (
+            sim ,"SELL",asset ,qty =-qty ,price_thb =price ,
+            gross_thb =gross ,fee_thb =fee ,
+            cash_delta_thb =gross -fee ,
+            realized_pnl_thb =realized ,
+            note =f"Telegram SELL — Order ID {order_id}",
+            )
+
+        tx ["external_order_id"] =order_id
+        tx ["source"] ="Telegram"
+        tx ["exchange"] =str (rec .get ("Exchange")or "Bitkub")
+        tx ["order_type"] =str (rec .get ("ประเภท")or "MARKET").upper ()
+        existing_ids .add (order_id )
+        existing_notes .add (str (tx .get ("note","")))
+        added +=1
+
+    return added
+
+
+def portfolio_snapshot (sim :dict [str ,Any ],price_thb_map :Mapping [str ,float ],_sync_telegram:bool =True )->dict [str ,Any ]:
+    ensure_portfolio_ledger (sim )
+
+    # Always reconcile Telegram trades here, not only on the Portfolio page.
+    # This makes every portfolio consumer (Allocation, Holdings, P&L, Journal,
+    # Rebalance, etc.) see BUY/SELL orders for ALL supported assets.
+    # The flag prevents recursion when the Telegram sync calculates SELL cost basis.
+    if _sync_telegram:
+        try:
+            sync_telegram_orders_to_portfolio_ledger (sim )
+        except Exception as _tg_snapshot_sync_exc:
+            print (f"[telegram portfolio snapshot sync] error: {_tg_snapshot_sync_exc }")
+
     txs =sim .get ("portfolio_ledger",[])
     cash =0.0 
     qty_map :dict [str ,float ]={}
@@ -16624,9 +16754,29 @@ def _main_body ()->None :
         use_fx_proxy =cfg ["use_fx_proxy"])
 
     market_df =fetch_market_overview (SUPPORTED_ASSETS )
+
+    # Telegram /confirm เขียน wallet + orders ลง shared sim_state จากอีก process
+    # (Telegram bot) ดังนั้น session ของ Streamlit ต้อง refresh state ก่อน
+    # สร้าง Portfolio Snapshot ไม่เช่นนั้นออเดอร์ที่เพิ่งซื้อจะไม่เข้า Holdings.
+    if not is_guest_mode ():
+        try :
+            _latest_saved_sim =load_sim_state ()
+            if isinstance (_latest_saved_sim ,dict ):
+                st .session_state ["sim"]=_latest_saved_sim
+        except Exception as _tg_reload_exc :
+            print (f"[telegram portfolio reload] error: {_tg_reload_exc }")
+
     sim_for_portfolio =st .session_state .get ("sim",{})
     if isinstance (sim_for_portfolio ,dict ):
         ensure_portfolio_ledger (sim_for_portfolio )
+        try :
+            _tg_added =sync_telegram_orders_to_portfolio_ledger (sim_for_portfolio )
+            if _tg_added >0 :
+                st .session_state ["sim"]=sim_for_portfolio
+                save_sim_state (sim_for_portfolio )
+        except Exception as _tg_sync_exc :
+            print (f"[telegram portfolio sync] error: {_tg_sync_exc }")
+
         _portfolio_prices ={"THB":1.0 }
         if not market_df .empty :
             for _ ,_r in market_df .iterrows ():
