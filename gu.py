@@ -5487,12 +5487,19 @@ def _spot_hyperliquid(b: str) -> tuple[float, float, float]:
     # Always have the exact universe name available for L2.  If the summary
     # context is zero or suspicious, use the real Spot order book instead.
     if not _valid_btc_price(px):
-        coin = str(match_u.get("name") or "").strip()
+        # Hyperliquid uses the generic `l2Book` info method for Spot too.
+        # For Spot pairs, the coin identifier is the universe index (e.g. @107),
+        # not the display name such as UBTC/USDC. Using `spotL2Book` causes HTTP 422.
+        spot_index = match_u.get("index")
+        try:
+            coin = "@" + str(int(spot_index))
+        except (TypeError, ValueError):
+            coin = str(match_u.get("name") or "").strip()
         if not coin:
-            coin = "@" + str(match_u.get("index"))
+            raise ValueError("Hyperliquid Spot pair has no valid universe index")
         book = _http_json(
             "https://api.hyperliquid.xyz/info",
-            {"type": "spotL2Book", "coin": coin},
+            {"type": "l2Book", "coin": coin},
             timeout=8.0,
         )
         levels = book.get("levels") if isinstance(book, dict) else None
