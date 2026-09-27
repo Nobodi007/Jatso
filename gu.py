@@ -6358,29 +6358,54 @@ run();
 
 
 def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
-    """Render the combined Global Venue Board (Perpetual + Spot).
+    """Render the Global Venue Board with real comparison logic for both markets.
 
-    Perpetual remains the comparison/arb universe. Spot venues are displayed
-    for market context only and are explicitly excluded from arb calculations.
+    Perpetual and Spot are shown in one board, but each market type has its own
+    VWAP, turnover share, liquidity ranking and price ranking.  Perpetual-only
+    arbitrage remains isolated in the analysis layer below the table.
     """
-    valid = [r for r in rows if r.get("price") is not None]
+    valid = [r for r in rows if r.get("price") is not None and not r.get("err")]
     if not valid:
         st.warning("ไม่พบข้อมูล Global Venue ในขณะนี้")
         return
 
     perp = [r for r in valid if str(r.get("market_type", "perp")).lower() == "perp"]
     spot = [r for r in valid if str(r.get("market_type", "perp")).lower() == "spot"]
-    universe = perp or valid
 
-    prices = [float(r["price"]) for r in universe]
-    total_turn = sum(float(r.get("turnover") or 0.0) for r in perp)
-    vwap = (sum(float(r["price"]) * float(r.get("turnover") or 0.0) for r in perp) / total_turn) if perp and total_turn > 0 else sum(prices) / len(prices)
-    max_dev = max(max(abs((float(r["price"]) / vwap - 1.0) * 100.0) for r in universe), 0.001)
-    low = min(perp, key=lambda r: float(r["price"])) if perp else min(universe, key=lambda r: float(r["price"]))
-    high = max(perp, key=lambda r: float(r["price"])) if perp else max(universe, key=lambda r: float(r["price"]))
-    spread_pct = (float(high["price"]) / float(low["price"]) - 1.0) * 100.0 if float(low["price"]) else 0.0
-    low_name = str(low.get("exchange", "")) if perp and spread_pct >= 0.02 else ""
-    high_name = str(high.get("exchange", "")) if perp and spread_pct >= 0.02 else ""
+    def market_stats(items: list[dict[str, Any]]) -> dict[str, Any]:
+        total_turn = sum(float(r.get("turnover") or 0.0) for r in items)
+        weighted = (
+            sum(float(r["price"]) * float(r.get("turnover") or 0.0) for r in items) / total_turn
+            if total_turn > 0 else
+            (sum(float(r["price"]) for r in items) / len(items) if items else 0.0)
+        )
+        shares = {
+            str(r.get("exchange")): (float(r.get("turnover") or 0.0) / total_turn * 100.0 if total_turn > 0 else 0.0)
+            for r in items
+        }
+        by_turn = sorted(items, key=lambda r: float(r.get("turnover") or 0.0), reverse=True)
+        by_price = sorted(items, key=lambda r: float(r.get("price") or 0.0))
+        return {
+            "vwap": weighted,
+            "total_turn": total_turn,
+            "shares": shares,
+            "turn_rank": {str(r.get("exchange")): i + 1 for i, r in enumerate(by_turn)},
+            "price_rank": {str(r.get("exchange")): i + 1 for i, r in enumerate(by_price)},
+        }
+
+    perp_stats = market_stats(perp)
+    spot_stats = market_stats(spot)
+
+    # Perpetual arb remains exactly what it was: observed low/high among PERP only.
+    low = min(perp, key=lambda r: float(r["price"])) if perp else None
+    high = max(perp, key=lambda r: float(r["price"])) if perp else None
+    spread_pct = (
+        (float(high["price"]) / float(low["price"]) - 1.0) * 100.0
+        if low and high and float(low["price"]) > 0 else 0.0
+    )
+    arb_enabled = bool(low and high and low is not high and spread_pct >= 0.02)
+    low_name = str(low.get("exchange")) if arb_enabled else ""
+    high_name = str(high.get("exchange")) if arb_enabled else ""
 
     def esc(x: Any) -> str:
         return _html.escape(str(x))
@@ -6398,13 +6423,14 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
         except Exception:
             return "—"
 
-    def liquidity(turnover: float | None) -> tuple[str, str]:
-        t = float(turnover or 0.0)
-        if t >= 2_500_000_000:
-            return "High", "#0ecb81"
-        if t >= 500_000_000:
-            return "Medium", "#f0b90b"
-        return "Low", "#f6465d"
+    def liquidity_from_share(share: float) -> tuple[str, str, float]:
+        # Relative to the market type, so Spot is not unfairly labelled Low
+        # merely because Spot turnover is numerically smaller than Perpetual.
+        if share >= 30.0:
+            return "High", "#0ecb81", 100.0
+        if share >= 10.0:
+            return "Medium", "#f0b90b", max(35.0, min(80.0, share / 30.0 * 100.0))
+        return "Low", "#f6465d", max(12.0, min(30.0, share / 10.0 * 30.0))
 
     css = """
     <style>
@@ -6414,7 +6440,7 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
       .nobody-pv td{padding:12px 14px;border-bottom:1px solid #252a31;vertical-align:middle}
       .nobody-pv tr:last-child td{border-bottom:0}
       .nobody-pv .venue{font-weight:700;font-size:15px;white-space:nowrap}.nobody-pv .venuebox{display:flex;align-items:center;gap:9px}.nobody-pv .venue-logo{width:28px;height:28px;border-radius:50%;object-fit:cover;background:#171b20;border:1px solid #2b3139;flex:0 0 28px}
-      .nobody-pv .symbol{color:#2f8cff;white-space:nowrap}.nobody-pv .type{display:inline-block;margin-left:7px;padding:2px 6px;border-radius:5px;font-size:10px;font-weight:800;letter-spacing:.3px;vertical-align:middle}.nobody-pv .type-perp{color:#2f8cff;background:rgba(47,140,255,.10);border:1px solid rgba(47,140,255,.28)}.nobody-pv .type-spot{color:#b7c0cc;background:rgba(132,142,156,.08);border:1px solid #2b3139}
+      .nobody-pv .symbol{white-space:nowrap}.nobody-pv .symbol a{color:#2f8cff;text-decoration:none}.nobody-pv .type{display:inline-block;margin-left:7px;padding:2px 6px;border-radius:5px;font-size:10px;font-weight:800;letter-spacing:.3px;vertical-align:middle}.nobody-pv .type-perp{color:#2f8cff;background:rgba(47,140,255,.10);border:1px solid rgba(47,140,255,.28)}.nobody-pv .type-spot{color:#b7c0cc;background:rgba(132,142,156,.08);border:1px solid #2b3139}
       .nobody-pv .chg-up{color:#0ecb81;font-weight:700}.nobody-pv .chg-down{color:#f6465d;font-weight:700}
       .nobody-pv .bar{height:6px;background:#242a31;border-radius:8px;min-width:90px;position:relative;overflow:hidden}.nobody-pv .bar i{display:block;height:100%;border-radius:8px;position:absolute;left:50%;transform:translateX(-50%)}
       .nobody-pv .buy{background:rgba(14,203,129,.12);box-shadow:inset 3px 0 #0ecb81}.nobody-pv .sell{background:rgba(246,70,93,.10);box-shadow:inset 3px 0 #f6465d}
@@ -6422,46 +6448,63 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
       .nobody-pv .share{height:5px;background:#20252c;border-radius:5px;margin-top:5px;overflow:hidden}.nobody-pv .share i{display:block;height:100%;background:#2f8cff;border-radius:5px}
       .nobody-pv .liq{display:inline-block;padding:4px 8px;border:1px solid currentColor;border-radius:6px;font-size:12px;font-weight:700}.nobody-pv .liqline{height:4px;background:#242a31;border-radius:4px;margin-top:6px;overflow:hidden}.nobody-pv .liqline i{display:block;height:100%;border-radius:4px}
       .nobody-pv .muted{color:#848e9c;font-size:11px;margin-top:3px}.nobody-pv .via{display:inline-block;color:#848e9c;border:1px solid #2b3139;border-radius:4px;padding:2px 5px;font-size:10px;margin-left:8px}
-      .nobody-pv .spot-row{background:rgba(132,142,156,.025)}.nobody-pv .section-row td{padding:7px 14px;background:#11151b;color:#848e9c;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;border-top:1px solid #2b3139}
+      .nobody-pv .rank{display:inline-block;margin-left:6px;padding:2px 5px;border-radius:4px;font-size:9px;font-weight:800;background:rgba(47,140,255,.10);color:#5aa7ff;border:1px solid rgba(47,140,255,.22)}
+      .nobody-pv .cheap{background:rgba(14,203,129,.10);color:#0ecb81;border-color:rgba(14,203,129,.25)}
+      .nobody-pv .spot-row{background:rgba(132,142,156,.025)}
     </style>
     """
+
     def render_row(r: dict[str, Any]) -> str:
-        p=float(r["price"]); chg=r.get("chg"); turn=float(r.get("turnover") or 0.0)
-        is_spot=str(r.get("market_type","perp")).lower()=="spot"
-        dev=(p/vwap-1.0)*100.0
-        width=min(42.0, abs(dev)/max_dev*42.0)
-        color="#0ecb81" if dev <= 0 else "#f6465d"
-        chg_html="—" if chg is None else f"<span class='{ 'chg-up' if float(chg)>=0 else 'chg-down' }'>{float(chg):+.2f}%</span>"
-        share=(turn/total_turn*100.0) if (total_turn and not is_spot) else 0.0
-        role_html=""; row_class="spot-row" if is_spot else ""
-        if not is_spot and low_name and str(r.get("exchange"))==low_name:
-            row_class="buy"; role_html="<div class='arb-buy'>🟢 ซื้อที่นี่</div>"
-        elif not is_spot and high_name and str(r.get("exchange"))==high_name:
-            row_class="sell"; role_html="<div class='arb-sell'>🔴 ขายที่นี่</div>"
-        liq_name, liq_color=liquidity(turn)
-        liq_width={"High":100,"Medium":60,"Low":25}[liq_name]
-        type_cls="type-spot" if is_spot else "type-perp"
-        type_label="SPOT" if is_spot else "PERP"
-        turnover_html=money(turn) if turn > 0 else "—"
-        share_html=(f"<div class='share'><i style='width:{min(100,share):.1f}%'></i></div><div class='muted'>{share:.1f}% ของ Perpetual</div>" if not is_spot else "<div class='muted'>Spot · ไม่รวม Arb</div>")
+        p = float(r["price"])
+        chg = r.get("chg")
+        turn = float(r.get("turnover") or 0.0)
+        is_spot = str(r.get("market_type", "perp")).lower() == "spot"
+        stats = spot_stats if is_spot else perp_stats
+        vwap = float(stats["vwap"] or 0.0)
+        dev = (p / vwap - 1.0) * 100.0 if vwap > 0 else 0.0
+        max_dev = max(
+            [abs((float(x["price"]) / vwap - 1.0) * 100.0) for x in (spot if is_spot else perp) if vwap > 0] or [0.001]
+        )
+        width = min(42.0, abs(dev) / max_dev * 42.0)
+        color = "#0ecb81" if dev <= 0 else "#f6465d"
+        chg_html = "—" if chg is None else f"<span class='{ 'chg-up' if float(chg)>=0 else 'chg-down' }'>{float(chg):+.2f}%</span>"
+        name = str(r.get("exchange", "—"))
+        share = float(stats["shares"].get(name, 0.0))
+        turn_rank = int(stats["turn_rank"].get(name, 0) or 0)
+        price_rank = int(stats["price_rank"].get(name, 0) or 0)
+        liq_name, liq_color, liq_width = liquidity_from_share(share)
+        row_class = "spot-row" if is_spot else ""
+        role_html = ""
+        if not is_spot and name == low_name:
+            row_class = "buy"; role_html = "<div class='arb-buy'>🟢 ซื้อที่นี่</div>"
+        elif not is_spot and name == high_name:
+            row_class = "sell"; role_html = "<div class='arb-sell'>🔴 ขายที่นี่</div>"
+        rank_html = ""
+        if turn_rank <= 3:
+            rank_html += f"<span class='rank'>Vol#{turn_rank}</span>"
+        if price_rank == 1:
+            rank_html += "<span class='rank cheap'>💰 #1 ราคา</span>"
+        type_cls = "type-spot" if is_spot else "type-perp"
+        type_label = "SPOT" if is_spot else "PERP"
+        share_label = "% ของ Spot" if is_spot else "% ของ Perpetual"
+        share_html = f"<div class='share'><i style='width:{min(100,share):.1f}%'></i></div><div class='muted'>{share:.1f}{share_label}</div>"
+        via_html = f"<span class='via'>via {esc(r.get('via'))}</span>" if r.get("via") else ""
+        logo_html = f"<img class='venue-logo' src='{esc(r.get('logo',''))}' onerror=\"this.style.display='none'\" />" if r.get("logo") else ""
+        url = esc(r.get("url", ""))
+        symbol = esc(r.get("symbol", "—"))
+        symbol_html = f"<a href='{url}' target='_blank' rel='noopener'>{symbol}</a>" if url else symbol
         return f"""
         <tr class='{row_class}'>
-          <td class='venue'><div class='venuebox'>{('<img class="venue-logo" src="'+esc(r.get('logo',''))+'" onerror="this.style.display=\'none\'" />') if r.get('logo') else ''}<div>{esc(r.get('exchange','—'))}{'<span class="via">via browser</span>' if r.get('via')=='browser' else ''}{role_html}</div></div></td>
-          <td class='symbol'>{esc(r.get('symbol','—'))}<span class='type {type_cls}'>{type_label}</span></td>
+          <td class='venue'><div class='venuebox'>{logo_html}<div>{esc(name)}{rank_html}{via_html}{role_html}</div></div></td>
+          <td class='symbol'>{symbol_html}<span class='type {type_cls}'>{type_label}</span></td>
           <td>{p:,.1f}</td>
           <td>{chg_html}</td>
-          <td><div style='display:flex;align-items:center;gap:7px'><div class='bar'><i style='width:{width:.1f}%;background:{color}'></i></div><span style='color:{color};font-size:12px'>{dev:+.3f}%</span></div></td>
-          <td><div style='font-size:15px'>{turnover_html}</div>{share_html}</td>
-          <td><span class='liq' style='color:{liq_color}'>{liq_name}</span><div class='liqline'><i style='width:{liq_width}%;background:{liq_color}'></i></div></td>
+          <td><div style='display:flex;align-items:center;gap:7px'><div class='bar'><i style='width:{width:.1f}%;background:{color}'></i></div><span style='color:{color};font-size:12px'>{dev:+.3f}%</span></div><div class='muted'>VWAP {vwap:,.1f}</div></td>
+          <td><div style='font-size:15px'>{money(turn)}</div>{share_html}</td>
+          <td><span class='liq' style='color:{liq_color}'>{liq_name}</span><div class='liqline'><i style='width:{liq_width:.1f}%;background:{liq_color}'></i></div></td>
         </tr>"""
 
-    body=[]
-    if perp:
-        for r in perp:
-            body.append(render_row(r))
-    if spot:
-        for r in spot:
-            body.append(render_row(r))
+    body = [render_row(r) for r in perp] + [render_row(r) for r in spot]
     html = css + "<div class='nobody-pv-wrap'><table class='nobody-pv'><thead><tr><th>Exchange</th><th>Symbol</th><th>Price($)</th><th>Chg 24H(%)</th><th>vs VWAP</th><th>Turnover 24h</th><th>Liquidity</th></tr></thead><tbody>" + "".join(body) + "</tbody></table></div>"
     st.markdown(html, unsafe_allow_html=True)
 
