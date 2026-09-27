@@ -11046,22 +11046,31 @@ def render_mobile_home (cfg :dict [str ,Any ],data :pd .DataFrame )->None :
     holdings .sort (key =lambda h :h ["value"],reverse =True )
 
     total_value =cust_thb +coins_value 
-    initial_capital =1_000_000.0 # ทุนเริ่มต้นของกระเป๋าจำลอง
-    change_thb =total_value -initial_capital 
-    change_pct =(change_thb /initial_capital *100 )if initial_capital else 0.0 
+
+    # Mobile ใช้ตัวชี้วัดเดียวกับ Desktop: การขึ้น/ลงของเหรียญที่ถืออยู่
+    # ไม่ผูกกับทุนเริ่มต้น จึงไม่เปลี่ยนเพราะเติมเงินเข้ากระเป๋า
+    try :
+        _coin_snap =portfolio_snapshot (sim ,price_thb_map )
+        coin_pnl_thb =float (_coin_snap .get ("unrealized_pnl_thb",0.0 )or 0.0 )
+        coin_cost_thb =float (_coin_snap .get ("invested_cost_thb",0.0 )or 0.0 )
+    except Exception :
+        coin_pnl_thb =0.0 
+        coin_cost_thb =0.0 
+
+    coin_change_pct =(coin_pnl_thb /coin_cost_thb *100.0 )if coin_cost_thb >0 else 0.0 
 
     hour =pd .Timestamp .now (tz ="Asia/Bangkok").hour 
     greeting ="สวัสดีตอนเช้า"if hour <12 else ("สวัสดีตอนบ่าย"if hour <18 else "สวัสดีตอนเย็น")
 
-    change_cls ="mobile-green"if change_thb >=0 else "mobile-red"
-    change_sign ="+"if change_thb >=0 else ""
+    change_cls ="mobile-green"if coin_pnl_thb >=0 else "mobile-red"
+    change_sign ="+"if coin_pnl_thb >=0 else ""
 
     st .markdown (
     f'<div class="mobile-home-greet">{greeting } 👋</div>'
     f'<div class="mobile-home-port-label">มูลค่าพอร์ตทั้งหมด</div>'
     f'<div class="mobile-home-port-value">฿{total_value :,.0f}</div>'
-    f'<div class="mobile-home-port-change {change_cls }">{change_sign }{change_pct :.2f}% '
-    f'({_mobile_money (change_thb ,True )}) เทียบทุนเริ่มต้น</div>',
+    f'<div class="mobile-home-port-change {change_cls }">{change_sign }{coin_change_pct :.2f}% '
+    f'({_mobile_money (coin_pnl_thb ,True )}) การขึ้น/ลงของเหรียญในพอร์ต</div>',
     unsafe_allow_html =True ,
     )
 
@@ -14965,15 +14974,25 @@ market_df :Optional [pd .DataFrame ]=None )->None :
     holdings .sort (key =lambda h :h ["value"],reverse =True )
 
     total_value =cust_thb +coins_value 
-    initial_capital =1_000_000.0 
-    change_thb =total_value -initial_capital 
-    change_pct =(change_thb /initial_capital *100 )if initial_capital else 0.0 
+
+    # แสดงผลการขึ้น/ลงของ "เหรียญที่ถืออยู่" แทนผลตอบแทนเทียบทุนเริ่มต้น
+    # ดังนั้นการเติมเงินเข้า Customer THB Wallet จะไม่ทำให้ % นี้กระโดด
+    # ใช้ Unrealized P&L จาก cost basis ของเหรียญใน Portfolio โดยตรง
+    try :
+        _coin_snap =portfolio_snapshot (sim ,price_thb_map )
+        coin_pnl_thb =float (_coin_snap .get ("unrealized_pnl_thb",0.0 )or 0.0 )
+        coin_cost_thb =float (_coin_snap .get ("invested_cost_thb",0.0 )or 0.0 )
+    except Exception :
+        coin_pnl_thb =0.0 
+        coin_cost_thb =0.0 
+
+    coin_change_pct =(coin_pnl_thb /coin_cost_thb *100.0 )if coin_cost_thb >0 else 0.0 
 
     hour =pd .Timestamp .now (tz ="Asia/Bangkok").hour 
     greeting ="Good morning"if hour <12 else ("Good afternoon"if hour <18 else "Good evening")
 
-    change_cls ="up"if change_thb >=0 else "down"
-    change_sign ="+"if change_thb >=0 else ""
+    change_cls ="up"if coin_pnl_thb >=0 else "down"
+    change_sign ="+"if coin_pnl_thb >=0 else ""
 
     d_name =st .session_state .get ("current_role")# เผื่ออยากดึงชื่อจริง ปรับตามที่มึงเก็บไว้
 
@@ -14982,8 +15001,8 @@ market_df :Optional [pd .DataFrame ]=None )->None :
     f'<div class="greet">{greeting } 👋</div>'
     f'<div class="label">Portfolio</div>'
     f'<div class="value">฿{total_value :,.0f}</div>'
-    f'<div class="change {change_cls }">{change_sign }{change_pct :.2f}% '
-    f'({fmt_baht (change_thb ,force_sign =True )}) เทียบทุนเริ่มต้น</div>'
+    f'<div class="change {change_cls}">{change_sign}{coin_change_pct :.2f}% '
+    f'({fmt_baht (coin_pnl_thb ,force_sign =True )}) การขึ้น/ลงของเหรียญในพอร์ต</div>'
     f'</div>',
     unsafe_allow_html =True ,
     )
