@@ -16080,10 +16080,19 @@ def render_site_footer() -> None:
         .st-key-xs_footer [data-testid="stButton"] { margin: 0 !important; padding: 0 !important; min-height: 0 !important; text-align: left !important; }
         .st-key-xs_footer [data-testid="stElementContainer"]:has([data-testid="stButton"]) { margin: 0 0 11px 0 !important; padding: 0 !important; min-height: 0 !important; text-align: left !important; }
         .st-key-xs_footer [data-testid="stVerticalBlock"] { gap: 0 !important; }
-        .st-key-xs_footer [data-testid="stButton"] > button {
+        /* Force Streamlit internal flex layout to the left. */
+        .st-key-xs_footer [data-testid="stButton"] {
+            width: 100% !important;
+            text-align: left !important;
+        }
+        .st-key-xs_footer [data-testid="stButton"] button {
+            display: flex !important;
+            justify-content: flex-start !important;
+            align-items: center !important;
+            text-align: left !important;
+            width: 100% !important;
             min-height: 0 !important;
             height: auto !important;
-            width: 100% !important;
             padding: 0 !important;
             margin: 0 !important;
             border: 0 !important;
@@ -16091,23 +16100,29 @@ def render_site_footer() -> None:
             background: transparent !important;
             color: #6ea8fe !important;
             box-shadow: none !important;
-            justify-content: flex-start !important;
             font-size: 13px !important;
             font-weight: 400 !important;
             line-height: 1.55 !important;
-            white-space: normal !important;
-            text-align: left !important;
         }
-        .st-key-xs_footer [data-testid="stButton"] > button:hover,
-        .st-key-xs_footer [data-testid="stButton"] > button:focus,
-        .st-key-xs_footer [data-testid="stButton"] > button:active {
+        .st-key-xs_footer [data-testid="stButton"] button > div,
+        .st-key-xs_footer [data-testid="stButton"] button [data-testid="stMarkdownContainer"],
+        .st-key-xs_footer [data-testid="stButton"] button [data-testid="stMarkdownContainer"] p {
+            display: flex !important;
+            justify-content: flex-start !important;
+            text-align: left !important;
+            width: 100% !important;
+            margin: 0 !important;
+            white-space: normal !important;
+        }
+        .st-key-xs_footer [data-testid="stButton"] button:hover,
+        .st-key-xs_footer [data-testid="stButton"] button:focus,
+        .st-key-xs_footer [data-testid="stButton"] button:active {
             color: #9dc4ff !important;
             border: 0 !important;
             background: transparent !important;
             box-shadow: none !important;
             text-decoration: underline !important;
         }
-        .st-key-xs_footer [data-testid="stButton"] > button p { margin: 0 !important; text-align: left !important; width: 100% !important; }
         .st-key-xs_footer .stColumn { min-width: 0 !important; }
 
         @media (max-width:900px) {
