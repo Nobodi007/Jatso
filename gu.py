@@ -6863,7 +6863,7 @@ def render_tab2 (cfg :dict [str ,Any ],data :pd .DataFrame ,data_err :Optional [
     # reuses the same global scope selection without rendering a duplicate control.
     cp_mode =st .session_state .get (
     "cp_mode",
-    "Single-Asset (ใช้เหรียญที่เลือกในแถบซ้าย)",
+    "Single-Asset",
     )
 
     # NC Planner results were moved to Risk Center; do not render the old
@@ -8855,17 +8855,55 @@ def render_risk_center (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :pd
     section ("🎛️ โหมดคำนวณความเสี่ยง")
     st .radio (
     "เลือกโหมด",
-    ["Single-Asset (ใช้เหรียญที่เลือกในแถบซ้าย)","Multi-Asset Portfolio"],
+    ["Single-Asset","Multi-Asset Portfolio"],
     horizontal =True ,key ="cp_mode",
     )
-    st .caption (
-    "โหมดนี้จะถูกใช้ร่วมกับ Risk / NC Planner โดยไม่ต้องเลือกซ้ำในหน้าคำนวณ"
-    )
+
+    cp_mode =st .session_state .get ("cp_mode", "Single-Asset")
+    risk_data =data
+    risk_asset =asset
+
+    # Single-Asset coin selector: use the Risk Center itself instead of the sidebar.
+    if cp_mode .startswith ("Single"):
+        single_assets =[a for a in SUPPORTED_ASSETS if a not in STABLECOINS]
+        default_single =asset if asset in single_assets else single_assets [0]
+        if st .session_state .get ("risk_single_asset") not in single_assets:
+            st .session_state ["risk_single_asset"] =default_single
+        st .markdown (
+        '<div style="margin:4px 0 8px;color:#8b95a5;font-size:.82rem;font-weight:700;">เลือกเหรียญ</div>',
+        unsafe_allow_html =True ,
+        )
+        risk_asset =st .radio (
+        "เลือกเหรียญ",
+        single_assets ,
+        horizontal =True ,
+        key ="risk_single_asset",
+        label_visibility ="collapsed",
+        )
+        if risk_asset != asset:
+            risk_data ,risk_err =fetch_price_data (
+            risk_asset ,cfg ["start_date"],cfg ["end_date"]
+            )
+            if risk_data .empty:
+                st .warning (f"⚠️ ไม่สามารถโหลดข้อมูล {risk_asset} ได้ จึงใช้ {asset} แทน")
+                risk_asset =asset
+                risk_data =data
+
+        # Rebuild the risk snapshot for the coin selected in Risk Center.
+        if not risk_data .empty:
+            selected_date =pd .to_datetime (risk_data .index [-1 ])
+            selected_usdthb =float (risk_data .loc [selected_date ,"USDTHB"])
+            selected_price_map ={k:v for k,v in price_map .items () if k != asset}
+            if "Global_USD" in risk_data .columns:
+                try:
+                    selected_price_map [risk_asset]=float (risk_data .loc [selected_date ,"Global_USD"])*selected_usdthb
+                except (TypeError ,ValueError ,KeyError):
+                    pass
+            snap =portfolio_snapshot (sim ,selected_price_map)
+            risk =_portfolio_risk_metrics (snap ,selected_date)
 
     # NC Planner summary/details live here with the Risk calculation scope.
-    _render_nc_planner_results (cfg ,data ,asset ,st .session_state .get (
-    "cp_mode", "Single-Asset (ใช้เหรียญที่เลือกในแถบซ้าย)"
-    ))
+    _render_nc_planner_results (cfg ,risk_data ,risk_asset ,cp_mode)
 
     vol =float (risk ["volatility_pct"])
     dd =float (risk ["max_drawdown_pct"])
