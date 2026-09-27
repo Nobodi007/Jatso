@@ -5257,6 +5257,99 @@ def _pv_bitunix (b :str )->tuple [float ,float ,float ]:
 
 
     # cg = คำนำหน้าชื่อกระดานใน CoinGlass (ตัวพิมพ์เล็ก ไม่มีจุด/ช่องว่าง)
+
+# --------------------------------------------------------------------------
+# GLOBAL SPOT VENUES — เพิ่มกระดาน Spot ขนาดใหญ่เข้า Board เดียวกัน
+# หมายเหตุ: Spot จะไม่ถูกนำไปคำนวณ Perpetual arbitrage / funding / execution
+# เพื่อไม่ให้เอาคนละ market type มาเทียบกันผิดความหมาย
+# --------------------------------------------------------------------------
+def _spot_kraken(b: str) -> tuple[float, float, float]:
+    pair = "XBTUSD" if b.upper() == "BTC" else f"{b.upper()}USD"
+    d = _http_json(f"https://api.kraken.com/0/public/Ticker?pair={pair}")
+    result = d.get("result") or {}
+    if not result:
+        raise ValueError("empty Kraken ticker")
+    x = next(iter(result.values()))
+    last = float(x["c"][0])
+    open_px = float(x["o"])
+    vol24 = float(x["v"][1])
+    chg = ((last / open_px) - 1.0) * 100.0 if open_px > 0 else 0.0
+    return last, chg, last * vol24
+
+
+def _spot_coinbase(b: str) -> tuple[float, float, float]:
+    pair = f"{b.upper()}-USD"
+    d = _http_json(f"https://api.exchange.coinbase.com/products/{pair}/ticker")
+    last = float(d["price"])
+    volume = float(d.get("volume") or 0.0)
+    return last, None, last * volume
+
+
+def _spot_bitstamp(b: str) -> tuple[float, float, float]:
+    pair = f"{b.lower()}usd"
+    d = _http_json(f"https://www.bitstamp.net/api/v2/ticker/{pair}/")
+    last = float(d["last"])
+    chg = float(d.get("percent_change_24") or 0.0)
+    volume = float(d.get("volume") or 0.0)
+    return last, chg, last * volume
+
+
+def _spot_bitfinex(b: str) -> tuple[float, float, float]:
+    symbol = f"t{b.upper()}USD"
+    d = _http_json(f"https://api-pub.bitfinex.com/v2/ticker/{symbol}")
+    last = float(d[6])
+    chg = float(d[5]) * 100.0
+    volume = float(d[7])
+    return last, chg, last * volume
+
+
+def _spot_kucoin(b: str) -> tuple[float, float, float]:
+    symbol = f"{b.upper()}-USDT"
+    # Level-1 endpoint supplied for the board's live price.
+    level1 = _http_json(
+        f"https://api.kucoin.com/api/v1/market/orderbook/level1?symbol={symbol}"
+    )
+    data = level1.get("data") or {}
+    last = float(data["price"])
+
+    # KuCoin's 24h stats endpoint supplies quote turnover and 24h change.
+    stats = _http_json(
+        f"https://api.kucoin.com/api/v1/market/stats?symbol={symbol}"
+    )
+    sd = stats.get("data") or {}
+    chg = float(sd.get("changeRate") or 0.0) * 100.0
+    turnover = float(sd.get("volValue") or 0.0)
+    return last, chg, turnover
+
+
+_SPOT_VENUES =[
+    dict(name="Kraken", bg="#5741D9", fg="#ffffff", tx="K",
+         logo="https://www.google.com/s2/favicons?domain=kraken.com&sz=64",
+         fn=_spot_kraken, sym=lambda b: "XBT/USD" if b == "BTC" else f"{b}/USD",
+         url=lambda b: f"https://www.kraken.com/prices/{b.lower()}",
+         note="Spot · USD"),
+    dict(name="Coinbase", bg="#0052FF", fg="#ffffff", tx="CB",
+         logo="https://www.google.com/s2/favicons?domain=coinbase.com&sz=64",
+         fn=_spot_coinbase, sym=lambda b: f"{b}/USD",
+         url=lambda b: f"https://www.coinbase.com/advanced-trade/spot/{b}-USD",
+         note="Spot · USD"),
+    dict(name="Bitstamp", bg="#0B6E4F", fg="#ffffff", tx="BS",
+         logo="https://www.google.com/s2/favicons?domain=bitstamp.net&sz=64",
+         fn=_spot_bitstamp, sym=lambda b: f"{b}/USD",
+         url=lambda b: f"https://www.bitstamp.net/markets/{b.lower()}/usd/",
+         note="Spot · USD"),
+    dict(name="Bitfinex", bg="#16B979", fg="#07110d", tx="BF",
+         logo="https://www.google.com/s2/favicons?domain=bitfinex.com&sz=64",
+         fn=_spot_bitfinex, sym=lambda b: f"{b}/USD",
+         url=lambda b: f"https://trading.bitfinex.com/t/{b.upper()}:USD",
+         note="Spot · USD"),
+    dict(name="KuCoin", bg="#24AE8F", fg="#07110d", tx="KC",
+         logo="https://www.google.com/s2/favicons?domain=kucoin.com&sz=64",
+         fn=_spot_kucoin, sym=lambda b: f"{b}/USDT",
+         url=lambda b: f"https://www.kucoin.com/trade/{b}-USDT",
+         note="Spot · USDT"),
+]
+
 _PERP_VENUES =[
 dict (
 name ="Binance",
@@ -5408,9 +5501,16 @@ rows :list [dict ],v :dict ,base :str
 
 
 @_cache_data (ttl =30 ,show_spinner =False )
-def fetch_perp_venues (base :str ="BTC")->tuple [pd .DataFrame ,str ]:
-    """ดึงทุกกระดานพร้อมกัน → ตัวที่ล้มค่อยไปดึงผ่าน CoinGlass ถ้ามี key"""
-    def one (v :dict )->dict :
+def fetch_perp_venues (base :str ="BTC")->tuple [pd.DataFrame ,str ]:
+    """ดึง Global Perpetual + Global Spot ในรอบเดียว
+
+    Spot ถูกเก็บเป็น market_type="spot" เพื่อให้แสดงบน Board เดียวกัน
+    แต่ไม่ปนเข้า Perpetual arbitrage / VWAP / opportunity history
+    """
+    venues =[(v, "perp") for v in _PERP_VENUES] + [(v, "spot") for v in _SPOT_VENUES]
+
+    def one (item :tuple[dict,str])->dict :
+        v, market_type = item
         row =dict (
         exchange =v ["name"],
         symbol =v ["sym"](base ),
@@ -5420,22 +5520,24 @@ def fetch_perp_venues (base :str ="BTC")->tuple [pd .DataFrame ,str ]:
         turnover =None ,
         err =None ,
         via =None ,
+        market_type =market_type ,
         )
         try :
             p ,c ,t =v ["fn"](base )
-            if not (p >0 ):
+            if not (p >0):
                 raise ValueError ("bad price")
             row .update (price =p ,chg =c ,turnover =t )
         except urllib .error .HTTPError as e :
             row ["err"]=f"HTTP {e .code }"
         except Exception as e :
-            row ["err"]=type (e ).__name__ 
-        return row 
+            row ["err"]=type (e ).__name__
+        return row
 
-    with ThreadPoolExecutor (max_workers =len (_PERP_VENUES ))as ex :
-        rows =list (ex .map (one ,_PERP_VENUES ))
+    with ThreadPoolExecutor (max_workers =len (venues))as ex :
+        rows =list (ex .map (one ,venues))
 
-    failed =[r for r in rows if r ["err"] and str(r.get("market_type","perp")).lower()=="perp"]
+    # CoinGlass fallback applies only to perpetual venues.
+    failed =[r for r in rows if r ["err"] and r.get("market_type")=="perp"]
     if failed :
         key =_coinglass_key ()
         cg_rows :list [dict ]=[]
@@ -5449,9 +5551,9 @@ def fetch_perp_venues (base :str ="BTC")->tuple [pd .DataFrame ,str ]:
             except Exception as e :
                 cg_err =f"CoinGlass {type (e ).__name__ }: {e }"[:70 ]
 
-        meta ={v ["name"]:v for v in _PERP_VENUES }
+        meta ={v ["name"]:v for v in (_PERP_VENUES + _SPOT_VENUES)}
         for r in failed :
-            hit =_cg_pick (cg_rows ,meta [r ["exchange"]],base )if cg_rows else None 
+            hit =_cg_pick (cg_rows ,meta [r ["exchange"]],base )if cg_rows else None
             if hit :
                 r .update (
                 price =hit [0 ],
@@ -5465,9 +5567,12 @@ def fetch_perp_venues (base :str ="BTC")->tuple [pd .DataFrame ,str ]:
             elif key :
                 r ["err"]+=" → CoinGlass ไม่พบคู่นี้"
 
-    df =pd .DataFrame (rows ).sort_values (
-    "turnover",ascending =False ,na_position ="last"
-    )
+    df =pd .DataFrame (rows )
+    # Perpetual first (by turnover), then Spot (by turnover), keeping the board
+    # visually grouped while still showing all venues together.
+    df ["_type_order"] =df ["market_type"].map ({"perp":0,"spot":1}).fillna(9)
+    df =df .sort_values (["_type_order","turnover"],ascending =[True,False],na_position ="last")
+    df =df .drop (columns ="_type_order")
     return df .reset_index (drop =True ),pd .Timestamp .now ("Asia/Bangkok").strftime ("%H:%M:%S")
 
 
@@ -6211,30 +6316,29 @@ run();
 
 
 def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
-    """Server-rendered fallback for the Global Perpetual table.
+    """Render the combined Global Venue Board (Perpetual + Spot).
 
-    The original table uses a components.html iframe/JS renderer.  Keep the
-    visual table available even when an embedded iframe is suppressed or fails
-    to execute in a deployed Streamlit session.
+    Perpetual remains the comparison/arb universe. Spot venues are displayed
+    for market context only and are explicitly excluded from arb calculations.
     """
     valid = [r for r in rows if r.get("price") is not None]
     if not valid:
-        st.warning("ไม่พบข้อมูล Global Perpetual ในขณะนี้")
+        st.warning("ไม่พบข้อมูล Global Venue ในขณะนี้")
         return
 
-    prices = [float(r["price"]) for r in valid]
-    turnovers = [float(r["turnover"]) for r in valid if r.get("turnover") is not None]
-    vwap = (sum(float(r["price"]) * float(r.get("turnover") or 0.0) for r in valid) /
-            sum(float(r.get("turnover") or 0.0) for r in valid)) if sum(float(r.get("turnover") or 0.0) for r in valid) > 0 else sum(prices) / len(prices)
-    max_dev = max(max(abs((float(r["price"]) / vwap - 1.0) * 100.0) for r in valid), 0.001)
-    total_turn = sum(float(r.get("turnover") or 0.0) for r in valid)
-    low = min(valid, key=lambda r: float(r["price"]))
-    high = max(valid, key=lambda r: float(r["price"]))
-    spread_pct = (float(high["price"]) / float(low["price"]) - 1.0) * 100.0 if float(low["price"]) else 0.0
+    perp = [r for r in valid if str(r.get("market_type", "perp")).lower() == "perp"]
+    spot = [r for r in valid if str(r.get("market_type", "perp")).lower() == "spot"]
+    universe = perp or valid
 
-    # Preserve the same 0.02% arb-highlight threshold used by the JS table.
-    low_name = str(low.get("exchange", "")) if spread_pct >= 0.02 else ""
-    high_name = str(high.get("exchange", "")) if spread_pct >= 0.02 else ""
+    prices = [float(r["price"]) for r in universe]
+    total_turn = sum(float(r.get("turnover") or 0.0) for r in perp)
+    vwap = (sum(float(r["price"]) * float(r.get("turnover") or 0.0) for r in perp) / total_turn) if perp and total_turn > 0 else sum(prices) / len(prices)
+    max_dev = max(max(abs((float(r["price"]) / vwap - 1.0) * 100.0) for r in universe), 0.001)
+    low = min(perp, key=lambda r: float(r["price"])) if perp else min(universe, key=lambda r: float(r["price"]))
+    high = max(perp, key=lambda r: float(r["price"])) if perp else max(universe, key=lambda r: float(r["price"]))
+    spread_pct = (float(high["price"]) / float(low["price"]) - 1.0) * 100.0 if float(low["price"]) else 0.0
+    low_name = str(low.get("exchange", "")) if perp and spread_pct >= 0.02 else ""
+    high_name = str(high.get("exchange", "")) if perp and spread_pct >= 0.02 else ""
 
     def esc(x: Any) -> str:
         return _html.escape(str(x))
@@ -6253,7 +6357,6 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
             return "—"
 
     def liquidity(turnover: float | None) -> tuple[str, str]:
-        # Same proxy thresholds used by the existing liquidity intelligence.
         t = float(turnover or 0.0)
         if t >= 2_500_000_000:
             return "High", "#0ecb81"
@@ -6263,52 +6366,64 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
 
     css = """
     <style>
-      .nobody-pv-wrap{border:1px solid #2b3139;border-radius:10px;overflow:hidden;background:#0d1117;margin:0 0 12px 0}
+      .nobody-pv-wrap{border:1px solid #2b3139;border-radius:12px;overflow:hidden;background:#0d1117;margin:0 0 12px 0}
       .nobody-pv{width:100%;border-collapse:collapse;font-family:Arial,sans-serif;color:#eaecef;font-size:14px}
       .nobody-pv th{background:#171b20;color:#848e9c;text-align:left;font-weight:700;padding:11px 14px;border-bottom:1px solid #2b3139;white-space:nowrap}
-      .nobody-pv td{padding:13px 14px;border-bottom:1px solid #252a31;vertical-align:middle}
+      .nobody-pv td{padding:12px 14px;border-bottom:1px solid #252a31;vertical-align:middle}
       .nobody-pv tr:last-child td{border-bottom:0}
       .nobody-pv .venue{font-weight:700;font-size:15px;white-space:nowrap}.nobody-pv .venuebox{display:flex;align-items:center;gap:9px}.nobody-pv .venue-logo{width:28px;height:28px;border-radius:50%;object-fit:cover;background:#171b20;border:1px solid #2b3139;flex:0 0 28px}
-      .nobody-pv .symbol{color:#2f8cff;white-space:nowrap}
+      .nobody-pv .symbol{color:#2f8cff;white-space:nowrap}.nobody-pv .type{display:inline-block;margin-left:7px;padding:2px 6px;border-radius:5px;font-size:10px;font-weight:800;letter-spacing:.3px;vertical-align:middle}.nobody-pv .type-perp{color:#2f8cff;background:rgba(47,140,255,.10);border:1px solid rgba(47,140,255,.28)}.nobody-pv .type-spot{color:#b7c0cc;background:rgba(132,142,156,.08);border:1px solid #2b3139}
       .nobody-pv .chg-up{color:#0ecb81;font-weight:700}.nobody-pv .chg-down{color:#f6465d;font-weight:700}
-      .nobody-pv .bar{height:6px;background:#242a31;border-radius:8px;min-width:90px;position:relative;overflow:hidden}
-      .nobody-pv .bar i{display:block;height:100%;border-radius:8px;position:absolute;left:50%;transform:translateX(-50%)}
-      .nobody-pv .buy{background:rgba(14,203,129,.12);box-shadow:inset 3px 0 #0ecb81}
-      .nobody-pv .sell{background:rgba(246,70,93,.10);box-shadow:inset 3px 0 #f6465d}
+      .nobody-pv .bar{height:6px;background:#242a31;border-radius:8px;min-width:90px;position:relative;overflow:hidden}.nobody-pv .bar i{display:block;height:100%;border-radius:8px;position:absolute;left:50%;transform:translateX(-50%)}
+      .nobody-pv .buy{background:rgba(14,203,129,.12);box-shadow:inset 3px 0 #0ecb81}.nobody-pv .sell{background:rgba(246,70,93,.10);box-shadow:inset 3px 0 #f6465d}
       .nobody-pv .arb-buy{color:#0ecb81;font-size:11px;font-weight:700}.nobody-pv .arb-sell{color:#f6465d;font-size:11px;font-weight:700}
       .nobody-pv .share{height:5px;background:#20252c;border-radius:5px;margin-top:5px;overflow:hidden}.nobody-pv .share i{display:block;height:100%;background:#2f8cff;border-radius:5px}
       .nobody-pv .liq{display:inline-block;padding:4px 8px;border:1px solid currentColor;border-radius:6px;font-size:12px;font-weight:700}.nobody-pv .liqline{height:4px;background:#242a31;border-radius:4px;margin-top:6px;overflow:hidden}.nobody-pv .liqline i{display:block;height:100%;border-radius:4px}
       .nobody-pv .muted{color:#848e9c;font-size:11px;margin-top:3px}.nobody-pv .via{display:inline-block;color:#848e9c;border:1px solid #2b3139;border-radius:4px;padding:2px 5px;font-size:10px;margin-left:8px}
+      .nobody-pv .spot-row{background:rgba(132,142,156,.025)}.nobody-pv .section-row td{padding:7px 14px;background:#11151b;color:#848e9c;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;border-top:1px solid #2b3139}
     </style>
     """
-    body=[]
-    for r in valid:
+    def render_row(r: dict[str, Any]) -> str:
         p=float(r["price"]); chg=r.get("chg"); turn=float(r.get("turnover") or 0.0)
+        is_spot=str(r.get("market_type","perp")).lower()=="spot"
         dev=(p/vwap-1.0)*100.0
         width=min(42.0, abs(dev)/max_dev*42.0)
         color="#0ecb81" if dev <= 0 else "#f6465d"
         chg_html="—" if chg is None else f"<span class='{ 'chg-up' if float(chg)>=0 else 'chg-down' }'>{float(chg):+.2f}%</span>"
-        share=(turn/total_turn*100.0) if total_turn else 0.0
-        role_html=""
-        row_class=""
-        if low_name and str(r.get("exchange"))==low_name:
+        share=(turn/total_turn*100.0) if (total_turn and not is_spot) else 0.0
+        role_html=""; row_class="spot-row" if is_spot else ""
+        if not is_spot and low_name and str(r.get("exchange"))==low_name:
             row_class="buy"; role_html="<div class='arb-buy'>🟢 ซื้อที่นี่</div>"
-        elif high_name and str(r.get("exchange"))==high_name:
+        elif not is_spot and high_name and str(r.get("exchange"))==high_name:
             row_class="sell"; role_html="<div class='arb-sell'>🔴 ขายที่นี่</div>"
         liq_name, liq_color=liquidity(turn)
         liq_width={"High":100,"Medium":60,"Low":25}[liq_name]
-        body.append(f"""
+        type_cls="type-spot" if is_spot else "type-perp"
+        type_label="SPOT" if is_spot else "PERP"
+        turnover_html=money(turn) if turn > 0 else "—"
+        share_html=(f"<div class='share'><i style='width:{min(100,share):.1f}%'></i></div><div class='muted'>{share:.1f}% ของ Perpetual</div>" if not is_spot else "<div class='muted'>Spot · ไม่รวม Arb</div>")
+        return f"""
         <tr class='{row_class}'>
           <td class='venue'><div class='venuebox'>{('<img class="venue-logo" src="'+esc(r.get('logo',''))+'" onerror="this.style.display=\'none\'" />') if r.get('logo') else ''}<div>{esc(r.get('exchange','—'))}{'<span class="via">via browser</span>' if r.get('via')=='browser' else ''}{role_html}</div></div></td>
-          <td class='symbol'>{esc(r.get('symbol','—'))}</td>
+          <td class='symbol'>{esc(r.get('symbol','—'))}<span class='type {type_cls}'>{type_label}</span></td>
           <td>{p:,.1f}</td>
           <td>{chg_html}</td>
           <td><div style='display:flex;align-items:center;gap:7px'><div class='bar'><i style='width:{width:.1f}%;background:{color}'></i></div><span style='color:{color};font-size:12px'>{dev:+.3f}%</span></div></td>
-          <td><div style='font-size:15px'>{money(turn)}</div><div class='share'><i style='width:{min(100,share):.1f}%'></i></div><div class='muted'>{share:.1f}% ของตลาด</div></td>
+          <td><div style='font-size:15px'>{turnover_html}</div>{share_html}</td>
           <td><span class='liq' style='color:{liq_color}'>{liq_name}</span><div class='liqline'><i style='width:{liq_width}%;background:{liq_color}'></i></div></td>
-        </tr>""")
+        </tr>"""
+
+    body=[]
+    if perp:
+        for r in perp:
+            body.append(render_row(r))
+    if spot:
+        body.append("<tr class='section-row'><td colspan='7'>SPOT MARKET · 5 เพิ่มเติม · แสดงเพื่อเทียบราคา/สภาพคล่อง · ไม่รวม Perpetual Arb</td></tr>")
+        for r in spot:
+            body.append(render_row(r))
     html = css + "<div class='nobody-pv-wrap'><table class='nobody-pv'><thead><tr><th>Exchange</th><th>Symbol</th><th>Price($)</th><th>Chg 24H(%)</th><th>vs VWAP</th><th>Turnover 24h</th><th>Liquidity</th></tr></thead><tbody>" + "".join(body) + "</tbody></table></div>"
     st.markdown(html, unsafe_allow_html=True)
+
 
 def _render_global_perp_coin_tabs(default_base: str = "BTC") -> str:
     """Coin switcher styled as real tabs, with coin logos.
@@ -6513,7 +6628,7 @@ def render_perp_venue_table (base :str ="BTC")->None :
     # Fetch/build the venue rows first so the comparison table is the first
     # visual element in this section.  Analysis controls/cards follow below.
     df ,ts =fetch_perp_venues (base )
-    meta ={v ["name"]:v for v in _PERP_VENUES }
+    meta ={v ["name"]:v for v in (_PERP_VENUES + _SPOT_VENUES)}
 
     def _num (x :Any )->Optional [float ]:
         return None if pd .isna (x )else float (x )
@@ -6536,11 +6651,12 @@ def render_perp_venue_table (base :str ="BTC")->None :
         turnover =_num (r ["turnover"]),
         err =r ["err"]if isinstance (r ["err"],str )else None ,
         via =r ["via"]if isinstance (r ["via"],str )else None ,
-        market_type ="perp",
+        market_type =str (r.get ("market_type")or "perp"),
         )
         )
 
-    section ("🌐 เทียบราคา — Global Perpetual")
+    section ("🌐 เทียบราคา — Global Venue Board")
+    st.caption (f"Perpetual {len(_PERP_VENUES)} กระดาน + Spot {len(_SPOT_VENUES)} กระดาน · Spot แสดงเพื่อเทียบตลาดและสภาพคล่อง แต่ไม่รวม Perpetual Arb")
 
     # The exchange comparison table is the hero element.  Read the selected
     # coin from session state first, then render the coin tabs underneath it.
@@ -6564,7 +6680,7 @@ def render_perp_venue_table (base :str ="BTC")->None :
                 turnover=_num(r["turnover"]),
                 err=r["err"] if isinstance(r["err"], str) else None,
                 via=r["via"] if isinstance(r["via"], str) else None,
-                market_type="perp",
+                market_type=str(r.get("market_type") or "perp"),
             ))
 
     # Render the comparison table first so exchange logos/venues remain the
