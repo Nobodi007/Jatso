@@ -11001,12 +11001,68 @@ def _mobile_home_goto (tab_label :str )->None :
     st .session_state ["mobile_nav"]=tab_label 
 
 
+
+def _build_portfolio_performance_df_v56(sim, orders, initial_capital):
+    """Build Portfolio Performance data from current/legacy order schemas.
+    Kept above mobile/desktop renderers so the helper is always defined before main().
+    """
+    empty = pd.DataFrame(columns=["วันที่", "equity"])
+    try:
+        # Prefer portfolio snapshots when they are available.
+        snaps = sim.get("portfolio_snapshots", []) if isinstance(sim, dict) else []
+        rows = []
+        if isinstance(snaps, list):
+            for snap in snaps:
+                if not isinstance(snap, dict):
+                    continue
+                dt = pd.to_datetime(snap.get("timestamp") or snap.get("date"), errors="coerce")
+                val = pd.to_numeric(snap.get("total_value_thb"), errors="coerce")
+                if pd.notna(dt) and pd.notna(val):
+                    rows.append((dt, float(val)))
+        if len(rows) >= 2:
+            df = pd.DataFrame(rows, columns=["วันที่", "equity"]).sort_values("วันที่")
+            return df.drop_duplicates("วันที่", keep="last").reset_index(drop=True)
+
+        if not orders:
+            return empty
+
+        odf = pd.DataFrame(orders).copy()
+        # Current Telegram/portfolio schema first, then legacy Thai schema.
+        ds = odf["timestamp"] if "timestamp" in odf.columns else odf.get("วันที่", odf.get("date"))
+        if ds is None:
+            return empty
+        odf["วันที่"] = pd.to_datetime(ds, errors="coerce")
+
+        if "realized_pnl_thb" in odf.columns:
+            ps = odf["realized_pnl_thb"]
+        elif "กำไรออเดอร์" in odf.columns:
+            ps = odf["กำไรออเดอร์"]
+        elif "realized_pnl" in odf.columns:
+            ps = odf["realized_pnl"]
+        else:
+            ps = 0.0
+        odf["pnl"] = pd.to_numeric(ps, errors="coerce").fillna(0.0)
+        odf = odf.dropna(subset=["วันที่"]).sort_values("วันที่")
+        if odf.empty:
+            return empty
+
+        # One point per day keeps the chart readable and avoids duplicate timestamps.
+        daily = odf.groupby(odf["วันที่"].dt.date, as_index=False)["pnl"].sum()
+        daily["วันที่"] = pd.to_datetime(daily["วันที่"])
+        daily["equity"] = float(initial_capital) + daily["pnl"].cumsum()
+        start = daily["วันที่"].iloc[0] - pd.Timedelta(days=1)
+        start_row = pd.DataFrame({"วันที่": [start], "equity": [float(initial_capital)]})
+        return pd.concat([start_row, daily[["วันที่", "equity"]]], ignore_index=True)
+    except Exception:
+        return empty
+
 def render_mobile_home (cfg :dict [str ,Any ],data :pd .DataFrame )->None :
     sim =st .session_state .get ("sim",{})or {}
     asset =str (cfg .get ("asset","BTC"))
     cust_thb =float (sim .get ("customer_thb",1_000_000.0 )or 0.0 )
     cust_coins =sim .get ("customer_coins",{})or {}
     orders =sim .get ("orders",[])if isinstance (sim ,dict )else []
+    initial_capital =float (sim .get ("initial_capital_thb",1_000_000.0 )or 1_000_000.0 )
 
     usdthb_now =1.0 
     try :
@@ -11077,7 +11133,7 @@ def render_mobile_home (cfg :dict [str ,Any ],data :pd .DataFrame )->None :
     # ---- กราฟ Portfolio Performance ----
     st .markdown ('<div class="mobile-home-chart-card">'
     '<div class="mobile-home-chart-title">📈 Portfolio Performance</div>',unsafe_allow_html =True )
-    plot_df =_build_portfolio_performance_df(sim,orders,initial_capital) if go is not None else pd.DataFrame()
+    plot_df =_build_portfolio_performance_df_v56(sim,orders,initial_capital) if go is not None else pd.DataFrame()
     if not plot_df.empty:
         try :
             marker_mode="lines+markers"if len(plot_df)<=8 else "lines"
@@ -14954,6 +15010,7 @@ market_df :Optional [pd .DataFrame ]=None )->None :
     cust_thb =float (sim .get ("customer_thb",1_000_000.0 )or 0.0 )
     cust_coins =sim .get ("customer_coins",{})or {}
     orders =sim .get ("orders",[])if isinstance (sim ,dict )else []
+    initial_capital =float (sim .get ("initial_capital_thb",1_000_000.0 )or 1_000_000.0 )
 
     usdthb_now =1.0 
     try :
@@ -15031,7 +15088,7 @@ market_df :Optional [pd .DataFrame ]=None )->None :
     # ---- Portfolio Performance chart ----
     st .markdown ('<div class="dash-chart-card">'
     '<div class="dash-chart-title">📈 Portfolio Performance</div>',unsafe_allow_html =True )
-    plot_df =_build_portfolio_performance_df(sim,orders,initial_capital) if go is not None else pd.DataFrame()
+    plot_df =_build_portfolio_performance_df_v56(sim,orders,initial_capital) if go is not None else pd.DataFrame()
     if not plot_df.empty:
         try :
             marker_mode ="lines+markers"if len(plot_df)<=8 else "lines"
