@@ -14476,8 +14476,8 @@ def _render_ai_daily_portfolio_brief (cfg :dict [str ,Any ],data :pd .DataFrame 
         "คุณคือ Nobody AI Daily Portfolio Analyst. ตอบภาษาไทยสั้น กระชับ. "
         "ข้อมูลที่ส่งมาใน JSON คือข้อเท็จจริงที่ระบบ Nobody คำนวณแล้ว ห้ามแก้ตัวเลข ห้ามสร้างตัวเลขใหม่ "
         "ห้ามทำนายราคาและห้ามแนะนำซื้อหรือขาย. วิเคราะห์เฉพาะความสัมพันธ์จาก facts ที่ให้. "
-        "เขียน 1-2 ประโยคสั้น ๆ สำหรับหัวข้อ 'AI มองภาพรวม' เช่น ระบุสินทรัพย์ที่มีสัดส่วนสูงสุด "
-        "และอธิบายว่าการเปลี่ยนแปลงรายวันของพอร์ตมาจากอะไรเมื่อข้อมูลรองรับ. "
+        "เขียน 1-2 ประโยคสั้น ๆ เป็นเนื้อหาสรุปเท่านั้น ไม่ต้องใส่หัวข้อ ไม่ต้องใส่คำนำ และห้ามขึ้นต้นด้วย 'AI มองภาพรวม' "
+        "เช่น ระบุสินทรัพย์ที่มีสัดส่วนสูงสุด และอธิบายว่าการเปลี่ยนแปลงรายวันของพอร์ตมาจากอะไรเมื่อข้อมูลรองรับ. "
         "ถ้าข้อมูลไม่พอ ให้บอกว่าไม่มีข้อมูลเพียงพอแทนการเดา."
         )
         prompt =(
@@ -14489,7 +14489,12 @@ def _render_ai_daily_portfolio_brief (cfg :dict [str ,Any ],data :pd .DataFrame 
         cache.update (date =today_key ,facts_key =cache_key ,text =str (brief_text))
         st .session_state ["sim"] =sim
 
-    safe =_html .escape (str (brief_text))
+    # Gemini บางครั้งใส่หัวข้อซ้ำกับ UI เช่น "**AI มองภาพรวม:**"
+    # ตัดเฉพาะหัวข้อที่ซ้ำออก โดยไม่แตะเนื้อหาสรุปจริง
+    _brief_clean = str (brief_text).strip ()
+    _brief_clean = re.sub (r"^\s*\*{0,2}AI\s*มองภาพรวม\s*:?\*{0,2}\s*", "", _brief_clean, flags=re.IGNORECASE)
+    _brief_clean = re.sub (r"^\s*AI\s*มองภาพรวม\s*[-–—:]\s*", "", _brief_clean, flags=re.IGNORECASE)
+    safe =_html .escape (_brief_clean.strip ())
     daily_cls ="up"if daily_pnl_thb >=0 else "down"
     daily_sign ="+"if daily_pnl_thb >=0 else ""
     cash_txt =f"฿{cash_thb:,.0f} ({cash_pct:.1f}%)"
