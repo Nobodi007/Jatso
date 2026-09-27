@@ -16040,36 +16040,48 @@ def render_site_footer() -> None:
     st.markdown(
         r"""
         <style>
-        .xs-footer-wrap {
+        /* Footer visual design — keep real Streamlit buttons/functionality */
+        .st-key-xs_footer {
             margin-top: 70px;
+            padding: 0 !important;
+        }
+        .st-key-xs_footer .xs-footer-wrap {
+            width: 100%;
             padding: 42px 34px 24px;
             background: linear-gradient(180deg, rgba(255,255,255,.018), rgba(255,255,255,.006));
             border-top: 1px solid rgba(255,255,255,.10);
             box-sizing: border-box;
         }
-        .xs-footer-wrap .xs-footer-inner { max-width: 1500px; margin: 0 auto; }
-        .xs-footer-wrap .xs-footer-brand { padding-right: 25px; }
-        .xs-footer-wrap .xs-footer-logo { display:flex; align-items:center; gap:10px; margin-bottom:13px; }
-        .xs-footer-wrap .xs-footer-logo-icon {
+        .st-key-xs_footer .xs-footer-inner { max-width: 1500px; margin: 0 auto; }
+        .st-key-xs_footer .xs-footer-brand { padding-right: 25px; }
+        .st-key-xs_footer .xs-footer-logo { display:flex; align-items:center; gap:10px; margin-bottom:13px; }
+        .st-key-xs_footer .xs-footer-logo-icon {
             width:36px; height:36px; border-radius:10px; display:flex; align-items:center; justify-content:center;
             background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.10); font-size:19px;
         }
-        .xs-footer-wrap .xs-footer-logo-text { color:#f5f7fa; font-size:20px; font-weight:800; letter-spacing:-.2px; }
-        .xs-footer-wrap .xs-footer-description { color:rgba(255,255,255,.56); font-size:13px; line-height:1.75; max-width:290px; }
-        .xs-footer-wrap .xs-footer-heading { color:#f5f7fa; font-size:14px; font-weight:800; margin-bottom:10px; }
-        .xs-footer-wrap .xs-footer-bottom {
+        .st-key-xs_footer .xs-footer-logo-text { color:#f5f7fa; font-size:20px; font-weight:800; letter-spacing:-.2px; }
+        .st-key-xs_footer .xs-footer-description { color:rgba(255,255,255,.56); font-size:13px; line-height:1.75; max-width:290px; }
+        .st-key-xs_footer .xs-footer-heading { color:#f5f7fa; font-size:14px; font-weight:800; margin-bottom:17px; }
+        .st-key-xs_footer .xs-footer-bottom {
             margin-top:34px; padding-top:19px; border-top:1px solid rgba(255,255,255,.07);
             display:flex; align-items:center; justify-content:space-between; gap:20px;
         }
-        .xs-footer-wrap .xs-footer-copy { color:rgba(255,255,255,.38); font-size:11px; line-height:1.6; }
-        .xs-footer-wrap .xs-footer-status { display:inline-flex; align-items:center; gap:7px; color:rgba(255,255,255,.48); font-size:11px; }
-        .xs-footer-wrap .xs-footer-status-dot {
+        .st-key-xs_footer .xs-footer-copy { color:rgba(255,255,255,.38); font-size:11px; line-height:1.6; }
+        .st-key-xs_footer .xs-footer-status { display:inline-flex; align-items:center; gap:7px; color:rgba(255,255,255,.48); font-size:11px; }
+        .st-key-xs_footer .xs-footer-status-dot {
             width:7px; height:7px; border-radius:50%; background:#20c997; box-shadow:0 0 10px rgba(32,201,151,.45);
         }
-        .xs-footer-wrap [data-testid="stButton"] > button {
+
+        /* IMPORTANT: style only footer buttons, while keeping them clickable */
+        .st-key-xs_footer [data-testid="stButton"] { margin: 0 0 6px 0 !important; }
+        .st-key-xs_footer [data-testid="stButton"] > button {
             min-height: 0 !important;
-            padding: 3px 0 !important;
+            height: auto !important;
+            width: 100% !important;
+            padding: 0 !important;
+            margin: 0 !important;
             border: 0 !important;
+            border-radius: 0 !important;
             background: transparent !important;
             color: rgba(255,255,255,.66) !important;
             box-shadow: none !important;
@@ -16080,20 +16092,25 @@ def render_site_footer() -> None:
             white-space: normal !important;
             text-align: left !important;
         }
-        .xs-footer-wrap [data-testid="stButton"] > button:hover {
-            color: #0ecb81 !important;
+        .st-key-xs_footer [data-testid="stButton"] > button:hover,
+        .st-key-xs_footer [data-testid="stButton"] > button:focus,
+        .st-key-xs_footer [data-testid="stButton"] > button:active {
+            color: #ffffff !important;
             border: 0 !important;
             background: transparent !important;
+            box-shadow: none !important;
         }
-        .xs-footer-wrap [data-testid="stButton"] > button p { margin: 0 !important; }
-        .xs-footer-wrap .stColumn { min-width: 0 !important; }
+        .st-key-xs_footer [data-testid="stButton"] > button p { margin: 0 !important; }
+        .st-key-xs_footer .stColumn { min-width: 0 !important; }
+
         @media (max-width:900px) {
-            .xs-footer-wrap { padding:36px 24px 22px; }
+            .st-key-xs_footer .xs-footer-wrap { padding:36px 24px 22px; }
         }
         @media (max-width:640px) {
-            .xs-footer-wrap { margin-top:45px; padding:30px 18px 20px; }
-            .xs-footer-wrap .xs-footer-bottom { margin-top:27px; align-items:flex-start; flex-direction:column; gap:8px; }
-            .xs-footer-wrap [data-testid="stButton"] > button { font-size:12px !important; }
+            .st-key-xs_footer { margin-top:45px; }
+            .st-key-xs_footer .xs-footer-wrap { padding:30px 18px 20px; }
+            .st-key-xs_footer .xs-footer-bottom { margin-top:27px; align-items:flex-start; flex-direction:column; gap:8px; }
+            .st-key-xs_footer [data-testid="stButton"] > button { font-size:12px !important; }
         }
         </style>
         """,
