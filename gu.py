@@ -5880,9 +5880,42 @@ def _arb_history_record(highlights: Optional[dict], rows: list[dict[str, Any]], 
 
 
 def render_arb_history_tracker(base: str = "BTC") -> None:
-    """Display persistent Arb history for the current user/base."""
+    """Display Arb history with persistent DB, session, and empty-state fallbacks."""
     history, source = _arb_history_load_persistent(base=base, limit=5000)
+
+    # If the persistent store is empty/unavailable, use the live session cache
+    # immediately. This keeps the tab useful before a Supabase migration or
+    # while a database write is temporarily unavailable.
     if not history:
+        session_rows = list(st.session_state.get("arb_opportunity_history", []) or [])
+        history = [
+            r for r in session_rows
+            if str(r.get("base") or base) == str(base)
+        ]
+        if history:
+            source = "session"
+
+    # Never leave the tab visually blank. A new user/base gets a clear
+    # empty state and the tracker will populate automatically on new snapshots.
+    if not history:
+        st.markdown(
+            """
+            <div style='margin-top:14px;border:1px solid #2b3139;border-radius:12px;
+                        padding:24px 22px;background:linear-gradient(135deg,rgba(22,26,30,.96),rgba(14,18,23,.96));'>
+              <div style='font-size:1rem;font-weight:800;color:#EAECEF;margin-bottom:8px;'>
+                📚 Opportunity History
+              </div>
+              <div style='color:#848e9c;font-size:.9rem;line-height:1.6;'>
+                ยังไม่มี Arb Opportunity snapshot สำหรับ <b style='color:#EAECEF;'>%s</b>
+                ตอนนี้ระบบจะเริ่มเก็บประวัติอัตโนมัติเมื่อมีข้อมูล Arb เข้ามา
+              </div>
+              <div style='margin-top:12px;color:#5e6673;font-size:.78rem;'>
+                ไม่ต้องกดบันทึกเอง · History จะถูกสะสมจาก snapshot ที่ระบบสังเกตพบ
+              </div>
+            </div>
+            """ % str(base),
+            unsafe_allow_html=True,
+        )
         return
 
     hdf = pd.DataFrame(history)
@@ -5902,7 +5935,7 @@ def render_arb_history_tracker(base: str = "BTC") -> None:
         "📚 Arb Opportunity History</div>",
         unsafe_allow_html=True,
     )
-    source_label = "Supabase · persistent" if source == "supabase" else "Local fallback · persistent on same runtime"
+    source_label = ("Supabase · persistent" if source == "supabase" else "Session cache · live") if source in {"supabase", "session"} else "Local fallback · persistent on same runtime"
     st.caption(f"{source_label} · {len(hdf):,} snapshots · แยกตามผู้ใช้และ {base}")
 
     latest = hdf.iloc[-1]
