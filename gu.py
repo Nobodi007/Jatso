@@ -10266,7 +10266,7 @@ def render_portfolio_intelligence (cfg :dict [str ,Any ],data :pd .DataFrame ,ma
     </style>
     """,unsafe_allow_html =True )
     st .markdown (f'<div class="intel-hero"><div class="intel-eyebrow">PORTFOLIO INTELLIGENCE</div><h2>🧠 Portfolio Intelligence</h2><p>สรุปโครงสร้างพอร์ต ผลกระทบของแต่ละสินทรัพย์ และต้นทุนการเทรดจาก Ledger ปัจจุบัน</p></div>',unsafe_allow_html =True )
-    t_health ,t_insights ,t_pnl ,t_fees =st .tabs (["🩺 Portfolio Health","💡 Insights","📊 P&L Attribution","💸 Fee Analytics"])
+    t_health ,t_insights ,t_pnl ,t_fees ,t_evolution =st .tabs (["🩺 Portfolio Health","💡 Insights","📊 P&L Attribution","💸 Fee Analytics","🧠 Portfolio Evolution"])
 
     with t_health :
         c1 ,c2 ,c3 =st .columns ([1.1 ,1 ,1 ])
@@ -10332,6 +10332,310 @@ def render_portfolio_intelligence (cfg :dict [str ,Any ],data :pd .DataFrame ,ma
         st .markdown (f'<div class="intel-card"><h4>Fee Breakdown</h4><div class="intel-row"><span>BUY/SELL fees</span><span class="intel-val">฿{trade_fees :,.2f}</span></div><div class="intel-row"><span>Withdrawal fees</span><span class="intel-val">฿{withdrawal_fees :,.2f}</span></div><div class="intel-row"><span>All recorded fees</span><span class="intel-val">฿{total_fees :,.2f}</span></div><div class="intel-row"><span>Ledger transactions</span><span class="intel-val">{len (txs ):,}</span></div></div>',unsafe_allow_html =True )
 
 
+    with t_evolution :
+        render_portfolio_evolution(sim)
+
+
+
+def _portfolio_evolution_history(sim:dict[str,Any]) -> pd.DataFrame:
+    """Normalize persistent portfolio snapshots into a time-series dataframe."""
+    snaps = sim.get("portfolio_snapshots", []) if isinstance(sim, dict) else []
+    rows = []
+    for s in snaps if isinstance(snaps, list) else []:
+        if not isinstance(s, dict):
+            continue
+        dt = pd.to_datetime(s.get("timestamp") or s.get("date"), errors="coerce")
+        val = pd.to_numeric(s.get("total_value_thb"), errors="coerce")
+        pnl = pd.to_numeric(s.get("total_pnl_thb"), errors="coerce")
+        if pd.notna(dt) and pd.notna(val):
+            rows.append({
+                "date": dt,
+                "value": float(val),
+                "pnl": float(pnl) if pd.notna(pnl) else 0.0,
+                "snapshot": s,
+            })
+    if not rows:
+        return pd.DataFrame(columns=["date", "value", "pnl", "snapshot"])
+    return pd.DataFrame(rows).sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+
+
+def _portfolio_evolution_fmt_delta(v:float) -> str:
+    return f"{'+' if v >= 0 else ''}฿{v:,.2f}"
+
+
+def _portfolio_evolution_card(title:str, value:str, sub:str="", cls:str="") -> str:
+    return (
+        f'<div class="pe-card"><div class="pe-label">{_html.escape(title)}</div>'
+        f'<div class="pe-value {cls}">{value}</div>'
+        f'<div class="pe-sub">{_html.escape(sub)}</div></div>'
+    )
+
+
+def _portfolio_evolution_what_changed(sim:dict[str,Any]) -> None:
+    hist = _portfolio_evolution_history(sim)
+    st.markdown('<div class="pe-section-head"><h3>🔎 What Changed?</h3><p>เปรียบเทียบ Snapshot ล่าสุดกับครั้งก่อน เพื่อเห็นการเปลี่ยนแปลงของพอร์ตโดยไม่ตีความเป็นสัญญาณซื้อขาย</p></div>', unsafe_allow_html=True)
+    if len(hist) < 2:
+        st.info("ต้องมี Portfolio Snapshot อย่างน้อย 2 จุดเพื่อเปรียบเทียบ — ไปที่ Portfolio Calendar แล้วบันทึก Snapshot เพิ่ม")
+        return
+    prev, cur = hist.iloc[-2], hist.iloc[-1]
+    ps, cs = prev["snapshot"], cur["snapshot"]
+    value_delta = float(cur["value"] - prev["value"])
+    pnl_delta = float(cur["pnl"] - prev["pnl"])
+    prev_assets = {str(x.get("asset","")).upper(): x for x in (ps.get("assets",[]) or []) if isinstance(x,dict)}
+    cur_assets = {str(x.get("asset","")).upper(): x for x in (cs.get("assets",[]) or []) if isinstance(x,dict)}
+    symbols = sorted(set(prev_assets) | set(cur_assets))
+    changes = []
+    for sym in symbols:
+        a, b = prev_assets.get(sym, {}), cur_assets.get(sym, {})
+        old_v = float(a.get("market_value",0) or 0)
+        new_v = float(b.get("market_value",0) or 0)
+        old_pct = float(a.get("allocation_pct",0) or 0)
+        new_pct = float(b.get("allocation_pct",0) or 0)
+        changes.append((sym, new_v-old_v, new_pct-old_pct, old_v, new_v))
+    changes.sort(key=lambda x: abs(x[1]), reverse=True)
+    c1,c2,c3 = st.columns(3)
+    c1.markdown(_portfolio_evolution_card("PORTFOLIO VALUE", f"฿{cur['value']:,.2f}", f"{prev['date'].strftime('%d %b %Y')} → {cur['date'].strftime('%d %b %Y')}"), unsafe_allow_html=True)
+    c2.markdown(_portfolio_evolution_card("VALUE CHANGE", _portfolio_evolution_fmt_delta(value_delta), "change between snapshots", "pe-pos" if value_delta >= 0 else "pe-neg"), unsafe_allow_html=True)
+    c3.markdown(_portfolio_evolution_card("P&L CHANGE", _portfolio_evolution_fmt_delta(pnl_delta), "total P&L delta", "pe-pos" if pnl_delta >= 0 else "pe-neg"), unsafe_allow_html=True)
+    rows=[]
+    for sym,dv,dp,ov,nv in changes[:12]:
+        cls="pe-pos" if dv>0 else ("pe-neg" if dv<0 else "")
+        rows.append({
+            "Asset":sym, "มูลค่าเดิม":ov, "มูลค่าปัจจุบัน":nv,
+            "เปลี่ยนแปลง (THB)":dv, "Allocation Δ (pp)":dp
+        })
+    if rows:
+        st.dataframe(pd.DataFrame(rows).style.format({
+            "มูลค่าเดิม":"฿{:,.2f}","มูลค่าปัจจุบัน":"฿{:,.2f}",
+            "เปลี่ยนแปลง (THB)":"฿{:+,.2f}","Allocation Δ (pp)":"{:+.2f}"
+        }), use_container_width=True, hide_index=True)
+    else:
+        st.caption("ยังไม่มีสินทรัพย์ใน Snapshot")
+
+
+def _portfolio_evolution_time_machine(sim:dict[str,Any]) -> None:
+    hist = _portfolio_evolution_history(sim)
+    st.markdown('<div class="pe-section-head"><h3>⏪ Portfolio Time Machine</h3><p>เลือก Snapshot เพื่อดูว่าพอร์ตเคยมีหน้าตาอย่างไรในวันนั้น</p></div>', unsafe_allow_html=True)
+    if hist.empty:
+        st.info("ยังไม่มี Snapshot ให้ย้อนดู")
+        return
+    labels = [x.strftime("%Y-%m-%d %H:%M") for x in hist["date"]]
+    idx = len(labels)-1
+    selected = st.selectbox("เลือกเวลา", labels, index=idx, key="pe_tm_date")
+    row = hist.iloc[labels.index(selected)]
+    s = row["snapshot"]
+    prev_idx = labels.index(selected)-1
+    prev_s = hist.iloc[prev_idx]["snapshot"] if prev_idx >= 0 else None
+    c1,c2,c3,c4 = st.columns(4)
+    c1.markdown(_portfolio_evolution_card("PORTFOLIO VALUE", f"฿{row['value']:,.2f}", selected), unsafe_allow_html=True)
+    c2.markdown(_portfolio_evolution_card("TOTAL P&L", _portfolio_evolution_fmt_delta(float(s.get("total_pnl_thb",0))), "at selected snapshot"), unsafe_allow_html=True)
+    c3.markdown(_portfolio_evolution_card("CASH", f"฿{float(s.get('cash_thb',0) or 0):,.2f}", "THB"), unsafe_allow_html=True)
+    c4.markdown(_portfolio_evolution_card("ASSETS", f"{len(s.get('assets',[]) or [])}", "non-zero holdings"), unsafe_allow_html=True)
+    assets = pd.DataFrame(s.get("assets",[]) or [])
+    if not assets.empty:
+        keep = [c for c in ["asset","qty","market_value","allocation_pct","unrealized_pnl"] if c in assets.columns]
+        st.dataframe(assets[keep].rename(columns={
+            "asset":"Asset","qty":"Qty","market_value":"Market Value (THB)",
+            "allocation_pct":"Allocation %","unrealized_pnl":"Unrealized P&L"
+        }).style.format({"Qty":"{:,.8f}","Market Value (THB)":"฿{:,.2f}","Allocation %":"{:.2f}%","Unrealized P&L":"฿{:+,.2f}"}),
+        use_container_width=True, hide_index=True)
+    if prev_s:
+        st.caption(f"เทียบกับ Snapshot ก่อนหน้า: ฿{float(prev_s.get('total_value_thb',0) or 0):,.2f} → ฿{float(s.get('total_value_thb',0) or 0):,.2f}")
+
+
+def _portfolio_evolution_drift(sim:dict[str,Any]) -> None:
+    st.markdown('<div class="pe-section-head"><h3>🎯 Drift Monitor</h3><p>กำหนด Target Allocation ชั่วคราวเพื่อดูส่วนต่างจากพอร์ตจริง — ไม่แก้ Wallet และไม่ส่งคำสั่งซื้อขาย</p></div>', unsafe_allow_html=True)
+    snaps = _portfolio_evolution_history(sim)
+    if snaps.empty:
+        st.info("ยังไม่มี Snapshot สำหรับคำนวณ Allocation")
+        return
+    current = snaps.iloc[-1]["snapshot"]
+    current_map = {str(x.get("asset","")).upper(): float(x.get("allocation_pct",0) or 0) for x in (current.get("assets",[]) or []) if isinstance(x,dict)}
+    syms = sorted([s for s,v in current_map.items() if v > 0])
+    if not syms:
+        st.info("ยังไม่มี Holdings ที่มีมูลค่า")
+        return
+    st.caption("Target เริ่มต้นจาก Allocation ปัจจุบัน เพื่อให้ปรับได้ทันที")
+    targets={}
+    cols=st.columns(min(3,max(1,len(syms))))
+    for i,sym in enumerate(syms):
+        with cols[i % len(cols)]:
+            targets[sym]=st.number_input(f"{sym} Target %", min_value=0.0, max_value=100.0,
+                                         value=float(current_map[sym]), step=1.0, key=f"pe_target_{sym}")
+    target_total=sum(targets.values())
+    if target_total > 100.0001:
+        st.warning(f"Target รวม {target_total:.2f}% — มากกว่า 100%")
+    elif target_total < 99.9999:
+        st.caption(f"Target รวม {target_total:.2f}% · เหลือ {100-target_total:.2f}% ที่ยังไม่ได้กำหนด")
+    rows=[]
+    for sym in syms:
+        actual=current_map.get(sym,0.0); target=targets.get(sym,0.0)
+        drift=actual-target
+        rows.append({"Asset":sym,"Actual %":actual,"Target %":target,"Drift (pp)":drift})
+    df=pd.DataFrame(rows)
+    st.dataframe(df.style.format({"Actual %":"{:.2f}%","Target %":"{:.2f}%","Drift (pp)":"{:+.2f}"}),
+                 use_container_width=True, hide_index=True)
+    largest=df.iloc[df["Drift (pp)"].abs().argmax()]
+    st.caption(f"Drift ที่มีขนาดมากที่สุด: {largest['Asset']} {largest['Drift (pp)']:+.2f} จุดเปอร์เซ็นต์")
+
+
+def _portfolio_evolution_pnl(sim:dict[str,Any]) -> None:
+    st.markdown('<div class="pe-section-head"><h3>🔬 P&L Attribution</h3><p>แยกผลกระทบของแต่ละสินทรัพย์ รวม Realized / Unrealized และค่าธรรมเนียมจาก Ledger</p></div>', unsafe_allow_html=True)
+    ensure_portfolio_ledger(sim)
+    txs=[x for x in sim.get("portfolio_ledger",[]) if isinstance(x,dict)]
+    by_asset={}
+    for tx in txs:
+        sym=str(tx.get("asset","THB")).upper()
+        if sym=="THB": continue
+        d=by_asset.setdefault(sym, {"realized":0.0,"fees":0.0,"buy":0.0,"sell":0.0,"trades":0})
+        typ=str(tx.get("type","")).upper()
+        d["realized"] += float(tx.get("realized_pnl_thb",0) or 0)
+        d["fees"] += float(tx.get("fee_thb",0) or 0)
+        if typ in {"BUY","SELL"}:
+            d["trades"] += 1
+            gross=float(tx.get("gross_thb",0) or 0)
+            if typ=="BUY": d["buy"] += gross
+            else: d["sell"] += gross
+    snap=portfolio_snapshot(sim, {"THB":1.0})
+    # Current unrealized requires a real price map; the caller's snapshot is not available here,
+    # so use the persisted snapshot's latest asset values/costs for attribution when available.
+    latest=_portfolio_evolution_history(sim)
+    latest_assets={}
+    if not latest.empty:
+        for x in latest.iloc[-1]["snapshot"].get("assets",[]) or []:
+            if isinstance(x,dict):
+                latest_assets[str(x.get("asset","")).upper()]=x
+    rows=[]
+    for sym,d in by_asset.items():
+        a=latest_assets.get(sym,{})
+        unreal=float(a.get("unrealized_pnl",0) or 0)
+        rows.append({"Asset":sym,"Realized P&L":d["realized"],"Unrealized P&L":unreal,
+                     "Fees":d["fees"],"Net incl. unrealized":d["realized"]+unreal-d["fees"],"Trades":d["trades"]})
+    if rows:
+        df=pd.DataFrame(rows).sort_values("Net incl. unrealized", key=lambda s:s.abs(), ascending=False)
+        st.dataframe(df.style.format({"Realized P&L":"฿{:+,.2f}","Unrealized P&L":"฿{:+,.2f}",
+                                      "Fees":"฿{:,.2f}","Net incl. unrealized":"฿{:+,.2f}"}),
+                     use_container_width=True, hide_index=True)
+    else:
+        st.info("ยังไม่มี BUY/SELL ใน Portfolio Ledger")
+    c1,c2,c3=st.columns(3)
+    c1.metric("Realized P&L", f"฿{float(snap.get('realized_pnl_thb',0)):+,.2f}")
+    c2.metric("Unrealized P&L", f"฿{float(snap.get('unrealized_pnl_thb',0)):+,.2f}")
+    c3.metric("Fees", f"฿{float(snap.get('fees_thb',0)):,.2f}")
+
+
+def _portfolio_evolution_drawdown(sim:dict[str,Any]) -> None:
+    hist=_portfolio_evolution_history(sim)
+    st.markdown('<div class="pe-section-head"><h3>🧯 Drawdown Recovery Monitor</h3><p>ติดตามจุดสูงสุดเดิม การลดลงจาก Peak และจำนวนวันที่ต้องฟื้นกลับไปยัง Peak</p></div>', unsafe_allow_html=True)
+    if len(hist)<2:
+        st.info("ต้องมี Snapshot อย่างน้อย 2 จุด")
+        return
+    h=hist.copy()
+    h["peak"]=h["value"].cummax()
+    h["drawdown_pct"]=(h["value"]/h["peak"]-1)*100
+    peak_i=int(h["value"].idxmax())
+    current=h.iloc[-1]
+    dd=float(current["drawdown_pct"])
+    peak=float(current["peak"])
+    recovery_pct=(peak/float(current["value"])-1)*100 if current["value"]>0 else 0
+    peak_date=h.loc[h["peak"].idxmax(),"date"]
+    c1,c2,c3,c4=st.columns(4)
+    c1.markdown(_portfolio_evolution_card("CURRENT",f"฿{current['value']:,.2f}",current["date"].strftime("%d %b %Y")),unsafe_allow_html=True)
+    c2.markdown(_portfolio_evolution_card("FROM PEAK",f"{dd:.2f}%","current drawdown","pe-neg" if dd<0 else "pe-pos"),unsafe_allow_html=True)
+    c3.markdown(_portfolio_evolution_card("RECOVERY NEEDED",f"+{recovery_pct:.2f}%","to recover current peak"),unsafe_allow_html=True)
+    c4.markdown(_portfolio_evolution_card("PEAK",f"฿{peak:,.2f}",peak_date.strftime("%d %b %Y")),unsafe_allow_html=True)
+    max_dd=float(h["drawdown_pct"].min())
+    max_dd_row=h.loc[h["drawdown_pct"].idxmin()]
+    st.caption(f"Maximum observed drawdown in saved snapshots: {max_dd:.2f}% on {max_dd_row['date'].strftime('%d %b %Y')}")
+    st.line_chart(h.set_index("date")[["value"]], use_container_width=True)
+
+
+def _portfolio_evolution_dna(sim:dict[str,Any]) -> None:
+    hist=_portfolio_evolution_history(sim)
+    st.markdown('<div class="pe-section-head"><h3>🧬 Portfolio DNA</h3><p>ภาพโครงสร้างพอร์ตในมิติที่อธิบายได้จากข้อมูลจริง โดยไม่ให้คะแนนว่าดีหรือแย่</p></div>', unsafe_allow_html=True)
+    latest=hist.iloc[-1]["snapshot"] if not hist.empty else {}
+    assets=[x for x in (latest.get("assets",[]) or []) if isinstance(x,dict)]
+    alloc=sorted([float(x.get("allocation_pct",0) or 0) for x in assets], reverse=True)
+    cash_pct=(float(latest.get("cash_thb",0) or 0)/float(latest.get("total_value_thb",1) or 1))*100
+    top1=alloc[0] if alloc else 0.0
+    top3=sum(alloc[:3])
+    asset_count=len([x for x in assets if float(x.get("market_value",0) or 0)>0])
+    txs=[x for x in sim.get("portfolio_ledger",[]) if isinstance(x,dict)]
+    trade_count=sum(1 for x in txs if str(x.get("type","")).upper() in {"BUY","SELL"})
+    avg_size=(sum(float(x.get("gross_thb",0) or 0) for x in txs if str(x.get("type","")).upper() in {"BUY","SELL"})/trade_count) if trade_count else 0
+    dna=[
+        ("Concentration","Top 1 allocation",f"{top1:.1f}%"),
+        ("Breadth","Non-zero assets",f"{asset_count}"),
+        ("Concentration","Top 3 allocation",f"{top3:.1f}%"),
+        ("Liquidity","Cash THB",f"{cash_pct:.1f}%"),
+        ("Activity","Recorded trades",f"{trade_count:,}"),
+        ("Activity","Average trade size",f"฿{avg_size:,.2f}"),
+    ]
+    cols=st.columns(2)
+    for i,(group,label,value) in enumerate(dna):
+        with cols[i%2]:
+            st.markdown(_portfolio_evolution_card(label,value,group),unsafe_allow_html=True)
+    if not hist.empty:
+        first=float(hist.iloc[0]["value"]); last=float(hist.iloc[-1]["value"])
+        change=((last/first)-1)*100 if first else 0
+        st.caption(f"Snapshot history: {len(hist)} จุด · มูลค่าพอร์ตเปลี่ยนจาก ฿{first:,.2f} เป็น ฿{last:,.2f} ({change:+.2f}%)")
+
+
+def _portfolio_evolution_autopsy(sim:dict[str,Any]) -> None:
+    hist=_portfolio_evolution_history(sim)
+    st.markdown('<div class="pe-section-head"><h3>🤖 Portfolio Autopsy</h3><p>เลือกเหตุการณ์จาก Snapshot history แล้วระบบจะไล่หาการเปลี่ยนแปลงหลักที่สัมพันธ์กับเหตุการณ์นั้น</p></div>', unsafe_allow_html=True)
+    if len(hist)<2:
+        st.info("ต้องมี Snapshot อย่างน้อย 2 จุดเพื่อทำ Autopsy")
+        return
+    h=hist.copy()
+    h["delta"]=h["value"].diff()
+    h["delta_pct"]=h["value"].pct_change()*100
+    event_rows=h.iloc[1:].copy()
+    labels=[x.strftime("%Y-%m-%d %H:%M") for x in event_rows["date"]]
+    selected=st.selectbox("เลือกเหตุการณ์",labels,index=len(labels)-1,key="pe_autopsy_event")
+    idx=labels.index(selected)+1
+    cur=h.iloc[idx]; prev=h.iloc[idx-1]
+    ps,cs=prev["snapshot"],cur["snapshot"]
+    pa={str(x.get("asset","")).upper():x for x in (ps.get("assets",[]) or []) if isinstance(x,dict)}
+    ca={str(x.get("asset","")).upper():x for x in (cs.get("assets",[]) or []) if isinstance(x,dict)}
+    impact=[]
+    for sym in sorted(set(pa)|set(ca)):
+        old=float(pa.get(sym,{}).get("market_value",0) or 0)
+        new=float(ca.get(sym,{}).get("market_value",0) or 0)
+        impact.append((sym,new-old,old,new))
+    impact.sort(key=lambda x:abs(x[1]),reverse=True)
+    c1,c2,c3=st.columns(3)
+    c1.markdown(_portfolio_evolution_card("EVENT",selected,"selected snapshot"),unsafe_allow_html=True)
+    c2.markdown(_portfolio_evolution_card("PORTFOLIO Δ",_portfolio_evolution_fmt_delta(float(cur["delta"])),f"{float(cur['delta_pct']):+.2f}%","pe-pos" if cur["delta"]>=0 else "pe-neg"),unsafe_allow_html=True)
+    c3.markdown(_portfolio_evolution_card("TOP DRIVER",impact[0][0] if impact else "—",_portfolio_evolution_fmt_delta(impact[0][1]) if impact else "no asset change"),unsafe_allow_html=True)
+    if impact:
+        df=pd.DataFrame([{"Asset":s,"Δ Value (THB)":d,"Before":o,"After":n} for s,d,o,n in impact[:10]])
+        st.dataframe(df.style.format({"Δ Value (THB)":"฿{:+,.2f}","Before":"฿{:,.2f}","After":"฿{:,.2f}"}),
+                     use_container_width=True, hide_index=True)
+    st.caption("Autopsy เป็นการเปรียบเทียบ Snapshot ที่บันทึกไว้ ไม่ใช่การอนุมานสาเหตุเชิงตลาดจากข้อมูลภายนอก")
+
+
+def render_portfolio_evolution(sim:dict[str,Any]) -> None:
+    """Seven portfolio-intelligence tools; read-only except temporary target inputs."""
+    st.markdown("""
+    <style>
+    .pe-section-head{margin:4px 0 14px}.pe-section-head h3{margin:0;color:#eaecef;font-size:1.2rem}
+    .pe-section-head p{margin:4px 0 0;color:#737d8c;font-size:.78rem;line-height:1.5}
+    .pe-card{border:1px solid #2b3139;border-radius:15px;background:#0f1115;padding:15px 16px;margin-bottom:12px;min-height:96px}
+    .pe-label{color:#737d8c;font-size:.68rem;letter-spacing:.08em;font-weight:800;text-transform:uppercase}
+    .pe-value{color:#eaecef;font-size:1.35rem;font-weight:850;margin-top:6px;font-variant-numeric:tabular-nums}
+    .pe-sub{color:#687282;font-size:.72rem;margin-top:4px}.pe-pos{color:#0ecb81!important}.pe-neg{color:#f6465d!important}
+    @media(max-width:700px){.pe-card{min-height:84px;padding:13px}.pe-value{font-size:1.12rem}}
+    </style>
+    """, unsafe_allow_html=True)
+    tabs=st.tabs(["🔎 What Changed?","⏪ Time Machine","🎯 Drift","🔬 P&L","🧯 Drawdown","🧬 DNA","🤖 Autopsy"])
+    with tabs[0]: _portfolio_evolution_what_changed(sim)
+    with tabs[1]: _portfolio_evolution_time_machine(sim)
+    with tabs[2]: _portfolio_evolution_drift(sim)
+    with tabs[3]: _portfolio_evolution_pnl(sim)
+    with tabs[4]: _portfolio_evolution_drawdown(sim)
+    with tabs[5]: _portfolio_evolution_dna(sim)
+    with tabs[6]: _portfolio_evolution_autopsy(sim)
 
 def render_what_if_simulator (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :pd .DataFrame )->None :
     """Scenario-only portfolio simulator. Never mutates real holdings or ledger."""
