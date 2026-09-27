@@ -2239,7 +2239,6 @@ async function run(){
   }
 }
 run();
-setInterval(refreshStalenessBadges,5000);
 </script></body></html>"""
 
 
@@ -5630,11 +5629,10 @@ html,body{margin:0;padding:0;background:transparent;color:#EAECEF;
 table{width:100%;border-collapse:collapse;font-size:.92rem;}
 th{text-align:left;padding:10px 14px;color:#848e9c;font-weight:600;font-size:.78rem;
   border-bottom:1px solid #2b3139;background:#161a1e;}
-td{padding:12px 14px;border-bottom:1px solid #2b3139;font-variant-numeric:tabular-nums;}
-.ex{display:flex;align-items:center;gap:10px;font-weight:600;min-height:28px;}
-.arb-action{display:block;margin:3px 0 0 38px;font-size:.72rem;font-weight:700;line-height:1.25;white-space:nowrap;}
-.arb-action.buy{color:#0ecb81;}
-.arb-action.sell{color:#f6465d;}
+td{padding:15px 14px;border-bottom:1px solid #2b3139;font-variant-numeric:tabular-nums;vertical-align:middle;}
+tr.arb-buy td:first-child,tr.arb-sell td:first-child{padding-top:15px;padding-bottom:20px;}
+tr.arb-buy td:first-child::after,tr.arb-sell td:first-child::after{display:block;margin-top:5px;line-height:1.2;white-space:nowrap;}
+.ex{display:flex;align-items:center;gap:10px;font-weight:600;}
 .logo{width:28px;height:28px;min-width:28px;border-radius:50%;
   border:1px solid #2b3139;background:#161a1e;object-fit:contain;display:block;padding:2px;box-sizing:border-box;}
 .logo-fallback{display:none;align-items:center;justify-content:center;width:28px;height:28px;
@@ -5658,22 +5656,10 @@ a{color:#4c9aff;text-decoration:none;}
 .rank-badge.cheap{background:rgba(14,203,129,.10);color:#0ecb81;}
 tr.arb-buy{background:rgba(14,203,129,.10);border-left:3px solid #0ecb81;}
 tr.arb-sell{background:rgba(246,70,93,.10);border-left:3px solid #f6465d;}
-/* Arb action labels live inside the exchange cell instead of td::after.
-   This prevents the label from sitting on the table border / being clipped. */
+tr.arb-buy td:first-child::after{content:" 🟢 ซื้อที่นี่";font-size:.68rem;color:#0ecb81;}
+tr.arb-sell td:first-child::after{content:" 🔴 ขายที่นี่";font-size:.68rem;color:#f6465d;}
 .note{color:#848e9c;font-size:.78rem;margin-top:8px;line-height:1.5;}
-.hstats-bar{display:flex;gap:20px;flex-wrap:wrap;align-items:center;padding:10px 14px;margin-bottom:10px;background:#161a1e;border:1px solid #2b3139;border-radius:8px;}
-.hstat{display:flex;flex-direction:column;gap:2px;min-width:125px;}
-.hstat-label{font-size:.66rem;color:#848e9c;}
-.hstat-value{font-size:.88rem;font-weight:700;color:#EAECEF;font-variant-numeric:tabular-nums;}
-.hstat.cheap .hstat-value{color:#0ecb81;}
-.hstat.expensive .hstat-value{color:#f6465d;}
-.stale-badge{margin-left:6px;font-size:.64rem;font-weight:600;white-space:nowrap;}
-@keyframes flashUp{0%{background:rgba(14,203,129,.35)}100%{background:transparent}}
-@keyframes flashDown{0%{background:rgba(246,70,93,.35)}100%{background:transparent}}
-.flash-up{animation:flashUp 900ms ease-out;}
-.flash-down{animation:flashDown 900ms ease-out;}
 </style></head><body>
-<div id="header-stats" class="hstats-bar"></div>
 <div class="wrap"><table><thead><tr><th>Exchange</th><th>Symbol</th><th>Price($)</th>
 <th>Chg 24H(%)</th><th>vs VWAP</th><th>Turnover 24h</th></tr></thead><tbody id="tb"></tbody></table></div>
 <div class="note" id="note"></div>
@@ -5759,61 +5745,6 @@ function rankBadgeHTML(rank,kind){
   return '';
 }
 
-let prevPrices = {};
-
-function priceFlashClass(exchange,currentPrice){
-  if(!currentPrice || !isFinite(currentPrice)) return '';
-  const prev = prevPrices[exchange];
-  if(prev === undefined || !isFinite(prev)) return '';
-  if(Number(currentPrice) > Number(prev)) return 'flash-up';
-  if(Number(currentPrice) < Number(prev)) return 'flash-down';
-  return '';
-}
-
-function stalenessBadge(r){
-  if(!r.via) return '';
-  const ageSec = r.fetchedAt ? Math.max(0,Math.floor((Date.now()-r.fetchedAt)/1000)) : null;
-  const tone = ageSec !== null && ageSec > 30 ? '#f6465d' : '#fcd535';
-  const ageTxt = ageSec !== null ? ageSec+'s ago' : '—';
-  return `<span class="stale-badge" data-fetched-at="${r.fetchedAt || ''}" style="color:${tone}" title="ดึงผ่าน ${esc(r.via)} — อาจ delay กว่ากระดานอื่น">⏱️ ${ageTxt}</span>`;
-}
-
-function refreshStalenessBadges(){
-  document.querySelectorAll('.stale-badge').forEach(el => {
-    const ts = Number(el.dataset.fetchedAt || 0);
-    if(!ts) return;
-    const ageSec = Math.max(0,Math.floor((Date.now()-ts)/1000));
-    el.textContent = '⏱️ '+ageSec+'s ago';
-    el.style.color = ageSec > 30 ? '#f6465d' : '#fcd535';
-  });
-}
-
-function computeHeaderStats(rows){
-  const valid = rows.filter(r => r.price && r.turnover && !r.err && isFinite(r.price) && isFinite(r.turnover));
-  if(!valid.length) return null;
-  const totalTurnover = valid.reduce((s,r) => s + Number(r.turnover),0);
-  const vwap = totalTurnover > 0
-    ? valid.reduce((s,r) => s + Number(r.price)*Number(r.turnover),0)/totalTurnover
-    : null;
-  const priceValid = rows.filter(r => r.price && !r.err && isFinite(r.price));
-  if(!priceValid.length) return null;
-  const cheapest = priceValid.reduce((a,b) => Number(a.price) < Number(b.price) ? a : b);
-  const priciest = priceValid.reduce((a,b) => Number(a.price) > Number(b.price) ? a : b);
-  return {vwap,totalTurnover,cheapest,priciest,nVenues:valid.length};
-}
-
-function updateHeaderStats(){
-  const el = document.getElementById('header-stats');
-  if(!el) return;
-  const stats = computeHeaderStats(rows);
-  if(!stats){ el.innerHTML=''; return; }
-  el.innerHTML = `
-    <div class="hstat"><span class="hstat-label">VWAP (${stats.nVenues} กระดาน)</span><span class="hstat-value">$${fmtP(stats.vwap)}</span></div>
-    <div class="hstat"><span class="hstat-label">Total Turnover 24h</span><span class="hstat-value">${fmtT(stats.totalTurnover)}</span></div>
-    <div class="hstat cheap"><span class="hstat-label">ถูกสุด</span><span class="hstat-value">${esc(stats.cheapest.exchange)} $${fmtP(stats.cheapest.price)}</span></div>
-    <div class="hstat expensive"><span class="hstat-label">แพงสุด</span><span class="hstat-value">${esc(stats.priciest.exchange)} $${fmtP(stats.priciest.price)}</span></div>`;
-}
-
 function render(){
   const valid = rows.filter(r => r.price && !r.err && isFinite(r.price));
   const vwap = computeVWAP(rows);
@@ -5837,15 +5768,14 @@ function render(){
   });
   const list = rows.slice().sort((a,b) => (b.turnover ?? -1) - (a.turnover ?? -1));
   document.getElementById('tb').innerHTML = list.map(r => {
-    const via = r.via ? '<span class="via" title="ข้อมูลไม่ได้ดึงตรงจาก server">via '+esc(r.via)+'</span>' + stalenessBadge(r) : '';
+    const via = r.via ? '<span class="via" title="ข้อมูลไม่ได้ดึงตรงจาก server">via '+esc(r.via)+'</span>' : '';
     const tRank = ranks.turnoverRank[r.exchange];
     const pRank = ranks.priceRank[r.exchange];
     const badges = rankBadgeHTML(tRank,'turnover') + rankBadgeHTML(pRank,'price');
-    let p, c, d, t, flashClass = '';
+    let p, c, d, t;
     if(r.err){
       p = c = d = t = '<span class="mut" title="'+esc(r.err)+'">—</span>';
     } else {
-      flashClass = priceFlashClass(r.exchange,r.price);
       p = fmtP(r.price);
       c = '<span class="'+(r.chg>=0?'up':'dn')+'">'+(r.chg>=0?'+':'')+r.chg.toFixed(2)+'%</span>'
         + (r.note ? '<span class="mut" style="cursor:help" title="'+esc(r.note)+'"> *</span>' : '');
@@ -5856,12 +5786,9 @@ function render(){
       ? ('<span class="logo-wrap"><img class="logo" src="'+esc(r.logo)+'" alt="'+esc(r.exchange)+' logo" loading="lazy" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'inline-flex\';"><span class="logo-fallback" style="background:'+esc(r.bg)+';color:'+esc(r.fg)+'">'+esc(r.tx)+'</span></span>')
       : ('<span class="logo-wrap"><span class="logo-fallback" style="display:inline-flex;background:'+esc(r.bg)+';color:'+esc(r.fg)+'">'+esc(r.tx)+'</span></span>');
     const rowClass = r.arbRole === 'buy' ? 'arb-buy' : (r.arbRole === 'sell' ? 'arb-sell' : '');
-    const arbAction = r.arbRole === 'buy'
-      ? '<span class="arb-action buy">🟢 ซื้อที่นี่</span>'
-      : (r.arbRole === 'sell' ? '<span class="arb-action sell">🔴 ขายที่นี่</span>' : '');
-    return '<tr class="'+rowClass+'"><td><div class="ex">'+logo+esc(r.exchange)+badges+via+'</div>'+arbAction+'</td>'
+    return '<tr class="'+rowClass+'"><td><div class="ex">'+logo+esc(r.exchange)+badges+via+'</div></td>'
       +'<td><a href="'+esc(r.url)+'" target="_blank" rel="noopener">'+esc(r.symbol)+'</a></td>'
-      +'<td class="'+flashClass+'">'+p+'</td><td>'+c+'</td><td>'+d+'</td><td>'+t+'</td></tr>';
+      +'<td>'+p+'</td><td>'+c+'</td><td>'+d+'</td><td>'+t+'</td></tr>';
   }).join('');
 
   const bad = rows.filter(r => r.err).map(r => r.exchange+' ('+r.err+')');
@@ -5879,9 +5806,6 @@ function render(){
   Object.keys(via).forEach(k => { n += ' · '+via[k].join(', ')+' ดึงผ่าน '+k; });
   if(bad.length) n += ' · ดึงไม่ได้: '+bad.join(', ');
   document.getElementById('note').textContent = n;
-
-  rows.forEach(r => { if(r.price && isFinite(r.price)) prevPrices[r.exchange] = Number(r.price); });
-  updateHeaderStats();
 }
 
 async function run(){
@@ -5891,7 +5815,7 @@ async function run(){
     try{
       const [p, c, t] = await JOBS[r.exchange]();
       if(!(isFinite(p) && p > 0 && isFinite(c) && isFinite(t))) throw new Error('bad data');
-      Object.assign(r, {price:p, chg:c, turnover:t, err:null, via:'browser', fetchedAt:Date.now()});
+      Object.assign(r, {price:p, chg:c, turnover:t, err:null, via:'browser'});
     } catch(e){
       r.err += ' → browser: ' + (e && e.message ? e.message : 'fetch failed');
     }
@@ -5969,7 +5893,7 @@ def render_perp_venue_table (base :str ="BTC")->None :
 
     components .html (
     _PV_HTML .replace ("__PAYLOAD__",payload ),
-    height =180 +76 *len (rows ),
+    height =120 +72 *len (rows ),
     scrolling =False ,
     )
 
@@ -17660,6 +17584,7 @@ def _main_body ()->None :
         NAV_LABELS [2 ],# Liquidity & Capital Planner
         NAV_LABELS [3 ],# Exchange UI Simulator
         NAV_LABELS [5 ],# Investment Backtest
+        NAV_AUTO_DCA ,# Live Auto DCA
         ],
         "💼 พอร์ตของฉัน":[
         NAV_LABELS [4 ],# Portfolio & Wallet
