@@ -7987,6 +7987,80 @@ def deposit_dialog() -> None:
     st.dialog("ฝากเงินบาท")(_deposit_dialog_body)()
 
 
+def _open_user_guide() -> None:
+    st.session_state["open_user_guide"] = True
+
+
+def _user_guide_dialog_body() -> None:
+    st.markdown("""
+    <style>
+    .ug-section { margin-bottom: 22px; }
+    .ug-section h4 { color:#0ecb81; font-size:.95rem; font-weight:800; margin-bottom:8px; display:flex; align-items:center; gap:8px; }
+    .ug-section p, .ug-section li { color:#c4cad3; font-size:.85rem; line-height:1.7; }
+    .ug-section ul { margin:6px 0 0 0; padding-left:20px; }
+    .ug-tag { display:inline-block; background:rgba(14,203,129,.1); color:#0ecb81; border:1px solid rgba(14,203,129,.25); border-radius:6px; padding:2px 8px; font-size:.7rem; font-weight:700; margin-right:6px; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.caption("ภาพรวมการใช้งาน XSpring Dealer Suite — คู่มือฉบับย่อสำหรับผู้ใช้ใหม่")
+
+    st.markdown("""
+    <div class="ug-section">
+      <h4>📊 Backtest Simulator</h4>
+      <p>จำลองผลประกอบการของ Dealer ย้อนหลังสูงสุด 5 ปี โดยใช้ราคาจริงจากตลาด
+      ปรับพารามิเตอร์ เช่น Dealer Spread, Local Premium, Hedge Fee ในแถบซ้าย
+      แล้วดู Net P&amp;L, Max Drawdown, Sharpe Ratio และ Waterfall Chart ของรายได้/ต้นทุน</p>
+    </div>
+
+    <div class="ug-section">
+      <h4>🧮 Liquidity &amp; Capital Planner</h4>
+      <p>วางแผนเงินทุนสภาพคล่องและเงินกองทุนสุทธิ (NC) ตามเกณฑ์ ก.ล.ต.
+      ระบบจะคำนวณ Safety Stock ที่ต้องดำรง, NC Buffer และเงินทุนสูงสุดที่รับปริมาณธุรกรรมได้</p>
+    </div>
+
+    <div class="ug-section">
+      <h4>🛒 Exchange UI Simulator</h4>
+      <p>จำลองหน้าเทรดจริงแบบ Bitkub/Binance พร้อมระบบ Hedge อัตโนมัติ
+      สามารถซื้อ/ขาย, ตั้ง Limit Order, สุ่มออเดอร์ลูกค้าจำลอง และดู Risk Dashboard แบบเรียลไทม์</p>
+    </div>
+
+    <div class="ug-section">
+      <h4>💼 Portfolio &amp; Wallet</h4>
+      <p>ดูสินทรัพย์ในกระเป๋าจำลอง, ฝาก/ถอนเงินบาท, ติดตาม Watchlist และดูประวัติธุรกรรมทั้งหมด</p>
+    </div>
+
+    <div class="ug-section">
+      <h4>🚨 Risk Center &amp; 🧠 Portfolio Intelligence</h4>
+      <p>ตรวจสอบความเสี่ยงของพอร์ต เช่น Concentration, Volatility, Drawdown
+      พร้อม P&amp;L Attribution และ Fee Analytics แบบละเอียด</p>
+    </div>
+
+    <div class="ug-section">
+      <h4>🧪 Quant Research Lab</h4>
+      <p>เครื่องมือขั้นสูงสำหรับนักวิจัย เช่น Shadow Mode, Stress Test, Monte Carlo Simulation,
+      PBO/DSR Lab และ Production Readiness Gate — ใช้ประเมินความพร้อมก่อนใช้งานจริง</p>
+    </div>
+
+    <div class="ug-section">
+      <h4>💡 เคล็ดลับเริ่มต้น</h4>
+      <ul>
+        <li>เริ่มที่ <span class="ug-tag">Backtest</span> เพื่อเข้าใจภาพรวมก่อน</li>
+        <li>ปรับพารามิเตอร์ในแถบซ้ายแล้วสังเกตผลกระทบต่อ Net P&amp;L</li>
+        <li>ใช้ <span class="ug-tag">🎲 สุ่มออเดอร์</span> ใน Exchange Simulator เพื่อทดสอบระบบเร็วๆ</li>
+        <li>ทุกอย่างเป็น <b>โมเดลจำลอง</b> เพื่อการวางแผนเท่านั้น ไม่ใช่การรับรอง compliance</li>
+      </ul>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.divider()
+    if st.button("ปิดหน้าต่างนี้", key="ug_close_btn", use_container_width=True):
+        st.rerun()
+
+
+def user_guide_dialog() -> None:
+    st.dialog("📘 คู่มือการใช้งาน XSpring Dealer Suite", width="large")(_user_guide_dialog_body)()
+
+
 # ---- 5.5 TAB 4 — WALLET ------------------------------------------------
 
 def _portfolio_pnl_class(value: float) -> str:
@@ -16192,7 +16266,7 @@ def render_site_footer() -> None:
         with c5:
             st.markdown('<div class="xs-footer-heading">ช่วยเหลือ</div>', unsafe_allow_html=True)
             st.button("คู่มือการใช้งาน", key="footer_guide", use_container_width=True,
-                      on_click=_footer_go_to, args=(NAV_DASHBOARD,))
+                      on_click=_open_user_guide)
             st.button("เกี่ยวกับระบบ", key="footer_about", use_container_width=True,
                       on_click=_footer_go_to, args=(NAV_SYSTEM_HEALTH,))
             st.button("ความเป็นส่วนตัว", key="footer_privacy", use_container_width=True,
@@ -16577,6 +16651,10 @@ def _main_body() -> None:
             render_tab4(cfg, data, market_df=market_df)
 
     render_ai_fab()
+
+    # User guide dialog — เปิดทับหน้าปัจจุบันโดยไม่เปลี่ยน navigation state
+    if st.session_state.pop("open_user_guide", False):
+        user_guide_dialog()
 
     # Site footer — เพิ่มเป็นชั้น UI แยก ไม่แตะ routing/logic เดิม
     render_site_footer()
