@@ -16416,7 +16416,7 @@ def render_site_footer() -> None:
             st.button("ความเป็นส่วนตัว", key="footer_privacy", use_container_width=True,
                       on_click=_footer_go_to, args=(NAV_SYSTEM_HEALTH,))
             st.markdown(
-                f'<a href="{DEV_LINKEDIN}" target="_blank" rel="noopener noreferrer" class="xs-footer-link">ติดต่อ</a>',
+                f'<a href="{DEV_LINKEDIN}" target="_blank" rel="noopener noreferrer" class="xs-footer-link">ติดต่อ คุณNobodi สุดเท่</a>',
                 unsafe_allow_html=True,
             )
 
