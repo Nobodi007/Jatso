@@ -16845,6 +16845,20 @@ def render_site_footer ()->None :
         }
         .st-key-xs_footer .xs-footer-logo-text { color:#f5f7fa; font-size:17px; font-weight:800; letter-spacing:-.2px; line-height:1.35; max-width:210px; text-align:left !important; }
         .st-key-xs_footer .xs-footer-description { color:#7c8695; font-size:12.5px; line-height:1.75; max-width:270px; text-align:left !important; }
+        .st-key-xs_footer [data-testid="stButton"] button[kind="secondary"] {
+            color:#7c8695 !important;
+        }
+        .st-key-xs_footer .st-key-footer_logout_btn button {
+            color:#9aa3af !important;
+            font-size:12px !important;
+            margin-top:16px !important;
+            padding:0 !important;
+            width:auto !important;
+        }
+        .st-key-xs_footer .st-key-footer_logout_btn button:hover {
+            color:#f0f2f5 !important;
+            text-decoration:underline !important;
+        }
         .st-key-xs_footer .xs-footer-heading { color:#f5f7fa !important; font-size:13.5px !important; font-weight:800 !important; margin:0 0 15px 0 !important; line-height:1.4 !important; text-align:left !important; }
         .st-key-xs_footer .xs-footer-bottom {
             margin-top:30px; padding-top:16px; border-top:1px solid #1e2228;
@@ -16953,6 +16967,12 @@ def render_site_footer ()->None :
             'แพลตฟอร์มจำลองการซื้อขายและเครื่องมือ Quant Research สำหรับการศึกษา วิเคราะห์ และทดสอบกลยุทธ์'
             '</div></div>',
             unsafe_allow_html =True ,
+            )
+            st .button (
+            "🚪 ออกจากระบบ Guest (ล้างข้อมูลทั้งหมด)" if is_guest_mode () else "🚪 ออกจากระบบ",
+            key ="footer_logout_btn",
+            on_click =_end_guest_session if is_guest_mode () else st .logout,
+            use_container_width =False,
             )
 
         with c2 :
@@ -17110,20 +17130,19 @@ def _main_body ()->None :
 
     remote_config =None if is_guest_mode ()else load_remote_config (email )
     apply_remote_config_to_widgets (remote_config )
+
+    # Backtest Settings are only relevant to the Backtest tab. Keep the
+    # existing config/state logic intact, but do not show the sidebar on
+    # unrelated pages.
+    if current_nav != NAV_LABELS [1 ]:
+        st .markdown (
+        "<style>section[data-testid=\"stSidebar\"]{display:none !important;}"
+        "[data-testid=\"collapsedControl\"]{display:none !important;}</style>",
+        unsafe_allow_html =True ,
+        )
+
     cfg =build_sidebar ()
     sync_remote_config_from_cfg (cfg )
-
-    with st .sidebar :
-        st .divider ()
-        if is_guest_mode ():
-            st .button (
-            "🚪 ออกจากระบบ Guest (ล้างข้อมูลทั้งหมด)",
-            key ="logout_btn",
-            on_click =_end_guest_session ,
-            use_container_width =True ,
-            )
-        else :
-            st .button ("ออกจากระบบ",key ="logout_btn",on_click =st .logout ,use_container_width =True )
 
     if not cfg ["dates_ok"]:
         data ,data_err =pd .DataFrame (),"ช่วงวันที่ไม่ถูกต้อง"
