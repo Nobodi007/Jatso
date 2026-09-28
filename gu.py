@@ -1493,6 +1493,7 @@ NAV_FINAL_QUANT_REVIEW ="🚦 Final Quant Production Review"
 NAV_DECISION_LOG ="📘 Portfolio Decision Log"
 NAV_RULES_ENGINE ="⚙️ Rules Engine"
 NAV_REGIME_SWITCHBOARD ="🧠 Market Regime Switchboard"
+NAV_SHADOW_PORTFOLIO ="🤖 Shadow Portfolio"
 
 QUANT_RESEARCH_PAGES =[
 NAV_RESEARCH_SCORECARD ,
@@ -1511,6 +1512,7 @@ NAV_FINAL_QUANT_REVIEW ,
 NAV_DECISION_LOG ,
 NAV_RULES_ENGINE ,
 NAV_REGIME_SWITCHBOARD ,
+NAV_SHADOW_PORTFOLIO ,
 ]
 QUANT_RESEARCH_LEGACY_NAVS =set (QUANT_RESEARCH_PAGES )
 
@@ -19830,79 +19832,320 @@ def _regime_derivatives_snapshot(symbol: str = "BTCUSDT") -> dict[str, Any]:
 
     return out
 
-def render_market_regime_switchboard(cfg: dict[str, Any], data: pd.DataFrame, market_df: Optional[pd.DataFrame] = None) -> None:
+
+def _regime_environment_composite(m: dict[str, Any], macro: dict[str, Any], micro: dict[str, Any], deriv: dict[str, Any]) -> dict[str, Any]:
+    """Combine Macro + Market Regime + Micro + Derivatives into one descriptive state."""
+    macro_state = str(macro.get("risk_state") or "UNKNOWN")
+    micro_state = str(micro.get("micro_state") or "DATA UNAVAILABLE")
+    trend_state = str(m.get("trend_state") or "RANGE / MIXED")
+    vol_state = str(m.get("vol_state") or "LOW / NORMAL VOLATILITY")
+    liq_state = str(m.get("liq_state") or "NORMAL LIQUIDITY")
+    funding_state = str(deriv.get("funding_state") or "DATA UNAVAILABLE")
+    oi_state = str(deriv.get("oi_state") or "DATA UNAVAILABLE")
+    flow_state = str(deriv.get("flow_state") or "DATA UNAVAILABLE")
+    liq_deriv_state = str(deriv.get("liq_state") or "DATA UNAVAILABLE")
+    stress = 0; support = 0; reasons=[]; evidence=[]
+    if macro_state == "RISK-OFF": stress += 2; reasons.append("Macro risk-off"); evidence.append("Macro")
+    elif macro_state == "RISK-ON": support += 2; reasons.append("Macro risk-on"); evidence.append("Macro")
+    elif macro_state == "MIXED": reasons.append("Macro mixed")
+    if "HIGH VOLATILITY" in vol_state: stress += 2; reasons.append("High volatility"); evidence.append("Volatility")
+    elif "ELEVATED VOLATILITY" in vol_state: stress += 1; reasons.append("Elevated volatility"); evidence.append("Volatility")
+    if "LOW LIQUIDITY" in liq_state: stress += 2; reasons.append("Low volume liquidity proxy"); evidence.append("Liquidity")
+    elif "HIGH LIQUIDITY" in liq_state: support += 1
+    if "SELL" in micro_state: stress += 2; reasons.append("Sell-side microstructure"); evidence.append("Micro")
+    elif "THIN" in micro_state: stress += 2; reasons.append("Thin micro liquidity"); evidence.append("Micro")
+    elif "BUY" in micro_state: support += 2; reasons.append("Buy-side microstructure"); evidence.append("Micro")
+    if funding_state == "HIGH POSITIVE": stress += 1; reasons.append("High positive funding"); evidence.append("Funding")
+    elif funding_state == "HIGH NEGATIVE": stress += 1; reasons.append("High negative funding"); evidence.append("Funding")
+    if oi_state == "RISING FAST": reasons.append("Open interest rising fast"); evidence.append("OI")
+    elif oi_state == "FALLING FAST": reasons.append("Open interest falling fast"); evidence.append("OI")
+    if "SELL" in flow_state: stress += 2; reasons.append("Taker sell pressure"); evidence.append("Taker Flow")
+    elif "BUY" in flow_state: support += 2; reasons.append("Taker buy pressure"); evidence.append("Taker Flow")
+    if liq_deriv_state == "ELEVATED": stress += 2; reasons.append("Elevated liquidations"); evidence.append("Liquidations")
+    if stress >= 6: state="STRESSED"
+    elif stress >= 3: state="FRAGILE"
+    elif support >= 4 and stress == 0: state="SUPPORTIVE"
+    else: state="BALANCED / MIXED"
+    trend_label = str(m.get("trend_direction")) if trend_state == "TRENDING" and m.get("trend_direction") not in (None,"NEUTRAL") else "RANGE / MIXED"
+    return {"state":state,"score":stress-support,"stress":stress,"support":support,"trend":trend_label,"macro":macro_state,"micro":micro_state,"funding":funding_state,"oi":oi_state,"flow":flow_state,"liquidations":liq_deriv_state,"reasons":reasons[:8],"evidence":list(dict.fromkeys(evidence))}
+
+
+def _regime_transition_update(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Keep a small in-session state history and detect state transitions."""
+    history=st.session_state.setdefault("_regime_transition_history",[])
+    fp=json.dumps(snapshot,sort_keys=True,ensure_ascii=False,default=str)
+    now=datetime.now(timezone.utc).isoformat()
+    if not history or history[-1].get("fingerprint") != fp:
+        history.append({"timestamp":now,"fingerprint":fp,**snapshot})
+        st.session_state["_regime_transition_history"]=history[-48:]
+    current=st.session_state["_regime_transition_history"][-1]
+    previous=st.session_state["_regime_transition_history"][-2] if len(st.session_state["_regime_transition_history"])>=2 else None
+    changed=[]
+    if previous:
+        for key in ("environment","macro","micro","trend","funding","oi","flow","liquidations"):
+            if previous.get(key)!=current.get(key): changed.append(key)
+    return {"current":current,"previous":previous,"changed":changed}
+
+
+def _regime_divergence_radar(m: dict[str, Any], macro: dict[str, Any], micro: dict[str, Any], deriv: dict[str, Any]) -> list[dict[str, str]]:
+    """Find descriptive disagreements between trend, microstructure and derivatives."""
+    findings=[]; direction=str(m.get("trend_direction") or "NEUTRAL"); micro_state=str(micro.get("micro_state") or "DATA UNAVAILABLE"); flow_state=str(deriv.get("flow_state") or "DATA UNAVAILABLE"); oi_state=str(deriv.get("oi_state") or "DATA UNAVAILABLE"); funding_state=str(deriv.get("funding_state") or "DATA UNAVAILABLE")
+    if direction=="UPTREND" and ("SELL" in micro_state or "SELL" in flow_state): findings.append({"Signal":"Price vs Flow","Status":"DIVERGENCE","Detail":"Trend is up while short-term sell pressure is present."})
+    if direction=="DOWNTREND" and ("BUY" in micro_state or "BUY" in flow_state): findings.append({"Signal":"Price vs Flow","Status":"DIVERGENCE","Detail":"Trend is down while short-term buy pressure is present."})
+    if direction=="UPTREND" and oi_state in ("RISING","RISING FAST") and funding_state=="HIGH POSITIVE": findings.append({"Signal":"Trend + Leverage","Status":"WATCH","Detail":"Uptrend, rising open interest and high positive funding are aligned."})
+    if direction=="DOWNTREND" and oi_state in ("RISING","RISING FAST") and funding_state=="HIGH NEGATIVE": findings.append({"Signal":"Trend + Leverage","Status":"WATCH","Detail":"Downtrend, rising open interest and high negative funding are aligned."})
+    if "THIN" in micro_state and str(m.get("vol_state","")).startswith("HIGH"): findings.append({"Signal":"Liquidity vs Volatility","Status":"STRESS","Detail":"Thin micro liquidity is coinciding with high volatility."})
+    if macro.get("risk_state")=="RISK-OFF" and direction=="UPTREND": findings.append({"Signal":"Macro vs Trend","Status":"DIVERGENCE","Detail":"Macro is risk-off while the observed price trend remains upward."})
+    if macro.get("risk_state")=="RISK-ON" and direction=="DOWNTREND": findings.append({"Signal":"Macro vs Trend","Status":"DIVERGENCE","Detail":"Macro is risk-on while the observed price trend remains downward."})
+    return findings
+
+
+def _shadow_portfolio_init() -> dict[str, Any]:
+    state = st.session_state.setdefault("_shadow_portfolio_v1", {})
+    if not isinstance(state, dict):
+        state = {}
+        st.session_state["_shadow_portfolio_v1"] = state
+    state.setdefault("initial_cash", 1_000_000.0)
+    state.setdefault("cash", 1_000_000.0)
+    state.setdefault("qty", 0.0)
+    state.setdefault("avg_cost", 0.0)
+    state.setdefault("realized_pnl", 0.0)
+    state.setdefault("fees", 0.0)
+    state.setdefault("trades", [])
+    state.setdefault("equity_history", [])
+    state.setdefault("last_run", None)
+    state.setdefault("strategy", "Regime Adaptive")
+    return state
+
+
+def _shadow_signal(strategy: str, m: dict[str, Any], envx: dict[str, Any], micro: dict[str, Any], deriv: dict[str, Any]) -> tuple[str, str]:
+    trend = str(m.get("trend_direction") or "NEUTRAL")
+    regime = str(m.get("regime") or "")
+    env = str(envx.get("state") or "BALANCED")
+    micro_state = str(micro.get("micro_state") or "")
+    flow = str(deriv.get("flow_state") or "")
+    vol = str(m.get("vol_state") or "")
+    oi = str(deriv.get("oi_state") or "")
+
+    if strategy == "Trend Following":
+        if trend == "UPTREND" and ("SELL" not in micro_state) and ("SELL" not in flow) and env not in ("STRESSED",):
+            return "BUY", "Uptrend with no confirmed short-term sell pressure"
+        if trend == "DOWNTREND" and ("BUY" not in micro_state) and ("BUY" not in flow):
+            return "SELL", "Downtrend with no confirmed short-term buy pressure"
+        return "HOLD", f"Trend state={trend}; no execution condition"
+
+    if strategy == "Mean Reversion":
+        if ("RANGE" in regime or "MIXED" in regime or env == "BALANCED") and "HIGH" not in vol:
+            if "SELL" in micro_state or "SELL" in flow:
+                return "BUY", "Range/mixed environment with short-term sell pressure"
+            if "BUY" in micro_state or "BUY" in flow:
+                return "SELL", "Range/mixed environment with short-term buy pressure"
+        return "HOLD", f"Regime={regime}; volatility={vol}"
+
+    if strategy == "DCA":
+        if env != "STRESSED" and "THIN" not in micro_state:
+            return "BUY", "Periodic accumulation allowed while environment is not stressed"
+        return "HOLD", f"Accumulation paused: environment={env}, micro={micro_state}"
+
+    # Regime Adaptive
+    if env == "SUPPORTIVE" and trend == "UPTREND" and ("SELL" not in flow):
+        return "BUY", "Supportive environment + uptrend + flow not sell-side"
+    if env in ("FRAGILE", "STRESSED") and (trend == "DOWNTREND" or "SELL" in flow or "SELL" in micro_state):
+        return "SELL", "Stress environment with downside/sell-side confirmation"
+    if env == "BALANCED" and trend == "UPTREND" and ("BUY" in micro_state or "BUY" in flow):
+        return "BUY", "Balanced environment with aligned upside signals"
+    return "HOLD", f"Environment={env}; trend={trend}; micro={micro_state}; flow={flow}; OI={oi}"
+
+
+def _shadow_execute(state: dict[str, Any], signal: str, reason: str, price: float, envx: dict[str, Any], m: dict[str, Any], asset: str) -> dict[str, Any]:
+    fee_rate = 0.0025
+    slippage_rate = 0.0005
+    equity_before = state["cash"] + state["qty"] * price
+    max_trade = max(1_000.0, equity_before * 0.10)
+    signal = signal.upper()
+    executed = False
+    qty_delta = 0.0
+    fill = price
+    if signal == "BUY" and state["cash"] >= 1_000.0:
+        gross = min(max_trade, state["cash"])
+        fill = price * (1.0 + slippage_rate)
+        fee = gross * fee_rate
+        spend = min(state["cash"], gross)
+        qty = max(0.0, (spend - fee) / fill)
+        if qty > 0:
+            old_qty = state["qty"]
+            old_cost = old_qty * state["avg_cost"]
+            state["qty"] = old_qty + qty
+            state["avg_cost"] = (old_cost + spend) / state["qty"] if state["qty"] > 0 else 0.0
+            state["cash"] -= spend
+            state["fees"] += fee
+            qty_delta = qty
+            executed = True
+    elif signal == "SELL" and state["qty"] > 0:
+        qty = min(state["qty"], max_trade / max(price, 1e-9))
+        fill = price * (1.0 - slippage_rate)
+        gross = qty * fill
+        fee = gross * fee_rate
+        realized = gross - fee - qty * state["avg_cost"]
+        state["qty"] -= qty
+        state["cash"] += gross - fee
+        state["realized_pnl"] += realized
+        state["fees"] += fee
+        qty_delta = -qty
+        executed = True
+    trade = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "asset": asset,
+        "signal": signal,
+        "executed": executed,
+        "price": float(price),
+        "fill": float(fill),
+        "qty": float(qty_delta),
+        "reason": reason,
+        "environment": envx.get("state", "—"),
+        "regime": m.get("regime", "—"),
+        "fee_rate": fee_rate,
+        "slippage_rate": slippage_rate,
+    }
+    state["trades"].append(trade)
+    state["trades"] = state["trades"][-200:]
+    state["last_run"] = trade["timestamp"]
+    equity_after = state["cash"] + state["qty"] * price
+    state["equity_history"].append({"timestamp": trade["timestamp"], "equity": equity_after, "price": price})
+    state["equity_history"] = state["equity_history"][-500:]
+    return trade
+
+
+def render_shadow_portfolio(cfg: dict[str, Any], data: pd.DataFrame, market_df: Optional[pd.DataFrame] = None) -> None:
+    """Paper-only autonomous strategy sandbox. Never calls execute_order or sends exchange orders."""
+    state = _shadow_portfolio_init()
+    asset = str(cfg.get("asset") or "BTC").upper()
+    if asset == "BTC":
+        asset = "BTC"
+    try:
+        row = data.iloc[-1]
+        price = float(row.get("Global_USD", 0.0)) * float(row.get("USDTHB", 0.0))
+    except Exception:
+        price = 0.0
+    if price <= 0:
+        st.error("Shadow Portfolio: ไม่พบราคาปัจจุบันที่ใช้จำลองได้")
+        return
+
     m = _regime_switchboard_metrics(cfg, data, market_df)
     macro = _regime_macro_snapshot()
-    micro = _regime_micro_snapshot(f"{str(cfg.get('asset','BTC')).upper()}USDT")
+    symbol = f"{asset}USDT"
+    micro = _regime_micro_snapshot(symbol)
+    deriv = _regime_derivatives_snapshot(symbol)
+    envx = _regime_environment_composite(m, macro, micro, deriv)
+
+    st.markdown("## 🤖 Shadow Portfolio")
+    st.caption("Autonomous Trading Lab · paper-only · จำลอง execution เท่านั้น · ไม่ส่งคำสั่งซื้อขายจริง")
+    c1, c2, c3 = st.columns(3)
+    strategy = c1.selectbox("Strategy", ["Regime Adaptive", "Trend Following", "Mean Reversion", "DCA"], index=["Regime Adaptive", "Trend Following", "Mean Reversion", "DCA"].index(state.get("strategy", "Regime Adaptive")), key="shadow_strategy")
+    state["strategy"] = strategy
+    capital = c2.number_input("Initial Capital (THB)", min_value=10_000.0, value=float(state.get("initial_cash", 1_000_000.0)), step=10_000.0, key="shadow_capital")
+    if capital != state.get("initial_cash") and not state.get("trades"):
+        state["initial_cash"] = float(capital); state["cash"] = float(capital)
+
+    signal, reason = _shadow_signal(strategy, m, envx, micro, deriv)
+    equity = state["cash"] + state["qty"] * price
+    total_return = (equity / state["initial_cash"] - 1.0) * 100.0 if state["initial_cash"] else 0.0
+    a,b,c,d,e = st.columns(5)
+    a.metric("Shadow Equity", f"฿{equity:,.0f}", f"{total_return:+.2f}%")
+    b.metric(f"{asset} Position", f"{state['qty']:.8f}")
+    c.metric("Cash", f"฿{state['cash']:,.0f}")
+    d.metric("Realized P&L", f"฿{state['realized_pnl']:,.0f}")
+    e.metric("Fees", f"฿{state['fees']:,.0f}")
+
+    st.markdown("### 🧠 Current Autonomous Decision")
+    dc1, dc2, dc3 = st.columns(3)
+    dc1.metric("Signal", signal)
+    dc2.metric("Environment", envx["state"])
+    dc3.metric("Market Regime", m["regime"])
+    st.info(f"**Why:** {reason}\n\nCurrent simulated price: ฿{price:,.2f} · Trade size cap: 10% of equity · Fee: 0.25% · Slippage assumption: 0.05%")
+
+    r1, r2 = st.columns(2)
+    with r1:
+        if st.button("▶️ Run Shadow Cycle", type="primary", use_container_width=True, key="shadow_run_cycle"):
+            trade = _shadow_execute(state, signal, reason, price, envx, m, asset)
+            emit_event("SHADOW_DECISION", {"strategy": strategy, "asset": asset, "signal": signal, "executed": trade["executed"], "reason": reason, "price": price, "environment": envx["state"], "regime": m["regime"]}, source="shadow_portfolio", dedupe_seconds=30)
+            st.success(f"Shadow cycle: {signal} · {'EXECUTED' if trade['executed'] else 'HOLD / NO FILL'}")
+            st.rerun()
+    with r2:
+        if st.button("♻️ Reset Shadow Portfolio", use_container_width=True, key="shadow_reset"):
+            st.session_state.pop("_shadow_portfolio_v1", None)
+            st.rerun()
+
+    st.markdown("### 🛡️ Shadow Risk Gate")
+    gate_rows = [
+        {"Gate": "Real exchange execution", "Status": "BLOCKED", "Reason": "Shadow module never calls execute_order"},
+        {"Gate": "Max trade size", "Status": "PASS", "Reason": "10% of current equity"},
+        {"Gate": "Fee + slippage", "Status": "PASS", "Reason": "0.25% fee + 0.05% slippage simulated"},
+        {"Gate": "Audit event", "Status": "PASS", "Reason": "Decision written to Event Bus"},
+    ]
+    st.dataframe(pd.DataFrame(gate_rows), use_container_width=True, hide_index=True)
+
+    with st.expander("📜 Shadow Trade History", expanded=False):
+        if state["trades"]:
+            rows = [{"Time": str(t["timestamp"])[:19].replace("T", " "), "Signal": t["signal"], "Executed": "YES" if t["executed"] else "NO", "Qty": f"{t['qty']:+.8f}", "Price": f"฿{t['price']:,.2f}", "Environment": t["environment"], "Reason": t["reason"]} for t in reversed(state["trades"][-50:])]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        else:
+            st.caption("ยังไม่มี Shadow Cycle")
+
+    with st.expander("📊 Shadow Performance", expanded=False):
+        hist = state.get("equity_history", [])
+        if hist:
+            eq = [float(x["equity"]) for x in hist]
+            peak = max([state["initial_cash"]] + eq)
+            max_dd = min([(x / max(state["initial_cash"], 1e-9) - 1.0) * 100.0 for x in eq] or [0.0])
+            st.write({"Cycles": len(hist), "Return": f"{total_return:+.2f}%", "Peak Equity": f"฿{peak:,.0f}", "Worst observed return": f"{max_dd:+.2f}%"})
+        else:
+            st.caption("ยังไม่มี performance history")
+
+def render_market_regime_switchboard(cfg: dict[str, Any], data: pd.DataFrame, market_df: Optional[pd.DataFrame] = None) -> None:
+    m=_regime_switchboard_metrics(cfg,data,market_df); macro=_regime_macro_snapshot(); asset=f"{str(cfg.get('asset','BTC')).upper()}USDT"; micro=_regime_micro_snapshot(asset); deriv=_regime_derivatives_snapshot(asset); envx=_regime_environment_composite(m,macro,micro,deriv)
     st.markdown("## 🧠 Market Regime Switchboard")
-    st.caption("Operating Environment Layer — Macro + Market Regime + Micro Structure · descriptive only · ไม่ทำนายราคา · ไม่ส่งคำสั่งซื้อขาย")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Trend", f"{m['trend_score']:.0f}/100", m["trend_direction"])
-    c2.metric("Volatility", f"{m['vol20']:.1f}%", m["vol_state"])
-    c3.metric("Liquidity proxy", f"{m['liquidity_score']:.0f}/100", m["liq_state"])
-    c4.metric("Correlation", f"{m['avg_corr']*100:.0f}%", "cross-asset")
-    st.markdown(f'''<div style="background:linear-gradient(135deg,#171A20 0%,#101318 100%);border:1px solid #2B3139;border-radius:14px;padding:18px;margin:12px 0 18px;">
-    <div style="font-size:11px;color:#8B93A1;letter-spacing:.08em;">CURRENT MARKET REGIME · {m['symbol']}</div>
-    <div style="font-size:24px;font-weight:800;color:#EAECEF;margin-top:7px;">{_html.escape(m['regime'])}</div>
-    <div style="font-size:12px;color:#8B93A1;margin-top:8px;">20D return {m['ret20']:+.2f}% · annualized 20D volatility {m['vol20']:.1f}% · avg cross-asset correlation {m['avg_corr']*100:.1f}%</div>
-    </div>''', unsafe_allow_html=True)
-    st.markdown("### 🌍 Macro Environment")
-    ma,mb,mc,md=st.columns(4)
-    ma.metric("Macro Regime",macro.get("macro_state","—")); mb.metric("VIX",f"{macro['vix']:.1f}" if macro.get("vix") is not None else "—"); mc.metric("DXY",f"{macro['dxy']:.2f}" if macro.get("dxy") is not None else "—"); md.metric("US 10Y",f"{macro['us10y']:.2f}%" if macro.get("us10y") is not None else "—")
-    st.markdown("### 🧬 Micro Market Structure")
-    xa,xb,xc,xd=st.columns(4)
-    xa.metric("Micro State",micro.get("micro_state","—")); xb.metric("Spread",f"{micro['spread_bps']:.2f} bps" if micro.get("spread_bps") is not None else "—"); xc.metric("Book Imbalance",f"{micro['imbalance']*100:+.1f}%" if micro.get("imbalance") is not None else "—"); xd.metric("Buy Pressure",f"{micro['buy_pressure']:.0f}/100" if micro.get("buy_pressure") is not None else "—")
+    st.caption("Operating Environment Layer — Macro + Market Regime + Micro Structure + Derivatives · descriptive only · ไม่ทำนายราคา · ไม่ส่งคำสั่งซื้อขาย")
+    c1,c2,c3,c4=st.columns(4); c1.metric("Trend",f"{m['trend_score']:.0f}/100",m["trend_direction"]); c2.metric("Volatility",f"{m['vol20']:.1f}%",m["vol_state"]); c3.metric("Liquidity proxy",f"{m['liquidity_score']:.0f}/100",m["liq_state"]); c4.metric("Correlation",f"{m['avg_corr']*100:.0f}%","cross-asset")
+    st.markdown(f'''<div style="background:linear-gradient(135deg,#171A20 0%,#101318 100%);border:1px solid #2B3139;border-radius:14px;padding:18px;margin:12px 0 18px;"><div style="font-size:11px;color:#8B93A1;letter-spacing:.08em;">CURRENT MARKET REGIME · {_html.escape(m['symbol'])}</div><div style="font-size:24px;font-weight:800;color:#EAECEF;margin-top:7px;">{_html.escape(m['regime'])}</div><div style="font-size:12px;color:#8B93A1;margin-top:8px;">20D return {m['ret20']:+.2f}% · annualized 20D volatility {m['vol20']:.1f}% · avg cross-asset correlation {m['avg_corr']*100:.1f}%</div></div>''',unsafe_allow_html=True)
+    st.markdown("### 🌍 Macro Environment"); ma,mb,mc,md=st.columns(4); ma.metric("Macro Regime",macro.get("macro_state","—")); mb.metric("VIX",f"{macro['vix']:.1f}" if macro.get("vix") is not None else "—"); mc.metric("DXY",f"{macro['dxy']:.2f}" if macro.get("dxy") is not None else "—"); md.metric("US 10Y",f"{macro['us10y']:.2f}%" if macro.get("us10y") is not None else "—")
+    st.markdown("### 🧬 Micro Market Structure"); xa,xb,xc,xd=st.columns(4); xa.metric("Micro State",micro.get("micro_state","—")); xb.metric("Spread",f"{micro['spread_bps']:.2f} bps" if micro.get("spread_bps") is not None else "—"); xc.metric("Book Imbalance",f"{micro['imbalance']*100:+.1f}%" if micro.get("imbalance") is not None else "—"); xd.metric("Buy Pressure",f"{micro['buy_pressure']:.0f}/100" if micro.get("buy_pressure") is not None else "—")
     macro_flag=macro.get("risk_state","UNKNOWN"); micro_flag=micro.get("micro_state","DATA UNAVAILABLE")
     if macro_flag=="RISK-OFF" and ("SELL" in micro_flag or "THIN" in micro_flag): env="FRAGILE — MACRO RISK-OFF + WEAK MICROSTRUCTURE"
     elif macro_flag=="RISK-ON" and "BUY" in micro_flag: env="SUPPORTIVE — MACRO RISK-ON + BUY-SIDE MICROSTRUCTURE"
     elif "THIN" in micro_flag: env="CAUTION — MICRO LIQUIDITY FRAGILE"
     else: env=f"{macro_flag} / {micro_flag}"
     st.info(f"**Combined Environment:** {env}\n\nMacro: {macro_flag} · Micro: {micro_flag}")
+    st.markdown("### 📉 Derivatives Environment"); da,db,dc,dd=st.columns(4); da.metric("Funding",f"{deriv['funding_rate']*100:.4f}%" if deriv.get("funding_rate") is not None else "—",deriv.get("funding_state","—")); oi_label=f"${deriv['open_interest_usd']/1e9:.2f}B" if deriv.get("open_interest_usd") is not None else (f"{deriv['open_interest']:,.2f}" if deriv.get("open_interest") is not None else "—"); db.metric("Open Interest",oi_label,deriv.get("oi_state","—")); dc.metric("Taker Flow",f"{deriv['taker_imbalance']*100:+.1f}%" if deriv.get("taker_imbalance") is not None else "—",deriv.get("flow_state","—")); dd.metric("Liquidations",f"${deriv['liq_total_usd']/1e6:.1f}M" if deriv.get("liq_total_usd") is not None else "—",deriv.get("liq_state","—"))
+    if deriv.get("oi_change_1h_pct") is not None: st.caption(f"OI 1h change: {deriv['oi_change_1h_pct']:+.2f}% · Taker flow = latest 5m aggregate")
+    if deriv.get("liquidation_source"): st.caption(f"Liquidation source: {deriv['liquidation_source']}")
+    if deriv.get("funding_rate") is None and deriv.get("open_interest") is None: st.warning("Derivatives data ยังไม่ตอบกลับจาก Binance USDⓈ-M — ไม่ตีความเป็น 0")
 
-    deriv = _regime_derivatives_snapshot(f"{str(cfg.get('asset','BTC')).upper()}USDT")
-    st.markdown("### 📉 Derivatives Environment")
-    da, db, dc, dd = st.columns(4)
-    da.metric("Funding", f"{deriv['funding_rate']*100:.4f}%" if deriv.get("funding_rate") is not None else "—", deriv.get("funding_state", "—"))
-    oi_label = "—"
-    if deriv.get("open_interest_usd") is not None:
-        oi_label = f"${deriv['open_interest_usd']/1e9:.2f}B"
-    elif deriv.get("open_interest") is not None:
-        oi_label = f"{deriv['open_interest']:,.2f}"
-    db.metric("Open Interest", oi_label, deriv.get("oi_state", "—"))
-    dc.metric("Taker Flow", f"{deriv['taker_imbalance']*100:+.1f}%" if deriv.get("taker_imbalance") is not None else "—", deriv.get("flow_state", "—"))
-    dd.metric("Liquidations", f"${deriv['liq_total_usd']/1e6:.1f}M" if deriv.get("liq_total_usd") is not None else "—", deriv.get("liq_state", "—"))
-    if deriv.get("oi_change_1h_pct") is not None:
-        st.caption(f"OI 1h change: {deriv['oi_change_1h_pct']:+.2f}% · Taker flow = latest 5m aggregate")
-    if deriv.get("liquidation_source"):
-        st.caption(f"Liquidation source: {deriv['liquidation_source']}")
-    if deriv.get("funding_rate") is None and deriv.get("open_interest") is None:
-        st.warning("Derivatives data ยังไม่ตอบกลับจาก Binance USDⓈ-M — ไม่ตีความเป็น 0")
+    st.markdown("### 🧠 Environment Composite"); ec1,ec2,ec3,ec4=st.columns(4); ec1.metric("Environment",envx["state"],f"stress {envx['stress']} · support {envx['support']}"); ec2.metric("Trend Context",envx["trend"]); ec3.metric("Macro",envx["macro"]); ec4.metric("Micro",envx["micro"])
+    if envx["reasons"]: st.caption("Drivers: "+" · ".join(envx["reasons"]))
+    if envx["evidence"]: st.caption("Evidence feeds: "+", ".join(envx["evidence"]))
 
-    a, b = st.columns(2)
+    transition_snapshot={"environment":envx["state"],"macro":envx["macro"],"micro":envx["micro"],"trend":envx["trend"],"funding":envx["funding"],"oi":envx["oi"],"flow":envx["flow"],"liquidations":envx["liquidations"]}; transition=_regime_transition_update(transition_snapshot)
+    if transition["changed"] and transition["previous"]:
+        prev=transition["previous"]; st.warning(f"**⚠️ REGIME TRANSITION DETECTED** — {prev.get('environment','—')} → {envx['state']} · changed: {', '.join(transition['changed'])}")
+        emit_event("REGIME_CHANGED",{"symbol":asset,"from":prev.get("environment"),"to":envx["state"],"changed":transition["changed"],**transition_snapshot},source="market_regime_switchboard",dedupe_seconds=300)
+
+    st.markdown("### 🔎 Divergence Radar"); divergences=_regime_divergence_radar(m,macro,micro,deriv)
+    if divergences: st.dataframe(pd.DataFrame(divergences),use_container_width=True,hide_index=True); st.caption("Divergence Radar flags disagreements between observed datasets; it is not a buy/sell signal.")
+    else: st.success("No material cross-signal divergence detected from the currently available feeds.")
+
+    a,b=st.columns(2)
     with a:
-        st.markdown("### 🌡️ Environment Signals")
-        st.markdown(f"**Trend**  `{_regime_bar(m['trend_score'])}` {m['trend_score']:.0f}/100")
-        st.markdown(f"**Volatility**  `{_regime_bar(min(100, m['vol20'] / 1.5))}` {m['vol20']:.1f}%")
-        st.markdown(f"**Liquidity**  `{_regime_bar(m['liquidity_score'])}` {m['liquidity_score']:.0f}/100")
-        st.markdown(f"**Correlation**  `{_regime_bar(m['corr_score'])}` {m['avg_corr']*100:.1f}%")
-        st.caption("Liquidity เป็น volume proxy จาก market overview; ไม่ใช่ bid/ask spread หรือ order-book depth โดยตรง")
+        st.markdown("### 🌡️ Environment Signals"); st.markdown(f"**Trend**  `{_regime_bar(m['trend_score'])}` {m['trend_score']:.0f}/100"); st.markdown(f"**Volatility**  `{_regime_bar(min(100,m['vol20']/1.5))}` {m['vol20']:.1f}%"); st.markdown(f"**Liquidity**  `{_regime_bar(m['liquidity_score'])}` {m['liquidity_score']:.0f}/100"); st.markdown(f"**Correlation**  `{_regime_bar(m['corr_score'])}` {m['avg_corr']*100:.1f}%"); st.caption("Liquidity เป็น volume proxy จาก market overview; ไม่ใช่ bid/ask spread หรือ order-book depth โดยตรง")
     with b:
-        st.markdown("### 🧩 Strategy Compatibility")
-        st.dataframe(pd.DataFrame([ {"Profile": k, "State": v} for k, v in m["compatibility"].items() ]), use_container_width=True, hide_index=True)
-        st.caption("Compatibility เป็น environment check แบบ descriptive เท่านั้น ไม่ผูกกับ execution engine")
-    with st.expander("🔬 Regime Diagnostics", expanded=False):
-        diag = pd.DataFrame([
-            {"Signal": "20D Return", "Value": f"{m['ret20']:+.2f}%"},
-            {"Signal": "Trend Direction", "Value": m["trend_direction"]},
-            {"Signal": "Annualized 20D Volatility", "Value": f"{m['vol20']:.2f}%"},
-            {"Signal": "Liquidity Volume", "Value": f"{m['asset_volume']:,.0f}" if m["asset_volume"] else "—"},
-            {"Signal": "Cross-Asset Avg Abs Correlation", "Value": f"{m['avg_corr']*100:.2f}%"},
-            {"Signal": "Funding Rate", "Value": f"{deriv['funding_rate']*100:.4f}%" if deriv.get("funding_rate") is not None else "—"},
-            {"Signal": "OI 1h Change", "Value": f"{deriv['oi_change_1h_pct']:+.2f}%" if deriv.get("oi_change_1h_pct") is not None else "—"},
-            {"Signal": "Taker Flow", "Value": f"{deriv['taker_imbalance']*100:+.1f}%" if deriv.get("taker_imbalance") is not None else "—"},
-            {"Signal": "Liquidation State", "Value": deriv.get("liq_state", "—")},
-        ])
-        st.dataframe(diag, use_container_width=True, hide_index=True)
+        st.markdown("### 🧩 Strategy Compatibility"); st.dataframe(pd.DataFrame([{"Profile":k,"State":v} for k,v in m["compatibility"].items()]),use_container_width=True,hide_index=True); st.caption("Compatibility เป็น environment check แบบ descriptive เท่านั้น ไม่ผูกกับ execution engine")
+    with st.expander("🕰️ Regime Transition History",expanded=False):
+        hist=st.session_state.get("_regime_transition_history",[])
+        if hist:
+            rows=[{"Time UTC":str(x.get("timestamp",""))[:19].replace("T"," "),"Environment":x.get("environment","—"),"Macro":x.get("macro","—"),"Micro":x.get("micro","—"),"Trend":x.get("trend","—"),"Funding":x.get("funding","—"),"OI":x.get("oi","—"),"Flow":x.get("flow","—"),"Liquidations":x.get("liquidations","—")} for x in reversed(hist[-24:])]; st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
+        else: st.caption("ยังไม่มี transition history ใน session นี้")
+    with st.expander("🔬 Regime Diagnostics",expanded=False):
+        diag=pd.DataFrame([{"Signal":"20D Return","Value":f"{m['ret20']:+.2f}%"},{"Signal":"Trend Direction","Value":m["trend_direction"]},{"Signal":"Annualized 20D Volatility","Value":f"{m['vol20']:.2f}%"},{"Signal":"Liquidity Volume","Value":f"{m['asset_volume']:,.0f}" if m["asset_volume"] else "—"},{"Signal":"Cross-Asset Avg Abs Correlation","Value":f"{m['avg_corr']*100:.2f}%"},{"Signal":"Environment Composite","Value":envx["state"]},{"Signal":"Funding Rate","Value":f"{deriv['funding_rate']*100:.4f}%" if deriv.get("funding_rate") is not None else "—"},{"Signal":"OI 1h Change","Value":f"{deriv['oi_change_1h_pct']:+.2f}%" if deriv.get("oi_change_1h_pct") is not None else "—"},{"Signal":"Taker Flow","Value":f"{deriv['taker_imbalance']*100:+.1f}%" if deriv.get("taker_imbalance") is not None else "—"},{"Signal":"Liquidation State","Value":deriv.get("liq_state","—")},{"Signal":"Transition Changed","Value":", ".join(transition["changed"]) if transition["changed"] else "—"}]); st.dataframe(diag,use_container_width=True,hide_index=True)
 
 
 def render_quant_research_hub (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :Optional [pd .DataFrame ]=None )->None :
@@ -19931,6 +20174,7 @@ def render_quant_research_hub (cfg :dict [str ,Any ],data :pd .DataFrame ,market
     ],
     "🕶️ Shadow & Governance":[
     NAV_SHADOW_MODE ,
+    NAV_SHADOW_PORTFOLIO ,
     NAV_EXPERIMENT_TRACKER ,
     NAV_MODEL_GOVERNANCE ,
     NAV_DECISION_LOG ,
@@ -19999,6 +20243,8 @@ def render_quant_research_hub (cfg :dict [str ,Any ],data :pd .DataFrame ,market
         render_rules_engine (cfg ,data ,market_df )
     elif selected ==NAV_REGIME_SWITCHBOARD :
         render_market_regime_switchboard (cfg ,data ,market_df )
+    elif selected ==NAV_SHADOW_PORTFOLIO :
+        render_shadow_portfolio (cfg ,data ,market_df )
     elif selected ==NAV_TRANSACTION_COST_LAB :
         render_transaction_cost_lab (cfg ,data ,market_df )
     elif selected ==NAV_PBO_DSR_LAB :
