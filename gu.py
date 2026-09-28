@@ -270,7 +270,24 @@ THB_LOGO_SVG ="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmc
 # ข้อมูลผู้พัฒนา (แสดงมุมซ้ายบน)
 DEV_NAME ="Thiraphat Niyom"
 DEV_LINKEDIN ="https://www.linkedin.com/in/thiraphat-niyom-11044727b"
-DEV_AVATAR_B64 ="data:image/jpeg;base64,ใส่_BASE64_ของรูป_IMG_2908_ตรงนี้"
+def _default_dev_avatar() -> str:
+    """Valid inline avatar (initials) so <img src> never points at a broken placeholder."""
+    initials = "".join(w[0] for w in DEV_NAME.split()[:2]).upper() or "?"
+    svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>"
+        "<circle cx='50' cy='50' r='50' fill='#2b3139'/>"
+        "<text x='50' y='50' text-anchor='middle' dominant-baseline='central' "
+        "font-family='Arial,sans-serif' font-size='38' font-weight='700' fill='#EAECEF'>"
+        f"{initials}</text></svg>"
+    )
+    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
+
+
+DEV_AVATAR_B64 = _default_dev_avatar()
+# ใส่รูปจริงได้โดยตั้ง env XSPRING_DEV_AVATAR เป็น data URI (data:image/jpeg;base64,...)
+_env_avatar = os.environ.get("XSPRING_DEV_AVATAR", "").strip()
+if _env_avatar.startswith("data:image/") and not re.search(r"[\"'<>\s]", _env_avatar):
+    DEV_AVATAR_B64 = _env_avatar
 
 COIN_LOGOS ={s :f"https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/{s .lower ()}.png"for s in SUPPORTED_ASSETS }
 COIN_LOGOS ["THB"]=THB_LOGO_SVG 
@@ -2197,7 +2214,7 @@ html,body{margin:0;padding:0;background:transparent;color:#EAECEF;
 .note{color:#5e6673;font-size:.7rem;margin-top:6px;}
 </style></head><body>
 <div class="box">
-  <div class="row"><span>💹 ราคาจริงจาก Binance (live)</span>
+  <div class="row"><span>💹 ราคาจริงจาก Binance Spot (live)</span>
     <b id="bn-price">กำลังโหลด…</b></div>
   <div class="row"><span>ราคาที่โมเดลใช้ในการ Hedge</span>
     <b>$__MODEL_PRICE__</b></div>
@@ -2213,7 +2230,7 @@ async function run(){
   try{
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), 8000);
-    const r = await fetch("https://fapi.binance.com/fapi/v1/ticker/price?symbol=" + SYMBOL,
+    const r = await fetch("https://data-api.binance.vision/api/v3/ticker/price?symbol=" + SYMBOL,
                           {signal: ac.signal});
     clearTimeout(t);
     if(!r.ok) throw new Error("HTTP " + r.status);
@@ -5299,12 +5316,22 @@ def _spot_kraken(b: str) -> tuple[float, float, float]:
     return last, chg, last * vol24
 
 
-def _spot_coinbase(b: str) -> tuple[float, float, float]:
+def _spot_coinbase(b: str) -> tuple[float, Optional[float], float]:
     pair = f"{b.upper()}-USD"
     d = _http_json(f"https://api.exchange.coinbase.com/products/{pair}/ticker")
     last = float(d["price"])
     volume = float(d.get("volume") or 0.0)
-    return last, None, last * volume
+    # ticker ไม่มี % เปลี่ยนแปลง → คำนวณจาก open 24h ใน /stats
+    # ถ้าดึง stats ไม่ได้ให้คืน None (UI แสดง "—") แทนการเดาเป็น 0%
+    chg: Optional[float] = None
+    try:
+        s = _http_json(f"https://api.exchange.coinbase.com/products/{pair}/stats", timeout=4.0)
+        open_px = float(s.get("open") or 0.0)
+        if open_px > 0:
+            chg = (last / open_px - 1.0) * 100.0
+    except Exception:
+        chg = None
+    return last, chg, last * volume
 
 
 def _spot_bitstamp(b: str) -> tuple[float, float, float]:
@@ -5916,11 +5943,16 @@ def fetch_perp_venues (base :str ="BTC")->tuple [pd.DataFrame ,str ]:
 # ==========================================================================
 ARB_HIGHLIGHT_THRESHOLD_PCT = 0.02
 ARB_ALERT_THRESHOLD_PCT = 0.05
-DEFAULT_TAKER_FEE_PCT = 0.05
+# Fallback สำหรับกระดานที่ไม่มี preset: 0.10% เป็นสมมติฐานระดับ Spot ทั่วไป
+# (เดิม 0.05% เป็นระดับ perp จึงทำให้ net edge ของ Spot ดูดีเกินจริง)
+# ควรตรวจ fee tier จริงของบัญชีแล้วเพิ่ม preset ใน config.yaml
+DEFAULT_TAKER_FEE_PCT = 0.10
 
 _VENUE_TO_FEE_PRESET = {
     "Binance": "Binance",
     "OKX": "OKX",
+    "Coinbase": "Coinbase",
+    "Kraken": "Kraken",
     "Bitget": None,
     "Gate": None,
     "Bitunix": None,
@@ -6578,13 +6610,13 @@ async function getJSON(url){
 // กระดานที่มักถูกจำกัดจาก server → ให้ browser ของผู้ใช้ลองดึงเอง
 const JOBS = {
   Binance: async () => {
-    const d = await getJSON('https://fapi.binance.com/fapi/v1/ticker/24hr?symbol='+BASE+'USDT');
+    const d = await getJSON('https://data-api.binance.vision/api/v3/ticker/24hr?symbol='+BASE+'USDT');
     return [+d.lastPrice, +d.priceChangePercent, +d.quoteVolume];
   },
 };
 
 function computeVWAP(rows){
-  const valid = rows.filter(r => r.market_type !== 'spot' && r.price && r.turnover && !r.err && isFinite(r.price) && isFinite(r.turnover));
+  const valid = rows.filter(r => r.price && r.turnover && !r.err && isFinite(r.price) && isFinite(r.turnover));
   if(!valid.length) return null;
   const totalTurnover = valid.reduce((s,r) => s + Number(r.turnover), 0);
   if(totalTurnover <= 0) return null;
@@ -6607,7 +6639,7 @@ function deviationBarHTML(devPct,maxAbsDev){
 }
 
 function computeMarketShare(rows){
-  const valid = rows.filter(r => r.market_type !== 'spot' && r.turnover && !r.err && isFinite(r.turnover));
+  const valid = rows.filter(r => r.turnover && !r.err && isFinite(r.turnover));
   const total = valid.reduce((s,r) => s + Number(r.turnover), 0);
   if(total <= 0) return {};
   const shares = {};
@@ -6633,7 +6665,7 @@ function turnoverCellHTML(turnover,sharePct){
 }
 
 function computeRanks(rows){
-  const valid = rows.filter(r => r.market_type !== 'spot' && r.price && !r.err && isFinite(r.price));
+  const valid = rows.filter(r => r.price && !r.err && isFinite(r.price));
   const byTurnover = [...valid].sort((a,b) => (Number(b.turnover)||0) - (Number(a.turnover)||0));
   const turnoverRank = {};
   byTurnover.forEach((r,i) => { turnoverRank[r.exchange] = i + 1; });
@@ -6651,15 +6683,15 @@ function rankBadgeHTML(rank,kind){
 }
 
 function render(){
-  const valid = rows.filter(r => r.market_type !== 'spot' && r.price && !r.err && isFinite(r.price));
+  const valid = rows.filter(r => r.price && !r.err && isFinite(r.price));
   const vwap = computeVWAP(rows);
-  const validForDev = rows.filter(r => r.market_type !== 'spot' && r.price && !r.err && isFinite(r.price));
+  const validForDev = rows.filter(r => r.price && !r.err && isFinite(r.price));
   const maxAbsDev = validForDev.length && vwap
     ? Math.max(...validForDev.map(r => Math.abs(deviationFromVWAP(r.price,vwap))))
     : 1;
   const shares = computeMarketShare(rows);
   const ranks = computeRanks(rows);
-  const validTurnover = rows.filter(r => r.market_type !== 'spot' && r.turnover && !r.err && isFinite(r.turnover));
+  const validTurnover = rows.filter(r => r.turnover && !r.err && isFinite(r.turnover));
   const maxTurnover = validTurnover.length ? Math.max(...validTurnover.map(r => Number(r.turnover))) : 0;
   let cheapest = null, priciest = null;
   if(valid.length >= 2){
@@ -6670,21 +6702,23 @@ function render(){
   }
   rows.forEach(r => {
     r.arbRole = '';
-    if(r.market_type !== 'spot' && cheapest && r.exchange === cheapest.exchange) r.arbRole = 'buy';
-    if(r.market_type !== 'spot' && priciest && r.exchange === priciest.exchange) r.arbRole = 'sell';
+    if(cheapest && r.exchange === cheapest.exchange) r.arbRole = 'buy';
+    if(priciest && r.exchange === priciest.exchange) r.arbRole = 'sell';
   });
   const list = rows.slice().sort((a,b) => (b.turnover ?? -1) - (a.turnover ?? -1));
   document.getElementById('tb').innerHTML = list.map(r => {
     const via = r.via ? '<span class="via" title="ข้อมูลไม่ได้ดึงตรงจาก server">via '+esc(r.via)+'</span>' : '';
     const tRank = ranks.turnoverRank[r.exchange];
     const pRank = ranks.priceRank[r.exchange];
-    const badges = (r.market_type === 'spot' ? '<span class="rank-badge spot" title="ตลาด Spot ไทย">🇹🇭 Spot</span>' : '') + rankBadgeHTML(tRank,'turnover') + rankBadgeHTML(pRank,'price');
+    const badges = rankBadgeHTML(tRank,'turnover') + rankBadgeHTML(pRank,'price');
     let p, c, d, t, l;
     if(r.err){
       p = c = d = t = l = '<span class="mut" title="'+esc(r.err)+'">—</span>';
     } else {
       p = fmtP(r.price);
-      c = '<span class="'+(r.chg>=0?'up':'dn')+'">'+(r.chg>=0?'+':'')+r.chg.toFixed(2)+'%</span>'
+      c = (r.chg === null || r.chg === undefined || !isFinite(r.chg))
+        ? '<span class="mut">—</span>'
+        : '<span class="'+(r.chg>=0?'up':'dn')+'">'+(r.chg>=0?'+':'')+Number(r.chg).toFixed(2)+'%</span>'
         + (r.note ? '<span class="mut" style="cursor:help" title="'+esc(r.note)+'"> *</span>' : '');
       d = (r.price && vwap) ? deviationBarHTML(deviationFromVWAP(r.price,vwap),maxAbsDev) : '<span class="mut">—</span>';
       t = turnoverCellHTML(Number(r.turnover),shares[r.exchange] || 0);
@@ -6722,7 +6756,7 @@ async function run(){
   await Promise.all(todo.map(async r => {
     try{
       const [p, c, t] = await JOBS[r.exchange]();
-      if(!(isFinite(p) && p > 0 && isFinite(c) && isFinite(t))) throw new Error('bad data');
+      if(!(isFinite(p) && p > 0 && isFinite(t))) throw new Error('bad data');
       Object.assign(r, {price:p, chg:c, turnover:t, err:null, via:'browser'});
     } catch(e){
       r.err += ' → browser: ' + (e && e.message ? e.message : 'fetch failed');
