@@ -19503,19 +19503,47 @@ def _regime_macro_snapshot() -> dict[str, Any]:
     return out
 
 def _regime_micro_snapshot(symbol: str="BTCUSDT") -> dict[str,Any]:
-    out={"symbol":symbol,"spread_bps":None,"imbalance":None,"depth_score":None,"micro_state":"DATA UNAVAILABLE","buy_pressure":None}
-    try:
-        book=_http_json(f"https://api.binance.com/api/v3/depth?symbol={symbol}&limit=20") or {}; bids=book.get("bids") or []; asks=book.get("asks") or []
-        if not bids or not asks: return out
-        bp,ap=float(bids[0][0]),float(asks[0][0]); mid=(bp+ap)/2; out["spread_bps"]=((ap-bp)/mid*10000) if mid else None
-        bq=sum(float(x[1]) for x in bids); aq=sum(float(x[1]) for x in asks); total=bq+aq; out["imbalance"]=((bq-aq)/total) if total else 0.0
-        out["buy_pressure"]=(out["imbalance"]+1)*50; out["depth_score"]=max(0,min(100,50+out["imbalance"]*50))
-        if out["spread_bps"]>12 and out["imbalance"]<-.20: out["micro_state"]="THIN / SELL PRESSURE"
-        elif out["spread_bps"]>12: out["micro_state"]="THIN LIQUIDITY"
-        elif out["imbalance"]>.20: out["micro_state"]="BUY-SIDE PRESSURE"
-        elif out["imbalance"]<-.20: out["micro_state"]="SELL-SIDE PRESSURE"
-        else: out["micro_state"]="BALANCED / NORMAL"
-    except Exception as exc: out["error"]=str(exc)
+    """Read public Binance Spot depth with multiple host fallbacks.
+
+    Streamlit Cloud/hosted regions can reach one Binance public host but not
+    another. Keep the calculation identical; only the transport endpoint
+    changes. This prevents a venue connectivity issue from appearing as
+    genuine "DATA UNAVAILABLE" market structure.
+    """
+    out={"symbol":symbol,"spread_bps":None,"imbalance":None,"depth_score":None,
+         "micro_state":"DATA UNAVAILABLE","buy_pressure":None,"source":None}
+    urls=[
+        f"https://data-api.binance.vision/api/v3/depth?symbol={symbol}&limit=20",
+        f"https://api.binance.com/api/v3/depth?symbol={symbol}&limit=20",
+        f"https://api1.binance.com/api/v3/depth?symbol={symbol}&limit=20",
+        f"https://api2.binance.com/api/v3/depth?symbol={symbol}&limit=20",
+        f"https://api3.binance.com/api/v3/depth?symbol={symbol}&limit=20",
+        f"https://api4.binance.com/api/v3/depth?symbol={symbol}&limit=20",
+        f"https://api-gcp.binance.com/api/v3/depth?symbol={symbol}&limit=20",
+    ]
+    last_err=None
+    for url in urls:
+        try:
+            book=_http_json(url,timeout=5.0) or {}
+            bids=book.get("bids") or []; asks=book.get("asks") or []
+            if not bids or not asks:
+                raise RuntimeError("empty order book")
+            bp,ap=float(bids[0][0]),float(asks[0][0]); mid=(bp+ap)/2
+            out["spread_bps"]=((ap-bp)/mid*10000) if mid else None
+            bq=sum(float(x[1]) for x in bids); aq=sum(float(x[1]) for x in asks)
+            total=bq+aq; out["imbalance"]=((bq-aq)/total) if total else 0.0
+            out["buy_pressure"]=(out["imbalance"]+1)*50
+            out["depth_score"]=max(0,min(100,50+out["imbalance"]*50))
+            out["source"]="Binance Spot order book"
+            if out["spread_bps"]>12 and out["imbalance"]<-.20: out["micro_state"]="THIN / SELL PRESSURE"
+            elif out["spread_bps"]>12: out["micro_state"]="THIN LIQUIDITY"
+            elif out["imbalance"]>.20: out["micro_state"]="BUY-SIDE PRESSURE"
+            elif out["imbalance"]<-.20: out["micro_state"]="SELL-SIDE PRESSURE"
+            else: out["micro_state"]="BALANCED / NORMAL"
+            return out
+        except Exception as exc:
+            last_err=exc
+    out["error"]=str(last_err) if last_err else "order book unavailable"
     return out
 
 
