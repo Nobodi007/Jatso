@@ -1491,6 +1491,7 @@ NAV_SYNTHETIC_LAB ="🧬 Synthetic Market Lab"
 NAV_HMM_RESEARCH ="🌡️ HMM Production Research"
 NAV_FINAL_QUANT_REVIEW ="🚦 Final Quant Production Review"
 NAV_DECISION_LOG ="📘 Portfolio Decision Log"
+NAV_RULES_ENGINE ="⚙️ Rules Engine"
 
 QUANT_RESEARCH_PAGES =[
 NAV_RESEARCH_SCORECARD ,
@@ -1507,6 +1508,7 @@ NAV_SYNTHETIC_LAB ,
 NAV_HMM_RESEARCH ,
 NAV_FINAL_QUANT_REVIEW ,
 NAV_DECISION_LOG ,
+NAV_RULES_ENGINE ,
 ]
 QUANT_RESEARCH_LEGACY_NAVS =set (QUANT_RESEARCH_PAGES )
 
@@ -18912,6 +18914,461 @@ def render_system_health_center (cfg :dict [str ,Any ],sim :dict [str ,Any ],dat
         st .markdown ("- **Quant Engine** ตรวจว่าฟังก์ชันหลักของ Quant ยังถูกโหลดอยู่")
 
 
+
+_RULES_LOCAL =_HERE /"rules_engine.json"
+
+_RULE_FIELD_LABELS ={
+"portfolio_value_thb":"Portfolio Value (THB)",
+"cash_pct":"Cash %",
+"fees_thb":"Total Fees (THB)",
+"unrealized_pnl_thb":"Unrealized P&L (THB)",
+"realized_pnl_thb":"Realized P&L (THB)",
+"asset_count":"Asset Count",
+"btc_weight_pct":"BTC Weight %",
+"eth_weight_pct":"ETH Weight %",
+"sol_weight_pct":"SOL Weight %",
+"btc_price_thb":"BTC Price (THB)",
+"eth_price_thb":"ETH Price (THB)",
+"sol_price_thb":"SOL Price (THB)",
+}
+
+_RULE_OPS ={
+">":"มากกว่า",
+">=":"มากกว่าหรือเท่ากับ",
+"<":"น้อยกว่า",
+"<=":"น้อยกว่าหรือเท่ากับ",
+"==":"เท่ากับ",
+"!=":"ไม่เท่ากับ",
+}
+
+def _rules_load ()->list [dict [str ,Any ]]:
+    try :
+        if _RULES_LOCAL .exists ():
+            raw =json .loads (_RULES_LOCAL .read_text (encoding ="utf-8"))
+            return raw if isinstance (raw ,list )else []
+    except Exception :
+        pass
+    return []
+
+def _rules_save (rules :list [dict [str ,Any ]])->None :
+    try :
+        _RULES_LOCAL .write_text (json .dumps (rules ,ensure_ascii =False ,indent =2 ),encoding ="utf-8")
+    except Exception as exc :
+        if HAS_UI :
+            st .warning (f"บันทึก Rules ลงไฟล์ไม่ได้: {exc }")
+
+def _rules_price_map (market_df :Optional [pd .DataFrame ])->dict [str ,float ]:
+    prices ={}
+    if isinstance (market_df ,pd .DataFrame )and not market_df .empty :
+        for _ ,row in market_df .iterrows ():
+            try :
+                sym =str (row .get ("symbol","")).upper ()
+                px =float (row .get ("price_usd",0 )or 0 )
+                if sym and px >0 :
+                    prices [sym]=px
+            except (TypeError ,ValueError ):
+                pass
+    return prices
+
+def _rules_context (sim :dict [str ,Any ],market_df :Optional [pd .DataFrame ])->dict [str ,float ]:
+    prices_usd =_rules_price_map (market_df )
+    usdthb =FALLBACK_USDTHB
+    price_thb ={"THB":1.0 }
+    for sym ,px in prices_usd .items ():
+        price_thb [sym]=px *usdthb
+
+    snap =portfolio_snapshot (sim ,price_thb ,_sync_telegram =False )
+    weights ={str (r .get ("asset","")).upper ():float (r .get ("allocation_pct",0 )or 0 )for r in snap .get ("rows",[])}
+    total =float (snap .get ("total_value_thb",0 )or 0 )
+    cash =float (snap .get ("cash_thb",0 )or 0 )
+
+    return {
+    "portfolio_value_thb":total ,
+    "cash_pct":cash /total *100.0 if total >0 else 0.0 ,
+    "fees_thb":float (snap .get ("fees_thb",0 )or 0 ),
+    "unrealized_pnl_thb":float (snap .get ("unrealized_pnl_thb",0 )or 0 ),
+    "realized_pnl_thb":float (snap .get ("realized_pnl_thb",0 )or 0 ),
+    "asset_count":float (sum (1 for v in weights .values ()if v >0 )),
+    "btc_weight_pct":weights .get ("BTC",0.0 ),
+    "eth_weight_pct":weights .get ("ETH",0.0 ),
+    "sol_weight_pct":weights .get ("SOL",0.0 ),
+    "btc_price_thb":price_thb .get ("BTC",0.0 ),
+    "eth_price_thb":price_thb .get ("ETH",0.0 ),
+    "sol_price_thb":price_thb .get ("SOL",0.0 ),
+    }
+
+def _rules_compare (actual :float ,op :str ,target :float )->bool :
+    try :
+        a=float (actual ); b=float (target )
+        return {
+        ">":a >b ,
+        ">=":a >=b ,
+        "<":a <b ,
+        "<=":a <=b ,
+        "==":math .isclose (a ,b ,rel_tol =1e-9 ,abs_tol =1e-9 ),
+        "!=":not math .isclose (a ,b ,rel_tol =1e-9 ,abs_tol =1e-9 ),
+        }.get (op ,False )
+    except (TypeError ,ValueError ):
+        return False
+
+def evaluate_rules (rules :list [dict [str ,Any ]],context :Mapping [str ,Any ])->list [dict [str ,Any ]]:
+    """Pure rule evaluation layer; never mutates trading state."""
+    results =[]
+    for rule in rules :
+        if not isinstance (rule ,dict )or not bool (rule .get ("enabled",True )):
+            continue
+        conditions =rule .get ("conditions",[])
+        if not isinstance (conditions ,list )or not conditions :
+            continue
+        checks =[]
+        for cond in conditions :
+            field =str (cond .get ("field",""))
+            op =str (cond .get ("op",">"))
+            target =cond .get ("value",0 )
+            actual =context .get (field )
+            checks .append ({
+            "field":field ,"actual":actual ,"op":op ,"target":target ,
+            "passed":_rules_compare (actual ,op ,target ),
+            })
+        logic =str (rule .get ("logic","ALL")).upper ()
+        triggered =all (c ["passed"]for c in checks )if logic =="ALL"else any (c ["passed"]for c in checks )
+        results .append ({
+        "id":str (rule .get ("id","")),
+        "name":str (rule .get ("name","Untitled Rule")),
+        "logic":logic ,"triggered":triggered ,"checks":checks ,
+        "action":str (rule .get ("action","log")),
+        "message":str (rule .get ("message","")),
+        })
+    return results
+
+
+
+# =========================================================================
+# RULES ENGINE v2 — EVENT BUS / EVENT REGISTRY
+# =========================================================================
+EVENT_BUS_TABLE = "rules_event_bus"
+_EVENT_BUS_LOCAL = _HERE / "event_bus.json"
+_EVENT_BUS_MAX = 500
+
+_EVENT_TYPE_LABELS = {
+    "portfolio_state": "Portfolio State",
+    "risk_state": "Risk State",
+    "market_state": "Market State",
+    "rule_triggered": "Rule Triggered",
+}
+
+
+def _event_bus_actor() -> str:
+    """Return the authenticated actor key used by the existing app persistence layer."""
+    try:
+        actor = str(_current_actor() or "").strip().lower()
+    except Exception:
+        actor = ""
+    if is_guest_mode() or not actor or actor == "unknown":
+        return ""
+    return actor
+
+
+def _event_bus_load_local(limit: int = _EVENT_BUS_MAX) -> list[dict[str, Any]]:
+    try:
+        if _EVENT_BUS_LOCAL.exists():
+            raw = json.loads(_EVENT_BUS_LOCAL.read_text(encoding="utf-8"))
+            rows = raw if isinstance(raw, list) else []
+            return rows[-limit:]
+    except Exception:
+        pass
+    return []
+
+
+def _event_bus_save_local(events: list[dict[str, Any]]) -> None:
+    try:
+        _EVENT_BUS_LOCAL.write_text(
+            json.dumps(events[-_EVENT_BUS_MAX:], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _event_fingerprint(event_type: str, payload: dict[str, Any]) -> str:
+    raw = json.dumps(
+        {"type": event_type, "payload": payload},
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+
+
+def _event_bus_load_persistent(limit: int = 500) -> tuple[list[dict[str, Any]], str]:
+    """Load Event Bus from Supabase, with local fallback."""
+    actor = _event_bus_actor()
+    if actor:
+        sb = _get_supabase()
+        if sb is not None:
+            try:
+                res = (
+                    sb.table(EVENT_BUS_TABLE)
+                    .select("id,actor,event_type,source,timestamp,payload,fingerprint")
+                    .eq("actor", actor)
+                    .order("timestamp", desc=True)
+                    .limit(int(limit))
+                    .execute()
+                )
+                rows = list(reversed(res.data or []))
+                return rows, "supabase"
+            except Exception as exc:
+                st.session_state["event_bus_persistence_error"] = str(exc)
+
+    return _event_bus_load_local(limit), "local"
+
+
+def emit_event(
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    source: str = "rules_engine",
+    dedupe_seconds: int = 300,
+) -> dict[str, Any] | None:
+    """Publish an observational event to Supabase when available, else local JSON.
+
+    This layer never places orders and never mutates portfolio state.
+    """
+    now = datetime.now(timezone.utc)
+    actor = _event_bus_actor()
+    event = {
+        "id": uuid.uuid4().hex[:16],
+        "actor": actor,
+        "event_type": str(event_type),
+        "source": str(source),
+        "timestamp": now.isoformat(),
+        "payload": _json_safe(payload),
+        "fingerprint": _event_fingerprint(event_type, payload),
+    }
+
+    # Read the recent persistent stream first so duplicate reruns do not create noise.
+    recent, _ = _event_bus_load_persistent(limit=100)
+    cutoff = now.timestamp() - max(0, int(dedupe_seconds))
+    for old in reversed(recent):
+        try:
+            old_ts = datetime.fromisoformat(str(old.get("timestamp", "")).replace("Z", "+00:00")).timestamp()
+        except Exception:
+            continue
+        if old_ts < cutoff:
+            break
+        if (
+            old.get("fingerprint") == event["fingerprint"]
+            and old.get("event_type") == event_type
+            and old.get("source") == source
+        ):
+            return None
+
+    if actor:
+        sb = _get_supabase()
+        if sb is not None:
+            try:
+                sb.table(EVENT_BUS_TABLE).insert(event).execute()
+                st.session_state["event_bus_persistence_mode"] = "supabase"
+                return event
+            except Exception as exc:
+                st.session_state["event_bus_persistence_error"] = str(exc)
+
+    # Guests and unavailable Supabase use the existing durable local fallback.
+    local = _event_bus_load_local()
+    local.append(event)
+    _event_bus_save_local(local)
+    st.session_state["event_bus_persistence_mode"] = "local"
+    return event
+
+def _event_bus_snapshot(context: dict[str, Any]) -> list[dict[str, Any]]:
+    """Create observational state events from the current Rules context."""
+    events: list[dict[str, Any]] = []
+    portfolio_payload = {
+        k: context.get(k)
+        for k in (
+            "portfolio_value_thb", "cash_pct", "fees_thb",
+            "realized_pnl_thb", "unrealized_pnl_thb", "asset_count",
+        )
+    }
+    market_payload = {
+        k: context.get(k)
+        for k in (
+            "btc_price_thb", "eth_price_thb", "sol_price_thb",
+        )
+    }
+    allocation_payload = {
+        k: context.get(k)
+        for k in ("btc_weight_pct", "eth_weight_pct", "sol_weight_pct")
+    }
+
+    for event_type, payload in (
+        ("portfolio_state", portfolio_payload),
+        ("market_state", market_payload),
+        ("risk_state", allocation_payload),
+    ):
+        payload = {k: v for k, v in payload.items() if v is not None}
+        if payload:
+            ev = emit_event(event_type, payload, source="rules_engine", dedupe_seconds=300)
+            if ev:
+                events.append(ev)
+    return events
+
+
+def _event_bus_render(events: list[dict[str, Any]], source: str = "local") -> None:
+    with st.expander("🛰️ Event Bus — Recent Events", expanded=False):
+        if source == "supabase":
+            st.caption("☁️ Persistent Event Bus: Supabase")
+        else:
+            st.caption("💾 Event Bus: local fallback")
+            err = st.session_state.get("event_bus_persistence_error")
+            if err:
+                st.warning("Supabase Event Bus ยังไม่พร้อม — ใช้ local fallback ชั่วคราว")
+        if not events:
+            st.info("ยังไม่มี Event ใหม่ในรอบนี้")
+        else:
+            rows = []
+            for ev in events[-30:][::-1]:
+                rows.append({
+                    "เวลา": str(ev.get("timestamp", ""))[:19].replace("T", " "),
+                    "Event": _EVENT_TYPE_LABELS.get(str(ev.get("event_type")), str(ev.get("event_type"))),
+                    "Source": ev.get("source", ""),
+                    "Actor": ev.get("actor", ""),
+                    "Fingerprint": ev.get("fingerprint", ""),
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        if st.button("🧹 Clear local Event Bus", key="rules_clear_event_bus"):
+            try:
+                _EVENT_BUS_LOCAL.write_text("[]", encoding="utf-8")
+            except Exception:
+                pass
+            st.rerun()
+
+def render_rules_engine (cfg :dict [str ,Any ],data :pd .DataFrame ,
+market_df :Optional [pd .DataFrame ]=None )->None :
+    st .markdown ("## ⚙️ Rules Engine")
+    st .caption ("สร้างกฎหลายเงื่อนไขจาก Portfolio/Market Context + Event Bus — เป็น research & alert layer เท่านั้น ไม่ส่งคำสั่งซื้อขายอัตโนมัติ")
+
+    rules =_rules_load ()
+    sim =st .session_state .get ("sim",{})or {}
+    context =_rules_context (sim ,market_df )
+    _event_bus_snapshot(context)
+    results =evaluate_rules (rules ,context )
+    triggered =[r for r in results if r ["triggered"]]
+    for r in triggered:
+        emit_event("rule_triggered", {"rule_id": r.get("id"), "rule_name": r.get("name"), "action": r.get("action")}, source="rules_engine", dedupe_seconds=300)
+
+    a ,b ,c =st .columns (3 )
+    a .metric ("Rules",len (rules ))
+    b .metric ("Enabled",sum (1 for r in rules if r .get ("enabled",True )))
+    c .metric ("Triggered",len (triggered ))
+
+    if triggered :
+        st .warning ("พบ Rule ที่เข้าเงื่อนไข — ระบบจะแจ้งเตือนเท่านั้น และไม่ execute order")
+        for r in triggered :
+            st .error (f"⚠️ {r ['message']or r ['name']}")
+    else :
+        st .success ("ไม่มี Rule ใดเข้าเงื่อนไขในขณะนี้")
+
+    event_rows, event_source = _event_bus_load_persistent(limit=500)
+    _event_bus_render(event_rows, event_source)
+
+    with st .expander ("📊 Current Rule Context",expanded =False ):
+        st .dataframe (
+        pd .DataFrame ([{"Field":_RULE_FIELD_LABELS .get(k,k),"Value":v }for k ,v in context .items ()]),
+        use_container_width =True ,hide_index =True ,
+        )
+
+    st .markdown ("### ➕ สร้าง Rule")
+    with st .form ("rules_engine_create_form",clear_on_submit =True ):
+        name =st .text_input ("Rule Name",placeholder ="เช่น BTC concentration + low cash")
+        logic =st .selectbox ("Condition Logic",["ALL","ANY"])
+        f1 ,o1 ,v1 =st .columns ([1.5 ,0.8 ,1 ])
+        with f1 :
+            field1 =st .selectbox ("Condition 1",list (_RULE_FIELD_LABELS ),format_func =lambda x:_RULE_FIELD_LABELS [x])
+        with o1 :
+            op1 =st .selectbox ("Operator 1",list (_RULE_OPS ),format_func =lambda x:_RULE_OPS [x])
+        with v1 :
+            val1 =st .number_input ("Value 1",value =0.0,key ="rules_v1")
+        use_second =st .checkbox ("เพิ่ม Condition ที่ 2",value =False )
+        field2 =op2 =None
+        val2 =0.0
+        if use_second :
+            f2 ,o2 ,v2 =st .columns ([1.5 ,0.8 ,1 ])
+            with f2 :
+                field2 =st .selectbox ("Condition 2",list (_RULE_FIELD_LABELS ),index =1,format_func =lambda x:_RULE_FIELD_LABELS [x],key ="rules_f2")
+            with o2 :
+                op2 =st .selectbox ("Operator 2",list (_RULE_OPS ),key ="rules_o2",format_func =lambda x:_RULE_OPS [x])
+            with v2 :
+                val2 =st .number_input ("Value 2",value =0.0,key ="rules_v2")
+        action =st .selectbox ("Action",["log","alert"],format_func =lambda x:"บันทึก Log"if x =="log"else "แจ้งเตือน")
+        message =st .text_input ("Message",placeholder ="ข้อความเมื่อ Rule trigger")
+        if st .form_submit_button ("💾 Save Rule"):
+            if not name .strip ():
+                st .error ("กรุณาตั้งชื่อ Rule")
+            else :
+                conditions =[{"field":field1 ,"op":op1 ,"value":float (val1 )}]
+                if use_second and field2 and op2 :
+                    conditions .append ({"field":field2 ,"op":op2 ,"value":float (val2 )})
+                rules .append ({
+                "id":uuid .uuid4 ().hex ,"name":name .strip (),"enabled":True ,
+                "logic":logic ,"conditions":conditions ,"action":action ,
+                "message":message .strip (),
+                "created_at":datetime .now (timezone .utc ).isoformat (),
+                })
+                _rules_save (rules )
+                st .success ("บันทึก Rule แล้ว")
+                st .rerun ()
+
+    if rules :
+        st .markdown ("### 📜 Rule Registry")
+        registry =[]
+        for r in rules :
+            registry .append ({
+            "Enabled":"🟢"if r .get ("enabled",True )else "⚪",
+            "Rule":r .get ("name",""),"Logic":r .get ("logic","ALL"),
+            "Conditions":len (r .get ("conditions",[])),"Action":r .get ("action","log"),
+            "ID":r .get ("id","")[:8],
+            })
+        st .dataframe (pd .DataFrame (registry ),use_container_width =True ,hide_index =True )
+
+        selected_id =st .selectbox (
+        "เลือก Rule",
+        [str (r .get ("id",""))for r in rules ],
+        format_func =lambda rid:next ((r .get ("name","")for r in rules if str (r .get ("id",""))==rid),rid),
+        key ="rules_manage_select",
+        )
+        m1 ,m2 =st .columns (2 )
+        with m1 :
+            if st .button ("⏸️ Disable / Enable",key ="rules_toggle"):
+                for r in rules :
+                    if str (r .get ("id",""))==selected_id :
+                        r ["enabled"]=not bool (r .get ("enabled",True ))
+                _rules_save (rules )
+                st .rerun ()
+        with m2 :
+            if st .button ("🗑️ Delete Rule",key ="rules_delete"):
+                rules =[r for r in rules if str (r .get ("id",""))!=selected_id]
+                _rules_save (rules )
+                st .rerun ()
+
+        st .markdown ("### 🔍 Evaluation Details")
+        eval_rows =[]
+        for r in results :
+            for ch in r ["checks"]:
+                eval_rows .append ({
+                "Rule":r ["name"],"Field":_RULE_FIELD_LABELS .get (ch ["field"],ch ["field"]),
+                "Actual":ch ["actual"],"Operator":ch ["op"],"Target":ch ["target"],
+                "Pass":"YES"if ch ["passed"]else "NO","Triggered":"YES"if r ["triggered"]else "NO",
+                })
+        if eval_rows :
+            st .dataframe (pd .DataFrame (eval_rows ),use_container_width =True ,hide_index =True )
+    else :
+        st .info ("ยังไม่มี Rule — สร้าง Rule แรกด้านบนได้เลย")
+
+    st .info ("Rule definition → reusable evaluator → read-only context. ต่อ Event Bus / Experiment Registry / module integrations ได้ภายหลัง โดยไม่ผูกกับ execute_order()")
+
+
 def render_quant_research_hub (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :Optional [pd .DataFrame ]=None )->None :
     """Single entry point for all Quant Research tools.
 
@@ -18938,6 +19395,7 @@ def render_quant_research_hub (cfg :dict [str ,Any ],data :pd .DataFrame ,market
     NAV_EXPERIMENT_TRACKER ,
     NAV_MODEL_GOVERNANCE ,
     NAV_DECISION_LOG ,
+    NAV_RULES_ENGINE ,
     ],
     "🧬 Models & Simulation":[
     NAV_SYNTHETIC_LAB ,
@@ -18998,6 +19456,8 @@ def render_quant_research_hub (cfg :dict [str ,Any ],data :pd .DataFrame ,market
         render_model_governance (cfg ,data ,market_df )
     elif selected ==NAV_DECISION_LOG :
         render_portfolio_decision_log (cfg ,data ,market_df )
+    elif selected ==NAV_RULES_ENGINE :
+        render_rules_engine (cfg ,data ,market_df )
     elif selected ==NAV_TRANSACTION_COST_LAB :
         render_transaction_cost_lab (cfg ,data ,market_df )
     elif selected ==NAV_PBO_DSR_LAB :
