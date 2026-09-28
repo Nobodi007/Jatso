@@ -19570,6 +19570,7 @@ def _regime_derivatives_snapshot(symbol: str = "BTCUSDT") -> dict[str, Any]:
         "taker_buy": None,
         "taker_sell": None,
         "taker_imbalance": None,
+        "taker_source": None,
         "flow_state": "DATA UNAVAILABLE",
         "liq_long_usd": None,
         "liq_short_usd": None,
@@ -19664,7 +19665,13 @@ def _regime_derivatives_snapshot(symbol: str = "BTCUSDT") -> dict[str, Any]:
         else:
             out["oi_state"] = "STABLE"
 
-    # Taker buy/sell flow, 5-minute public aggregate.
+    # Taker buy/sell flow.
+    # Primary: Binance aggregate taker endpoint.
+    # Fallback: public aggTrades.  The aggTrades `m` flag tells whether the
+    # buyer was the maker: m=False => buyer was taker (aggressive buy),
+    # m=True => seller was taker (aggressive sell). This avoids returning
+    # DATA UNAVAILABLE just because the /futures/data endpoint is blocked.
+    taker_ok = False
     for host in fapi_hosts:
         try:
             rows = _http_json(
@@ -19679,9 +19686,47 @@ def _regime_derivatives_snapshot(symbol: str = "BTCUSDT") -> dict[str, Any]:
                 if total > 0:
                     out["taker_buy"], out["taker_sell"] = buy, sell
                     out["taker_imbalance"] = (buy - sell) / total
+                    out["taker_source"] = "Binance takerBuySellVol · 5m"
+                    taker_ok = True
                 break
         except Exception as exc:
             out["errors"].append(f"taker:{type(exc).__name__}")
+
+    # Fallback: reconstruct the latest taker pressure from recent aggregate trades.
+    if not taker_ok:
+        for host in fapi_hosts:
+            try:
+                trades = _http_json(
+                    f"{host}/fapi/v1/aggTrades?symbol={symbol}&limit=1000",
+                    timeout=8.0,
+                )
+                if isinstance(trades, list) and trades:
+                    now_ms = int(time.time() * 1000)
+                    cutoff_ms = now_ms - 5 * 60 * 1000
+                    buy_v = sell_v = 0.0
+                    for tr in trades:
+                        ts = int(tr.get("T") or 0)
+                        if ts and ts < cutoff_ms:
+                            continue
+                        px = float(tr.get("p") or 0.0)
+                        qty = float(tr.get("q") or 0.0)
+                        value = px * qty
+                        if value <= 0:
+                            continue
+                        if bool(tr.get("m")):
+                            sell_v += value
+                        else:
+                            buy_v += value
+                    total = buy_v + sell_v
+                    if total > 0:
+                        out["taker_buy"], out["taker_sell"] = buy_v, sell_v
+                        out["taker_imbalance"] = (buy_v - sell_v) / total
+                        out["taker_source"] = "Binance aggTrades fallback · latest 5m"
+                        taker_ok = True
+                    break
+            except Exception as exc:
+                out["errors"].append(f"taker_agg:{type(exc).__name__}")
+
     ti = out.get("taker_imbalance")
     if ti is not None:
         if ti >= 0.20:
@@ -19691,11 +19736,63 @@ def _regime_derivatives_snapshot(symbol: str = "BTCUSDT") -> dict[str, Any]:
         else:
             out["flow_state"] = "BALANCED"
 
-    # Liquidations: CoinGlass v4 when the user has configured an API key.
-    # Binance's old market-wide allForceOrders REST endpoint was deprecated;
-    # do not substitute a user's private forceOrders endpoint for market data.
+    # Liquidations: first try the public Binance market-wide liquidation stream.
+    # Binance documents this as !forceOrder@arr; it is a WebSocket stream, not
+    # a historical REST endpoint. We sample it briefly and cache the result.
+    # CoinGlass remains the historical 1h fallback when an API key is configured.
+    liq_stream_ok = False
+    try:
+        import websocket as _ws  # optional dependency: websocket-client
+        ws = _ws.create_connection(
+            "wss://fstream.binance.com/market/ws/!forceOrder@arr",
+            timeout=2.5,
+            enable_multithread=True,
+        )
+        ws.settimeout(0.8)
+        deadline = time.time() + 2.0
+        events = []
+        while time.time() < deadline:
+            try:
+                raw = ws.recv()
+            except Exception:
+                break
+            if not raw:
+                continue
+            try:
+                payload = json.loads(raw)
+            except Exception:
+                continue
+            data = payload.get("data", payload) if isinstance(payload, dict) else {}
+            order = data.get("o", {}) if isinstance(data, dict) else {}
+            if str(order.get("s", "")).upper() != symbol.upper():
+                continue
+            qty = float(order.get("q") or 0.0)
+            avg_px = float(order.get("ap") or order.get("p") or 0.0)
+            value = qty * avg_px
+            if value > 0:
+                events.append((str(order.get("S", "")).upper(), value))
+        try:
+            ws.close()
+        except Exception:
+            pass
+        if events:
+            long_v = sum(v for side, v in events if side == "SELL")
+            short_v = sum(v for side, v in events if side == "BUY")
+            total = long_v + short_v
+            out["liq_long_usd"], out["liq_short_usd"], out["liq_total_usd"] = long_v, short_v, total
+            out["liquidation_source"] = "Binance !forceOrder@arr · live sample"
+            out["liq_state"] = "RECENT ACTIVITY"
+            liq_stream_ok = True
+        else:
+            out["liquidation_source"] = "Binance !forceOrder@arr · no BTCUSDT event in sample"
+            out["liq_state"] = "NO RECENT EVENT"
+            liq_stream_ok = True
+    except Exception as exc:
+        out["errors"].append(f"liquidation_stream:{type(exc).__name__}")
+
+    # Historical fallback: CoinGlass v4 when the user has configured an API key.
     cg_key = _coinglass_key()
-    if cg_key:
+    if cg_key and not liq_stream_ok:
         try:
             url = (
                 "https://open-api-v4.coinglass.com/api/futures/liquidation/history"
@@ -19728,8 +19825,8 @@ def _regime_derivatives_snapshot(symbol: str = "BTCUSDT") -> dict[str, Any]:
                 out["errors"].append(f"liquidation:CoinGlass {doc.get('msg')}")
         except Exception as exc:
             out["errors"].append(f"liquidation:{type(exc).__name__}")
-    else:
-        out["liquidation_source"] = "CoinGlass API key not configured"
+    elif not liq_stream_ok:
+        out["liquidation_source"] = "Binance liquidation stream unavailable · CoinGlass API key not configured"
 
     return out
 
