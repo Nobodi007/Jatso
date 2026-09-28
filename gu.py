@@ -19547,6 +19547,192 @@ def _regime_micro_snapshot(symbol: str="BTCUSDT") -> dict[str,Any]:
     return out
 
 
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _regime_derivatives_snapshot(symbol: str = "BTCUSDT") -> dict[str, Any]:
+    """Descriptive derivatives snapshot.
+
+    Funding/OI/taker-flow come from Binance USDⓈ-M public market-data REST.
+    Liquidation history uses CoinGlass only when COINGLASS_API_KEY is configured;
+    Binance's historical market-wide liquidation REST endpoint is no longer
+    maintained, so the UI must not pretend that a missing feed is zero.
+    No execution or account data is touched.
+    """
+    base = symbol.upper().replace("USDT", "")
+    out = {
+        "symbol": symbol,
+        "funding_rate": None,
+        "funding_state": "DATA UNAVAILABLE",
+        "open_interest": None,
+        "open_interest_usd": None,
+        "oi_change_1h_pct": None,
+        "oi_state": "DATA UNAVAILABLE",
+        "taker_buy": None,
+        "taker_sell": None,
+        "taker_imbalance": None,
+        "flow_state": "DATA UNAVAILABLE",
+        "liq_long_usd": None,
+        "liq_short_usd": None,
+        "liq_total_usd": None,
+        "liq_state": "DATA UNAVAILABLE",
+        "liquidation_source": None,
+        "source": "Binance USDⓈ-M public market data",
+        "errors": [],
+    }
+
+    # Binance USDⓈ-M endpoints. Keep a web-host fallback for hosted regions
+    # where fapi.binance.com can be unreachable.
+    fapi_hosts = ["https://fapi.binance.com", "https://www.binance.com"]
+
+    # Funding rate: latest funding history, with premium-index fallback.
+    funding = None
+    for host in fapi_hosts:
+        try:
+            rows = _http_json(f"{host}/fapi/v1/fundingRate?symbol={symbol}&limit=1", timeout=6.0)
+            if isinstance(rows, list) and rows:
+                funding = float(rows[-1].get("fundingRate"))
+                break
+        except Exception as exc:
+            out["errors"].append(f"funding:{type(exc).__name__}")
+    if funding is None:
+        for host in fapi_hosts:
+            try:
+                prem = _http_json(f"{host}/fapi/v1/premiumIndex?symbol={symbol}", timeout=6.0)
+                if isinstance(prem, dict) and prem.get("lastFundingRate") not in (None, ""):
+                    funding = float(prem.get("lastFundingRate"))
+                    break
+            except Exception as exc:
+                out["errors"].append(f"premium:{type(exc).__name__}")
+    if funding is not None:
+        out["funding_rate"] = funding
+        if funding >= 0.0003:
+            out["funding_state"] = "HIGH POSITIVE"
+        elif funding <= -0.0003:
+            out["funding_state"] = "HIGH NEGATIVE"
+        else:
+            out["funding_state"] = "NORMAL"
+
+    # Current OI + 1h historical comparison.
+    oi_qty = None
+    mark_price = None
+    for host in fapi_hosts:
+        try:
+            d = _http_json(f"{host}/fapi/v1/openInterest?symbol={symbol}", timeout=6.0)
+            oi_qty = float(d.get("openInterest"))
+            break
+        except Exception as exc:
+            out["errors"].append(f"oi:{type(exc).__name__}")
+    for host in fapi_hosts:
+        try:
+            d = _http_json(f"{host}/fapi/v1/premiumIndex?symbol={symbol}", timeout=6.0)
+            if isinstance(d, dict):
+                mark_price = float(d.get("markPrice"))
+                break
+        except Exception as exc:
+            out["errors"].append(f"mark:{type(exc).__name__}")
+    if oi_qty is not None:
+        out["open_interest"] = oi_qty
+        if mark_price and mark_price > 0:
+            out["open_interest_usd"] = oi_qty * mark_price
+
+    for host in fapi_hosts:
+        try:
+            hist = _http_json(
+                f"{host}/futures/data/openInterestHist?symbol={symbol}&period=1h&limit=2",
+                timeout=7.0,
+            )
+            if isinstance(hist, list) and len(hist) >= 2:
+                prev = float(hist[-2].get("sumOpenInterestValue") or 0.0)
+                curr = float(hist[-1].get("sumOpenInterestValue") or 0.0)
+                if prev > 0:
+                    out["oi_change_1h_pct"] = (curr / prev - 1.0) * 100.0
+                break
+        except Exception as exc:
+            out["errors"].append(f"oi_hist:{type(exc).__name__}")
+    if out["open_interest"] is not None:
+        chg = out.get("oi_change_1h_pct")
+        if chg is None:
+            out["oi_state"] = "CURRENT ONLY"
+        elif chg >= 3:
+            out["oi_state"] = "RISING FAST"
+        elif chg <= -3:
+            out["oi_state"] = "FALLING FAST"
+        elif chg > 0.5:
+            out["oi_state"] = "RISING"
+        elif chg < -0.5:
+            out["oi_state"] = "FALLING"
+        else:
+            out["oi_state"] = "STABLE"
+
+    # Taker buy/sell flow, 5-minute public aggregate.
+    for host in fapi_hosts:
+        try:
+            rows = _http_json(
+                f"{host}/futures/data/takerBuySellVol?symbol={symbol}&contractType=PERPETUAL&period=5m&limit=1",
+                timeout=7.0,
+            )
+            if isinstance(rows, list) and rows:
+                row = rows[-1]
+                buy = float(row.get("buyVolValue") or row.get("buyVol") or 0.0)
+                sell = float(row.get("sellVolValue") or row.get("sellVol") or 0.0)
+                total = buy + sell
+                if total > 0:
+                    out["taker_buy"], out["taker_sell"] = buy, sell
+                    out["taker_imbalance"] = (buy - sell) / total
+                break
+        except Exception as exc:
+            out["errors"].append(f"taker:{type(exc).__name__}")
+    ti = out.get("taker_imbalance")
+    if ti is not None:
+        if ti >= 0.20:
+            out["flow_state"] = "BUY PRESSURE"
+        elif ti <= -0.20:
+            out["flow_state"] = "SELL PRESSURE"
+        else:
+            out["flow_state"] = "BALANCED"
+
+    # Liquidations: CoinGlass v4 when the user has configured an API key.
+    # Binance's old market-wide allForceOrders REST endpoint was deprecated;
+    # do not substitute a user's private forceOrders endpoint for market data.
+    cg_key = _coinglass_key()
+    if cg_key:
+        try:
+            url = (
+                "https://open-api-v4.coinglass.com/api/futures/liquidation/history"
+                f"?exchange=Binance&symbol={symbol}&interval=1h&limit=6"
+            )
+            doc = _http_json(url, timeout=8.0, extra_headers={"CG-API-KEY": cg_key})
+            if str(doc.get("code")) == "0":
+                rows = doc.get("data") or []
+                if rows:
+                    row = rows[-1]
+                    long_v = float(row.get("long_liquidation_usd") or 0.0)
+                    short_v = float(row.get("short_liquidation_usd") or 0.0)
+                    total = long_v + short_v
+                    out["liq_long_usd"], out["liq_short_usd"], out["liq_total_usd"] = long_v, short_v, total
+                    out["liquidation_source"] = "CoinGlass · Binance · 1h"
+                    prev = []
+                    for r in rows[:-1]:
+                        try:
+                            prev.append(float(r.get("long_liquidation_usd") or 0.0) + float(r.get("short_liquidation_usd") or 0.0))
+                        except Exception:
+                            pass
+                    baseline = float(np.median(prev)) if prev else 0.0
+                    if baseline > 0 and total >= baseline * 2.0:
+                        out["liq_state"] = "ELEVATED"
+                    elif total > 0:
+                        out["liq_state"] = "NORMAL"
+                    else:
+                        out["liq_state"] = "NONE REPORTED"
+            else:
+                out["errors"].append(f"liquidation:CoinGlass {doc.get('msg')}")
+        except Exception as exc:
+            out["errors"].append(f"liquidation:{type(exc).__name__}")
+    else:
+        out["liquidation_source"] = "CoinGlass API key not configured"
+
+    return out
+
 def render_market_regime_switchboard(cfg: dict[str, Any], data: pd.DataFrame, market_df: Optional[pd.DataFrame] = None) -> None:
     m = _regime_switchboard_metrics(cfg, data, market_df)
     macro = _regime_macro_snapshot()
@@ -19576,6 +19762,25 @@ def render_market_regime_switchboard(cfg: dict[str, Any], data: pd.DataFrame, ma
     else: env=f"{macro_flag} / {micro_flag}"
     st.info(f"**Combined Environment:** {env}\n\nMacro: {macro_flag} · Micro: {micro_flag}")
 
+    deriv = _regime_derivatives_snapshot(f"{str(cfg.get('asset','BTC')).upper()}USDT")
+    st.markdown("### 📉 Derivatives Environment")
+    da, db, dc, dd = st.columns(4)
+    da.metric("Funding", f"{deriv['funding_rate']*100:.4f}%" if deriv.get("funding_rate") is not None else "—", deriv.get("funding_state", "—"))
+    oi_label = "—"
+    if deriv.get("open_interest_usd") is not None:
+        oi_label = f"${deriv['open_interest_usd']/1e9:.2f}B"
+    elif deriv.get("open_interest") is not None:
+        oi_label = f"{deriv['open_interest']:,.2f}"
+    db.metric("Open Interest", oi_label, deriv.get("oi_state", "—"))
+    dc.metric("Taker Flow", f"{deriv['taker_imbalance']*100:+.1f}%" if deriv.get("taker_imbalance") is not None else "—", deriv.get("flow_state", "—"))
+    dd.metric("Liquidations", f"${deriv['liq_total_usd']/1e6:.1f}M" if deriv.get("liq_total_usd") is not None else "—", deriv.get("liq_state", "—"))
+    if deriv.get("oi_change_1h_pct") is not None:
+        st.caption(f"OI 1h change: {deriv['oi_change_1h_pct']:+.2f}% · Taker flow = latest 5m aggregate")
+    if deriv.get("liquidation_source"):
+        st.caption(f"Liquidation source: {deriv['liquidation_source']}")
+    if deriv.get("funding_rate") is None and deriv.get("open_interest") is None:
+        st.warning("Derivatives data ยังไม่ตอบกลับจาก Binance USDⓈ-M — ไม่ตีความเป็น 0")
+
     a, b = st.columns(2)
     with a:
         st.markdown("### 🌡️ Environment Signals")
@@ -19595,6 +19800,10 @@ def render_market_regime_switchboard(cfg: dict[str, Any], data: pd.DataFrame, ma
             {"Signal": "Annualized 20D Volatility", "Value": f"{m['vol20']:.2f}%"},
             {"Signal": "Liquidity Volume", "Value": f"{m['asset_volume']:,.0f}" if m["asset_volume"] else "—"},
             {"Signal": "Cross-Asset Avg Abs Correlation", "Value": f"{m['avg_corr']*100:.2f}%"},
+            {"Signal": "Funding Rate", "Value": f"{deriv['funding_rate']*100:.4f}%" if deriv.get("funding_rate") is not None else "—"},
+            {"Signal": "OI 1h Change", "Value": f"{deriv['oi_change_1h_pct']:+.2f}%" if deriv.get("oi_change_1h_pct") is not None else "—"},
+            {"Signal": "Taker Flow", "Value": f"{deriv['taker_imbalance']*100:+.1f}%" if deriv.get("taker_imbalance") is not None else "—"},
+            {"Signal": "Liquidation State", "Value": deriv.get("liq_state", "—")},
         ])
         st.dataframe(diag, use_container_width=True, hide_index=True)
 
