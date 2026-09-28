@@ -1492,6 +1492,7 @@ NAV_HMM_RESEARCH ="🌡️ HMM Production Research"
 NAV_FINAL_QUANT_REVIEW ="🚦 Final Quant Production Review"
 NAV_DECISION_LOG ="📘 Portfolio Decision Log"
 NAV_RULES_ENGINE ="⚙️ Rules Engine"
+NAV_REGIME_SWITCHBOARD ="🧠 Market Regime Switchboard"
 
 QUANT_RESEARCH_PAGES =[
 NAV_RESEARCH_SCORECARD ,
@@ -1509,6 +1510,7 @@ NAV_HMM_RESEARCH ,
 NAV_FINAL_QUANT_REVIEW ,
 NAV_DECISION_LOG ,
 NAV_RULES_ENGINE ,
+NAV_REGIME_SWITCHBOARD ,
 ]
 QUANT_RESEARCH_LEGACY_NAVS =set (QUANT_RESEARCH_PAGES )
 
@@ -19369,6 +19371,151 @@ market_df :Optional [pd .DataFrame ]=None )->None :
     st .info ("Rule definition → reusable evaluator → read-only context. ต่อ Event Bus / Experiment Registry / module integrations ได้ภายหลัง โดยไม่ผูกกับ execute_order()")
 
 
+# =========================================================================
+# MARKET REGIME SWITCHBOARD v1 — OPERATING ENVIRONMENT LAYER
+# =========================================================================
+_REGIME_ASSETS = ["BTC", "ETH", "SOL", "BNB", "XRP"]
+
+@_cache_data(ttl=900, show_spinner=False)
+def _regime_fetch_close_matrix(assets: tuple[str, ...] = tuple(_REGIME_ASSETS)) -> pd.DataFrame:
+    """Fetch a small cached daily close matrix used only for regime context."""
+    try:
+        raw = yf.download(
+            [f"{a}-USD" for a in assets], period="120d", interval="1d",
+            auto_adjust=False, progress=False, group_by="column", threads=True,
+        )
+        if raw is None or raw.empty:
+            return pd.DataFrame()
+        if isinstance(raw.columns, pd.MultiIndex):
+            if "Close" not in raw.columns.get_level_values(0):
+                return pd.DataFrame()
+            close = raw["Close"].copy()
+        else:
+            close = raw[["Close"]].copy()
+            close.columns = [assets[0]]
+        close.columns = [str(c).replace("-USD", "").upper() for c in close.columns]
+        return close.dropna(how="all").ffill()
+    except Exception:
+        return pd.DataFrame()
+
+
+def _regime_num(v: Any, default: float = 0.0) -> float:
+    try:
+        x = float(v)
+        return x if math.isfinite(x) else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _regime_bar(value: float, width: int = 10) -> str:
+    n = max(0, min(width, int(round(_regime_num(value) / 100.0 * width))))
+    return "█" * n + "░" * (width - n)
+
+
+def _regime_switchboard_metrics(cfg: dict[str, Any], data: pd.DataFrame, market_df: Optional[pd.DataFrame]) -> dict[str, Any]:
+    """Build a descriptive market-state snapshot. No price prediction and no orders."""
+    symbol = str(cfg.get("asset", "BTC")).upper()
+    close = pd.Series(dtype=float)
+    if isinstance(data, pd.DataFrame) and not data.empty:
+        for col in ("Close", "close", "Global_USD"):
+            if col in data.columns:
+                close = pd.to_numeric(data[col], errors="coerce").dropna()
+                if not close.empty:
+                    break
+
+    ret20 = vol20 = trend_score = 0.0
+    trend_direction = "NEUTRAL"
+    if len(close) >= 25:
+        ret20 = (float(close.iloc[-1]) / float(close.iloc[-21]) - 1.0) * 100.0 if close.iloc[-21] else 0.0
+        daily_ret = close.pct_change().dropna()
+        vol20 = float(daily_ret.tail(20).std(ddof=1) * math.sqrt(365) * 100.0) if len(daily_ret) >= 10 else 0.0
+        ema20 = float(close.ewm(span=20, adjust=False).mean().iloc[-1])
+        ema50 = float(close.ewm(span=min(50, max(20, len(close))), adjust=False).mean().iloc[-1])
+        spread = ((ema20 / ema50) - 1.0) * 100.0 if ema50 else 0.0
+        trend_score = min(100.0, abs(ret20) * 5.0 + abs(spread) * 15.0)
+        if abs(ret20) >= 8.0 and abs(spread) >= 1.0:
+            trend_direction = "UPTREND" if ret20 > 0 else "DOWNTREND"
+        elif abs(ret20) >= 4.0 or abs(spread) >= 0.7:
+            trend_direction = "UPTREND" if (ret20 + spread) > 0 else "DOWNTREND"
+
+    liquidity_score, asset_volume, median_volume = 50.0, 0.0, 0.0
+    if isinstance(market_df, pd.DataFrame) and not market_df.empty and "volume" in market_df.columns:
+        vols = pd.to_numeric(market_df["volume"], errors="coerce").dropna()
+        if not vols.empty:
+            median_volume = float(vols.median())
+            row = market_df[market_df["symbol"].astype(str).str.upper() == symbol] if "symbol" in market_df.columns else pd.DataFrame()
+            if not row.empty:
+                asset_volume = _regime_num(row.iloc[0].get("volume"), 0.0)
+            if median_volume > 0 and asset_volume > 0:
+                ratio = asset_volume / median_volume
+                liquidity_score = max(0.0, min(100.0, 50.0 + 35.0 * math.log2(max(ratio, 0.125))))
+
+    closes = _regime_fetch_close_matrix()
+    avg_corr = 0.0
+    if isinstance(closes, pd.DataFrame) and closes.shape[1] >= 2:
+        try:
+            corr = closes.pct_change().tail(60).corr()
+            vals = corr.where(~np.eye(len(corr), dtype=bool)).stack().abs()
+            avg_corr = float(vals.mean()) if not vals.empty else 0.0
+        except Exception:
+            pass
+    corr_score = max(0.0, min(100.0, avg_corr * 100.0))
+
+    vol_state = "HIGH VOLATILITY" if vol20 >= 90.0 else ("ELEVATED VOLATILITY" if vol20 >= 45.0 else "LOW / NORMAL VOLATILITY")
+    liq_state = "LOW LIQUIDITY" if liquidity_score < 35 else ("NORMAL LIQUIDITY" if liquidity_score < 65 else "HIGH LIQUIDITY")
+    trend_state = "TRENDING" if trend_score >= 45 and trend_direction != "NEUTRAL" else "RANGE / MIXED"
+    regime = f"{vol_state} / {liq_state} / {trend_direction if trend_state == 'TRENDING' else 'RANGE'}"
+
+    extreme, thin, trending = vol20 >= 90.0, liquidity_score < 35.0, trend_state == "TRENDING"
+    compatibility = {
+        "Trend-following profile": "ACTIVE" if trending and not thin else ("DEGRADED" if trending or not thin else "UNSUITABLE"),
+        "Mean-reversion profile": "ACTIVE" if (not trending and not extreme and not thin) else ("DEGRADED" if not extreme else "UNSUITABLE"),
+        "DCA / accumulation profile": "ACTIVE" if not extreme and not thin else ("DEGRADED" if not thin else "UNSUITABLE"),
+    }
+    return {"symbol": symbol, "ret20": ret20, "vol20": vol20, "trend_score": trend_score,
+            "trend_direction": trend_direction, "liquidity_score": liquidity_score, "asset_volume": asset_volume,
+            "median_volume": median_volume, "avg_corr": avg_corr, "corr_score": corr_score,
+            "vol_state": vol_state, "liq_state": liq_state, "trend_state": trend_state,
+            "regime": regime, "compatibility": compatibility}
+
+
+def render_market_regime_switchboard(cfg: dict[str, Any], data: pd.DataFrame, market_df: Optional[pd.DataFrame] = None) -> None:
+    m = _regime_switchboard_metrics(cfg, data, market_df)
+    st.markdown("## 🧠 Market Regime Switchboard")
+    st.caption("Operating Environment Layer — อ่านสภาพตลาดจาก Trend / Volatility / Liquidity / Correlation · ไม่ทำนายราคา · ไม่ส่งคำสั่งซื้อขาย")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Trend", f"{m['trend_score']:.0f}/100", m["trend_direction"])
+    c2.metric("Volatility", f"{m['vol20']:.1f}%", m["vol_state"])
+    c3.metric("Liquidity proxy", f"{m['liquidity_score']:.0f}/100", m["liq_state"])
+    c4.metric("Correlation", f"{m['avg_corr']*100:.0f}%", "cross-asset")
+    st.markdown(f'''<div style="background:linear-gradient(135deg,#171A20 0%,#101318 100%);border:1px solid #2B3139;border-radius:14px;padding:18px;margin:12px 0 18px;">
+    <div style="font-size:11px;color:#8B93A1;letter-spacing:.08em;">CURRENT MARKET REGIME · {m['symbol']}</div>
+    <div style="font-size:24px;font-weight:800;color:#EAECEF;margin-top:7px;">{_html.escape(m['regime'])}</div>
+    <div style="font-size:12px;color:#8B93A1;margin-top:8px;">20D return {m['ret20']:+.2f}% · annualized 20D volatility {m['vol20']:.1f}% · avg cross-asset correlation {m['avg_corr']*100:.1f}%</div>
+    </div>''', unsafe_allow_html=True)
+    a, b = st.columns(2)
+    with a:
+        st.markdown("### 🌡️ Environment Signals")
+        st.markdown(f"**Trend**  `{_regime_bar(m['trend_score'])}` {m['trend_score']:.0f}/100")
+        st.markdown(f"**Volatility**  `{_regime_bar(min(100, m['vol20'] / 1.5))}` {m['vol20']:.1f}%")
+        st.markdown(f"**Liquidity**  `{_regime_bar(m['liquidity_score'])}` {m['liquidity_score']:.0f}/100")
+        st.markdown(f"**Correlation**  `{_regime_bar(m['corr_score'])}` {m['avg_corr']*100:.1f}%")
+        st.caption("Liquidity เป็น volume proxy จาก market overview; ไม่ใช่ bid/ask spread หรือ order-book depth โดยตรง")
+    with b:
+        st.markdown("### 🧩 Strategy Compatibility")
+        st.dataframe(pd.DataFrame([ {"Profile": k, "State": v} for k, v in m["compatibility"].items() ]), use_container_width=True, hide_index=True)
+        st.caption("Compatibility เป็น environment check แบบ descriptive เท่านั้น ไม่ผูกกับ execution engine")
+    with st.expander("🔬 Regime Diagnostics", expanded=False):
+        diag = pd.DataFrame([
+            {"Signal": "20D Return", "Value": f"{m['ret20']:+.2f}%"},
+            {"Signal": "Trend Direction", "Value": m["trend_direction"]},
+            {"Signal": "Annualized 20D Volatility", "Value": f"{m['vol20']:.2f}%"},
+            {"Signal": "Liquidity Volume", "Value": f"{m['asset_volume']:,.0f}" if m["asset_volume"] else "—"},
+            {"Signal": "Cross-Asset Avg Abs Correlation", "Value": f"{m['avg_corr']*100:.2f}%"},
+        ])
+        st.dataframe(diag, use_container_width=True, hide_index=True)
+
+
 def render_quant_research_hub (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :Optional [pd .DataFrame ]=None )->None :
     """Single entry point for all Quant Research tools.
 
@@ -19389,6 +19536,9 @@ def render_quant_research_hub (cfg :dict [str ,Any ],data :pd .DataFrame ,market
     "🛡️ Risk & Stress":[
     NAV_STRESS_LAB ,
     NAV_HEALTH_SCORE ,
+    ],
+    "🧠 Market Environment":[
+    NAV_REGIME_SWITCHBOARD ,
     ],
     "🕶️ Shadow & Governance":[
     NAV_SHADOW_MODE ,
@@ -19458,6 +19608,8 @@ def render_quant_research_hub (cfg :dict [str ,Any ],data :pd .DataFrame ,market
         render_portfolio_decision_log (cfg ,data ,market_df )
     elif selected ==NAV_RULES_ENGINE :
         render_rules_engine (cfg ,data ,market_df )
+    elif selected ==NAV_REGIME_SWITCHBOARD :
+        render_market_regime_switchboard (cfg ,data ,market_df )
     elif selected ==NAV_TRANSACTION_COST_LAB :
         render_transaction_cost_lab (cfg ,data ,market_df )
     elif selected ==NAV_PBO_DSR_LAB :
