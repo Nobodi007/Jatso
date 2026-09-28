@@ -19479,10 +19479,52 @@ def _regime_switchboard_metrics(cfg: dict[str, Any], data: pd.DataFrame, market_
             "regime": regime, "compatibility": compatibility}
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def _regime_macro_snapshot() -> dict[str, Any]:
+    out={"dxy":None,"vix":None,"us10y":None,"spx":None,"qqq":None,"gold":None,"macro_state":"DATA UNAVAILABLE","risk_state":"UNKNOWN"}
+    if yf is None: return out
+    tickers={"dxy":"DX-Y.NYB","vix":"^VIX","us10y":"^TNX","spx":"^GSPC","qqq":"QQQ","gold":"GC=F"}
+    try:
+        raw=yf.download(list(tickers.values()),period="3mo",interval="1d",auto_adjust=False,progress=False,threads=False)
+        if raw is None or raw.empty: return out
+        close=raw["Close"] if isinstance(raw.columns,pd.MultiIndex) and "Close" in raw.columns.get_level_values(0) else raw
+        inv={v:k for k,v in tickers.items()}; vals={}
+        for ticker,series in close.items():
+            ss=pd.to_numeric(series,errors="coerce").dropna()
+            if len(ss): vals[inv.get(ticker,ticker)]=(float(ss.iloc[-1]),float((ss.iloc[-1]/ss.iloc[-22]-1)*100) if len(ss)>=22 and ss.iloc[-22] else 0.0)
+        for k,pair in vals.items(): out[k]=pair[0]
+        vix=float(out["vix"] or 0); dxy=vals.get("dxy",(0,0))[1]; spx=vals.get("spx",(0,0))[1]; qqq=vals.get("qqq",(0,0))[1]
+        if vix>=30 and dxy>1 and (spx<0 or qqq<0): out["macro_state"]="RISK-OFF / TIGHT"
+        elif vix>=22 or dxy>2 or (spx<-5 and qqq<-5): out["macro_state"]="CAUTIOUS / MIXED"
+        elif vix<18 and dxy<=1 and spx>0: out["macro_state"]="RISK-ON / SUPPORTIVE"
+        else: out["macro_state"]="MIXED / TRANSITION"
+        out["risk_state"]="RISK-OFF" if "RISK-OFF" in out["macro_state"] else ("RISK-ON" if "RISK-ON" in out["macro_state"] else "MIXED")
+    except Exception as exc: out["error"]=str(exc)
+    return out
+
+def _regime_micro_snapshot(symbol: str="BTCUSDT") -> dict[str,Any]:
+    out={"symbol":symbol,"spread_bps":None,"imbalance":None,"depth_score":None,"micro_state":"DATA UNAVAILABLE","buy_pressure":None}
+    try:
+        book=_http_json(f"https://api.binance.com/api/v3/depth?symbol={symbol}&limit=20") or {}; bids=book.get("bids") or []; asks=book.get("asks") or []
+        if not bids or not asks: return out
+        bp,ap=float(bids[0][0]),float(asks[0][0]); mid=(bp+ap)/2; out["spread_bps"]=((ap-bp)/mid*10000) if mid else None
+        bq=sum(float(x[1]) for x in bids); aq=sum(float(x[1]) for x in asks); total=bq+aq; out["imbalance"]=((bq-aq)/total) if total else 0.0
+        out["buy_pressure"]=(out["imbalance"]+1)*50; out["depth_score"]=max(0,min(100,50+out["imbalance"]*50))
+        if out["spread_bps"]>12 and out["imbalance"]<-.20: out["micro_state"]="THIN / SELL PRESSURE"
+        elif out["spread_bps"]>12: out["micro_state"]="THIN LIQUIDITY"
+        elif out["imbalance"]>.20: out["micro_state"]="BUY-SIDE PRESSURE"
+        elif out["imbalance"]<-.20: out["micro_state"]="SELL-SIDE PRESSURE"
+        else: out["micro_state"]="BALANCED / NORMAL"
+    except Exception as exc: out["error"]=str(exc)
+    return out
+
+
 def render_market_regime_switchboard(cfg: dict[str, Any], data: pd.DataFrame, market_df: Optional[pd.DataFrame] = None) -> None:
     m = _regime_switchboard_metrics(cfg, data, market_df)
+    macro = _regime_macro_snapshot()
+    micro = _regime_micro_snapshot(f"{str(cfg.get('asset','BTC')).upper()}USDT")
     st.markdown("## 🧠 Market Regime Switchboard")
-    st.caption("Operating Environment Layer — อ่านสภาพตลาดจาก Trend / Volatility / Liquidity / Correlation · ไม่ทำนายราคา · ไม่ส่งคำสั่งซื้อขาย")
+    st.caption("Operating Environment Layer — Macro + Market Regime + Micro Structure · descriptive only · ไม่ทำนายราคา · ไม่ส่งคำสั่งซื้อขาย")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Trend", f"{m['trend_score']:.0f}/100", m["trend_direction"])
     c2.metric("Volatility", f"{m['vol20']:.1f}%", m["vol_state"])
@@ -19493,6 +19535,19 @@ def render_market_regime_switchboard(cfg: dict[str, Any], data: pd.DataFrame, ma
     <div style="font-size:24px;font-weight:800;color:#EAECEF;margin-top:7px;">{_html.escape(m['regime'])}</div>
     <div style="font-size:12px;color:#8B93A1;margin-top:8px;">20D return {m['ret20']:+.2f}% · annualized 20D volatility {m['vol20']:.1f}% · avg cross-asset correlation {m['avg_corr']*100:.1f}%</div>
     </div>''', unsafe_allow_html=True)
+    st.markdown("### 🌍 Macro Environment")
+    ma,mb,mc,md=st.columns(4)
+    ma.metric("Macro Regime",macro.get("macro_state","—")); mb.metric("VIX",f"{macro['vix']:.1f}" if macro.get("vix") is not None else "—"); mc.metric("DXY",f"{macro['dxy']:.2f}" if macro.get("dxy") is not None else "—"); md.metric("US 10Y",f"{macro['us10y']:.2f}%" if macro.get("us10y") is not None else "—")
+    st.markdown("### 🧬 Micro Market Structure")
+    xa,xb,xc,xd=st.columns(4)
+    xa.metric("Micro State",micro.get("micro_state","—")); xb.metric("Spread",f"{micro['spread_bps']:.2f} bps" if micro.get("spread_bps") is not None else "—"); xc.metric("Book Imbalance",f"{micro['imbalance']*100:+.1f}%" if micro.get("imbalance") is not None else "—"); xd.metric("Buy Pressure",f"{micro['buy_pressure']:.0f}/100" if micro.get("buy_pressure") is not None else "—")
+    macro_flag=macro.get("risk_state","UNKNOWN"); micro_flag=micro.get("micro_state","DATA UNAVAILABLE")
+    if macro_flag=="RISK-OFF" and ("SELL" in micro_flag or "THIN" in micro_flag): env="FRAGILE — MACRO RISK-OFF + WEAK MICROSTRUCTURE"
+    elif macro_flag=="RISK-ON" and "BUY" in micro_flag: env="SUPPORTIVE — MACRO RISK-ON + BUY-SIDE MICROSTRUCTURE"
+    elif "THIN" in micro_flag: env="CAUTION — MICRO LIQUIDITY FRAGILE"
+    else: env=f"{macro_flag} / {micro_flag}"
+    st.info(f"**Combined Environment:** {env}\n\nMacro: {macro_flag} · Micro: {micro_flag}")
+
     a, b = st.columns(2)
     with a:
         st.markdown("### 🌡️ Environment Signals")
