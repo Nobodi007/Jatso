@@ -287,7 +287,38 @@ DEV_AVATAR_B64 = _default_dev_avatar()
 # ใส่รูปจริงได้โดยตั้ง env XSPRING_DEV_AVATAR เป็น data URI (data:image/jpeg;base64,...)
 _env_avatar = os.environ.get("XSPRING_DEV_AVATAR", "").strip()
 if _env_avatar.startswith("data:image/") and not re.search(r"[\"'<>\s]", _env_avatar):
-    DEV_AVATAR_B64 = _env_avatar
+    DEV_AVATAR_B64 = data:image/jpeg;base64,
+
+
+def _load_local_dev_avatar() -> Optional[str]:
+    """โหลดรูปโปรไฟล์จากไฟล์ dev_avatar.(jpg|jpeg|png|webp) ในโฟลเดอร์เดียวกับไฟล์นี้
+    ครอปเป็นสี่เหลี่ยมจัตุรัสกลางภาพและย่อเหลือ 160x160 เพื่อให้เบา"""
+    try:
+        base = Path(__file__).resolve().parent
+    except Exception:
+        return None
+    for name in ("dev_avatar.jpg", "dev_avatar.jpeg", "dev_avatar.png", "dev_avatar.webp"):
+        fp = base / name
+        if not fp.is_file():
+            continue
+        try:
+            from PIL import Image, ImageOps
+            img = ImageOps.exif_transpose(Image.open(fp)).convert("RGB")
+            w, h = img.size
+            side = min(w, h)
+            left, top = (w - side) // 2, (h - side) // 2
+            img = img.crop((left, top, left + side, top + side)).resize((160, 160))
+            buf = BytesIO()
+            img.save(buf, "JPEG", quality=88)
+            return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+        except Exception:
+            continue
+    return None
+
+
+# ถ้าไม่ได้ตั้ง env ไว้ ให้ลองใช้รูปจากไฟล์ก่อน (ไม่มีไฟล์ก็ใช้ตัวอักษร TN เหมือนเดิม)
+if DEV_AVATAR_B64 == _default_dev_avatar():
+    DEV_AVATAR_B64 = _load_local_dev_avatar() or DEV_AVATAR_B64
 
 COIN_LOGOS ={s :f"https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/{s .lower ()}.png"for s in SUPPORTED_ASSETS }
 COIN_LOGOS ["THB"]=THB_LOGO_SVG 
