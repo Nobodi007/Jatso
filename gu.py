@@ -283,11 +283,7 @@ def _default_dev_avatar() -> str:
     return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
 
 
-DEV_AVATAR_B64 = _default_dev_avatar()
-# ใส่รูปจริงได้โดยตั้ง env XSPRING_DEV_AVATAR เป็น data URI (data:image/jpeg;base64,...)
-_env_avatar = os.environ.get("XSPRING_DEV_AVATAR", "").strip()
-if _env_avatar.startswith("data:image/") and not re.search(r"[\"'<>\s]", _env_avatar):
-    DEV_AVATAR_B64 = _env_avatar
+DEV_AVATAR_B64 = DEV_AVATAR_B64 = "data:image/jpeg;base64,ใส่_BASE64_ของรูป_IMG_2908_ตรงนี้"
 
 
 def _load_local_dev_avatar() -> Optional[str]:
