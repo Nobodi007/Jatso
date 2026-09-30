@@ -2383,7 +2383,15 @@ def _get_supabase ()->Optional ["_SupabaseClient"]:
         if not isinstance (cfg,Mapping ):
             cfg ={}
         url =str (cfg .get ("url","")or "").strip ()
-        key =str (cfg .get ("key","")or "").strip ()
+        # Prefer the service-role key when explicitly configured.
+        # It is required here because sim_state may be protected by RLS.
+        key =str (
+            cfg .get ("service_role_key","")
+            or st .secrets .get ("SUPABASE_SERVICE_ROLE_KEY","")
+            or os .environ .get ("SUPABASE_SERVICE_ROLE_KEY","")
+            or cfg .get ("key","")
+            or ""
+        ).strip ()
 
         # รองรับรูปแบบ Streamlit secrets/env ที่ใช้กันอีกแบบ
         if not url :
@@ -3082,6 +3090,7 @@ def load_sim_state (path :Optional [Path ]=None )->Optional[dict [str ,Any ]]:
     if last_error is not None:
         st .session_state ["sim_state_load_error"]=str (last_error)
     elif last_reason:
+        # Keep the real actor and a safe diagnostic, but never expose keys.
         st .session_state ["sim_state_load_error"]=last_reason
     elif sb is None:
         st .session_state ["sim_state_load_error"]="Supabase client unavailable or credentials not configured"
