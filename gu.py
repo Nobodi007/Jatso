@@ -3046,6 +3046,60 @@ def load_sim_state (path :Optional [Path ]=None )->Optional[dict [str ,Any ]]:
         return None
     return _normalize_loaded_sim_state (d)
 
+FAV_STATE_ENV_VAR ="XSPRING_FAV_STATE"
+
+def fav_state_path ()->Path :
+    return Path (os .environ .get (FAV_STATE_ENV_VAR )or (_HERE /"favorites.json"))
+
+def save_favorites (favs :Any ,path :Optional [Path ]=None )->None :
+    if is_guest_mode ():
+        return 
+    clean =[s for s in (favs or [])if s in SUPPORTED_ASSETS ]
+
+    sb =_get_supabase ()
+    if sb is not None :
+        try :
+            sb .table ("favorites").upsert ({
+            "actor":_current_actor (),
+            "symbols":clean ,
+            "updated_at":datetime .now (timezone .utc ).isoformat (),
+            }).execute ()
+            return 
+        except Exception :
+            pass 
+
+    p =Path (path )if path else fav_state_path ()
+    tmp =p .with_suffix (".tmp")
+    tmp .write_text (json .dumps (clean ),encoding ="utf-8")
+    os .replace (tmp ,p )
+
+def load_favorites (path :Optional [Path ]=None )->list [str]:
+    if is_guest_mode ():
+        return []
+    sb =_get_supabase ()
+    if sb is not None :
+        try :
+            res =(sb .table ("favorites")
+            .select ("symbols")
+            .eq ("actor",_current_actor ())
+            .limit (1 )
+            .execute ())
+            if res .data :
+                d =res .data [0 ]["symbols"]
+                return [s for s in d if s in SUPPORTED_ASSETS ]if isinstance (d ,list )else []
+        except Exception :
+            pass
+
+    p =Path (path )if path else fav_state_path ()
+    if not p .is_file ():
+        return []
+    try :
+        d =json .loads (p .read_text (encoding ="utf-8"))
+    except (OSError ,json .JSONDecodeError ):
+        return []
+    return [s for s in d if s in SUPPORTED_ASSETS ]if isinstance (d ,list )else []
+
+
 def _current_actor ()->str :
     try :
         email =getattr (st .user ,"email",None )
