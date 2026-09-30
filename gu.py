@@ -2902,6 +2902,46 @@ def save_sim_state (sim :Any ,path :Optional [Path ]=None )->None :
     tmp .write_text (json .dumps (_json_safe (sim ),ensure_ascii =False ),encoding ="utf-8")
     os .replace (tmp ,p )
 
+def _load_sim_state_via_rest (actor: str) -> Optional[dict[str, Any]]:
+    """Last-resort Supabase REST read for sim_state.
+
+    This bypasses the Python supabase client so a missing/broken client import
+    cannot silently make the app fall back to a fresh 1,000,000 THB state.
+    """
+    try:
+        cfg = st.secrets.get("supabase", {})
+        if not isinstance(cfg, Mapping):
+            cfg = {}
+        url = str(cfg.get("url", "") or "").strip()
+        key = str(cfg.get("key", "") or "").strip()
+        if not url:
+            url = str(st.secrets.get("SUPABASE_URL", "") or os.environ.get("SUPABASE_URL", "") or "").strip()
+        if not key:
+            key = str(st.secrets.get("SUPABASE_KEY", "") or os.environ.get("SUPABASE_KEY", "") or "").strip()
+        if not url or not key or not actor:
+            return None
+
+        from urllib.parse import quote
+        from urllib.request import Request, urlopen
+        endpoint = (url.rstrip("/") + "/rest/v1/sim_state?select=data&actor=eq." + quote(actor, safe="" ) + "&limit=1")
+        req = Request(endpoint, headers={
+            "apikey": key,
+            "Authorization": "Bearer " + key,
+            "Accept": "application/json",
+        }, method="GET")
+        with urlopen(req, timeout=10) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        if isinstance(payload, list) and payload:
+            d = payload[0].get("data")
+            if isinstance(d, dict):
+                st.session_state["sim_state_source"] = "supabase_rest"
+                st.session_state["sim_state_actor"] = actor
+                return d
+    except Exception as exc:
+        st.session_state["sim_state_rest_error"] = str(exc)
+    return None
+
+
 def load_sim_state (path :Optional [Path ]=None )->Optional [dict [str ,Any ]]:
     if is_guest_mode ():
         return None 
@@ -2940,6 +2980,18 @@ def load_sim_state (path :Optional [Path ]=None )->Optional [dict [str ,Any ]]:
         except Exception as exc :
             # Keep the error visible for diagnosis instead of silently hiding a cloud failure.
             st .session_state ["sim_state_load_error"]=str (exc )
+
+    # If the supabase-python client is unavailable or failed, read the exact
+    # same row directly through Supabase REST before ever falling back to a
+    # local file/default state. This prevents an apparent portfolio reset.
+    rest_state = _load_sim_state_via_rest(actor) if actor_lc and actor_lc != "unknown" else None
+    if isinstance(rest_state, dict):
+        if rest_state.get("current_date"):
+            try:
+                rest_state["current_date"] = pd.to_datetime(rest_state["current_date"])
+            except (ValueError, TypeError):
+                rest_state.pop("current_date", None)
+        return rest_state
 
     p =Path (path )if path else sim_state_path ()
     if not p .is_file ():
