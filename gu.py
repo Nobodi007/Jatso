@@ -2370,7 +2370,7 @@ _supabase_checked =False
 
 
 def _get_supabase ()->Optional ["_SupabaseClient"]:
-    """คืน Supabase client ถ้าตั้งค่าไว้ครบ; รองรับทั้ง [supabase] และ top-level secrets/env."""
+    """คืน Supabase client ถ้าตั้งค่าไว้ครบ; ถ้าไม่มีคืน None (จะ fallback ไปไฟล์ local)"""
     global _supabase_client ,_supabase_checked 
     if _supabase_checked :
         return _supabase_client 
@@ -2378,25 +2378,13 @@ def _get_supabase ()->Optional ["_SupabaseClient"]:
     if not HAS_SUPABASE_LIB :
         return None 
     try :
-        # รองรับรูปแบบเดิม: [supabase] url/key
         cfg =st .secrets .get ("supabase",{})
-        if not isinstance (cfg,Mapping ):
-            cfg ={}
-        url =str (cfg .get ("url","")or "").strip ()
-        key =str (cfg .get ("key","")or "").strip ()
-
-        # รองรับรูปแบบ Streamlit secrets/env ที่ใช้กันอีกแบบ
-        if not url :
-            url =str (st .secrets .get ("SUPABASE_URL","")or os .environ .get ("SUPABASE_URL","")or "").strip ()
-        if not key :
-            key =str (st .secrets .get ("SUPABASE_KEY","")or os .environ .get ("SUPABASE_KEY","")or "").strip ()
-
+        url ,key =cfg .get ("url",""),cfg .get ("key","")
         if not (url and key ):
             return None 
         _supabase_client =create_client (url ,key )
-    except Exception as exc :
+    except Exception :
         _supabase_client =None 
-        st .session_state ["supabase_init_error"]=str (exc )
     return _supabase_client 
 
 
@@ -2902,149 +2890,44 @@ def save_sim_state (sim :Any ,path :Optional [Path ]=None )->None :
     tmp .write_text (json .dumps (_json_safe (sim ),ensure_ascii =False ),encoding ="utf-8")
     os .replace (tmp ,p )
 
-def _sim_state_actor_candidates ()->list [str]:
-    """Return only identity candidates that belong to the current signed-in user."""
-    out :list [str]=[]
-    try:
-        email =str (getattr (st .user ,"email","")or "").strip ()
-        if email:
-            out .append (email )
-    except Exception :
-        pass
-    env_actor =str (os .environ .get (AUDIT_ACTOR_ENV_VAR ,"")or "").strip ()
-    if env_actor:
-        out .append (env_actor )
-    allowed =_allowed_email ()
-    if allowed and allowed !="*" and "," not in allowed:
-        out .append (allowed )
-    seen=set ()
-    return [x for x in out if x and x.lower ()!="unknown" and not (x.lower () in seen or seen.add (x.lower ())) ]
-
-def _sim_state_from_rest (actor :str )->Optional[dict [str ,Any ]]:
-    """Read the signed-in user's sim_state through Supabase REST.
-
-    Handles JSONB returned as either a dict or a JSON string and tolerates
-    case/whitespace differences in the actor email. It never searches for an
-    arbitrary user's state.
-    """
-    try:
-        cfg =st .secrets .get ("supabase",{})
-        if not isinstance (cfg ,Mapping ):
-            cfg ={}
-        url =str (cfg .get ("url","")or st .secrets .get ("SUPABASE_URL","")or os .environ .get ("SUPABASE_URL","")).strip ()
-        key =str (
-            cfg .get ("service_role_key","")
-            or st .secrets .get ("SUPABASE_SERVICE_ROLE_KEY","")
-            or cfg .get ("key","")
-            or st .secrets .get ("SUPABASE_KEY","")
-            or os .environ .get ("SUPABASE_SERVICE_ROLE_KEY","")
-            or os .environ .get ("SUPABASE_KEY","")
-            or ""
-        ).strip ()
-        if not url or not key:
-            return None
-        actor_clean =str (actor or "").strip ()
-        q =urllib .parse .urlencode (
-            {"select":"data,actor,updated_at","actor":f"ilike.{actor_clean}","limit":"1"}
-        )
-        req =urllib .request .Request (
-            url.rstrip ("/")+"/rest/v1/sim_state?"+q ,
-            headers ={
-                "apikey":key ,
-                "Authorization":f"Bearer {key }",
-                "Accept":"application/json",
-            },
-            method ="GET",
-        )
-        with urllib .request .urlopen (req ,timeout =8 )as resp :
-            rows =json .loads (resp .read ().decode ("utf-8"))
-        if isinstance (rows ,list )and rows and isinstance (rows [0 ],dict ):
-            d =rows [0 ].get ("data")
-            if isinstance (d ,str ):
-                try:
-                    d =json .loads (d )
-                except Exception:
-                    d =None
-            if isinstance (d ,dict ):
-                return d
-    except Exception as exc:
-        st .session_state ["sim_state_rest_error"]=str (exc )
-    return None
-
-def _normalize_loaded_sim_state (d :Any )->Optional[dict [str ,Any ]]:
-    if isinstance (d ,str ):
-        try:
-            d =json .loads (d )
-        except Exception:
-            return None
-    if not isinstance (d ,dict ):
-        return None
-    if d .get ("current_date"):
-        try:
-            d ["current_date"]=pd .to_datetime (d ["current_date"])
-        except (ValueError ,TypeError ):
-            d .pop ("current_date",None )
-    return d
-
-def load_sim_state (path :Optional [Path ]=None )->Optional[dict [str ,Any ]]:
+def load_sim_state (path :Optional [Path ]=None )->Optional [dict [str ,Any ]]:
     if is_guest_mode ():
-        return None
-
-    candidates =_sim_state_actor_candidates ()
+        return None 
     sb =_get_supabase ()
-    last_error =None
-    last_reason =None
-
-    # Primary client read. Try exact actor first, then case-insensitive actor.
-    if sb is not None and candidates:
-        for actor in candidates:
-            for mode in ("exact","ilike"):
-                try:
-                    q =sb .table ("sim_state").select ("data,actor,updated_at")
-                    if mode == "exact":
-                        q =q .eq ("actor",actor )
-                    else:
-                        q =q .ilike ("actor",actor )
-                    res =q .order ("updated_at",desc=True ).limit (1 ).execute ()
-                    if res .data:
-                        d =_normalize_loaded_sim_state (res .data [0 ].get ("data"))
-                        if d is not None:
-                            st .session_state ["sim_state_source"]="supabase"
-                            st .session_state ["sim_state_actor"]=str (res .data [0 ].get ("actor")or actor )
-                            st .session_state ["sim_state_loaded_ok"]=True
-                            st .session_state .pop ("sim_state_load_error",None )
-                            return d
-                        last_reason=f"row found for {actor}, but data is not valid JSON/object"
-                    else:
-                        last_reason=f"no sim_state row for actor {actor}"
-                except Exception as exc:
-                    last_error=exc
-
-    # REST fallback, still strictly scoped to the signed-in actor.
-    for actor in candidates:
-        d =_normalize_loaded_sim_state (_sim_state_from_rest (actor ))
-        if d is not None:
-            st .session_state ["sim_state_source"]="supabase_rest"
-            st .session_state ["sim_state_actor"]=actor
-            st .session_state ["sim_state_loaded_ok"]=True
-            st .session_state .pop ("sim_state_load_error",None )
-            return d
-
-    if last_error is not None:
-        st .session_state ["sim_state_load_error"]=str (last_error)
-    elif last_reason:
-        st .session_state ["sim_state_load_error"]=last_reason
-    elif sb is None:
-        st .session_state ["sim_state_load_error"]="Supabase client unavailable or credentials not configured"
+    if sb is not None :
+        try :
+            res =(sb .table ("sim_state")
+            .select ("data")
+            .eq ("actor",_current_actor ())
+            .limit (1 )
+            .execute ())
+            if res .data :
+                d =res .data [0 ]["data"]
+                if isinstance (d ,dict )and d .get ("current_date"):
+                    try :
+                        d ["current_date"]=pd .to_datetime (d ["current_date"])
+                    except (ValueError ,TypeError ):
+                        d .pop ("current_date",None )
+                return d 
+        except Exception :
+            pass # ตกไป fallback local
 
     p =Path (path )if path else sim_state_path ()
     if not p .is_file ():
-        return None
-    try:
+        return None 
+    try :
         d =json .loads (p .read_text (encoding ="utf-8"))
     except (OSError ,json .JSONDecodeError ):
-        return None
-    return _normalize_loaded_sim_state (d)
+        return None 
+    if not isinstance (d ,dict ):
+        return None 
+    if d .get ("current_date"):
+        try :
+            d ["current_date"]=pd .to_datetime (d ["current_date"])
+        except (ValueError ,TypeError ):
+            d .pop ("current_date",None )
+    return d 
+
 
 FAV_STATE_ENV_VAR ="XSPRING_FAV_STATE"
 
@@ -3066,14 +2949,14 @@ def save_favorites (favs :Any ,path :Optional [Path ]=None )->None :
             }).execute ()
             return 
         except Exception :
-            pass 
+            pass # ตกไป fallback local
 
     p =Path (path )if path else fav_state_path ()
     tmp =p .with_suffix (".tmp")
     tmp .write_text (json .dumps (clean ),encoding ="utf-8")
     os .replace (tmp ,p )
 
-def load_favorites (path :Optional [Path ]=None )->list [str]:
+def load_favorites (path :Optional [Path ]=None )->list [str ]:
     if is_guest_mode ():
         return []
     sb =_get_supabase ()
@@ -3088,7 +2971,7 @@ def load_favorites (path :Optional [Path ]=None )->list [str]:
                 d =res .data [0 ]["symbols"]
                 return [s for s in d if s in SUPPORTED_ASSETS ]if isinstance (d ,list )else []
         except Exception :
-            pass
+            pass # ตกไป fallback local
 
     p =Path (path )if path else fav_state_path ()
     if not p .is_file ():
@@ -20661,21 +20544,8 @@ def _main_body ()->None :
     else :
         if "sim"not in st .session_state :
             saved =load_sim_state ()
-            if isinstance (saved ,dict ):
-                st .session_state ["sim"]=saved
-            elif st .session_state .get ("sim_state_load_error"):
-                # Never create/save a fresh ฿1,000,000 wallet when cloud state
-                # could not be read. This prevents a failed read from overwriting
-                # the user's persisted portfolio in main()'s finally block.
-                st .error (
-                    "⚠️ ไม่สามารถโหลด Portfolio เดิมจาก Supabase ได้ — "
-                    "ระบบหยุดไว้ก่อนเพื่อป้องกันข้อมูลเดิมถูกเขียนทับ"
-                )
-                st .caption (
-                    f"Actor: {_current_actor()} · "
-                    f"สาเหตุ: {st .session_state.get('sim_state_load_error')}"
-                )
-                st .stop ()
+            if saved :
+                st .session_state ["sim"]=saved 
 
         if "favorite_tickers"not in st .session_state :
             st .session_state ["favorite_tickers"]=load_favorites ()
@@ -21367,15 +21237,11 @@ def main ()->None :
     try :
         _main_body ()
     finally :
-        # Save only a state that was successfully loaded or explicitly changed.
-        # Do NOT overwrite Supabase with a default wallet after a failed load.
+    # finally ทำงานแม้มี st.rerun() ทำให้ทุกออเดอร์ถูกเซฟเสมอ
         try :
-            sim =st .session_state .get ("sim")
-            loaded_ok =bool (st .session_state .get ("sim_state_loaded_ok",False ))
-            if isinstance (sim ,dict )and (loaded_ok or st .session_state .get ("sim_state_dirty",False )):
-                save_sim_state (sim )
+            save_sim_state (st .session_state .get ("sim"))
         except Exception :
-            pass
+            pass 
 
 
 # Restored core functions from v36 to preserve existing app modules.
