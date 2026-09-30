@@ -2921,25 +2921,50 @@ def _sim_state_actor_candidates ()->list [str]:
     return [x for x in out if x and x.lower ()!="unknown" and not (x.lower () in seen or seen.add (x.lower ())) ]
 
 def _sim_state_from_rest (actor :str )->Optional[dict [str ,Any ]]:
-    """Small REST fallback when the Supabase Python client is unavailable/fails."""
+    """Read the signed-in user's sim_state through Supabase REST.
+
+    Handles JSONB returned as either a dict or a JSON string and tolerates
+    case/whitespace differences in the actor email. It never searches for an
+    arbitrary user's state.
+    """
     try:
         cfg =st .secrets .get ("supabase",{})
         if not isinstance (cfg ,Mapping ):
             cfg ={}
         url =str (cfg .get ("url","")or st .secrets .get ("SUPABASE_URL","")or os .environ .get ("SUPABASE_URL","")).strip ()
-        key =str (cfg .get ("key","")or st .secrets .get ("SUPABASE_KEY","")or os .environ .get ("SUPABASE_KEY","")).strip ()
+        key =str (
+            cfg .get ("service_role_key","")
+            or st .secrets .get ("SUPABASE_SERVICE_ROLE_KEY","")
+            or cfg .get ("key","")
+            or st .secrets .get ("SUPABASE_KEY","")
+            or os .environ .get ("SUPABASE_SERVICE_ROLE_KEY","")
+            or os .environ .get ("SUPABASE_KEY","")
+            or ""
+        ).strip ()
         if not url or not key:
             return None
-        q =urllib .parse .urlencode ({"select":"data,actor,updated_at","actor":f"eq.{actor}","limit":"1"})
+        actor_clean =str (actor or "").strip ()
+        q =urllib .parse .urlencode (
+            {"select":"data,actor,updated_at","actor":f"ilike.{actor_clean}","limit":"1"}
+        )
         req =urllib .request .Request (
             url.rstrip ("/")+"/rest/v1/sim_state?"+q ,
-            headers ={"apikey":key ,"Authorization":f"Bearer {key }","Accept":"application/json"},
+            headers ={
+                "apikey":key ,
+                "Authorization":f"Bearer {key }",
+                "Accept":"application/json",
+            },
             method ="GET",
         )
         with urllib .request .urlopen (req ,timeout =8 )as resp :
             rows =json .loads (resp .read ().decode ("utf-8"))
         if isinstance (rows ,list )and rows and isinstance (rows [0 ],dict ):
             d =rows [0 ].get ("data")
+            if isinstance (d ,str ):
+                try:
+                    d =json .loads (d )
+                except Exception:
+                    d =None
             if isinstance (d ,dict ):
                 return d
     except Exception as exc:
@@ -2947,6 +2972,11 @@ def _sim_state_from_rest (actor :str )->Optional[dict [str ,Any ]]:
     return None
 
 def _normalize_loaded_sim_state (d :Any )->Optional[dict [str ,Any ]]:
+    if isinstance (d ,str ):
+        try:
+            d =json .loads (d )
+        except Exception:
+            return None
     if not isinstance (d ,dict ):
         return None
     if d .get ("current_date"):
@@ -2956,33 +2986,41 @@ def _normalize_loaded_sim_state (d :Any )->Optional[dict [str ,Any ]]:
             d .pop ("current_date",None )
     return d
 
-def load_sim_state (path :Optional [Path ]=None )->Optional [dict [str ,Any ]]:
+def load_sim_state (path :Optional [Path ]=None )->Optional[dict [str ,Any ]]:
     if is_guest_mode ():
         return None
 
     candidates =_sim_state_actor_candidates ()
     sb =_get_supabase ()
     last_error =None
+    last_reason =None
+
+    # Primary client read. Try exact actor first, then case-insensitive actor.
     if sb is not None and candidates:
         for actor in candidates:
-            try :
-                res =(sb .table ("sim_state")
-                .select ("data,actor,updated_at")
-                .eq ("actor",actor )
-                .limit (1 )
-                .execute ())
-                if res .data:
-                    d =_normalize_loaded_sim_state (res .data [0 ].get ("data"))
-                    if d is not None:
-                        st .session_state ["sim_state_source"]="supabase"
-                        st .session_state ["sim_state_actor"]=str (res .data [0 ].get ("actor")or actor )
-                        st .session_state ["sim_state_loaded_ok"]=True
-                        st .session_state .pop ("sim_state_load_error",None )
-                        return d
-            except Exception as exc :
-                last_error =exc
+            for mode in ("exact","ilike"):
+                try:
+                    q =sb .table ("sim_state").select ("data,actor,updated_at")
+                    if mode == "exact":
+                        q =q .eq ("actor",actor )
+                    else:
+                        q =q .ilike ("actor",actor )
+                    res =q .order ("updated_at",desc=True ).limit (1 ).execute ()
+                    if res .data:
+                        d =_normalize_loaded_sim_state (res .data [0 ].get ("data"))
+                        if d is not None:
+                            st .session_state ["sim_state_source"]="supabase"
+                            st .session_state ["sim_state_actor"]=str (res .data [0 ].get ("actor")or actor )
+                            st .session_state ["sim_state_loaded_ok"]=True
+                            st .session_state .pop ("sim_state_load_error",None )
+                            return d
+                        last_reason=f"row found for {actor}, but data is not valid JSON/object"
+                    else:
+                        last_reason=f"no sim_state row for actor {actor}"
+                except Exception as exc:
+                    last_error=exc
 
-    # REST fallback is deliberately identity-scoped; it never picks another user's row.
+    # REST fallback, still strictly scoped to the signed-in actor.
     for actor in candidates:
         d =_normalize_loaded_sim_state (_sim_state_from_rest (actor ))
         if d is not None:
@@ -2994,79 +3032,19 @@ def load_sim_state (path :Optional [Path ]=None )->Optional [dict [str ,Any ]]:
 
     if last_error is not None:
         st .session_state ["sim_state_load_error"]=str (last_error)
+    elif last_reason:
+        st .session_state ["sim_state_load_error"]=last_reason
     elif sb is None:
         st .session_state ["sim_state_load_error"]="Supabase client unavailable or credentials not configured"
 
     p =Path (path )if path else sim_state_path ()
     if not p .is_file ():
-        return None 
-    try :
+        return None
+    try:
         d =json .loads (p .read_text (encoding ="utf-8"))
     except (OSError ,json .JSONDecodeError ):
-        return None 
-    if not isinstance (d ,dict ):
-        return None 
-    if d .get ("current_date"):
-        try :
-            d ["current_date"]=pd .to_datetime (d ["current_date"])
-        except (ValueError ,TypeError ):
-            d .pop ("current_date",None )
-    return d 
-
-
-FAV_STATE_ENV_VAR ="XSPRING_FAV_STATE"
-
-def fav_state_path ()->Path :
-    return Path (os .environ .get (FAV_STATE_ENV_VAR )or (_HERE /"favorites.json"))
-
-def save_favorites (favs :Any ,path :Optional [Path ]=None )->None :
-    if is_guest_mode ():
-        return 
-    clean =[s for s in (favs or [])if s in SUPPORTED_ASSETS ]
-
-    sb =_get_supabase ()
-    if sb is not None :
-        try :
-            sb .table ("favorites").upsert ({
-            "actor":_current_actor (),
-            "symbols":clean ,
-            "updated_at":datetime .now (timezone .utc ).isoformat (),
-            }).execute ()
-            return 
-        except Exception :
-            pass # ตกไป fallback local
-
-    p =Path (path )if path else fav_state_path ()
-    tmp =p .with_suffix (".tmp")
-    tmp .write_text (json .dumps (clean ),encoding ="utf-8")
-    os .replace (tmp ,p )
-
-def load_favorites (path :Optional [Path ]=None )->list [str ]:
-    if is_guest_mode ():
-        return []
-    sb =_get_supabase ()
-    if sb is not None :
-        try :
-            res =(sb .table ("favorites")
-            .select ("symbols")
-            .eq ("actor",_current_actor ())
-            .limit (1 )
-            .execute ())
-            if res .data :
-                d =res .data [0 ]["symbols"]
-                return [s for s in d if s in SUPPORTED_ASSETS ]if isinstance (d ,list )else []
-        except Exception :
-            pass # ตกไป fallback local
-
-    p =Path (path )if path else fav_state_path ()
-    if not p .is_file ():
-        return []
-    try :
-        d =json .loads (p .read_text (encoding ="utf-8"))
-    except (OSError ,json .JSONDecodeError ):
-        return []
-    return [s for s in d if s in SUPPORTED_ASSETS ]if isinstance (d ,list )else []
-
+        return None
+    return _normalize_loaded_sim_state (d)
 
 def _current_actor ()->str :
     try :
