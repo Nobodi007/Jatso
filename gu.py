@@ -2370,7 +2370,7 @@ _supabase_checked =False
 
 
 def _get_supabase ()->Optional ["_SupabaseClient"]:
-    """คืน Supabase client ถ้าตั้งค่าไว้ครบ; ถ้าไม่มีคืน None (จะ fallback ไปไฟล์ local)"""
+    """คืน Supabase client ถ้าตั้งค่าไว้ครบ; รองรับทั้ง [supabase] และ top-level secrets/env."""
     global _supabase_client ,_supabase_checked 
     if _supabase_checked :
         return _supabase_client 
@@ -2378,13 +2378,25 @@ def _get_supabase ()->Optional ["_SupabaseClient"]:
     if not HAS_SUPABASE_LIB :
         return None 
     try :
+        # รองรับรูปแบบเดิม: [supabase] url/key
         cfg =st .secrets .get ("supabase",{})
-        url ,key =cfg .get ("url",""),cfg .get ("key","")
+        if not isinstance (cfg,Mapping ):
+            cfg ={}
+        url =str (cfg .get ("url","")or "").strip ()
+        key =str (cfg .get ("key","")or "").strip ()
+
+        # รองรับรูปแบบ Streamlit secrets/env ที่ใช้กันอีกแบบ
+        if not url :
+            url =str (st .secrets .get ("SUPABASE_URL","")or os .environ .get ("SUPABASE_URL","")or "").strip ()
+        if not key :
+            key =str (st .secrets .get ("SUPABASE_KEY","")or os .environ .get ("SUPABASE_KEY","")or "").strip ()
+
         if not (url and key ):
             return None 
         _supabase_client =create_client (url ,key )
-    except Exception :
+    except Exception as exc :
         _supabase_client =None 
+        st .session_state ["supabase_init_error"]=str (exc )
     return _supabase_client 
 
 
@@ -2893,24 +2905,41 @@ def save_sim_state (sim :Any ,path :Optional [Path ]=None )->None :
 def load_sim_state (path :Optional [Path ]=None )->Optional [dict [str ,Any ]]:
     if is_guest_mode ():
         return None 
+
+    actor =str (_current_actor ()or "").strip ()
+    actor_lc =actor .lower ()
     sb =_get_supabase ()
-    if sb is not None :
+    if sb is not None and actor_lc and actor_lc !="unknown":
         try :
+            # Primary lookup: exact actor key used by save_sim_state.
             res =(sb .table ("sim_state")
             .select ("data")
-            .eq ("actor",_current_actor ())
+            .eq ("actor",actor )
             .limit (1 )
             .execute ())
+
+            # Recovery lookup: tolerate case differences in older rows.
+            if not res .data and actor_lc !=actor :
+                res =(sb .table ("sim_state")
+                .select ("data")
+                .ilike ("actor",actor_lc )
+                .limit (1 )
+                .execute ())
+
             if res .data :
-                d =res .data [0 ]["data"]
+                d =res .data [0 ].get ("data")
                 if isinstance (d ,dict )and d .get ("current_date"):
                     try :
                         d ["current_date"]=pd .to_datetime (d ["current_date"])
                     except (ValueError ,TypeError ):
                         d .pop ("current_date",None )
-                return d 
-        except Exception :
-            pass # ตกไป fallback local
+                if isinstance (d ,dict ):
+                    st .session_state ["sim_state_source"]="supabase"
+                    st .session_state ["sim_state_actor"]=actor
+                    return d 
+        except Exception as exc :
+            # Keep the error visible for diagnosis instead of silently hiding a cloud failure.
+            st .session_state ["sim_state_load_error"]=str (exc )
 
     p =Path (path )if path else sim_state_path ()
     if not p .is_file ():
