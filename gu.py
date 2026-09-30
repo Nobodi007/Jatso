@@ -21292,6 +21292,12 @@ def show_profile_setup_page (email :str ):
     st .subheader ("ตั้งค่าโปรไฟล์ของคุณ")
     st .caption ("ระบบต้องการข้อมูลพื้นฐานก่อนเข้าใช้งาน Nobody Dealer Suite")
 
+    # Diagnostic: this page appears before sim_state loading when the
+    # signed-in user has no visible user_profiles row. Show the Supabase
+    # connection state here so we do not need to save/overwrite the profile.
+    with st .expander ("🔎 ตรวจการเชื่อมต่อ Supabase (ไม่แสดง key)", expanded=True):
+        st .json (_sb_diag ())
+
     default_name =getattr (st .user ,"name",email .split ("@")[0 ])
     name_input =st .text_input ("ชื่อที่แสดง (Display Name)",value =default_name )
 
