@@ -2372,9 +2372,9 @@ _supabase_checked =False
 def _get_supabase ()->Optional ["_SupabaseClient"]:
     """คืน Supabase client ถ้าตั้งค่าไว้ครบ; รองรับทั้ง [supabase] และ top-level secrets/env."""
     global _supabase_client ,_supabase_checked 
-    if _supabase_checked :
-        return _supabase_client 
-    _supabase_checked =True 
+    if _supabase_client is not None :
+        return _supabase_client
+    _supabase_checked =True
     if not HAS_SUPABASE_LIB :
         return None 
     try :
@@ -2889,23 +2889,60 @@ SIM_STATE_ENV_VAR ="XSPRING_SIM_STATE"
 def sim_state_path ()->Path :
     return Path (os .environ .get (SIM_STATE_ENV_VAR )or (_HERE /"sim_state.json"))
 
+def _cloud_has_state (actor :str )->Optional [bool]:
+    """True=มี row ใน cloud, False=ยืนยันว่าไม่มี, None=อ่านไม่ได้"""
+    sb =_get_supabase ()
+    if sb is None or not actor or actor.lower ()=="unknown":
+        return None
+    try :
+        res =(
+            sb .table ("sim_state")
+            .select ("actor")
+            .ilike ("actor",actor)
+            .limit (1)
+            .execute ()
+        )
+        return bool (res .data)
+    except Exception :
+        return None
+
+
 def save_sim_state (sim :Any ,path :Optional [Path ]=None )->None :
     if is_guest_mode ()or not isinstance (sim ,dict ):
-        return 
+        return
 
     sb =_get_supabase ()
     if sb is not None :
-        try :
-            sb .table ("sim_state").upsert ({
-            "actor":_current_actor (),
-            "data":_json_safe (sim ),
-            "updated_at":datetime .now (timezone .utc ).isoformat (),
-            }).execute ()
-            return 
-        except Exception :
-            pass # ตกไป fallback local
+        actor =_current_actor ()
+        if not st .session_state .get ("sim_state_loaded_ok",False ):
+            if _cloud_has_state (actor ) is not False :
+                st .session_state ["sim_state_save_error"] =(
+                    "ข้ามการ save: ยังโหลด portfolio จาก cloud ไม่สำเร็จ (กันเขียนทับของเดิม)"
+                )
+                return
+        last_exc =None
+        for _ in range (2 ):
+            try :
+                sb .table ("sim_state").upsert ({
+                    "actor":actor ,
+                    "data":_json_safe (sim ),
+                    "updated_at":datetime .now (timezone .utc ).isoformat (),
+                }).execute ()
+                st .session_state .pop ("sim_state_save_error",None )
+                st .session_state ["sim_state_loaded_ok"]=True
+                return
+            except Exception as exc :
+                last_exc =exc
+        st .session_state ["sim_state_save_error"]=f"Supabase save ล้มเหลว: {last_exc}"
+        return
 
-    p =Path (path )if path else sim_state_path ()
+    if path is None :
+        st .session_state ["sim_state_save_error"] =(
+            "Supabase client unavailable; ไม่เขียนลง sim_state.json อัตโนมัติ"
+        )
+        return
+
+    p =Path (path )
     tmp =p .with_suffix (".tmp")
     tmp .write_text (json .dumps (_json_safe (sim ),ensure_ascii =False ),encoding ="utf-8")
     os .replace (tmp ,p )
