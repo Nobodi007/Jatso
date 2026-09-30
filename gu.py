@@ -20728,6 +20728,72 @@ def render_site_footer ()->None :
         )
 
 
+def _sb_diag ()->dict :
+    """Diagnostic แบบไม่เปิดเผยค่า Supabase key จริง."""
+    out ={}
+    try :
+        cfg =st .secrets .get ("supabase",{})
+        cfg =cfg if isinstance (cfg ,Mapping )else {}
+        url =str (
+            cfg .get ("url","")
+            or st .secrets .get ("SUPABASE_URL","")
+            or os .environ .get ("SUPABASE_URL","")
+            or ""
+        ).strip ()
+        out ["url_host"]=urllib .parse .urlparse (url ).netloc
+
+        picked =None
+        for name ,val in (
+            ("[supabase].service_role_key",cfg .get ("service_role_key")),
+            ("SUPABASE_SERVICE_ROLE_KEY",st .secrets .get ("SUPABASE_SERVICE_ROLE_KEY")),
+            ("env SUPABASE_SERVICE_ROLE_KEY",os .environ .get ("SUPABASE_SERVICE_ROLE_KEY")),
+            ("[supabase].key",cfg .get ("key")),
+            ("SUPABASE_KEY",st .secrets .get ("SUPABASE_KEY")),
+        ):
+            if val and str (val ).strip ():
+                picked =(name ,str (val ).strip ())
+                break
+
+        if picked :
+            out ["key_source"]=picked [0]
+            k =picked [1]
+            if k .startswith ("sb_secret_"):
+                out ["key_role"]="secret (bypass RLS)"
+            elif k .startswith ("sb_publishable_"):
+                out ["key_role"]="publishable (ติด RLS)"
+            elif k .count (".")==2 :
+                try :
+                    seg =k .split (".")[1]
+                    seg +="="*(-len (seg )%4 )
+                    payload =json .loads (base64 .urlsafe_b64decode (seg ).decode ("utf-8"))
+                    out ["key_role"]=payload .get ("role")
+                except Exception :
+                    out ["key_role"]="jwt (อ่าน role ไม่ได้)"
+            else :
+                out ["key_role"]="unknown format"
+        else :
+            out ["key_source"]="ไม่เจอ key เลย"
+
+        try :
+            out ["actor_from_app"]=_current_actor ()
+        except Exception as exc :
+            out ["actor_error"]=str (exc )
+
+        sb =_get_supabase ()
+        out ["client_ready"]=sb is not None
+        if sb is not None :
+            res =sb .table ("sim_state").select ("actor").execute ()
+            rows =res .data or []
+            out ["rows_visible_to_app"]=len (rows )
+            out ["matching_actor_rows"]=sum (
+                1 for row in rows
+                if str (row .get ("actor","")).strip ().lower ()==str (out .get ("actor_from_app","")).strip ().lower ()
+            )
+    except Exception as exc :
+        out ["diag_error"]=f"{type (exc ).__name__}: {exc }"
+    return out
+
+
 def _main_body ()->None :
 # Unlock Web Audio on the user's first real click/tap so order SFX can
 # play after Streamlit reruns without being blocked by browser autoplay.
@@ -20776,6 +20842,7 @@ def _main_body ()->None :
                     f"Actor: {_current_actor()} · "
                     f"สาเหตุ: {st .session_state.get('sim_state_load_error')}"
                 )
+                st .json (_sb_diag ())
                 st .stop ()
 
         if "favorite_tickers"not in st .session_state :
