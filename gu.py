@@ -20863,7 +20863,7 @@ def _main_body ()->None :
 
         # ---- แสดงส่วนหัวด้านบนของหน้าหลัก ----
     with st .container (key ="desktop_chrome"):
-        top_l ,top_news ,top_r =st .columns ([3.8 ,4.4 ,2.0 ])
+        top_l ,top_learn ,_gap ,top_news ,_sp ,top_r =st .columns ([3.1 ,1.8 ,0.2 ,1.8 ,1.3 ,2.0 ])
         with top_l :
             st .markdown (
             f'<div style="display:flex;align-items:center;gap:12px;padding:6px 0;">'
@@ -20874,24 +20874,33 @@ def _main_body ()->None :
             f'</div></div>',
             unsafe_allow_html =True ,
             )
+        with top_learn :
+            st .markdown ('<div style="height:8px;"></div>',unsafe_allow_html =True )
+            learn_active =st .session_state .get ("main_nav")==NAV_LEARNING 
+            # ปุ่มเรียนรู้: ขนาดเท่าปุ่มข่าว วางชิดด้านซ้ายของปุ่มข่าว
+            if st .button (
+            "📚 เรียนรู้",
+            key ="top_learning_btn",
+            type ="primary"if learn_active else "secondary",
+            use_container_width =True ,
+            ):
+                st .session_state ["main_nav"]=NAV_LEARNING 
+                st .rerun ()
         with top_news :
             st .markdown ('<div style="height:8px;"></div>',unsafe_allow_html =True )
             news_active =st .session_state .get ("main_nav")==NAV_NEWS 
-            # ปุ่มข่าวให้เล็กและอยู่กึ่งกลาง ไม่กินพื้นที่ทั้งคอลัมน์
-            _ ,news_btn ,_ =st .columns ([1.6 ,2.2 ,1.6 ])
-            with news_btn :
-                if st .button (
-                "📰 ข่าว",
-                key ="top_news_btn",
-                type ="primary"if news_active else "secondary",
-                use_container_width =True ,
-                ):
-                    current =st .session_state .get ("main_nav")
-                    if current in [x for x in NAV_LABELS if x !=NAV_NEWS ]:
-                        st .session_state ["news_last_tab"]=current 
-                    st .session_state ["main_nav"]=NAV_NEWS 
-                    st .session_state .pop ("main_nav_tabs_news",None )
-                    st .rerun ()
+            if st .button (
+            "📰 ข่าว",
+            key ="top_news_btn",
+            type ="primary"if news_active else "secondary",
+            use_container_width =True ,
+            ):
+                current =st .session_state .get ("main_nav")
+                if current in [x for x in NAV_LABELS if x !=NAV_NEWS ]:
+                    st .session_state ["news_last_tab"]=current 
+                st .session_state ["main_nav"]=NAV_NEWS 
+                st .session_state .pop ("main_nav_tabs_news",None )
+                st .rerun ()
 
         with top_r :
             if avatar_b64 :
@@ -21105,7 +21114,6 @@ def _main_body ()->None :
         NAV_LABELS [13 ],# Smart Alerts
         NAV_LABELS [6 ],# Risk Center
         ],
-        "📚 เรียนรู้":[NAV_LEARNING],
         "🧪 Quant Research":[
         NAV_LABELS [19 ],# Quant Research Lab
         NAV_LABELS [20 ],# System Health Center
