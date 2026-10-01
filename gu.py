@@ -1453,6 +1453,7 @@ NAV_LABELS =[
 NAV_DASHBOARD =NAV_LABELS [0 ]
 NAV_EXCHANGE =NAV_LABELS [3 ]
 NAV_NEWS ="📰 News"
+NAV_LEARNING ="📚 Learning"
 NAV_SIMPLE =NAV_LABELS [5 ]
 NAV_RISK =NAV_LABELS [6 ]
 NAV_INTELLIGENCE =NAV_LABELS [7 ]
@@ -20794,6 +20795,54 @@ def _sb_diag ()->dict :
     return out
 
 
+def render_learning_hub ()->None :
+    """Standalone crypto learning hub; does not read or mutate portfolio state."""
+    st.markdown("""
+    <style>
+    .learning-hero{padding:26px 28px;border:1px solid #2b3139;border-radius:18px;
+      background:linear-gradient(120deg,rgba(14,203,129,.12),rgba(22,26,30,.96));margin-bottom:18px}
+    .learning-kicker{color:#0ecb81;font-size:.72rem;font-weight:800;letter-spacing:.12em}
+    .learning-hero h2{color:#EAECEF;margin:.35rem 0 .5rem;font-size:1.8rem}
+    .learning-hero p{color:#aeb6c2;margin:0;max-width:760px}
+    .learning-card{background:#181a20;border:1px solid #2b3139;border-radius:14px;padding:16px 18px;height:100%}
+    .learning-card small{color:#0ecb81;font-weight:700}
+    .learning-card h4{color:#EAECEF;margin:.4rem 0}
+    .learning-card p{color:#aeb6c2;font-size:.9rem;margin:0}
+    </style>
+    <div class="learning-hero"><div class="learning-kicker">NOBODY ACADEMY · LEARN AT YOUR PACE</div>
+    <h2>Learning Center</h2><p>พื้นที่เรียนรู้สินทรัพย์ดิจิทัล ตั้งแต่พื้นฐานการอ่านตลาด การจัดการความเสี่ยง ไปจนถึงการดูแลพอร์ตอย่างมีวินัย เนื้อหาเพื่อการศึกษา ไม่ใช่คำแนะนำการลงทุน</p></div>
+    """,unsafe_allow_html=True)
+    lessons={
+      "01 · พื้นฐาน Crypto":("เข้าใจสินทรัพย์ดิจิทัล",[
+        ("Blockchain คืออะไร?","Blockchain คือสมุดบันทึกธุรกรรมที่ถูกจัดเก็บและตรวจสอบร่วมกันผ่านเครือข่าย แต่ละเครือข่ายมีกติกาและรูปแบบการยืนยันธุรกรรมต่างกัน"),
+        ("Coin กับ Token","Coin มักเป็นสินทรัพย์หลักของเครือข่ายตนเอง ส่วน Token ถูกสร้างบนเครือข่ายที่มีอยู่แล้ว ควรตรวจสอบเครือข่ายและที่อยู่ให้ตรงก่อนโอน"),
+        ("ราคาและมูลค่าตลาด","Market Cap คำนวณจากราคา × จำนวนเหรียญหมุนเวียน ไม่ได้บอกสภาพคล่องหรือความเสี่ยงทั้งหมด ต้องดูปริมาณซื้อขายและความลึกของตลาดประกอบ")]),
+      "02 · อ่านตลาด":("อ่านข้อมูลก่อนตัดสินใจ",[
+        ("Bid / Ask / Spread","Bid คือราคาที่ฝั่งซื้อเสนอ, Ask คือราคาที่ฝั่งขายเสนอ และ Spread คือส่วนต่างระหว่างสองราคา Spread ที่กว้างขึ้นอาจเพิ่มต้นทุนการเข้าออก"),
+        ("Volatility","ความผันผวนวัดการแกว่งของราคาในช่วงเวลาหนึ่ง ค่าอดีตช่วยอธิบายความเสี่ยงที่ผ่านมา แต่ไม่รับประกันการเคลื่อนไหวในอนาคต"),
+        ("Liquidity","สภาพคล่องสะท้อนความสามารถในการซื้อขายโดยไม่กระทบราคาอย่างมาก ควรพิจารณาทั้ง volume และ order-book depth")]),
+      "03 · บริหารความเสี่ยง":("วางแผนก่อนลงเงิน",[
+        ("Position Sizing","กำหนดขนาดสถานะจากงบความเสี่ยงที่ยอมรับได้ ไม่ใช่จากความมั่นใจเพียงอย่างเดียว และหลีกเลี่ยงการใช้เงินที่จำเป็นต่อชีวิตประจำวัน"),
+        ("Diversification","การกระจายสินทรัพย์ช่วยลดการพึ่งพาสินทรัพย์เดียว แต่สินทรัพย์คริปโตอาจเคลื่อนไหวไปในทิศทางเดียวกันได้ จึงไม่ใช่การรับประกันการลดขาดทุน"),
+        ("Drawdown","Drawdown คือการลดลงจากจุดสูงสุดของมูลค่าพอร์ต ควรประเมินว่ารับการลดลงระดับใดได้และมีแผนรับมืออย่างไร")]),
+      "04 · ความปลอดภัย":("ปกป้องสินทรัพย์และบัญชี",[
+        ("Seed Phrase / Private Key","ผู้ที่ถือกุญแจสามารถควบคุมสินทรัพย์ได้ ห้ามส่งให้บุคคลอื่นหรือกรอกในเว็บที่ไม่รู้จัก เก็บสำรองแบบออฟไลน์อย่างปลอดภัย"),
+        ("ตรวจเครือข่ายก่อนโอน","ตรวจเหรียญ เครือข่าย และที่อยู่ปลายทางทุกครั้ง ทดลองโอนจำนวนน้อยเมื่อเหมาะสม เพราะธุรกรรมบล็อกเชนมักย้อนกลับไม่ได้"),
+        ("ป้องกัน Phishing","เข้าผ่าน bookmark หรือแอปทางการ เปิด 2FA และอย่ากดลิงก์จากข้อความเร่งด่วนที่ขอรหัสหรือ seed phrase")]),
+      "05 · วินัยการลงทุน":("สร้างกระบวนการที่ตรวจสอบได้",[
+        ("Investment Thesis","เขียนเหตุผลที่ถือสินทรัพย์ เงื่อนไขที่ทำให้มุมมองเปลี่ยน และกรอบเวลาที่ตั้งใจถือ แยกข้อเท็จจริงออกจากสมมติฐาน"),
+        ("บันทึกธุรกรรม","จดวัน เวลา ราคา ค่าธรรมเนียม และเหตุผลของการซื้อขาย เพื่อทบทวนผลลัพธ์โดยไม่พึ่งความทรงจำ"),
+        ("ทบทวนเป็นรอบ","กำหนดรอบตรวจพอร์ตและกติกาปรับสมดุลล่วงหน้า ลดการตัดสินใจตามอารมณ์ระยะสั้น")])}
+    chosen=st.selectbox("เลือกบทเรียน",list(lessons),key="learning_lesson_select")
+    title,items=lessons[chosen]
+    st.subheader(title)
+    st.caption(f"บทเรียน {list(lessons).index(chosen)+1} จาก {len(lessons)} · อ่านทีละหัวข้อได้ตามจังหวะของคุณ")
+    for heading,body in items:
+        with st.expander(heading,expanded=False):
+            st.write(body)
+    st.info("หมายเหตุ: เนื้อหานี้เป็นความรู้ทั่วไป ไม่ใช่คำแนะนำให้ซื้อ ขาย หรือถือสินทรัพย์ใด")
+
+
 def _main_body ()->None :
 # Unlock Web Audio on the user's first real click/tap so order SFX can
 # play after Streamlit reruns without being blocked by browser autoplay.
@@ -20912,7 +20961,7 @@ def _main_body ()->None :
     # Resolve the current navigation BEFORE deciding whether the Backtest
     # sidebar should be visible. v70 referenced current_nav here before the
     # compact navigation block initialized it, which caused UnboundLocalError.
-    nav_labels_all =list (NAV_LABELS )+[NAV_AUTO_DCA ]
+    nav_labels_all =list (NAV_LABELS )+[NAV_AUTO_DCA ,NAV_LEARNING ]
     current_nav =st .session_state .get ("main_nav",NAV_DASHBOARD )
     if current_nav in QUANT_RESEARCH_LEGACY_NAVS :
         st .session_state ["quant_research_section"]=current_nav 
@@ -21098,6 +21147,7 @@ def _main_body ()->None :
         NAV_LABELS [13 ],# Smart Alerts
         NAV_LABELS [6 ],# Risk Center
         ],
+        "📚 เรียนรู้":[NAV_LEARNING],
         "🧪 Quant Research":[
         NAV_LABELS [19 ],# Quant Research Lab
         NAV_LABELS [20 ],# System Health Center
@@ -21198,6 +21248,8 @@ def _main_body ()->None :
             market_df =market_df )
         elif nav ==NAV_NEWS :
             render_news_section (cfg )
+        elif nav ==NAV_LEARNING :
+            render_learning_hub ()
         elif nav ==NAV_RISK :
             render_risk_center (cfg ,data ,market_df )
         elif nav ==NAV_INTELLIGENCE :
