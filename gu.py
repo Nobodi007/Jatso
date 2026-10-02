@@ -1349,7 +1349,7 @@ price_lookup :Optional [Mapping [str ,float ]]=None ,
 
         # Dealer P&L / hedge / NC must use the exact quote formula used by
         # the Exchange UI. Do NOT use Telegram's customer-facing quote here.
-        _ ,rec =execute_order (
+        route_steps,rec =execute_order (
         engine_sim ,
         side ,
         amount_thb ,
@@ -1395,9 +1395,11 @@ price_lookup :Optional [Mapping [str ,float ]]=None ,
             if key in tg :
                 rec [key ]=tg [key ]
 
-        rec [TELEGRAM_ENGINE_TAG ]=True 
-        orders [original_idx ]=rec 
-        changed =True 
+        rec [TELEGRAM_ENGINE_TAG ]=True
+        orders [original_idx ]=rec
+        sim["last_routing_steps"] = route_steps
+        sim["last_routing_order_id"] = rec.get("Order ID") or rec.get("id")
+        changed =True
 
     if changed :
         sim ["orders"]=orders 
@@ -8718,6 +8720,8 @@ def _submit_order (sim ,side ,amount_thb ,data ,order_date ,ctx )->None :
     steps ,_rec =execute_order (sim ,side ,amount_thb ,order_date ,
     data .loc [order_date ],ctx )
     st .session_state .sim_steps =steps
+    sim["last_routing_steps"] = steps
+    sim["last_routing_order_id"] = (_rec or {}).get("Order ID") or (_rec or {}).get("id")
 
     # Persist the transaction immediately; a rerun alone does not guarantee a cloud save.
     if _rec is not None:
@@ -23065,11 +23069,19 @@ market_df :Optional [pd .DataFrame ]=None )->None :
 
         if reset :
             first_day =pd .to_datetime (data .index [-1 ])
-            st .session_state .sim =sim_defaults (
-            asset ,first_day ,data .loc [first_day ,"Global_USD"],
-            data .loc [first_day ,"USDTHB"],target_stock_thb )
-            st .session_state .sim_signature =signature 
-            st .session_state .sim_steps =[]
+            _old_sim = st.session_state.get("sim", {})
+            _fresh_sim = sim_defaults(
+                asset, first_day, data.loc[first_day, "Global_USD"],
+                data.loc[first_day, "USDTHB"], target_stock_thb)
+            # Reset operational balances, but never erase the audit trail or last routing view.
+            _fresh_sim["orders"] = list(_old_sim.get("orders", []))
+            _fresh_sim["portfolio_ledger"] = list(_old_sim.get("portfolio_ledger", []))
+            _fresh_sim["last_routing_steps"] = list(_old_sim.get("last_routing_steps", []))
+            _fresh_sim["last_routing_order_id"] = _old_sim.get("last_routing_order_id")
+            st.session_state.sim = _fresh_sim
+            st.session_state.sim_signature = signature
+            st.session_state.sim_steps = list(_fresh_sim["last_routing_steps"])
+            save_sim_state(_fresh_sim)
 
             st .session_state ["favorite_tickers"]=[]
             try :
@@ -23107,13 +23119,27 @@ market_df :Optional [pd .DataFrame ]=None )->None :
             _pt [asset ]=spot_usd_current *usdthb_current 
             _risk_dashboard_live (cfg ,ctx ,target_stock_thb ,_pt )
 
-        with t_route :
-            steps_now =st .session_state .get ("sim_steps",[])
-            if not steps_now :
-                st .info ("ยังไม่มีออเดอร์ — กดซื้อ/ขายด้านบนเพื่อดูระบบเดินงานทีละด่าน")
-            else :
-                render_timeline (steps_now )
-                render_binance_price_check (asset ,spot_usd_current )
+        with t_route:
+            steps_now = st.session_state.get("sim_steps") or sim.get("last_routing_steps", [])
+            last_order = next(
+                (r for r in reversed(sim.get("orders", [])) if isinstance(r, dict)),
+                None,
+            )
+            if last_order:
+                st.caption(
+                    f"ออเดอร์ล่าสุด: {last_order.get('วันที่', '—')} "
+                    f"{last_order.get('เวลา', '')} · {last_order.get('ฝั่ง', '—')} "
+                    f"{last_order.get('เหรียญ', '—')} · "
+                    f"฿{float(last_order.get('มูลค่า (บาท)', 0) or 0):,.2f} · "
+                    f"Source: {last_order.get('Source', 'Web')}"
+                )
+            if steps_now:
+                render_timeline(steps_now)
+                render_binance_price_check(asset, spot_usd_current)
+            elif last_order:
+                st.info("มีประวัติออเดอร์แล้ว แต่ไม่มีรายละเอียดขั้นตอน Routing ที่บันทึกไว้สำหรับรายการนี้")
+            else:
+                st.info("ยังไม่มีออเดอร์ — กดซื้อ/ขายด้านบนเพื่อดูระบบเดินงานทีละด่าน")
 
         with t_ledger :
             if not sim ["orders"]:
