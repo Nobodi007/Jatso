@@ -13861,7 +13861,7 @@ def render_mobile_market (cfg :dict [str ,Any ],market_df :pd .DataFrame ,usdthb
         symbol =TV_LOCAL_SYMBOL .get (chart_asset ,f"BITKUB:{chart_asset }THB")
         render_tradingview (symbol ,f"tv_mobile_{chart_asset }",390 ,studies =["MAExp@tv-basicstudies"])
     elif chart_view =="ℹ️ ข้อมูลเหรียญ":
-        _render_coin_detail (chart_asset )
+        _render_coin_detail (chart_asset ,"mob")
     else :
         try :
             render_orderbook_3d (symbol =f"{chart_asset .lower ()}_thb",title =f"3D Order Book — {chart_asset }/THB",limit =20 )
@@ -21440,85 +21440,204 @@ for _sym, _extra in COIN_PROFILES_EXTRA.items():
     COIN_PROFILES.setdefault(_sym, {}).update(_extra)
 
 
-def _render_coin_detail(pick: str) -> None:
-    """การ์ดข้อมูลเหรียญเดียว แบ่งเป็นหัวข้อย่อย (ใช้ทั้งในคลังเหรียญและหน้า Exchange)."""
+# สีเน้นของแต่ละเหรียญบนพื้นหลังมืด (บางเหรียญสีแบรนด์เข้มเกินไปจึงใช้เฉดที่สว่างขึ้น)
+_COIN_ACCENT = {
+    "BTC": "#F7931A", "ETH": "#7B8FF0", "SOL": "#B27BFF", "DOGE": "#D9BC45",
+    "ADA": "#4C7BF4", "HBAR": "#B4B9C4", "LINK": "#5B86F7", "XLM": "#2FC4EE",
+    "XRP": "#9FB3C8", "USDT": "#26A17B", "USDC": "#3B8FE0",
+}
+
+
+def _hex_to_rgb(h: str) -> str:
+    h = h.lstrip("#")
+    return f"{int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)}"
+
+
+def _coin_detail_css(scope: str, accent: str) -> str:
+    rgb = _hex_to_rgb(accent)
+    return f"""<style>
+.st-key-{scope} {{ --cd-acc:{accent}; --cd-rgb:{rgb}; }}
+.st-key-{scope} [data-baseweb="tab-list"] {{ gap:6px; flex-wrap:wrap; border-bottom:1px solid #2b3139; padding-bottom:8px; }}
+.st-key-{scope} [data-baseweb="tab-highlight"], .st-key-{scope} [data-baseweb="tab-border"] {{ display:none !important; }}
+.st-key-{scope} button[data-baseweb="tab"] {{
+  height:auto; padding:7px 14px; border-radius:999px; background:#1e2329; border:1px solid #2b3139;
+  color:#b7bdc6; transition:all .15s ease; }}
+.st-key-{scope} button[data-baseweb="tab"]:hover {{ border-color:rgba(var(--cd-rgb),.6); color:#fff; }}
+.st-key-{scope} button[data-baseweb="tab"][aria-selected="true"] {{
+  background:rgba(var(--cd-rgb),.20); border-color:var(--cd-acc); color:#fff; font-weight:700; }}
+.st-key-{scope} [data-baseweb="tab-panel"] {{ padding-top:14px; }}
+
+.cd-hero {{ display:flex; align-items:center; gap:18px; padding:18px 20px; border-radius:18px; margin:4px 0 14px 0;
+  background:linear-gradient(135deg, rgba(var(--cd-rgb),.30) 0%, rgba(24,26,32,.96) 62%);
+  border:1px solid rgba(var(--cd-rgb),.40); }}
+.cd-logo {{ width:64px; height:64px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center;
+  color:#fff; font-weight:800; letter-spacing:.3px; box-shadow:0 0 0 5px rgba(var(--cd-rgb),.18), 0 10px 28px rgba(var(--cd-rgb),.40); }}
+.cd-name {{ font-size:1.4rem; font-weight:800; color:#EAECEF; line-height:1.3; display:flex; flex-wrap:wrap; align-items:center; gap:10px; }}
+.cd-cat {{ font-size:.72rem; font-weight:700; padding:3px 11px; border-radius:999px; color:var(--cd-acc);
+  background:rgba(var(--cd-rgb),.14); border:1px solid rgba(var(--cd-rgb),.45); }}
+.cd-tag {{ color:#b7bdc6; margin-top:4px; }}
+
+.cd-about {{ border-left:3px solid var(--cd-acc); background:rgba(var(--cd-rgb),.08); padding:12px 16px;
+  border-radius:0 12px 12px 0; line-height:1.85; color:#e1e4ea; margin-bottom:14px; }}
+.cd-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px; margin:10px 0; }}
+.cd-tile {{ background:#1e2329; border:1px solid #2b3139; border-radius:14px; padding:12px 14px; }}
+.cd-tile .k {{ font-size:.74rem; color:#848e9c; margin-bottom:4px; }}
+.cd-tile .v {{ font-weight:700; color:#EAECEF; line-height:1.55; font-size:.92rem; }}
+.cd-box {{ background:#1a1d23; border:1px solid #2b3139; border-radius:14px; padding:12px 14px; }}
+.cd-box.good {{ border-top:3px solid #0ecb81; }}
+.cd-box.bad {{ border-top:3px solid #f6465d; }}
+.cd-box h5 {{ margin:0 0 6px 0; font-size:.95rem; color:#EAECEF; }}
+.cd-list {{ list-style:none; margin:0; padding:0; }}
+.cd-list li {{ position:relative; padding:8px 12px 8px 34px; margin:7px 0; background:#1e2329; border-radius:10px;
+  line-height:1.65; color:#d1d4dc; font-size:.92rem; }}
+.cd-list li::before {{ position:absolute; left:11px; top:8px; font-weight:800; content:"•"; color:var(--cd-acc); }}
+.cd-list.good li::before {{ content:"✓"; color:#0ecb81; }}
+.cd-list.bad li::before {{ content:"!"; color:#f6465d; }}
+.cd-ref {{ display:inline-block; margin-top:6px; padding:6px 14px; border-radius:999px; background:#1e2329;
+  border:1px dashed rgba(var(--cd-rgb),.6); color:#cfd3da; font-size:.85rem; }}
+
+.cd-step {{ display:flex; gap:12px; align-items:flex-start; background:#1e2329; border:1px solid #2b3139;
+  border-radius:12px; padding:11px 14px; margin:8px 0; line-height:1.65; color:#d1d4dc; font-size:.92rem; }}
+.cd-step .n {{ flex:none; width:26px; height:26px; border-radius:50%; background:rgba(var(--cd-rgb),.22);
+  color:var(--cd-acc); border:1px solid var(--cd-acc); font-weight:800; font-size:.8rem;
+  display:flex; align-items:center; justify-content:center; margin-top:1px; }}
+.cd-hl {{ background:linear-gradient(135deg, rgba(var(--cd-rgb),.22), rgba(30,35,41,.9)); border:1px solid rgba(var(--cd-rgb),.5);
+  border-radius:14px; padding:14px 16px; margin-bottom:10px; }}
+.cd-hl .k {{ font-size:.75rem; color:#b7bdc6; }}
+.cd-hl .v {{ font-size:1.05rem; font-weight:800; color:#fff; margin-top:2px; line-height:1.5; }}
+
+.cd-tl {{ position:relative; margin:6px 0 0 8px; padding-left:24px; border-left:2px solid rgba(var(--cd-rgb),.40); }}
+.cd-tl-item {{ position:relative; margin:0 0 14px 0; }}
+.cd-tl-item::before {{ content:""; position:absolute; left:-32px; top:6px; width:12px; height:12px; border-radius:50%;
+  background:var(--cd-acc); box-shadow:0 0 0 4px rgba(var(--cd-rgb),.22); }}
+.cd-year {{ display:inline-block; font-size:.76rem; font-weight:800; padding:2px 11px; border-radius:999px;
+  color:#0b0e11; background:var(--cd-acc); margin-bottom:4px; }}
+.cd-tl-txt {{ color:#d1d4dc; line-height:1.65; font-size:.92rem; background:#1e2329; border:1px solid #2b3139;
+  border-radius:10px; padding:8px 12px; }}
+
+.cd-chip {{ background:#1e2329; border:1px solid #2b3139; border-radius:12px; padding:11px 14px; color:#d1d4dc;
+  line-height:1.6; font-size:.92rem; }}
+.cd-chip .ic {{ margin-right:6px; }}
+.cd-chip b {{ color:#fff; }}
+
+.cd-myth {{ border:1px solid #2b3139; border-radius:14px; overflow:hidden; margin:10px 0; }}
+.cd-myth .m {{ background:rgba(246,70,93,.12); padding:10px 14px; color:#ffb3bd; font-weight:700; line-height:1.6; }}
+.cd-myth .f {{ background:rgba(14,203,129,.10); padding:10px 14px; color:#c9f2e0; line-height:1.7; }}
+.cd-note {{ margin-top:12px; font-size:.78rem; color:#848e9c; }}
+</style>"""
+
+
+def _render_coin_detail(pick: str, ctx: str = "guide") -> None:
+    """การ์ดข้อมูลเหรียญเดียว ตกแต่งด้วย CSS และแบ่งเป็นหัวข้อย่อย
+    ctx = ชื่อบริบท (guide / ex / mob) ใช้ทำ key ไม่ให้ซ้ำเมื่อ render หลายที่ใน run เดียวกัน."""
+    import html as _html
+
     if pick not in COIN_PROFILES:
         st.info("ยังไม่มีข้อมูลพื้นฐานของเหรียญนี้")
         return
+
+    def e(x) -> str:
+        return _html.escape(str(x))
+
+    def ul(items, kind="") -> str:
+        return f'<ul class="cd-list {kind}">' + "".join(f"<li>{e(i)}</li>" for i in items) + "</ul>"
+
     p = COIN_PROFILES[pick]
+    accent = _COIN_ACCENT.get(pick, "#fcd535")
     bg = _LOGO_BG.get(pick, "#2b3139")
+    scope = f"coin_detail_{ctx}"
 
-    st.markdown(
-        f"""
-        <div style="display:flex;align-items:center;gap:16px;margin:10px 0 6px 0;">
-          <div style="width:56px;height:56px;border-radius:50%;background:{bg};color:#fff;
-                      display:flex;align-items:center;justify-content:center;
-                      font-weight:800;font-size:{15 if len(pick) > 3 else 17}px;flex:none;">{pick}</div>
-          <div>
-            <div style="font-size:1.25rem;font-weight:800;color:#EAECEF;">{COIN_NAMES.get(pick, pick)}
-              <span style="font-size:.8rem;font-weight:600;color:#848e9c;">· {p['category']}</span></div>
-            <div style="color:#b7bdc6;">{p['tagline']}</div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    with st.container(key=scope):
+        st.markdown(_coin_detail_css(scope, accent), unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="cd-hero">'
+            f'<div class="cd-logo" style="background:{bg};font-size:{15 if len(pick) > 3 else 18}px;">{e(pick)}</div>'
+            f'<div><div class="cd-name">{e(COIN_NAMES.get(pick, pick))}<span class="cd-cat">{e(p["category"])}</span></div>'
+            f'<div class="cd-tag">{e(p["tagline"])}</div></div></div>',
+            unsafe_allow_html=True,
+        )
 
-    t_over, t_tech, t_tok, t_time, t_eco, t_metric, t_faq = st.tabs(
-        ["ภาพรวม", "เทคโนโลยี", "Tokenomics", "ไทม์ไลน์", "ระบบนิเวศ", "ตัวชี้วัด", "ข้อควรรู้"]
-    )
+        t_over, t_tech, t_tok, t_time, t_eco, t_metric, t_faq = st.tabs(
+            ["🧭 ภาพรวม", "⚙️ เทคโนโลยี", "🪙 Tokenomics", "📜 ไทม์ไลน์", "🌐 ระบบนิเวศ", "📊 ตัวชี้วัด", "💡 ข้อควรรู้"]
+        )
 
-    with t_over:
-        st.write(p["about"])
-        f1, f2 = st.columns(2)
-        with f1:
-            st.markdown(f"**🗓️ เปิดตัว:** {p['launched']}")
-            st.markdown(f"**👤 ผู้สร้าง:** {p['creator']}")
-        with f2:
-            st.markdown(f"**⚙️ กลไกฉันทามติ:** {p['consensus']}")
-            st.markdown(f"**📦 Supply:** {p['supply']}")
-        g1, g2 = st.columns(2)
-        with g1:
-            st.markdown("**✅ จุดเด่น**")
-            for item in p["strengths"]:
-                st.markdown(f"- {item}")
-        with g2:
-            st.markdown("**⚠️ ความเสี่ยงที่ควรรู้**")
-            for item in p["risks"]:
-                st.markdown(f"- {item}")
-        st.info(f"📖 อ่านเพิ่มในหน้า “เรียนรู้ → สรุปบทเรียน”: {p['chapters']}")
+        with t_over:
+            tiles = [
+                ("🗓️ เปิดตัว", p["launched"]),
+                ("👤 ผู้สร้าง", p["creator"]),
+                ("⚙️ กลไกฉันทามติ", p["consensus"]),
+                ("📦 Supply", p["supply"]),
+            ]
+            st.markdown(
+                f'<div class="cd-about">{e(p["about"])}</div>'
+                '<div class="cd-grid">'
+                + "".join(f'<div class="cd-tile"><div class="k">{e(k)}</div><div class="v">{e(v)}</div></div>' for k, v in tiles)
+                + "</div>"
+                '<div class="cd-grid">'
+                f'<div class="cd-box good"><h5>✅ จุดเด่น</h5>{ul(p["strengths"], "good")}</div>'
+                f'<div class="cd-box bad"><h5>⚠️ ความเสี่ยงที่ควรรู้</h5>{ul(p["risks"], "bad")}</div>'
+                "</div>"
+                f'<div class="cd-ref">📖 อ่านเพิ่มในหน้า “เรียนรู้ → สรุปบทเรียน”: {e(p["chapters"])}</div>',
+                unsafe_allow_html=True,
+            )
 
-    with t_tech:
-        st.markdown("**ทำงานอย่างไร**")
-        for item in p.get("tech", []):
-            st.markdown(f"- {item}")
+        with t_tech:
+            st.markdown(
+                "".join(
+                    f'<div class="cd-step"><div class="n">{i}</div><div>{e(t)}</div></div>'
+                    for i, t in enumerate(p.get("tech", []), 1)
+                ),
+                unsafe_allow_html=True,
+            )
 
-    with t_tok:
-        st.markdown(f"**📦 Supply:** {p['supply']}")
-        for item in p.get("tokenomics", []):
-            st.markdown(f"- {item}")
+        with t_tok:
+            st.markdown(
+                f'<div class="cd-hl"><div class="k">📦 Supply</div><div class="v">{e(p["supply"])}</div></div>'
+                + ul(p.get("tokenomics", [])),
+                unsafe_allow_html=True,
+            )
 
-    with t_time:
-        for when, what in p.get("timeline", []):
-            st.markdown(f"**{when}** — {what}")
+        with t_time:
+            st.markdown(
+                '<div class="cd-tl">'
+                + "".join(
+                    f'<div class="cd-tl-item"><span class="cd-year">{e(w)}</span><div class="cd-tl-txt">{e(t)}</div></div>'
+                    for w, t in p.get("timeline", [])
+                )
+                + "</div>",
+                unsafe_allow_html=True,
+            )
 
-    with t_eco:
-        st.markdown("**การใช้งานและโครงการที่เกี่ยวข้อง**")
-        for item in p.get("ecosystem", []):
-            st.markdown(f"- {item}")
+        with t_eco:
+            st.markdown(
+                '<div class="cd-grid">'
+                + "".join(f'<div class="cd-chip"><span class="ic">🔹</span>{e(i)}</div>' for i in p.get("ecosystem", []))
+                + "</div>",
+                unsafe_allow_html=True,
+            )
 
-    with t_metric:
-        st.markdown("**ตัวชี้วัดที่ควรติดตามเมื่อวิเคราะห์เหรียญนี้**")
-        for item in p.get("metrics", []):
-            st.markdown(f"- {item}")
-        st.caption("ตัวชี้วัดเหล่านี้ช่วยประกอบการเรียนรู้ ไม่ใช่สัญญาณซื้อ/ขาย")
+        with t_metric:
+            def _metric(item: str) -> str:
+                if " — " in item:
+                    k, v = item.split(" — ", 1)
+                    return f'<div class="cd-chip"><span class="ic">📊</span><b>{e(k)}</b> — {e(v)}</div>'
+                return f'<div class="cd-chip"><span class="ic">📊</span>{e(item)}</div>'
 
-    with t_faq:
-        for myth, fact in p.get("myths", []):
-            st.markdown(f"❌ **{myth}**")
-            st.markdown(f"✅ {fact}")
-            st.write("")
-        st.caption("ข้อมูลเพื่อการศึกษา ไม่ใช่คำแนะนำการลงทุน การลงทุนในสินทรัพย์ดิจิทัลมีความเสี่ยงสูง")
+            st.markdown(
+                '<div class="cd-grid">' + "".join(_metric(i) for i in p.get("metrics", [])) + "</div>"
+                '<div class="cd-note">ตัวชี้วัดเหล่านี้ช่วยประกอบการเรียนรู้ ไม่ใช่สัญญาณซื้อ/ขาย</div>',
+                unsafe_allow_html=True,
+            )
+
+        with t_faq:
+            st.markdown(
+                "".join(
+                    f'<div class="cd-myth"><div class="m">❌ {e(m)}</div><div class="f">✅ {e(f)}</div></div>'
+                    for m, f in p.get("myths", [])
+                )
+                + '<div class="cd-note">ข้อมูลเพื่อการศึกษา ไม่ใช่คำแนะนำการลงทุน การลงทุนในสินทรัพย์ดิจิทัลมีความเสี่ยงสูง</div>',
+                unsafe_allow_html=True,
+            )
 
 
 def _render_coin_guide() -> None:
@@ -21557,7 +21676,7 @@ def _render_coin_guide() -> None:
         label_visibility="collapsed",
         format_func=lambda s: f"{s}",
     )
-    _render_coin_detail(pick)
+    _render_coin_detail(pick, "guide")
 
 
 def render_learning_hub ()->None :
@@ -22896,7 +23015,7 @@ market_df :Optional [pd .DataFrame ]=None )->None :
             except Exception :
                 _coin_box =st .container ()
             with _coin_box :
-                _render_coin_detail (asset )
+                _render_coin_detail (asset ,"ex")
         else :
             try :
                 render_orderbook_3d (
