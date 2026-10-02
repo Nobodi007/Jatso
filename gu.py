@@ -8717,7 +8717,16 @@ def _submit_order (sim ,side ,amount_thb ,data ,order_date ,ctx )->None :
     _push_undo_snapshot (sim )
     steps ,_rec =execute_order (sim ,side ,amount_thb ,order_date ,
     data .loc [order_date ],ctx )
-    st .session_state .sim_steps =steps 
+    st .session_state .sim_steps =steps
+
+    # Persist the transaction immediately; a rerun alone does not guarantee a cloud save.
+    if _rec is not None:
+        save_sim_state(sim)
+        save_error = st.session_state.get("sim_state_save_error")
+        if save_error:
+            st.error(f"ออเดอร์ถูกประมวลผลในหน่วยความจำ แต่บันทึกถาวรไม่สำเร็จ: {save_error}")
+        else:
+            st.session_state["sim_state_dirty"] = False
 
     # Synthesized order feedback — no audio files required.
     if _rec is not None :
@@ -8741,12 +8750,14 @@ def _place_limit (side ,amount_thb ,qty ,px )->None :
     sim =st .session_state .sim 
     sim .setdefault ("open_orders",[]).append (
     dict (id =uuid .uuid4 ().hex [:6 ],side =side ,amount_thb =amount_thb ,qty =qty ,px =px ))
+    save_sim_state(sim)
     st .rerun (scope ="app")
 
 
 def _cancel_limit (oid :str )->None :
     sim =st .session_state .sim 
     sim ["open_orders"]=[o for o in sim .get ("open_orders",[])if o ["id"]!=oid ]
+    save_sim_state(sim)
 
 
 def check_open_orders (sim ,quote_buy ,quote_sell ,data ,order_date ,ctx )->None :
