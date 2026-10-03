@@ -772,7 +772,9 @@ def create_order_preview(user_id, amount):
 
         fee = amount_thb * TRADING_FEE_PCT
 
-        qty = amount_thb / quote
+        # Same customer settlement rule as the Exchange UI: fee is deducted
+        # from the gross THB amount, so the delivered coin quantity is net.
+        qty = (amount_thb - fee) / quote
 
         order_id = (
             "LINE-"
@@ -793,7 +795,7 @@ def create_order_preview(user_id, amount):
             f"ราคา: {money(quote)}\n"
             f"ประมาณได้รับ: {coin(qty)} {asset}\n"
             f"Fee: {fee:,.2f} บาท\n\n"
-            "⚠️ Exchange Simulator\n\n"
+            "⚠️ Exchange: Bitkub\n\n"
             "พิมพ์ /confirm เพื่อยืนยัน\n"
             "หรือ /cancel เพื่อยกเลิก"
         )
@@ -1020,7 +1022,7 @@ def confirm_order(user_id):
         "✅ ORDER FILLED\n\n"
         f"Order ID: {order_id}\n"
         f"Source: LINE\n"
-        f"Exchange: XSpring Simulator\n\n"
+        f"Exchange: Bitkub\n\n"
         f"{'ซื้อ' if action == 'buy' else 'ขาย'} "
         f"{coin(delivered)} {asset}\n"
         f"ราคา: {money(quote)}\n"
