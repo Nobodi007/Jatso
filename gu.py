@@ -1209,6 +1209,7 @@ forced_quote :Optional [float ]=None ,
 
 
 TELEGRAM_ENGINE_TAG ="_exchange_engine_v38"
+EXTERNAL_ENGINE_SOURCES ={"telegram","line"}
 
 
 def sync_telegram_orders_to_exchange_ledger (
@@ -1219,7 +1220,12 @@ ctx :Mapping [str ,Any ],
 target_stock_thb :float ,
 price_lookup :Optional [Mapping [str ,float ]]=None ,
 )->bool :
-    """ประมวลผลออเดอร์ Telegram ผ่าน execute_order ตัวเดียวกับเว็บ"""
+    """ประมวลผลออเดอร์ Telegram/LINE ผ่าน execute_order ตัวเดียวกับเว็บ
+
+    External orders (Telegram/LINE) ใช้ customer-facing quote ของตัวเองสำหรับ
+    ประวัติการทำรายการ แต่ dealer-side Hedge/CEX/Unhedged/Market Edge/Cost/P&L
+    จะคำนวณใหม่ด้วย execute_order() ซึ่งเป็น engine เดียวกับ Exchange UI.
+    """
     orders =sim .get ("orders",[])
     if not isinstance (orders ,list )or not orders :
         return False 
@@ -1232,9 +1238,10 @@ price_lookup :Optional [Mapping [str ,float ]]=None ,
     }
 
     def _is_pending (rec :Any )->bool :
+        source =str (rec .get ("Source","")).strip ().lower () if isinstance (rec ,dict ) else ""
         return (
         isinstance (rec ,dict )
-        and str (rec .get ("Source","")).lower ()=="telegram"
+        and source in EXTERNAL_ENGINE_SOURCES
         and not rec .get (TELEGRAM_ENGINE_TAG )
         )
 
@@ -1314,9 +1321,12 @@ price_lookup :Optional [Mapping [str ,float ]]=None ,
         asset =str (
         tg .get ("เหรียญ")or sim .get ("asset")or "BTC"
         ).upper ()
+        side_raw =str (tg .get ("ฝั่ง","")).strip ().lower ()
+        # Accept both the Thai labels used by the web ledger and the BUY/SELL
+        # labels that external bots may store.
         side =(
         "buy"
-        if str (tg .get ("ฝั่ง","")).strip ()=="ซื้อ"
+        if side_raw in {"ซื้อ","buy","b"}
         else "sell"
         )
         amount_thb =float (
@@ -1376,9 +1386,12 @@ price_lookup :Optional [Mapping [str ,float ]]=None ,
                 sim [key ]=copy .deepcopy (engine_sim [key ])
 
                 # Preserve the actual Telegram transaction fields visible to customer.
-        rec ["Source"]=tg .get ("Source","Telegram")
+        source_value =str (tg .get ("Source","Telegram")).strip () or "Telegram"
+        rec ["Source"]=source_value
         rec ["Exchange"]=tg .get ("Exchange","Bitkub")
-        rec ["Order ID"]=tg .get ("Order ID")
+        rec ["Order ID"]=tg .get ("Order ID") or tg .get ("order_id") or tg .get ("id")
+        if not rec.get ("Order ID"):
+            rec ["Order ID"] =f"{source_value.upper()}-{original_idx + 1}"
         rec ["สถานะ"]=tg .get ("สถานะ","Filled")
         rec ["ประเภท"]=tg .get ("ประเภท","MARKET")
         rec ["เวลา"]=tg .get ("เวลา","")
@@ -1391,9 +1404,25 @@ price_lookup :Optional [Mapping [str ,float ]]=None ,
         "ราคาที่ลูกค้าได้",
         "เหรียญที่ส่งมอบ",
         "ค่าธรรมเนียม",
+        "Customer",
+        "LINE User ID",
+        "Line User ID",
+        "line_user_id",
+        "chat_id",
         ):
             if key in tg :
                 rec [key ]=tg [key ]
+
+        # Normalize the LINE identifier so downstream customer analytics can
+        # find the same user regardless of the bot's legacy field spelling.
+        line_uid = (
+            tg.get("LINE User ID")
+            or tg.get("Line User ID")
+            or tg.get("line_user_id")
+            or tg.get("chat_id")
+        )
+        if line_uid:
+            rec ["LINE User ID"] =str (line_uid)
 
         rec [TELEGRAM_ENGINE_TAG ]=True
         orders [original_idx ]=rec
@@ -23914,7 +23943,7 @@ market_df :Optional [pd .DataFrame ]=None )->None :
     sim =sim_normalize_state (st .session_state .sim ,asset ,current_date_val ,spot_usd_current ,usdthb_current ,target_stock_thb )
     st .session_state .sim =sim 
 
-    # Telegram /confirm อัปเดต customer wallet เองแล้ว
+    # Telegram/LINE bot อัปเดต customer wallet เองแล้ว
     # ตรงนี้จึงเติมเฉพาะ dealer-side ledger ให้ใช้ schema เดียวกับ Exchange Simulator
     sync_telegram_orders_to_exchange_ledger (
     sim ,
