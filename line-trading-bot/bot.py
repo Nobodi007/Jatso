@@ -909,9 +909,8 @@ def confirm_order(user_id):
                 "เงินคงเหลือไม่พอ"
             )
 
-        qty = amount / quote
-
         fee = amount * TRADING_FEE_PCT
+        qty = (amount - fee) / quote
 
         coins[asset] = (
             owned + qty
@@ -991,7 +990,7 @@ def confirm_order(user_id):
 
         "ประเภท": "MARKET",
 
-        "Exchange": "XSpring Simulator",
+        "Exchange": "Bitkub",
 
         "Source": "LINE",
 
@@ -999,7 +998,7 @@ def confirm_order(user_id):
 
         "Customer": XSPRING_ACTOR,
 
-        "Line User ID": user_id,
+        "LINE User ID": user_id,
 
     }
 
