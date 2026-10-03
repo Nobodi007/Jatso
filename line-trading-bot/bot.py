@@ -208,31 +208,67 @@ def save_sim_state(sim):
 
 def get_price_usd(asset):
 
+    # ใช้ CoinGecko แทน Binance เพราะ Binance API
+    # อาจตอบ HTTP 451 จาก Render region
+    coin_map = {
+        "BTC": "bitcoin",
+        "ETH": "ethereum",
+        "SOL": "solana",
+        "DOGE": "dogecoin",
+        "ADA": "cardano",
+        "HBAR": "hedera-hashgraph",
+        "LINK": "chainlink",
+        "XLM": "stellar",
+        "XRP": "ripple",
+        "USDT": "tether",
+        "USDC": "usd-coin",
+    }
+
+    asset = str(asset).upper().strip()
+
+    if asset not in coin_map:
+        raise ValueError(
+            f"ไม่รองรับเหรียญ {asset}"
+        )
+
     if asset in ["USDT", "USDC"]:
         return 1.0
 
-    url = (
-        "https://api.binance.com/api/v3/ticker/price"
-        f"?symbol={asset}USDT"
-    )
+    url = "https://api.coingecko.com/api/v3/simple/price"
+
+    params = urllib.parse.urlencode({
+        "ids": coin_map[asset],
+        "vs_currencies": "usd",
+    })
 
     req = urllib.request.Request(
-        url,
+        f"{url}?{params}",
         headers={
-            "User-Agent": "JATSO-LINE-Bot"
+            "User-Agent": "JATSO-LINE-Bot/1.0",
+            "Accept": "application/json",
         },
     )
 
     with urllib.request.urlopen(
         req,
-        timeout=8
+        timeout=10
     ) as response:
 
         data = json.loads(
             response.read().decode("utf-8")
         )
 
-    return float(data["price"])
+    coin_id = coin_map[asset]
+
+    if (
+        coin_id not in data
+        or "usd" not in data[coin_id]
+    ):
+        raise RuntimeError(
+            f"ไม่พบราคา {asset} จาก CoinGecko"
+        )
+
+    return float(data[coin_id]["usd"])
 
 
 def get_usdthb():
