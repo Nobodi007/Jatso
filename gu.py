@@ -15404,6 +15404,21 @@ DASHBOARD_CSS ="""
         border: 1px solid #2b3139; border-radius: 16px;
         padding: 1.6rem 1.9rem; margin-bottom: 1.2rem;
     }
+    .dash-hero-grid {
+        display:grid; grid-template-columns:minmax(0,1.15fr) minmax(360px,.85fr);
+        gap:28px; align-items:center;
+    }
+    .dash-hero-brief {
+        border-left:1px solid #2b3139; padding:4px 4px 4px 28px;
+        min-height:145px; display:flex; flex-direction:column; justify-content:center;
+    }
+    .dash-hero-brief-label {
+        color:#707987; font-size:.68rem; font-weight:800; letter-spacing:.08em;
+        text-transform:uppercase; margin-bottom:10px;
+    }
+    .dash-hero-brief-text {
+        color:#D8DCE3; font-size:.82rem; line-height:1.7; max-width:560px;
+    }
     .dash-hero .greet { color:#848e9c; font-size:.95rem; font-weight:600; margin-bottom:4px; }
     .dash-hero .label { color:#848e9c; font-size:.8rem; margin-top:8px; }
     .dash-hero .value {
@@ -15413,6 +15428,10 @@ DASHBOARD_CSS ="""
     .dash-hero .change { font-size:.95rem; font-weight:700; }
     .dash-hero .change.up { color:#0ecb81; }
     .dash-hero .change.down { color:#f6465d; }
+    @media(max-width:900px){
+        .dash-hero-grid { grid-template-columns:1fr; gap:18px; }
+        .dash-hero-brief { border-left:0; border-top:1px solid #2b3139; padding:16px 0 0; min-height:0; }
+    }
 
     .dash-chart-card {
         background:#181a20; border:1px solid #2b3139; border-radius:14px;
@@ -18827,14 +18846,38 @@ market_df :Optional [pd .DataFrame ]=None )->None :
 
     d_name =st .session_state .get ("current_role")# เผื่ออยากดึงชื่อจริง ปรับตามที่มึงเก็บไว้
 
+    # Short AI Daily Brief is placed directly inside the empty right side of the hero.
+    try:
+        _hero_mi_history = _fetch_market_intelligence_history(tuple(SUPPORTED_ASSETS))
+        _hero_mi_facts = _build_market_intelligence_facts(market_df, _hero_mi_history)
+        _hero_regime = str(_hero_mi_facts.get("regime", "Mixed"))
+        _hero_strongest = (_hero_mi_facts.get("strongest_7d", {}) or {}).get("asset", "—")
+        _hero_brief = (
+            f"พอร์ตมีมูลค่า ฿{total_value:,.0f} และวันนี้เปลี่ยนแปลง "
+            f"{coin_pnl_thb:+,.0f} บาท. สินทรัพย์ที่มีสัดส่วนสูงสุดคือ "
+            f"{_ai_top_sym if '_ai_top_sym' in locals() else (holdings[0]['sym'] if holdings else '—')} "
+            f"{(_ai_top_pct if '_ai_top_pct' in locals() else ((holdings[0].get('pct') or 0) if holdings else 0)):.2f}% "
+            f"ขณะที่ตลาดอยู่ในภาวะ {_hero_regime} และ Relative Strength เด่นสุดคือ {_hero_strongest}."
+        )
+    except Exception:
+        _hero_brief = (
+            f"พอร์ตมีมูลค่า ฿{total_value:,.0f} และวันนี้เปลี่ยนแปลง {coin_pnl_thb:+,.0f} บาท. "
+            f"สินทรัพย์ที่มีสัดส่วนสูงสุดคือ {(holdings[0]['sym'] if holdings else '—')}."
+        )
+
     st .markdown (
-    f'<div class="dash-hero">'
+    f'<div class="dash-hero"><div class="dash-hero-grid">'
+    f'<div>'
     f'<div class="greet">{greeting } 👋</div>'
     f'<div class="label">Portfolio</div>'
     f'<div class="value">฿{total_value :,.0f}</div>'
     f'<div class="change {change_cls }">{change_sign }{coin_change_pct :.2f}% '
     f'({fmt_baht (coin_pnl_thb ,force_sign =True )}) การขึ้น/ลงของเหรียญในพอร์ต</div>'
-    f'</div>',
+    f'</div>'
+    f'<div class="dash-hero-brief">'
+    f'<div class="dash-hero-brief-label">AI DAILY BRIEF</div>'
+    f'<div class="dash-hero-brief-text">{_html.escape(_hero_brief)}</div>'
+    f'</div></div></div>',
     unsafe_allow_html =True ,
     )
 
@@ -18965,24 +19008,6 @@ market_df :Optional [pd .DataFrame ]=None )->None :
             f'<div class="ai-metric"><div class="ai-metric-k">BTC VOLATILITY</div><div class="ai-metric-v">{_ai_vol:.1f}%</div><div class="ai-metric-s">20D annualized</div></div>'
             f'<div class="ai-metric"><div class="ai-metric-k">DECISION ENGINE</div><div class="ai-metric-v" style="color:{_ai_risk_color};">{_ai_risk}</div><div class="ai-metric-s">Automatic read-only scan</div></div>'
             f'</div>', unsafe_allow_html=True)
-
-        # Short daily brief in the main dashboard; full details stay behind one expander.
-        try:
-            _ctx = _build_ai_portfolio_context(cfg, data, market_df)
-            _p = (_ctx.get("portfolio", {}) if isinstance(_ctx, dict) else {}) or {}
-            _d = (_ctx.get("daily_pnl", {}) if isinstance(_ctx, dict) else {}) or {}
-            _brief_short = (
-                f"พอร์ตมีมูลค่า ฿{float(_p.get('total_value_thb', total_value) or total_value):,.0f} "
-                f"และวันนี้เปลี่ยนแปลง {float(_d.get('net_pnl_thb', coin_pnl_thb) or coin_pnl_thb):+,.0f} บาท. "
-                f"สินทรัพย์ที่มีสัดส่วนสูงสุดคือ {_ai_top_sym} {_ai_top_pct:.2f}% "
-                f"ขณะที่ตลาดอยู่ในภาวะ {_ai_regime} และ Relative Strength เด่นสุดคือ {str(_ai_strongest.get('asset','—'))}."
-            )
-        except Exception:
-            _brief_short = f"พอร์ต {_ai_top_sym} มีสัดส่วนสูงสุด {_ai_top_pct:.2f}% และตลาดอยู่ในภาวะ {_ai_regime}."
-        st.markdown(
-            f'<div class="ai-brief"><div class="ai-brief-label">AI DAILY BRIEF</div>'
-            f'<div class="ai-brief-text">{_html.escape(_brief_short)}</div></div>',
-            unsafe_allow_html=True)
 
         with st.expander("🔎 View Full AI Intelligence", expanded=False):
             ai_tab1, ai_tab2, ai_tab3, ai_tab4 = st.tabs([
