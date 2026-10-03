@@ -18840,32 +18840,104 @@ market_df :Optional [pd .DataFrame ]=None )->None :
 
 
 
-    # ---- AI Portfolio Analyst ----
-    try :
-        render_ai_portfolio_analyst (cfg ,data ,market_df)
-    except Exception :
-        # AI layer must never take down the main Dashboard.
-        pass
-
-    # ---- AI Market Intelligence ----
+    # ---- AI Portfolio Intelligence (compact Dashboard hub) ----
+    # Keep the Dashboard clean: one compact summary card, with full AI
+    # modules available only when the user opens the details panel.
     try:
-        render_ai_market_intelligence(cfg, data, market_df)
-    except Exception:
-        # Market Intelligence must never take down the main Dashboard.
-        pass
+        _ai_top = holdings[0] if holdings else {}
+        _ai_top_sym = str(_ai_top.get("sym", "—"))
+        _ai_top_pct = float(_ai_top.get("pct", 0.0) or 0.0)
+        _ai_risk = "HIGH" if _ai_top_pct >= 40 else ("WATCH" if _ai_top_pct >= 25 else "NORMAL")
+        _ai_risk_cls = "risk-high" if _ai_risk == "HIGH" else ("risk-watch" if _ai_risk == "WATCH" else "risk-ok")
+        _ai_pnl_cls = "up" if coin_pnl_thb >= 0 else "down"
+        _ai_pnl_sign = "+" if coin_pnl_thb >= 0 else ""
+        _ai_pnl_color = "#0ECB81" if coin_pnl_thb >= 0 else "#F6465D"
+        _ai_risk_color = "#F6465D" if _ai_risk == "HIGH" else ("#F0B90B" if _ai_risk == "WATCH" else "#0ECB81")
 
-    # ---- AI Daily Portfolio Narrator (Gemini brief) ----
-    try :
-        _render_ai_daily_portfolio_brief (cfg ,data ,market_df)
-    except Exception as _e :
-    # ฟีเจอร์ AI ห้ามทำให้ Dashboard หลักล่ม
-        pass 
+        st.markdown(
+            """<style>
+            .ai-hub-card{background:linear-gradient(135deg,#11151c,#0d1015);border:1px solid #2a3039;border-radius:14px;padding:16px 18px;margin:0 0 14px;box-shadow:0 4px 18px rgba(0,0,0,.14)}
+            .ai-hub-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:14px}
+            .ai-hub-title{font-size:20px;font-weight:800;color:#f1f3f5}
+            .ai-hub-sub{font-size:11px;color:#8b93a1;margin-top:4px}
+            .ai-hub-live{font-size:10px;color:#0ecb81;font-weight:700;white-space:nowrap}
+            .ai-hub-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+            .ai-hub-stat{background:#151920;border:1px solid #252b34;border-radius:10px;padding:11px 12px;min-height:70px}
+            .ai-hub-stat .k{font-size:10px;color:#7f8794;text-transform:uppercase;letter-spacing:.04em}
+            .ai-hub-stat .v{font-size:18px;font-weight:800;color:#eaecef;margin-top:4px}
+            .ai-hub-stat .s{font-size:10px;color:#8b93a1;margin-top:3px}
+            @media(max-width:900px){.ai-hub-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+            </style>""", unsafe_allow_html=True)
+        st.markdown(
+            f'''<div class="ai-hub-card">
+                <div class="ai-hub-head">
+                    <div>
+                        <div class="ai-hub-title">🤖 AI Portfolio Intelligence</div>
+                        <div class="ai-hub-sub">วิเคราะห์พอร์ต ความเสี่ยง ตลาด และสรุปสถานการณ์จากข้อมูลจริง</div>
+                    </div>
+                    <div class="ai-hub-live">● LIVE</div>
+                </div>
+                <div class="ai-hub-grid">
+                    <div class="ai-hub-stat">
+                        <div class="k">Portfolio</div>
+                        <div class="v" style="color:{_ai_pnl_color};">{_ai_pnl_sign}{coin_change_pct:.2f}%</div>
+                        <div class="s">{fmt_baht(coin_pnl_thb, force_sign=True)}</div>
+                    </div>
+                    <div class="ai-hub-stat">
+                        <div class="k">Top Exposure</div>
+                        <div class="v">{_html.escape(_ai_top_sym)}</div>
+                        <div class="s">{_ai_top_pct:.2f}% ของพอร์ต</div>
+                    </div>
+                    <div class="ai-hub-stat">
+                        <div class="k">Risk Scan</div>
+                        <div class="v" style="color:{_ai_risk_color};">{_ai_risk}</div>
+                        <div class="s">Decision Engine</div>
+                    </div>
+                    <div class="ai-hub-stat">
+                        <div class="k">Assets</div>
+                        <div class="v">{len(holdings)}</div>
+                        <div class="s">Market + Portfolio AI</div>
+                    </div>
+                </div>
+            </div>''',
+            unsafe_allow_html=True,
+        )
 
-    # ---- Portfolio Decision Engine / Anomaly Detector ----
-    try:
-        render_portfolio_decision_engine(sim, price_thb_map, pct_map)
-        render_portfolio_anomaly_detector(sim, price_thb_map, pct_map)
+        with st.expander("🔎 ดูรายละเอียด AI Portfolio Intelligence", expanded=False):
+            ai_tab1, ai_tab2, ai_tab3, ai_tab4 = st.tabs([
+                "🤖 Portfolio Analyst",
+                "📊 Market Intelligence",
+                "🚨 Decision Engine",
+                "🌅 Daily Brief",
+            ])
+
+            with ai_tab1:
+                try:
+                    render_ai_portfolio_analyst(cfg, data, market_df)
+                except Exception:
+                    st.caption("Portfolio Analyst ไม่พร้อมใช้งานในขณะนี้")
+
+            with ai_tab2:
+                try:
+                    render_ai_market_intelligence(cfg, data, market_df)
+                except Exception:
+                    st.caption("Market Intelligence ไม่พร้อมใช้งานในขณะนี้")
+
+            with ai_tab3:
+                try:
+                    render_portfolio_decision_engine(sim, price_thb_map, pct_map)
+                    render_portfolio_anomaly_detector(sim, price_thb_map, pct_map)
+                except Exception:
+                    st.caption("Decision Engine ไม่พร้อมใช้งานในขณะนี้")
+
+            with ai_tab4:
+                try:
+                    _render_ai_daily_portfolio_brief(cfg, data, market_df)
+                except Exception:
+                    st.caption("Daily Brief ไม่พร้อมใช้งานในขณะนี้")
+
     except Exception:
+        # AI presentation must never take down the main Dashboard.
         pass
 
     # ---- Portfolio Performance chart ----
