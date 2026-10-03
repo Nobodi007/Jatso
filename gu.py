@@ -18827,66 +18827,18 @@ market_df :Optional [pd .DataFrame ]=None )->None :
 
     d_name =st .session_state .get ("current_role")# เผื่ออยากดึงชื่อจริง ปรับตามที่มึงเก็บไว้
 
-    # ---- Top terminal row: Portfolio + Breaking News ----
-    # Keep the hero compact and place the news panel beside it, like the reference dashboard.
-    try:
-        _top_news = [n for n in (fetch_crypto_news() or []) if isinstance(n, dict) and str(n.get("title", "")).strip()][:5]
-    except Exception:
-        _top_news = []
+    st .markdown (
+    f'<div class="dash-hero">'
+    f'<div class="greet">{greeting } 👋</div>'
+    f'<div class="label">Portfolio</div>'
+    f'<div class="value">฿{total_value :,.0f}</div>'
+    f'<div class="change {change_cls }">{change_sign }{coin_change_pct :.2f}% '
+    f'({fmt_baht (coin_pnl_thb ,force_sign =True )}) การขึ้น/ลงของเหรียญในพอร์ต</div>'
+    f'</div>',
+    unsafe_allow_html =True ,
+    )
 
-    st.markdown("""
-    <style>
-    .nobs-top-row{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(360px,0.95fr);gap:12px;margin:4px 0 16px}
-    .nobs-card{background:#0F1319;border:1px solid #252B34;border-radius:10px;overflow:hidden;min-height:245px}
-    .nobs-card-head{padding:14px 16px;border-bottom:1px solid #252B34;display:flex;align-items:center;justify-content:space-between}
-    .nobs-card-title{font-size:13px;font-weight:850;color:#EAECEF;letter-spacing:.02em}
-    .nobs-card-sub{font-size:10px;color:#707987;margin-top:3px}
-    .nobs-portfolio-body{padding:18px 16px}
-    .nobs-greet{font-size:14px;font-weight:700;color:#8B93A1;margin-bottom:16px}
-    .nobs-label{font-size:10px;color:#7F8794;text-transform:uppercase;letter-spacing:.08em}
-    .nobs-value{font-size:35px;line-height:1.05;font-weight:900;color:#F0F2F5;letter-spacing:-.035em;margin-top:5px}
-    .nobs-change{font-size:14px;font-weight:850;margin-top:12px}
-    .nobs-news{padding:2px 16px 8px}
-    .nobs-news-item{display:block;padding:11px 0;border-bottom:1px solid #20262F;text-decoration:none}
-    .nobs-news-item:last-child{border-bottom:0}
-    .nobs-news-title{font-size:11px;font-weight:700;line-height:1.35;color:#EAECEF}
-    .nobs-news-meta{font-size:9px;color:#697280;margin-top:4px}
-    @media(max-width:950px){.nobs-top-row{grid-template-columns:1fr}}
-    </style>
-    """, unsafe_allow_html=True)
 
-    st.markdown('<div class="nobs-top-row">', unsafe_allow_html=True)
-    left_top, right_top = st.columns([1.05, 0.95], gap="small")
-    with left_top:
-        st.markdown(
-            f'<div class="nobs-card">'
-            f'<div class="nobs-card-head"><div><div class="nobs-card-title">PORTFOLIO</div>'
-            f'<div class="nobs-card-sub">Current portfolio overview</div></div>'
-            f'<div style="font-size:10px;color:#707987;">{len(holdings)} assets</div></div>'
-            f'<div class="nobs-portfolio-body">'
-            f'<div class="nobs-greet">{greeting} 👋</div>'
-            f'<div class="nobs-label">CURRENT VALUE</div>'
-            f'<div class="nobs-value">฿{total_value:,.0f}</div>'
-            f'<div class="nobs-change" style="color:{"#0ECB81" if coin_pnl_thb >= 0 else "#F6465D"};">'
-            f'{change_sign}{coin_change_pct:.2f}% ({fmt_baht(coin_pnl_thb, force_sign=True)}) การขึ้น/ลงของเหรียญในพอร์ต</div>'
-            f'</div></div>', unsafe_allow_html=True)
-    with right_top:
-        _top_news_html=''
-        for n in _top_news:
-            _t=_html.escape(str(n.get("title","")).strip())
-            _src=_html.escape(str(n.get("source","")).strip() or "Market News")
-            _url=str(n.get("url","") or "").strip()
-            if _url:
-                _top_news_html += f'<a class="nobs-news-item" href="{_html.escape(_url)}" target="_blank"><div class="nobs-news-title">{_t}</div><div class="nobs-news-meta">↗ {_src}</div></a>'
-            else:
-                _top_news_html += f'<div class="nobs-news-item"><div class="nobs-news-title">{_t}</div><div class="nobs-news-meta">{_src}</div></div>'
-        if not _top_news_html:
-            _top_news_html='<div style="padding:18px 0;color:#707987;font-size:11px;">ยังไม่มีข่าวตลาดที่ดึงมาได้</div>'
-        st.markdown(
-            f'<div class="nobs-card"><div class="nobs-card-head"><div><div class="nobs-card-title">BREAKING NEWS</div>'
-            f'<div class="nobs-card-sub">High-impact market updates</div></div><div style="font-size:10px;color:#0ECB81;font-weight:800;">LIVE</div></div>'
-            f'<div class="nobs-news">{_top_news_html}</div></div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
 
     # ---- AI Portfolio Intelligence (NOBS-style dashboard layout) ----
     # Keep the AI area visually similar to a terminal/dashboard:
@@ -18968,8 +18920,8 @@ market_df :Optional [pd .DataFrame ]=None )->None :
             unsafe_allow_html=True,
         )
 
-        # Compact portfolio intelligence strip; Breaking News is already shown in the top row above.
-        left, right = st.columns([1, 1], gap="small")
+        # Top row: Portfolio + Breaking News, matching the information hierarchy of the reference image.
+        left, right = st.columns([1.65, 1], gap="small")
         with left:
             st.markdown(
                 f'<div class="ai-panel">'
@@ -18988,13 +18940,22 @@ market_df :Optional [pd .DataFrame ]=None )->None :
                 f'</div></div></div>', unsafe_allow_html=True)
 
         with right:
+            _news_html = ''
+            if _ai_news:
+                for n in _ai_news:
+                    _title = _html.escape(str(n.get("title", "")).strip())
+                    _source = _html.escape(str(n.get("source", "")).strip() or "Market News")
+                    _url = str(n.get("url", "") or "").strip()
+                    if _url:
+                        _news_html += f'<a class="ai-news-item" href="{_html.escape(_url)}" target="_blank"><div class="ai-news-title">{_title}</div><div class="ai-news-meta">↗ {_source}</div></a>'
+                    else:
+                        _news_html += f'<div class="ai-news-item"><div class="ai-news-title">{_title}</div><div class="ai-news-meta">{_source}</div></div>'
+            else:
+                _news_html = '<div style="padding:16px 0;color:#707987;font-size:11px;">ยังไม่มีข่าวตลาดที่ดึงมาได้</div>'
             st.markdown(
-                f'<div class="ai-panel"><div class="ai-panel-head"><div><div class="ai-panel-title">AI STATUS</div>'
-                f'<div class="ai-panel-sub">Live portfolio intelligence</div></div>'
-                f'<div style="font-size:10px;color:{_ai_risk_color};font-weight:800;">{_ai_risk}</div></div>'
-                f'<div style="padding:16px;color:#D8DCE3;font-size:11px;line-height:1.65;">'
-                f'AI กำลังติดตาม {_ai_top_sym} ที่มีสัดส่วน {_ai_top_pct:.2f}% ของพอร์ต พร้อมตรวจ Market Regime, Volatility และความผิดปกติของพอร์ตแบบ read-only</div></div>',
-                unsafe_allow_html=True)
+                f'<div class="ai-panel"><div class="ai-panel-head"><div><div class="ai-panel-title">BREAKING NEWS</div>'
+                f'<div class="ai-panel-sub">High-impact market updates</div></div><div style="font-size:10px;color:#707987;">LIVE</div></div>'
+                f'<div class="ai-news-list">{_news_html}</div></div>', unsafe_allow_html=True)
 
         # Compact market/risk strip.
         st.markdown(
