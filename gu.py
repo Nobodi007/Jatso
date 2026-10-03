@@ -11335,6 +11335,286 @@ def render_investor_public_view (token :str )->None :
     )
 
 
+
+def _build_ai_trading_journal_analysis(sim: dict[str, Any]) -> dict[str, Any]:
+    """Build factual Trading Journal analytics from the persisted portfolio ledger."""
+    ensure_portfolio_ledger(sim)
+    ledger = sim.get("portfolio_ledger", [])
+    journal = _journal_init(sim)
+
+    txs = [
+        t for t in ledger
+        if isinstance(t, dict)
+        and str(t.get("type", "")).upper() in {"BUY", "SELL"}
+    ]
+    if not txs:
+        return {"available": False, "trades": 0, "buy": 0, "sell": 0}
+
+    rows = []
+    for t in txs:
+        typ = str(t.get("type", "")).upper()
+        asset = str(t.get("asset", "THB")).upper()
+        try:
+            realized = float(t.get("realized_pnl_thb", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            realized = 0.0
+        try:
+            gross = float(t.get("gross_thb", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            gross = 0.0
+        try:
+            fee = float(t.get("fee_thb", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            fee = 0.0
+        ts_raw = str(t.get("timestamp", "") or "")
+        try:
+            ts = pd.to_datetime(ts_raw, errors="coerce")
+        except Exception:
+            ts = pd.NaT
+        rows.append({
+            "id": str(t.get("id", "")),
+            "type": typ,
+            "asset": asset,
+            "realized_pnl_thb": realized,
+            "gross_thb": gross,
+            "fee_thb": fee,
+            "timestamp": ts,
+        })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return {"available": False, "trades": 0, "buy": 0, "sell": 0}
+
+    df = df.sort_values("timestamp", na_position="last")
+    valid_dates = df["timestamp"].dropna().dt.date
+    trading_days = int(valid_dates.nunique()) if not valid_dates.empty else 0
+    total_realized = float(df["realized_pnl_thb"].sum())
+    total_fees = float(df["fee_thb"].sum())
+
+    asset_stats = []
+    for asset, g in df.groupby("asset", dropna=False):
+        asset = str(asset).upper()
+        realized = float(g["realized_pnl_thb"].sum())
+        fees = float(g["fee_thb"].sum())
+        asset_stats.append({
+            "asset": asset,
+            "trades": int(len(g)),
+            "realized_pnl_thb": realized,
+            "fees_thb": fees,
+            "buy": int((g["type"] == "BUY").sum()),
+            "sell": int((g["type"] == "SELL").sum()),
+        })
+    asset_stats.sort(key=lambda x: x["realized_pnl_thb"], reverse=True)
+
+    # A "round trip" is represented only by realized P&L recorded by the ledger.
+    realized_trades = df[df["realized_pnl_thb"].abs() > 1e-9]
+    wins = int((realized_trades["realized_pnl_thb"] > 0).sum())
+    losses = int((realized_trades["realized_pnl_thb"] < 0).sum())
+    win_rate = (wins / len(realized_trades) * 100.0) if len(realized_trades) else None
+
+    # Frequency: trades per active trading day, plus median gap between recorded trades.
+    trades_per_day = (len(df) / trading_days) if trading_days else 0.0
+    median_gap_hours = None
+    valid_ts = df["timestamp"].dropna().sort_values()
+    if len(valid_ts) >= 2:
+        gaps = valid_ts.diff().dropna().dt.total_seconds() / 3600.0
+        if not gaps.empty:
+            median_gap_hours = float(gaps.median())
+
+    # Journal coverage and recurring tags are factual, not recommendations.
+    journal_by_tx = {
+        str(j.get("tx_id", "")): j
+        for j in journal
+        if isinstance(j, dict)
+    }
+    journaled = 0
+    tag_counts = {}
+    lesson_texts = []
+    for row in rows:
+        entry = journal_by_tx.get(row["id"], {})
+        if entry.get("reason") or entry.get("review") or entry.get("tags"):
+            journaled += 1
+        for tag in entry.get("tags", []) or []:
+            tag = str(tag).strip()
+            if tag:
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+        review = str(entry.get("review", "") or "").strip()
+        if review:
+            lesson_texts.append(review)
+
+    recurring_tags = sorted(tag_counts.items(), key=lambda x: (-x[1], x[0]))[:5]
+
+    return {
+        "available": True,
+        "trades": int(len(df)),
+        "buy": int((df["type"] == "BUY").sum()),
+        "sell": int((df["type"] == "SELL").sum()),
+        "trading_days": trading_days,
+        "trades_per_day": round(trades_per_day, 2),
+        "median_gap_hours": round(median_gap_hours, 2) if median_gap_hours is not None else None,
+        "total_realized_pnl_thb": round(total_realized, 2),
+        "total_fees_thb": round(total_fees, 2),
+        "realized_trades": int(len(realized_trades)),
+        "wins": wins,
+        "losses": losses,
+        "win_rate_pct": round(win_rate, 2) if win_rate is not None else None,
+        "journaled": int(journaled),
+        "journal_coverage_pct": round(journaled / len(df) * 100.0, 2),
+        "asset_stats": asset_stats[:12],
+        "top_profit_asset": asset_stats[0] if asset_stats else None,
+        "top_loss_asset": asset_stats[-1] if asset_stats else None,
+        "recurring_tags": [{"tag": k, "count": v} for k, v in recurring_tags],
+        "lesson_texts": lesson_texts[-10:],
+    }
+
+
+def render_ai_trading_journal(sim: dict[str, Any]) -> None:
+    """AI Trading Journal — descriptive analytics plus optional Gemini summary."""
+    facts = _build_ai_trading_journal_analysis(sim)
+    if not facts.get("available"):
+        return
+
+    st.markdown("""
+    <style>
+    .tj-ai-wrap{border:1px solid #2b3139;border-radius:18px;background:linear-gradient(135deg,#11151b,#0d1014);
+    padding:18px 20px;margin:0 0 18px}
+    .tj-ai-eyebrow{font-size:.68rem;letter-spacing:.16em;color:#707987;font-weight:800}
+    .tj-ai-title{font-size:1.25rem;font-weight:850;color:#eef0f3;margin-top:5px}
+    .tj-ai-sub{font-size:.78rem;color:#7f8998;margin-top:4px}
+    .tj-ai-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:15px}
+    .tj-ai-card{background:#15191f;border:1px solid #272e37;border-radius:13px;padding:13px}
+    .tj-ai-label{font-size:.65rem;color:#707987;text-transform:uppercase}
+    .tj-ai-value{font-size:1.18rem;font-weight:850;color:#eaecef;margin-top:5px}
+    .tj-ai-good{color:#0ecb81!important}.tj-ai-bad{color:#f6465d!important}
+    .tj-ai-section{margin-top:16px;padding-top:14px;border-top:1px solid #252b33}
+    </style>
+    """, unsafe_allow_html=True)
+
+    pnl = float(facts.get("total_realized_pnl_thb", 0.0) or 0.0)
+    pnl_cls = "tj-ai-good" if pnl >= 0 else "tj-ai-bad"
+    win_rate = facts.get("win_rate_pct")
+    win_txt = f"{float(win_rate):.1f}%" if win_rate is not None else "—"
+
+    top_profit = facts.get("top_profit_asset") or {}
+    top_loss = facts.get("top_loss_asset") or {}
+    profit_asset = str(top_profit.get("asset", "—"))
+    loss_asset = str(top_loss.get("asset", "—"))
+
+    cards = (
+        '<div class="tj-ai-wrap">'
+        '<div class="tj-ai-eyebrow">BEHAVIOR & PERFORMANCE ANALYSIS</div>'
+        '<div class="tj-ai-title">🧠 AI Trading Journal</div>'
+        '<div class="tj-ai-sub">วิเคราะห์จาก BUY / SELL ที่บันทึกจริงใน Portfolio Ledger และ Journal ของคุณ</div>'
+        '<div class="tj-ai-grid">'
+        f'<div class="tj-ai-card"><div class="tj-ai-label">Trades</div><div class="tj-ai-value">{int(facts["trades"])}</div></div>'
+        f'<div class="tj-ai-card"><div class="tj-ai-label">Trades / Active Day</div><div class="tj-ai-value">{float(facts["trades_per_day"]):.2f}</div></div>'
+        f'<div class="tj-ai-card"><div class="tj-ai-label">Realized P&L</div><div class="tj-ai-value {pnl_cls}">฿{pnl:,.2f}</div></div>'
+        f'<div class="tj-ai-card"><div class="tj-ai-label">Win Rate</div><div class="tj-ai-value">{win_txt}</div></div>'
+        '</div>'
+        '<div class="tj-ai-section">'
+        '<div style="font-size:.78rem;color:#dfe3e8;font-weight:800;margin-bottom:8px;">📊 สิ่งที่ตรวจพบจากประวัติ</div>'
+        f'<div style="font-size:.78rem;color:#9da6b2;line-height:1.8;">'
+        f'กำไร/ขาดทุนที่รับรู้สูงสุดตามเหรียญ: <b style="color:#eaecef">{_html.escape(profit_asset)}</b> · '
+        f'เหรียญที่มีผลรวมต่ำสุด: <b style="color:#eaecef">{_html.escape(loss_asset)}</b> · '
+        f'บันทึก Journal แล้ว {int(facts["journaled"])} จาก {int(facts["trades"])} รายการ '
+        f'({float(facts["journal_coverage_pct"]):.1f}%)'
+        '</div></div>'
+        '</div>'
+    )
+    st.markdown(cards, unsafe_allow_html=True)
+
+    # Gemini only summarizes facts that were calculated locally.
+    api_key = ""
+    try:
+        api_key = st.secrets["gemini_api_key"]
+    except Exception:
+        api_key = os.environ.get("GEMINI_API_KEY", "")
+
+    ai_text = ""
+    if api_key and not api_key.startswith("AIza..."):
+        try:
+            compact_facts = {
+                "trades": facts["trades"],
+                "buy": facts["buy"],
+                "sell": facts["sell"],
+                "trading_days": facts["trading_days"],
+                "trades_per_day": facts["trades_per_day"],
+                "median_gap_hours": facts["median_gap_hours"],
+                "realized_pnl_thb": facts["total_realized_pnl_thb"],
+                "fees_thb": facts["total_fees_thb"],
+                "win_rate_pct": facts["win_rate_pct"],
+                "asset_stats": facts["asset_stats"],
+                "recurring_tags": facts["recurring_tags"],
+                "journal_lessons": facts["lesson_texts"],
+            }
+            prompt = (
+                "วิเคราะห์ Trading Journal ภาษาไทยจากข้อเท็จจริง JSON นี้เท่านั้น. "
+                "ห้ามสร้างตัวเลขใหม่ ห้ามทำนายตลาด ห้ามแนะนำซื้อหรือขาย. "
+                "แยกให้ชัดระหว่างข้อสังเกตจากข้อมูลกับบทเรียนที่ผู้ใช้เขียนเอง. "
+                "สรุป 3-5 bullet สั้น ๆ โดยครอบคลุมความถี่การซื้อขาย ผลลัพธ์ตามเหรียญ "
+                "ค่าธรรมเนียม และรูปแบบจาก tags/review หากข้อมูลรองรับ. "
+                "ถ้าข้อมูลไม่พอให้ระบุว่าไม่มีข้อมูลเพียงพอ.\\n\\n"
+                + json.dumps(compact_facts, ensure_ascii=False)
+            )
+            ai_text = _gemini_generate_text(api_key, prompt)
+        except Exception:
+            ai_text = ""
+
+    if not ai_text:
+        ai_text = (
+            f"• มีธุรกรรมทั้งหมด {facts['trades']} รายการ "
+            f"({facts['buy']} BUY / {facts['sell']} SELL) ใน {facts['trading_days']} วัน\n"
+            f"• ผล Realized P&L รวม ฿{facts['total_realized_pnl_thb']:,.2f} "
+            f"และค่าธรรมเนียมรวม ฿{facts['total_fees_thb']:,.2f}\n"
+            f"• ความถี่เฉลี่ย {facts['trades_per_day']:.2f} รายการต่อ active trading day\n"
+            f"• Journal ถูกบันทึกแล้ว {facts['journaled']} จาก {facts['trades']} รายการ"
+        )
+
+    st.markdown(
+        '<div class="tj-ai-wrap" style="margin-top:0;">'
+        '<div class="tj-ai-eyebrow">AI JOURNAL SUMMARY</div>'
+        '<div style="font-size:.92rem;color:#eaecef;line-height:1.85;margin-top:9px;">'
+        + _html.escape(str(ai_text)).replace("\\n", "<br>")
+        + '</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    if facts.get("asset_stats"):
+        st.markdown("#### 📈 ผลลัพธ์แยกตามเหรียญ")
+        display_rows = []
+        for r in facts["asset_stats"]:
+            display_rows.append({
+                "Asset": r["asset"],
+                "Trades": r["trades"],
+                "BUY": r["buy"],
+                "SELL": r["sell"],
+                "Realized P&L (THB)": r["realized_pnl_thb"],
+                "Fees (THB)": r["fees_thb"],
+            })
+        st.dataframe(
+            pd.DataFrame(display_rows).style.format({
+                "Realized P&L (THB)": "฿{:,.2f}",
+                "Fees (THB)": "฿{:,.2f}",
+            }),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    tags = facts.get("recurring_tags") or []
+    if tags:
+        tag_text = " ".join(
+            f'<span class="journal-chip">{_html.escape(str(x["tag"]))} × {int(x["count"])}</span>'
+            for x in tags
+        )
+        st.markdown(
+            '<div class="journal-card"><div class="journal-label">RECURRING JOURNAL TAGS</div>'
+            f'<div style="margin-top:7px;">{tag_text}</div></div>',
+            unsafe_allow_html=True,
+        )
+
+
+
 def render_trading_journal (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :pd .DataFrame )->None :
     sim =st .session_state .get ("sim",{})
     ensure_portfolio_ledger (sim )
@@ -11363,6 +11643,13 @@ def render_trading_journal (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df
     c2 .markdown (f'<div class="journal-card"><div class="journal-label">BUY</div><div class="journal-stat journal-buy">{buys }</div></div>',unsafe_allow_html =True )
     c3 .markdown (f'<div class="journal-card"><div class="journal-label">SELL</div><div class="journal-stat journal-sell">{sells }</div></div>',unsafe_allow_html =True )
     c4 .markdown (f'<div class="journal-card"><div class="journal-label">JOURNALED</div><div class="journal-stat">{total_journaled }</div></div>',unsafe_allow_html =True )
+
+    # ---- AI Trading Journal ----
+    try:
+        render_ai_trading_journal(sim)
+    except Exception:
+        # Journal analytics must never take down the trading journal page.
+        pass
     if not txs :
         st .info ("ยังไม่มี BUY / SELL transaction สำหรับทำ Journal")
         return 
@@ -12487,6 +12774,51 @@ market_df :Optional [pd .DataFrame ])->dict [str ,Any ]:
             rc["drawdown"]={"max_drawdown_pct":float(risk_metrics.get("max_drawdown_pct",0.0)),"volatility_pct":float(risk_metrics.get("volatility_pct",0.0)),"history_days":int(risk_metrics.get("history_days",0) or 0),"history_available":bool(risk_metrics.get("history_available",False))}
         risk_copilot["available"]=True
 
+    # Market Intelligence context for Copilot: server-calculated facts only.
+    market_intelligence = {"available": False, "rows": []}
+    try:
+        _mi_hist = _fetch_market_intelligence_history(tuple(SUPPORTED_ASSETS))
+        _mi_facts = _build_market_intelligence_facts(market_df, _mi_hist)
+        market_intelligence = {
+            "available": bool(_mi_facts.get("available")),
+            "regime": _mi_facts.get("regime"),
+            "breadth_positive_7d_pct": _mi_facts.get("breadth_positive_7d_pct"),
+            "median_return_7d_pct": _mi_facts.get("median_return_7d_pct"),
+            "btc_return_20d_pct": _mi_facts.get("btc_return_20d_pct"),
+            "btc_volatility_20d_annualized_pct": _mi_facts.get("btc_volatility_20d_annualized_pct"),
+            "strongest_7d": _mi_facts.get("strongest_7d"),
+            "weakest_7d": _mi_facts.get("weakest_7d"),
+            "volume_anomaly": _mi_facts.get("volume_anomaly"),
+            "rows": [
+                {
+                    "asset": str(r.get("symbol", "")).upper(),
+                    "return_1d_pct": round(float(r.get("return_1d", 0) or 0), 2),
+                    "return_7d_pct": round(float(r.get("return_7d", 0) or 0), 2),
+                    "return_20d_pct": round(float(r.get("return_20d", 0) or 0), 2),
+                    "return_30d_pct": round(float(r.get("return_30d", 0) or 0), 2),
+                    "volatility_20d_annualized_pct": round(float(r.get("volatility_20d", 0) or 0), 2),
+                    "volume_ratio_20d": round(float(r.get("volume_ratio_20d", 0) or 0), 2),
+                }
+                for r in _mi_hist.to_dict("records")
+            ],
+        }
+    except Exception:
+        market_intelligence = {"available": False, "rows": []}
+
+    # Deterministic what-if facts for common Copilot questions.
+    what_if_5pct = []
+    for h in holdings:
+        mv = float(h.get("market_value_thb", 0) or 0)
+        alloc = float(h.get("allocation_pct", 0) or 0)
+        if mv > 0:
+            what_if_5pct.append({
+                "asset": str(h.get("asset", "")).upper(),
+                "market_value_thb": round(mv, 2),
+                "allocation_pct": round(alloc, 2),
+                "impact_if_asset_falls_5pct_thb": round(-mv * 0.05, 2),
+                "portfolio_impact_pct": round(-alloc * 0.05, 2),
+            })
+
     context = {
     "available":True ,
     "as_of":timestamp ,
@@ -12533,6 +12865,8 @@ market_df :Optional [pd .DataFrame ])->dict [str ,Any ]:
     "orders_count":len (sim .get ("orders",[])or []),
     "risk_context_available":risk is not None ,
     "risk_copilot":risk_copilot ,
+    "market_intelligence": market_intelligence,
+    "what_if_5pct": what_if_5pct,
     }
     if risk_error :
         context ["risk_context_note"]="NC/Exposure บางส่วนคำนวณไม่ได้จากข้อมูลตลาดปัจจุบัน: "+risk_error
@@ -12680,6 +13014,18 @@ def _dca_pending_text(plan: dict[str, Any]) -> str:
     )
 
 
+COPILOT_AI_SYSTEM = (
+"คุณคือ AI Crypto Copilot ของ Nobody. คุณตอบคำถามโดยใช้ข้อมูลจริงที่ระบบแนบใน [PRIVATE PORTFOLIO CONTEXT] เท่านั้น. "
+"ห้ามสร้างตัวเลขขึ้นเอง และห้ามอ้างตัวเลขที่ไม่มีใน context. "
+"สำหรับคำถามว่าทำไมพอร์ตวันนี้บวก/ลบ ให้ใช้ daily_pnl และ contributors เป็นหลัก. "
+"สำหรับคำถามสัดส่วน ให้ใช้ holdings/allocation. สำหรับคำถามสมมติ เช่น BTC ลง 5% ให้ใช้ what_if_5pct ที่ระบบคำนวณไว้. "
+"สำหรับคำถาม 30 วันหรือเปรียบเทียบ BTC/ETH ให้ใช้ market_intelligence.rows ที่มี return_30d_pct; ถ้าไม่มีข้อมูล ให้บอกว่าไม่มีข้อมูล. "
+"แยก [ข้อเท็จจริงจากระบบ] กับ [การตีความของ AI] ให้ชัดเมื่อมีการอธิบาย. "
+"ห้ามแนะนำซื้อ/ขาย ห้ามทำนายราคา และห้ามทำให้ความเห็นเป็นตัวเลขจากระบบ. "
+"ตอบภาษาไทย กระชับ อ่านง่าย และระบุหน่วย/ช่วงเวลาให้ชัด. "
+)
+
+
 def render_ai_fab (cfg :Optional [dict [str ,Any ]]=None ,data :Optional [pd .DataFrame ]=None ,
 market_df :Optional [pd .DataFrame ]=None )->None :
     try :
@@ -12691,7 +13037,7 @@ market_df :Optional [pd .DataFrame ]=None )->None :
     pending =st .session_state .get ("ai_dca_pending")
 
     with st .container (key ="ai_fab"):
-        with st .popover ("💬 ถาม AI"):
+        with st .popover ("🤖 AI Crypto Copilot"):
             if not api_key or api_key .startswith ("AIza..."):
                 st .warning ("ยังไม่ได้ตั้ง `gemini_api_key` ใน Secrets")
                 return
@@ -12775,12 +13121,20 @@ market_df :Optional [pd .DataFrame ]=None )->None :
                     ph .markdown ("".join (_ai_bubble (m ["role"],m ["content"])for m in hist ),
                     unsafe_allow_html =True )
                 else :
-                    ph .markdown ('<div class="ai-empty">ลองกดคำถามด้านล่าง หรือพิมพ์เองได้เลย</div>',
+                    ph .markdown ('<div class="ai-empty">AI Crypto Copilot อ่านข้อมูลพอร์ตจริงของคุณ — ลองถามได้เลย</div>',
                     unsafe_allow_html =True )
 
             if not hist and not pending :
                 with sug_ph .container ():
-                    for i ,s in enumerate (AI_SUGGESTIONS ):
+                    st.caption("ตัวเลขที่ AI ใช้ตอบมาจาก Portfolio Context และ Market Intelligence ที่ระบบคำนวณไว้")
+                    _copilot_suggestions = [
+                        "ทำไมวันนี้พอร์ตติดลบ?",
+                        "เหรียญไหนมีสัดส่วนมากที่สุด?",
+                        "ถ้า BTC ลง 5% พอร์ตจะกระทบเท่าไร?",
+                        "ช่วง 30 วันที่ผ่านมาเหรียญไหนทำกำไรสูงสุด?",
+                        "เปรียบเทียบผลตอบแทน BTC กับ ETH",
+                    ]
+                    for i ,s in enumerate (_copilot_suggestions ):
                         st .button (s ,key =f"ai_sug_{i }",on_click =_ai_queue ,
                         args =(s ,),**WIDE )
 
@@ -12849,7 +13203,7 @@ market_df :Optional [pd .DataFrame ]=None )->None :
                         with st .spinner ("กำลังคิดจากข้อมูลพอร์ตจริง…"):
                             tx_words = ("transaction", "รายการ", "ledger", "order id", "orderid", "telegram buy", "telegram sell")
                             tx_question = any(w in question.lower() for w in tx_words) or selected_tx is not None
-                            ans =ask_ai (ai_messages ,api_key ,system_override=(TRANSACTION_AI_SYSTEM if tx_question else None))
+                            ans =ask_ai (ai_messages ,api_key ,system_override=(TRANSACTION_AI_SYSTEM if tx_question else COPILOT_AI_SYSTEM))
                         hist .append ({"role":"assistant","content":ans })
                 else :
                     # Existing Portfolio/Risk Copilot path remains unchanged.
@@ -12878,7 +13232,7 @@ market_df :Optional [pd .DataFrame ]=None )->None :
                     with st .spinner ("กำลังคิดจากข้อมูลพอร์ตจริง…"):
                         tx_words = ("transaction", "รายการ", "ledger", "order id", "orderid", "telegram buy", "telegram sell")
                         tx_question = any(w in question.lower() for w in tx_words) or selected_tx is not None
-                        ans =ask_ai (ai_messages ,api_key ,system_override=(TRANSACTION_AI_SYSTEM if tx_question else None))
+                        ans =ask_ai (ai_messages ,api_key ,system_override=(TRANSACTION_AI_SYSTEM if tx_question else COPILOT_AI_SYSTEM))
                     hist .append ({"role":"assistant","content":ans })
 
             draw ()
@@ -16736,14 +17090,442 @@ def render_print_report (fund_name :str ,cfg :dict [str ,Any ],sim :dict [str ,A
     # =========================================================================
 
 
+@_cache_data (ttl=900, show_spinner=False)
+def _fetch_market_intelligence_history(tickers: tuple[str, ...]) -> pd.DataFrame:
+    """Fetch compact daily history for the Market Intelligence layer.
+
+    This is read-only market data. The function is cached so opening the
+    Dashboard does not repeatedly hit Yahoo Finance on every Streamlit rerun.
+    """
+    rows: list[dict[str, Any]] = []
+
+    def _one(ticker: str) -> Optional[dict[str, Any]]:
+        try:
+            raw = yf.download(
+                f"{ticker}-USD",
+                period="60d",
+                interval="1d",
+                auto_adjust=False,
+                progress=False,
+            )
+            if raw is None or raw.empty or "Close" not in raw.columns:
+                return None
+            if isinstance(raw.columns, pd.MultiIndex):
+                raw.columns = raw.columns.get_level_values(0)
+            close = pd.to_numeric(raw["Close"], errors="coerce").dropna()
+            volume = pd.to_numeric(raw.get("Volume"), errors="coerce").dropna()
+            if len(close) < 8:
+                return None
+
+            def ret(days: int) -> float:
+                if len(close) <= days:
+                    return float("nan")
+                base = float(close.iloc[-days - 1])
+                last = float(close.iloc[-1])
+                return (last / base - 1.0) * 100.0 if base else float("nan")
+
+            daily_ret = close.pct_change().dropna()
+            vol20 = float(daily_ret.tail(20).std() * (365.0 ** 0.5) * 100.0) if len(daily_ret) >= 5 else float("nan")
+            vol_ratio = float("nan")
+            if len(volume) >= 21:
+                avg20 = float(volume.iloc[-21:-1].mean())
+                if avg20 > 0:
+                    vol_ratio = float(volume.iloc[-1]) / avg20
+
+            return {
+                "symbol": ticker.upper(),
+                "return_1d": ret(1),
+                "return_7d": ret(7),
+                "return_20d": ret(20),
+                "return_30d": ret(30),
+                "volatility_20d": vol20,
+                "volume_ratio_20d": vol_ratio,
+            }
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(tickers)))) as ex:
+        for row in ex.map(_one, tickers):
+            if row is not None:
+                rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _build_market_intelligence_facts(
+    market_df: Optional[pd.DataFrame],
+    history_df: Optional[pd.DataFrame],
+) -> dict[str, Any]:
+    """Build deterministic facts for the AI Market Intelligence layer."""
+    hist = history_df.copy() if isinstance(history_df, pd.DataFrame) else pd.DataFrame()
+    if not hist.empty:
+        for c in ["return_1d", "return_7d", "return_20d", "return_30d", "volatility_20d", "volume_ratio_20d"]:
+            hist[c] = pd.to_numeric(hist[c], errors="coerce")
+        hist = hist.dropna(subset=["symbol"])
+
+    tradable = hist[~hist["symbol"].isin(STABLECOINS)].copy() if not hist.empty else pd.DataFrame()
+    breadth_7d = float((tradable["return_7d"] > 0).mean() * 100.0) if not tradable.empty else 0.0
+    median_7d = float(tradable["return_7d"].median()) if not tradable.empty else 0.0
+
+    strongest = None
+    weakest = None
+    if not tradable.empty and tradable["return_7d"].notna().any():
+        strongest = tradable.loc[tradable["return_7d"].idxmax()].to_dict()
+        weakest = tradable.loc[tradable["return_7d"].idxmin()].to_dict()
+
+    btc = hist.loc[hist["symbol"] == "BTC"]
+    btc20 = float(btc["return_20d"].iloc[0]) if not btc.empty and pd.notna(btc["return_20d"].iloc[0]) else 0.0
+    btc_vol = float(btc["volatility_20d"].iloc[0]) if not btc.empty and pd.notna(btc["volatility_20d"].iloc[0]) else 0.0
+
+    # Descriptive regime only: it summarizes observed breadth/momentum and is
+    # explicitly not a forecast or trading signal.
+    if breadth_7d >= 65 and btc20 > 0:
+        regime = "Risk-on"
+    elif breadth_7d <= 35 and btc20 < 0:
+        regime = "Risk-off"
+    else:
+        regime = "Mixed"
+
+    volume_anomaly = None
+    if not tradable.empty and tradable["volume_ratio_20d"].notna().any():
+        v = tradable.dropna(subset=["volume_ratio_20d"])
+        if not v.empty:
+            volume_anomaly = v.loc[v["volume_ratio_20d"].idxmax()].to_dict()
+
+    market_rows = []
+    if isinstance(market_df, pd.DataFrame) and not market_df.empty:
+        for _, r in market_df.iterrows():
+            sym = str(r.get("symbol", "")).upper()
+            if not sym:
+                continue
+            market_rows.append({
+                "symbol": sym,
+                "price_usd": float(r.get("price_usd", 0) or 0),
+                "pct_change_24h": float(r.get("pct_change", 0) or 0),
+                "volume_24h": float(r.get("volume", 0) or 0),
+            })
+
+    return {
+        "available": bool(not hist.empty or market_rows),
+        "regime": regime,
+        "breadth_positive_7d_pct": round(breadth_7d, 1),
+        "median_return_7d_pct": round(median_7d, 2),
+        "btc_return_20d_pct": round(btc20, 2),
+        "btc_volatility_20d_annualized_pct": round(btc_vol, 2),
+        "strongest_7d": {
+            "asset": str(strongest.get("symbol", "—")),
+            "return_pct": round(float(strongest.get("return_7d", 0) or 0), 2),
+        } if strongest else {"asset": "—", "return_pct": 0.0},
+        "weakest_7d": {
+            "asset": str(weakest.get("symbol", "—")),
+            "return_pct": round(float(weakest.get("return_7d", 0) or 0), 2),
+        } if weakest else {"asset": "—", "return_pct": 0.0},
+        "volume_anomaly": {
+            "asset": str(volume_anomaly.get("symbol", "—")),
+            "ratio": round(float(volume_anomaly.get("volume_ratio_20d", 0) or 0), 2),
+        } if volume_anomaly else {"asset": "—", "ratio": 0.0},
+        "market_rows": market_rows,
+    }
+
+
+def render_ai_market_intelligence(
+    cfg: dict[str, Any],
+    data: pd.DataFrame,
+    market_df: Optional[pd.DataFrame],
+) -> None:
+    """AI Market Intelligence — descriptive market context, not a trading signal."""
+    try:
+        history = _fetch_market_intelligence_history(tuple(SUPPORTED_ASSETS))
+        facts = _build_market_intelligence_facts(market_df, history)
+    except Exception:
+        facts = {"available": False}
+
+    st.markdown(
+        '<div style="margin:18px 0 8px;display:flex;align-items:center;gap:10px;">'
+        '<div style="width:36px;height:36px;border-radius:11px;background:rgba(14,203,129,.12);'
+        'border:1px solid rgba(14,203,129,.28);display:flex;align-items:center;justify-content:center;font-size:18px;">🧠</div>'
+        '<div><div style="font-size:20px;font-weight:850;color:#F0F2F5;">AI Market Intelligence</div>'
+        '<div style="font-size:12px;color:#8B93A1;margin-top:2px;">สรุปภาพตลาดจากราคา, volatility, relative strength และ volume anomaly</div></div></div>',
+        unsafe_allow_html=True,
+    )
+
+    if not facts.get("available"):
+        st.markdown(
+            '<div style="padding:16px 18px;border:1px solid #2A3039;border-radius:14px;background:#11151B;color:#8B93A1;">'
+            'ยังไม่มีข้อมูลตลาดเพียงพอสำหรับ Market Intelligence</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    regime = str(facts.get("regime", "Mixed"))
+    regime_tone = {"Risk-on": "#0ECB81", "Risk-off": "#F6465D", "Mixed": "#F0B90B"}.get(regime, "#8B93A1")
+    strongest = facts.get("strongest_7d", {}) or {}
+    weakest = facts.get("weakest_7d", {}) or {}
+    anomaly = facts.get("volume_anomaly", {}) or {}
+    btc_vol = float(facts.get("btc_volatility_20d_annualized_pct", 0) or 0)
+    breadth = float(facts.get("breadth_positive_7d_pct", 0) or 0)
+
+    api_key = ""
+    try:
+        api_key = st.secrets.get("gemini_api_key", "")
+    except Exception:
+        api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        api_key = os.environ.get("GEMINI_API_KEY", "")
+
+    ai_text = ""
+    ai_facts = {
+        "market_regime": regime,
+        "breadth_positive_7d_pct": breadth,
+        "median_return_7d_pct": facts.get("median_return_7d_pct", 0),
+        "btc_return_20d_pct": facts.get("btc_return_20d_pct", 0),
+        "btc_volatility_20d_annualized_pct": btc_vol,
+        "strongest_7d": strongest,
+        "weakest_7d": weakest,
+        "volume_anomaly": anomaly,
+        "market_24h": facts.get("market_rows", []),
+    }
+    if api_key:
+        try:
+            system = (
+                "คุณคือ Nobody AI Market Intelligence. ตอบภาษาไทยสั้น กระชับ 2-3 ประโยค. "
+                "ใช้เฉพาะ facts ที่ระบบคำนวณแล้ว ห้ามสร้างตัวเลขใหม่ ห้ามทำนายราคา และห้ามแนะนำซื้อหรือขาย. "
+                "อธิบาย market regime, relative strength, volatility และ volume anomaly เมื่อข้อมูลรองรับ. "
+                "ถ้าข้อมูลไม่พอให้บอกตรง ๆ ว่าไม่มีข้อมูลเพียงพอ."
+            )
+            ai_text = str(ask_ai([
+                {"role": "user", "content": "สรุปภาพตลาดจาก facts นี้เท่านั้น:\n" + json.dumps(ai_facts, ensure_ascii=False)}
+            ], api_key, system)).strip()
+        except Exception:
+            ai_text = ""
+
+    if not ai_text:
+        ai_text = (
+            f"ตลาดอยู่ในภาวะ {regime} จาก breadth 7 วัน {breadth:.1f}% ของสินทรัพย์ที่ไม่ใช่ stablecoin ที่เป็นบวก "
+            f"ขณะที่ BTC มี volatility 20 วันแบบ annualized ประมาณ {btc_vol:.1f}%. "
+            f"Relative strength เด่นสุดคือ {strongest.get('asset','—')} ({float(strongest.get('return_pct',0) or 0):+.2f}% ใน 7 วัน) "
+            f"และ volume anomaly สูงสุดอยู่ที่ {anomaly.get('asset','—')} ประมาณ {float(anomaly.get('ratio',0) or 0):.2f}x ค่าเฉลี่ย 20 วัน."
+        )
+
+    cards = (
+        '<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:0 0 12px;">'
+        f'<div style="background:#11151B;border:1px solid {regime_tone}55;border-radius:15px;padding:15px;min-height:118px;">'
+        '<div style="font-size:11px;color:#8B93A1;">MARKET REGIME</div>'
+        f'<div style="font-size:20px;font-weight:850;color:{regime_tone};margin-top:9px;">{_html.escape(regime)}</div>'
+        f'<div style="font-size:12px;color:#AEB4BE;margin-top:7px;">Breadth 7D: {breadth:.1f}% positive</div></div>'
+        f'<div style="background:#11151B;border:1px solid #2A3039;border-radius:15px;padding:15px;min-height:118px;">'
+        '<div style="font-size:11px;color:#8B93A1;">VOLATILITY</div>'
+        f'<div style="font-size:20px;font-weight:850;color:#EAECEF;margin-top:9px;">{btc_vol:.1f}%</div>'
+        '<div style="font-size:12px;color:#AEB4BE;margin-top:7px;">BTC 20D annualized</div></div>'
+        f'<div style="background:#11151B;border:1px solid #2A3039;border-radius:15px;padding:15px;min-height:118px;">'
+        '<div style="font-size:11px;color:#8B93A1;">RELATIVE STRENGTH</div>'
+        f'<div style="font-size:20px;font-weight:850;color:#0ECB81;margin-top:9px;">{_html.escape(str(strongest.get("asset","—")))}</div>'
+        f'<div style="font-size:12px;color:#AEB4BE;margin-top:7px;">7D {float(strongest.get("return_pct",0) or 0):+.2f}%</div></div>'
+        f'<div style="background:#11151B;border:1px solid #2A3039;border-radius:15px;padding:15px;min-height:118px;">'
+        '<div style="font-size:11px;color:#8B93A1;">VOLUME ANOMALY</div>'
+        f'<div style="font-size:20px;font-weight:850;color:#F0B90B;margin-top:9px;">{_html.escape(str(anomaly.get("asset","—")))}</div>'
+        f'<div style="font-size:12px;color:#AEB4BE;margin-top:7px;">{float(anomaly.get("ratio",0) or 0):.2f}x vs 20D avg</div></div>'
+        '</div>'
+    )
+    st.markdown(cards, unsafe_allow_html=True)
+
+    st.markdown(
+        '<div style="background:linear-gradient(135deg,#171A20,#14171C);border:1px solid #2A3039;'
+        'border-radius:15px;padding:16px 18px;margin-bottom:18px;">'
+        '<div style="font-size:12px;color:#8B93A1;letter-spacing:.03em;text-transform:uppercase;">Market Brief</div>'
+        f'<div style="font-size:15px;color:#EAECEF;line-height:1.75;margin-top:8px;">{_html.escape(ai_text)}</div>'
+        f'<div style="display:flex;gap:22px;flex-wrap:wrap;margin-top:13px;padding-top:12px;border-top:1px solid #2A3039;font-size:12px;color:#AEB4BE;">'
+        f'<span>Strongest 7D <b style="color:#EAECEF;">{_html.escape(str(strongest.get("asset","—")))}</b></span>'
+        f'<span>Weakest 7D <b style="color:#EAECEF;">{_html.escape(str(weakest.get("asset","—")))}</b></span>'
+        f'<span>BTC 20D <b style="color:#EAECEF;">{float(facts.get("btc_return_20d_pct",0) or 0):+.2f}%</b></span>'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_ai_portfolio_analyst (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :Optional [pd .DataFrame ])->None :
+    """AI Portfolio Analyst — facts are calculated locally; Gemini is optional.
+
+    The dashboard always renders the factual insight cards even when no AI API
+    key is configured. Gemini is used only for the short natural-language
+    explanation and never for portfolio arithmetic.
+    """
+    try :
+        context =_build_ai_portfolio_context (cfg ,data ,market_df )
+    except Exception :
+        context ={"available":False }
+
+    if not context.get ("available"):
+        st .markdown (
+        '<div style="margin:14px 0 18px;padding:16px 18px;border:1px solid #2A3039;'
+        'border-radius:14px;background:#11151B;color:#8B93A1;">'
+        '<b style="color:#EAECEF;font-size:16px;">🤖 AI Portfolio Analyst</b>'
+        '<div style="margin-top:6px;">ยังไม่มีข้อมูลพอร์ตเพียงพอสำหรับวิเคราะห์</div></div>',
+        unsafe_allow_html =True )
+        return
+
+    portfolio =context.get ("portfolio",{}) or {}
+    holdings =[h for h in (context.get ("holdings",[]) or [])
+               if float (h.get ("market_value_thb",0) or 0)>0]
+    holdings =sorted (holdings,key=lambda h:float(h.get("market_value_thb",0) or 0),reverse=True)
+    daily =context.get ("daily_pnl",{}) or {}
+    contributors =list(daily.get("contributors",[]) or [])
+    risk =context.get ("risk_copilot",{}) or {}
+    risk_facts =risk.get ("facts",{}) or {}
+    concentration =risk_facts.get ("concentration",{}) or {}
+
+    total_value =float(portfolio.get("total_value_thb",0) or 0)
+    invested =float(portfolio.get("invested_cost_thb",0) or 0)
+    unrealized =float(portfolio.get("unrealized_pnl_thb",0) or 0)
+    total_pnl =float(portfolio.get("total_pnl_thb",0) or 0)
+    pnl_pct =float(portfolio.get("pnl_pct_on_invested_cost",0) or 0)
+
+    top =holdings[0] if holdings else {}
+    top_asset =str(top.get("asset","—")).upper() or "—"
+    top_pct =float(top.get("allocation_pct",0) or 0)
+    top_value =float(top.get("market_value_thb",0) or 0)
+    asset_count=len(holdings)
+
+    # Concentration is a factual threshold-based signal, not a trading signal.
+    if top_pct >= 70:
+        concentration_title="High Concentration Risk"
+        concentration_note=f"{top_asset} มีสัดส่วน {top_pct:.1f}% ของพอร์ต"
+        concentration_tone="#F6465D"
+    elif top_pct >= 50:
+        concentration_title="Concentration Watch"
+        concentration_note=f"{top_asset} มีสัดส่วน {top_pct:.1f}% ของพอร์ต"
+        concentration_tone="#F0B90B"
+    else:
+        concentration_title="Concentration Check"
+        concentration_note=f"สินทรัพย์ใหญ่สุดคือ {top_asset} ที่ {top_pct:.1f}%"
+        concentration_tone="#3B82F6"
+
+    # A simple descriptive diversification label based on number of holdings and
+    # largest allocation. It is not an investment recommendation.
+    if asset_count >= 5 and top_pct < 50:
+        diversification_title="หลายสินทรัพย์"
+        diversification_note=f"ถือ {asset_count} สินทรัพย์ และตัวใหญ่สุด {top_pct:.1f}%"
+        diversification_tone="#0ECB81"
+    elif asset_count >= 3 and top_pct < 70:
+        diversification_title="กระจายหลายสินทรัพย์"
+        diversification_note=f"ถือ {asset_count} สินทรัพย์ · ตัวใหญ่สุด {top_pct:.1f}%"
+        diversification_tone="#0ECB81"
+    else:
+        diversification_title="กระจุกตัวค่อนข้างสูง"
+        diversification_note=f"ถือ {asset_count} สินทรัพย์ · ตัวใหญ่สุด {top_pct:.1f}%"
+        diversification_tone="#F0B90B"
+
+    daily_pnl =float(daily.get("net_daily_pnl_thb",0) or 0)
+    daily_pct=(daily_pnl/total_value*100.0) if total_value>0 else 0.0
+    daily_positive=daily.get("biggest_positive_contributor") or {}
+    daily_negative=daily.get("biggest_negative_contributor") or {}
+
+    # The exact hypothetical shown in the user's reference: if the largest
+    # asset falls 10% and everything else is unchanged, portfolio impact is
+    # approximately allocation * -10%.
+    hypothetical_impact=-(top_pct/100.0)*10.0
+
+    # Optional AI prose. If Gemini is unavailable, use a deterministic fallback
+    # so the feature never disappears from the dashboard.
+    ai_text=""
+    try :
+        api_key=st .secrets.get("gemini_api_key","")
+    except Exception :
+        api_key=os .environ .get("GEMINI_API_KEY","")
+    if not api_key:
+        try :
+            api_key=os .environ .get("GEMINI_API_KEY","")
+        except Exception :
+            api_key=""
+
+    facts={
+        "portfolio_value_thb":round(total_value,2),
+        "invested_cost_thb":round(invested,2),
+        "unrealized_pnl_thb":round(unrealized,2),
+        "total_pnl_thb":round(total_pnl,2),
+        "pnl_pct":round(pnl_pct,2),
+        "top_asset":top_asset,
+        "top_asset_allocation_pct":round(top_pct,2),
+        "asset_count":asset_count,
+        "daily_pnl_thb":round(daily_pnl,2),
+        "daily_pnl_pct":round(daily_pct,2),
+        "biggest_positive_contributor":str(daily_positive.get("asset","—")),
+        "biggest_negative_contributor":str(daily_negative.get("asset","—")),
+    }
+    if api_key:
+        try :
+            system=(
+            "คุณคือ AI Portfolio Analyst ของ Nobody. ใช้เฉพาะตัวเลขใน JSON ที่ระบบคำนวณแล้ว. "
+            "ห้ามสร้างตัวเลขใหม่ ห้ามทำนายราคา และห้ามสั่งซื้อ/ขาย. "
+            "ตอบภาษาไทย 2 ประโยคสั้น ๆ อธิบายสถานการณ์พอร์ตและความเสี่ยงจาก concentration/P&L เท่านั้น."
+            )
+            ai_text=str(ask_ai([{"role":"user","content":"อธิบายพอร์ตจาก facts นี้เท่านั้น:\n"+json.dumps(facts,ensure_ascii=False)}],api_key,system)).strip()
+        except Exception :
+            ai_text=""
+    if not ai_text:
+        if top_asset != "—":
+            ai_text=(f"ตอนนี้ {top_asset} เป็นสัดส่วนใหญ่สุดของพอร์ตที่ {top_pct:.1f}% "
+                     f"จึงเป็นตัวแปรหลักต่อการเปลี่ยนแปลงมูลค่าพอร์ต. "
+                     f"หาก {top_asset} ลดลง 10% และสินทรัพย์อื่นไม่เปลี่ยนแปลง "
+                     f"ผลกระทบต่อพอร์ตโดยประมาณจะอยู่ที่ {hypothetical_impact:.2f}%.")
+        else:
+            ai_text="ยังไม่มีสินทรัพย์ที่มีมูลค่ามากพอสำหรับการวิเคราะห์"
+
+    def _money(v:float)->str:
+        return f"฿{v:,.2f}"
+
+    pnl_color="#0ECB81" if unrealized>=0 else "#F6465D"
+    daily_color="#0ECB81" if daily_pnl>=0 else "#F6465D"
+
+    st .markdown (
+    '<div style="margin:14px 0 8px;display:flex;align-items:center;gap:10px;">'
+    '<div style="width:36px;height:36px;border-radius:11px;background:rgba(59,130,246,.12);'
+    'border:1px solid rgba(59,130,246,.28);display:flex;align-items:center;justify-content:center;font-size:18px;">🤖</div>'
+    '<div><div style="font-size:20px;font-weight:850;color:#F0F2F5;">AI Portfolio Analyst</div>'
+    '<div style="font-size:12px;color:#8B93A1;margin-top:2px;">วิเคราะห์จาก Holdings, Allocation, P&amp;L และการเคลื่อนไหวของพอร์ตจริง</div></div></div>',
+    unsafe_allow_html=True )
+
+    st .markdown (
+    '<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:0 0 12px;">'
+    f'<div style="background:linear-gradient(135deg,#171A20,#14171C);border:1px solid {concentration_tone}55;border-radius:15px;padding:16px;min-height:132px;">'
+    f'<div style="font-size:12px;color:#8B93A1;">⚠️ Concentration</div>'
+    f'<div style="font-size:18px;font-weight:850;color:{concentration_tone};margin-top:9px;">{concentration_title}</div>'
+    f'<div style="font-size:13px;color:#C5CBD3;margin-top:7px;line-height:1.55;">{_html.escape(concentration_note)}</div>'
+    f'</div>'
+    f'<div style="background:linear-gradient(135deg,#171A20,#14171C);border:1px solid #2A3039;border-radius:15px;padding:16px;min-height:132px;">'
+    '<div style="font-size:12px;color:#8B93A1;">💰 Portfolio P&amp;L</div>'
+    f'<div style="font-size:18px;font-weight:850;color:{pnl_color};margin-top:9px;">{_money(unrealized)}</div>'
+    f'<div style="font-size:13px;color:#C5CBD3;margin-top:7px;line-height:1.55;">Unrealized · {pnl_pct:+.2f}% จากต้นทุนที่ลงทุน</div>'
+    f'</div>'
+    f'<div style="background:linear-gradient(135deg,#171A20,#14171C);border:1px solid {diversification_tone}55;border-radius:15px;padding:16px;min-height:132px;">'
+    '<div style="font-size:12px;color:#8B93A1;">✓ Diversification</div>'
+    f'<div style="font-size:18px;font-weight:850;color:{diversification_tone};margin-top:9px;">{diversification_title}</div>'
+    f'<div style="font-size:13px;color:#C5CBD3;margin-top:7px;line-height:1.55;">{_html.escape(diversification_note)}</div>'
+    f'</div></div>',
+    unsafe_allow_html=True )
+
+    positive_name=str(daily_positive.get("asset","—")) if daily_positive else "—"
+    negative_name=str(daily_negative.get("asset","—")) if daily_negative else "—"
+    st .markdown (
+    '<div style="background:#11151B;border:1px solid #2A3039;border-radius:15px;padding:16px 18px;margin-bottom:18px;">'
+    '<div style="font-size:12px;color:#8B93A1;letter-spacing:.03em;text-transform:uppercase;">AI Portfolio Insight</div>'
+    f'<div style="font-size:15px;color:#EAECEF;line-height:1.75;margin-top:8px;">{_html.escape(ai_text)}</div>'
+    f'<div style="display:flex;gap:22px;flex-wrap:wrap;margin-top:13px;padding-top:12px;border-top:1px solid #2A3039;font-size:12px;color:#AEB4BE;">'
+    f'<span>วันนี้ <b style="color:{daily_color};">{daily_pct:+.2f}%</b> ({_money(daily_pnl)})</span>'
+    f'<span>ขึ้นช่วยพอร์ต: <b style="color:#EAECEF;">{_html.escape(positive_name)}</b></span>'
+    f'<span>กดพอร์ต: <b style="color:#EAECEF;">{_html.escape(negative_name)}</b></span>'
+    f'<span>ถ้า { _html.escape(top_asset) } -10% → พอร์ตประมาณ <b style="color:#F6465D;">{hypothetical_impact:.2f}%</b></span>'
+    '</div></div>',
+    unsafe_allow_html=True )
+
+
 def _render_ai_daily_portfolio_brief (cfg :dict [str ,Any ],data :pd .DataFrame ,market_df :Optional [pd .DataFrame ])->None :
-    """AI Daily Portfolio Brief — server facts first, Gemini only interprets them."""
+    """AI Morning Brief — combined portfolio + market + risk + news summary."""
     try :
         api_key =st .secrets ["gemini_api_key"]
     except Exception :
         api_key =os .environ .get ("GEMINI_API_KEY","")
     if not api_key :
-        return
+        api_key =os .environ .get ("GEMINI_API_KEY","")
 
     sim =st .session_state .get ("sim",{}) or {}
     if not isinstance (sim,dict ):
@@ -16762,6 +17544,19 @@ def _render_ai_daily_portfolio_brief (cfg :dict [str ,Any ],data :pd .DataFrame 
     risk =context.get ("risk_copilot",{}) or {}
     risk_facts =risk.get ("facts",{}) or {}
     daily =context.get ("daily_pnl",{}) or {}
+
+    # Combine existing Market Intelligence and News into this one morning snapshot.
+    try:
+        _mi_history = _fetch_market_intelligence_history(tuple(SUPPORTED_ASSETS))
+        market_facts = _build_market_intelligence_facts(market_df, _mi_history)
+    except Exception:
+        market_facts = {"available": False}
+    try:
+        _morning_news = fetch_crypto_news()[:5]
+        news_facts = [{"title": str(n.get("title", "") or ""), "source": str(n.get("source", "") or "")}
+                      for n in _morning_news if isinstance(n, dict) and str(n.get("title", "") or "").strip()]
+    except Exception:
+        news_facts = []
 
     # All displayed numbers below are calculated by Nobody, not by Gemini.
     portfolio_value =float (portfolio.get ("total_value_thb",0 )or 0 )
@@ -16800,6 +17595,15 @@ def _render_ai_daily_portfolio_brief (cfg :dict [str ,Any ],data :pd .DataFrame 
         "nc_level":str (nc.get ("level","—")),
         "active_auto_dca_plans":active_dca,
         "risk_overall_level":overall_level or "—",
+        "market":{
+            "regime":str(market_facts.get("regime", "Mixed")),
+            "breadth_positive_7d_pct":round(float(market_facts.get("breadth_positive_7d_pct", 0) or 0), 1),
+            "btc_return_20d_pct":round(float(market_facts.get("btc_return_20d_pct", 0) or 0), 2),
+            "btc_volatility_20d_annualized_pct":round(float(market_facts.get("btc_volatility_20d_annualized_pct", 0) or 0), 2),
+            "strongest_7d":market_facts.get("strongest_7d", {"asset":"—", "return_pct":0}),
+            "volume_anomaly":market_facts.get("volume_anomaly", {"asset":"—", "ratio":0}),
+        },
+        "news":news_facts,
     }
 
     today_key =pd .Timestamp .now (tz ="Asia/Bangkok").strftime ("%Y-%m-%d")
@@ -16811,19 +17615,30 @@ def _render_ai_daily_portfolio_brief (cfg :dict [str ,Any ],data :pd .DataFrame 
 
     if brief_text is None:
         system =(
-        "คุณคือ Nobody AI Daily Portfolio Analyst. ตอบภาษาไทยสั้น กระชับ. "
-        "ข้อมูลที่ส่งมาใน JSON คือข้อเท็จจริงที่ระบบ Nobody คำนวณแล้ว ห้ามแก้ตัวเลข ห้ามสร้างตัวเลขใหม่ "
-        "ห้ามทำนายราคาและห้ามแนะนำซื้อหรือขาย. วิเคราะห์เฉพาะความสัมพันธ์จาก facts ที่ให้. "
-        "เขียน 1-2 ประโยคสั้น ๆ เป็นเนื้อหาสรุปเท่านั้น ไม่ต้องใส่หัวข้อ ไม่ต้องใส่คำนำ และห้ามขึ้นต้นด้วย 'AI มองภาพรวม' "
-        "เช่น ระบุสินทรัพย์ที่มีสัดส่วนสูงสุด และอธิบายว่าการเปลี่ยนแปลงรายวันของพอร์ตมาจากอะไรเมื่อข้อมูลรองรับ. "
-        "ถ้าข้อมูลไม่พอ ให้บอกว่าไม่มีข้อมูลเพียงพอแทนการเดา."
+        "คุณคือ Nobody AI Morning Brief. ตอบภาษาไทยสั้น กระชับ 3-4 ประโยค. "
+        "JSON คือข้อเท็จจริงที่ระบบ Nobody คำนวณหรือดึงมาแล้ว ห้ามแก้ตัวเลขและห้ามสร้างตัวเลขใหม่. "
+        "ห้ามทำนายราคา ห้ามแนะนำซื้อหรือขาย และห้ามอ้างข่าวที่ไม่มีใน JSON. "
+        "สรุปมูลค่าและการเปลี่ยนแปลงพอร์ต, สินทรัพย์ที่มีผลต่อพอร์ตและความเสี่ยง, ภาพตลาดจาก regime/breadth/relative strength/volatility และข่าวที่ควรติดตามเมื่อมีข้อมูล. "
+        "แยกข้อเท็จจริงออกจากการตีความ และถ้าข้อมูลไม่พอให้บอกตรง ๆ ว่าไม่มีข้อมูลเพียงพอ. "
+        "ไม่ต้องใส่หัวข้อหรือคำนำ และห้ามขึ้นต้นด้วย 'AI มองภาพรวม'."
         )
         prompt =(
         "สรุปภาพรวมพอร์ตวันนี้จากข้อเท็จจริงชุดนี้เท่านั้น:\n"+
         json .dumps (facts ,ensure_ascii =False )
         )
-        with st .spinner ("🤖 Gemini กำลังสรุป Daily Portfolio Brief…"):
-            brief_text =ask_ai ([{"role":"user","content":prompt }],api_key ,system )
+        if api_key and not api_key.startswith("AIza..."):
+            with st .spinner ("🤖 Gemini กำลังสรุป AI Morning Brief…"):
+                brief_text = ask_ai([{"role":"user","content":prompt}], api_key, system)
+        else:
+            _m = facts.get("market", {}) or {}
+            _rs = _m.get("strongest_7d", {}) or {}
+            _heads = " ".join(str(x.get("title", "")).strip() for x in news_facts[:2] if x.get("title"))
+            brief_text = (
+                f"พอร์ตมีมูลค่า ฿{portfolio_value:,.0f} และวันนี้เปลี่ยนแปลง {daily_pnl_pct:+.2f}%; "
+                f"สินทรัพย์ที่มีสัดส่วนสูงสุดคือ {top_exposure_asset} {top_exposure_pct:.1f}% และระดับความเสี่ยงโดยรวมคือ {overall_level or '—'}. "
+                f"ภาพตลาดอยู่ในภาวะ {_m.get('regime','Mixed')} โดย breadth 7 วัน {float(_m.get('breadth_positive_7d_pct',0) or 0):.1f}% และ relative strength เด่นสุดคือ {_rs.get('asset','—')} {float(_rs.get('return_pct',0) or 0):+.2f}%. "
+                + (f"ข่าวที่ควรติดตาม: {_heads}" if _heads else "ยังไม่มีข่าวที่ดึงมาได้สำหรับ Morning Brief")
+            )
         cache.update (date =today_key ,facts_key =cache_key ,text =str (brief_text))
         st .session_state ["sim"] =sim
 
@@ -16842,8 +17657,8 @@ def _render_ai_daily_portfolio_brief (cfg :dict [str ,Any ],data :pd .DataFrame 
     '<div style="display:flex;align-items:center;gap:10px;margin:10px 0 8px;">'
     '<div style="width:34px;height:34px;border-radius:10px;background:rgba(14,203,129,.12);'
     'border:1px solid rgba(14,203,129,.25);display:flex;align-items:center;justify-content:center;font-size:17px;">🤖</div>'
-    '<div><div style="font-size:16px;font-weight:800;color:#F0F2F5;line-height:1.2;">AI Daily Portfolio Brief</div>'
-    '<div style="font-size:11px;color:#8B93A1;margin-top:3px;">ข้อเท็จจริงจาก Nobody + การตีความของ AI</div></div></div>',
+    '<div><div style="font-size:16px;font-weight:800;color:#F0F2F5;line-height:1.2;">AI Morning Brief</div>'
+    '<div style="font-size:11px;color:#8B93A1;margin-top:3px;">Portfolio + Market + Risk + News · ข้อมูลจากระบบจริง</div></div></div>',
     unsafe_allow_html =True )
 
     daily_color = "#0ECB81" if daily_pnl_thb >= 0 else "#F6465D"
@@ -16861,6 +17676,11 @@ def _render_ai_daily_portfolio_brief (cfg :dict [str ,Any ],data :pd .DataFrame 
         f'<span style="font-size:12px;color:#AEB4BE;">NC Buffer <b style="color:#EAECEF;">{nc_txt}</b></span>'
         f'<span style="font-size:12px;color:#AEB4BE;">Auto DCA Active <b style="color:#EAECEF;">{active_dca} แผน</b></span>'
         f'<span style="font-size:12px;color:#AEB4BE;">Risk <b style="color:#EAECEF;">{_html.escape(overall_level or "—")}</b></span>'
+        '</div>'
+        f'<div style="margin-top:13px;padding-top:12px;border-top:1px solid #2A3039;color:#AEB4BE;font-size:12px;line-height:1.7;">'
+        f'<span>Market: <b style="color:#EAECEF;">{_html.escape(str((facts.get("market",{}) or {}).get("regime","Mixed")))}</b></span> · '
+        f'<span>Breadth 7D: <b style="color:#EAECEF;">{float((facts.get("market",{}) or {}).get("breadth_positive_7d_pct",0) or 0):.1f}%</b></span> · '
+        f'<span>Relative Strength: <b style="color:#EAECEF;">{_html.escape(str(((facts.get("market",{}) or {}).get("strongest_7d",{}) or {}).get("asset","—")))}</b></span>'
         '</div>'
         f'<div style="margin-top:13px;padding-top:12px;border-top:1px solid #2A3039;color:#EAECEF;font-size:14px;line-height:1.75;">'
         f'<b style="color:#0ECB81;">AI มองภาพรวม:</b> {safe}</div>'
@@ -18020,7 +18840,21 @@ market_df :Optional [pd .DataFrame ]=None )->None :
 
 
 
-    # ---- AI Portfolio Narrator (ข้อความเท่านั้น) ----
+    # ---- AI Portfolio Analyst ----
+    try :
+        render_ai_portfolio_analyst (cfg ,data ,market_df)
+    except Exception :
+        # AI layer must never take down the main Dashboard.
+        pass
+
+    # ---- AI Market Intelligence ----
+    try:
+        render_ai_market_intelligence(cfg, data, market_df)
+    except Exception:
+        # Market Intelligence must never take down the main Dashboard.
+        pass
+
+    # ---- AI Daily Portfolio Narrator (Gemini brief) ----
     try :
         _render_ai_daily_portfolio_brief (cfg ,data ,market_df)
     except Exception as _e :
@@ -18153,29 +18987,88 @@ def _portfolio_state_at_cutoff(sim: dict[str, Any], price_thb_map: Mapping[str, 
 
 
 def _portfolio_intelligence_snapshot(sim: dict[str, Any], price_thb_map: Mapping[str, float], pct_map: Mapping[str, float]) -> dict[str, Any]:
-    """System-calculated Portfolio Decision Engine + anomaly facts. Read-only."""
+    """System-calculated Portfolio Decision Engine + anomaly facts.
+
+    Read-only detection layer. It does not place orders and does not tell the
+    user to buy/sell. Findings are generated from portfolio ledger/orders,
+    current prices, 24h changes and cached market history.
+    """
     now = pd.Timestamp.now(tz="Asia/Bangkok")
     current = _portfolio_state_at_cutoff(sim, price_thb_map, now)
     cutoff = now - pd.Timedelta(hours=24)
     previous = _portfolio_state_at_cutoff(sim, price_thb_map, cutoff)
-    current_alloc = current.get("allocation", {})
-    previous_alloc = previous.get("allocation", {})
-    changes = {a: float(current_alloc.get(a, 0.0) - previous_alloc.get(a, 0.0)) for a in set(current_alloc) | set(previous_alloc)}
-    nonzero = sorted([(a, v) for a, v in current_alloc.items() if v > 0], key=lambda x: x[1], reverse=True)
+
+    current_alloc = current.get("allocation", {}) or {}
+    previous_alloc = previous.get("allocation", {}) or {}
+    changes = {
+        a: float(current_alloc.get(a, 0.0) - previous_alloc.get(a, 0.0))
+        for a in set(current_alloc) | set(previous_alloc)
+    }
+    nonzero = sorted(
+        [(a, v) for a, v in current_alloc.items() if v > 0],
+        key=lambda x: x[1], reverse=True,
+    )
     top = nonzero[0] if nonzero else ("—", 0.0)
-    alerts = []
+
+    alerts: list[dict[str, Any]] = []
+
+    # 1) Concentration risk
     if top[1] >= 70:
-        alerts.append({"level":"HIGH","title":"Concentration สูง","text":f"{top[0]} คิดเป็น {top[1]:.1f}% ของมูลค่าพอร์ตคริปโตที่ถืออยู่"})
+        alerts.append({
+            "level": "HIGH",
+            "type": "concentration",
+            "title": "Concentration Risk",
+            "text": f"{top[0]} มีสัดส่วน {top[1]:.1f}% ของมูลค่าพอร์ตคริปโตที่ถืออยู่",
+        })
     elif top[1] >= 50:
-        alerts.append({"level":"WATCH","title":"Concentration เด่น","text":f"{top[0]} คิดเป็น {top[1]:.1f}% ของมูลค่าพอร์ตคริปโตที่ถืออยู่"})
+        alerts.append({
+            "level": "WATCH",
+            "type": "concentration",
+            "title": "Concentration Risk",
+            "text": f"{top[0]} มีสัดส่วน {top[1]:.1f}% ของมูลค่าพอร์ตคริปโตที่ถืออยู่",
+        })
+
+    # 2) Allocation changed materially over the last 24h
     for asset, delta in sorted(changes.items(), key=lambda x: abs(x[1]), reverse=True):
         if abs(delta) >= 10:
             direction = "เพิ่ม" if delta > 0 else "ลด"
             reason = pct_map.get(asset)
             reason_txt = f" · 24H price change {reason:+.2f}%" if reason is not None else ""
-            alerts.append({"level":"WATCH","title":"Allocation เปลี่ยนมาก","text":f"{asset} {direction} {abs(delta):.1f} จุดเปอร์เซ็นต์ใน 24h{reason_txt}"})
+            alerts.append({
+                "level": "WATCH",
+                "type": "allocation",
+                "title": "Portfolio Update",
+                "text": f"{asset} {direction} {abs(delta):.1f} จุดเปอร์เซ็นต์ใน 24h{reason_txt}",
+            })
             break
 
+    # 3) Volatility alert: compare each held asset with the average volatility
+    #    of the tracked non-stablecoin universe.
+    try:
+        hist = _fetch_market_intelligence_history(tuple(SUPPORTED_ASSETS))
+    except Exception:
+        hist = pd.DataFrame()
+    if isinstance(hist, pd.DataFrame) and not hist.empty and "volatility_20d" in hist.columns:
+        h = hist.copy()
+        h["symbol"] = h["symbol"].astype(str).str.upper()
+        h["volatility_20d"] = pd.to_numeric(h["volatility_20d"], errors="coerce")
+        universe = h[~h["symbol"].isin(STABLECOINS)].dropna(subset=["volatility_20d"])
+        held_assets = set(str(a).upper() for a, q in (current.get("coins", {}) or {}).items() if float(q or 0) > 0)
+        if not universe.empty and held_assets:
+            avg_vol = float(universe["volatility_20d"].mean())
+            held_vol = universe[universe["symbol"].isin(held_assets)]
+            if not held_vol.empty and avg_vol > 0:
+                held_vol = held_vol.assign(vol_ratio=held_vol["volatility_20d"] / avg_vol)
+                row = held_vol.sort_values("vol_ratio", ascending=False).iloc[0]
+                if float(row["vol_ratio"]) >= 1.35:
+                    alerts.append({
+                        "level": "WATCH",
+                        "type": "volatility",
+                        "title": "Volatility Alert",
+                        "text": f"{row['symbol']} มี volatility 20D สูงกว่าค่าเฉลี่ยตลาดประมาณ {float(row['vol_ratio']):.1f}x",
+                    })
+
+    # 4) Unusual order frequency
     orders = sim.get("orders", []) if isinstance(sim, dict) else []
     recent, baseline = [], []
     for o in orders if isinstance(orders, list) else []:
@@ -18191,8 +19084,14 @@ def _portfolio_intelligence_snapshot(sim: dict[str, Any], price_thb_map: Mapping
     freq_ratio = (len(recent) / baseline_daily) if baseline_daily > 0 else (float("inf") if recent else 1.0)
     if len(recent) >= 3 and (freq_ratio >= 3.0 or (not baseline and len(recent) >= 5)):
         ratio_txt = f"{freq_ratio:.1f}x" if baseline_daily > 0 else "สูงกว่าช่วงอ้างอิง"
-        alerts.append({"level":"WATCH","title":"Order frequency ผิดจาก baseline","text":f"พบ {len(recent)} orders ใน 24h ({ratio_txt} ของค่าเฉลี่ย 7 วัน)"})
+        alerts.append({
+            "level": "WATCH",
+            "type": "orders",
+            "title": "Order Activity Anomaly",
+            "text": f"พบ {len(recent)} orders ใน 24h ({ratio_txt} ของค่าเฉลี่ย 7 วัน)",
+        })
 
+    # 5) Execution-price deviation from the current market proxy
     execution_flags = []
     for o in recent:
         asset = str(o.get("asset") or o.get("symbol") or "").upper()
@@ -18204,37 +19103,102 @@ def _portfolio_intelligence_snapshot(sim: dict[str, Any], price_thb_map: Mapping
                 execution_flags.append((asset, dev))
     if execution_flags:
         a, d = max(execution_flags, key=lambda x: abs(x[1]))
-        alerts.append({"level":"WATCH","title":"Execution price ต่างจากราคาปัจจุบัน","text":f"{a} มี execution price ต่างจาก current market proxy {d:+.2f}%"})
+        alerts.append({
+            "level": "WATCH",
+            "type": "execution",
+            "title": "Execution Price Check",
+            "text": f"{a} มี execution price ต่างจาก current market proxy {d:+.2f}%",
+        })
+
+    # Keep the dashboard focused on the most material findings.
+    priority = {"HIGH": 0, "WATCH": 1}
+    alerts.sort(key=lambda x: priority.get(x.get("level", "WATCH"), 9))
+    alerts = alerts[:4]
     confidence = "High" if len(alerts) >= 2 else ("Medium" if alerts else "Low")
-    return {"current": current, "previous": previous, "allocation_change": changes, "top": top, "alerts": alerts[:4], "recent_orders": len(recent), "baseline_daily_orders": baseline_daily, "confidence": confidence}
+
+    return {
+        "current": current,
+        "previous": previous,
+        "allocation_change": changes,
+        "top": top,
+        "alerts": alerts,
+        "recent_orders": len(recent),
+        "baseline_daily_orders": baseline_daily,
+        "confidence": confidence,
+    }
 
 
 def render_portfolio_decision_engine(sim: dict[str, Any], price_thb_map: Mapping[str, float], pct_map: Mapping[str, float]) -> None:
+    """Render the read-only Portfolio Decision Engine in the dashboard style."""
     facts = _portfolio_intelligence_snapshot(sim, price_thb_map, pct_map)
-    st.markdown("### 🧠 Portfolio Decision Engine")
-    if not facts["alerts"]:
-        st.success("✓ ไม่พบการเปลี่ยนแปลงที่เด่นชัดจากกฎตรวจจับปัจจุบัน")
-        st.caption("อ่าน allocation, การเปลี่ยนแปลง 24h และ order activity แบบ read-only · ไม่มีคำสั่งซื้อ/ขาย")
+    alerts = facts["alerts"]
+
+    st.markdown(
+        '<div style="margin:18px 0 8px;display:flex;align-items:center;gap:10px;">'
+        '<div style="width:36px;height:36px;border-radius:11px;background:rgba(246,185,11,.12);'
+        'border:1px solid rgba(246,185,11,.28);display:flex;align-items:center;justify-content:center;font-size:18px;">🧠</div>'
+        '<div><div style="font-size:20px;font-weight:850;color:#F0F2F5;">Portfolio Decision Engine</div>'
+        '<div style="font-size:12px;color:#8B93A1;margin-top:2px;">ตรวจหาความผิดปกติของพอร์ตอัตโนมัติจากข้อมูลล่าสุด</div></div></div>',
+        unsafe_allow_html=True,
+    )
+
+    if not alerts:
+        st.markdown(
+            '<div style="padding:17px 18px;border:1px solid rgba(14,203,129,.28);border-radius:15px;'
+            'background:linear-gradient(135deg,#101A17,#11151B);">'
+            '<div style="font-size:16px;font-weight:800;color:#0ECB81;">✓ No material findings</div>'
+            '<div style="font-size:13px;color:#AEB4BE;margin-top:5px;">ยังไม่พบความผิดปกติที่เข้าเกณฑ์การตรวจจับในข้อมูลล่าสุด</div>'
+            '</div>', unsafe_allow_html=True,
+        )
+        st.caption(f"Detection confidence: {facts['confidence']} · Read-only · ไม่มีคำสั่งซื้อ/ขาย")
         return
-    for a in facts["alerts"]:
-        icon = "🔴" if a["level"] == "HIGH" else "🟡"
-        st.markdown(f"**{icon} {a['title']}**  \n{a['text']}")
-    st.caption(f"Detection confidence: **{facts['confidence']}** · ข้อมูลจากระบบ · ไม่มีคำแนะนำซื้อ/ขาย")
+
+    cards = []
+    for a in alerts[:3]:
+        high = a.get("level") == "HIGH"
+        tone = "#F6465D" if high else "#F0B90B"
+        bg = "rgba(246,70,93,.07)" if high else "rgba(240,185,11,.06)"
+        icon = "⚠" if high else "◉"
+        cards.append(
+            f'<div style="background:{bg};border:1px solid {tone}55;border-radius:15px;padding:16px;min-height:142px;">'
+            f'<div style="font-size:11px;color:#8B93A1;text-transform:uppercase;letter-spacing:.04em;">{_html.escape(str(a.get("level","WATCH")))}</div>'
+            f'<div style="font-size:16px;font-weight:850;color:{tone};margin-top:8px;">{icon} {_html.escape(str(a.get("title","Finding")))}</div>'
+            f'<div style="font-size:13px;color:#C5CBD3;line-height:1.55;margin-top:8px;">{_html.escape(str(a.get("text","")))}</div>'
+            '</div>'
+        )
+
+    while len(cards) < 3:
+        cards.append(
+            '<div style="background:#11151B;border:1px solid #2A3039;border-radius:15px;padding:16px;min-height:142px;">'
+            '<div style="font-size:11px;color:#8B93A1;">STATUS</div>'
+            '<div style="font-size:16px;font-weight:800;color:#8B93A1;margin-top:8px;">No additional finding</div>'
+            '<div style="font-size:13px;color:#6F7784;line-height:1.55;margin-top:8px;">ยังไม่มีสัญญาณอื่นที่ผ่านเกณฑ์ตรวจจับ</div>'
+            '</div>'
+        )
+
+    st.markdown(
+        f'<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:0 0 10px;">{"".join(cards)}</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        f"Detection confidence: **{facts['confidence']}** · Orders 24h: **{facts['recent_orders']}** · "
+        "ตรวจจาก Ledger / Orders / ราคาปัจจุบัน / market history แบบ read-only · ไม่ใช่คำแนะนำการลงทุน"
+    )
 
 
 def render_portfolio_anomaly_detector(sim: dict[str, Any], price_thb_map: Mapping[str, float], pct_map: Mapping[str, float]) -> None:
     facts = _portfolio_intelligence_snapshot(sim, price_thb_map, pct_map)
-    with st.expander("🕵️ Portfolio Anomaly Detector", expanded=False):
+    with st.expander("🕵️ รายละเอียด Detection Engine", expanded=False):
         c1, c2, c3 = st.columns(3)
-        c1.metric("Orders 24h", f"{facts['recent_orders']}")
-        c2.metric("7D Avg / day", f"{facts['baseline_daily_orders']:.1f}")
+        c1.metric("Findings", f"{len(facts['alerts'])}")
+        c2.metric("Orders 24h", f"{facts['recent_orders']}")
         c3.metric("Confidence", facts["confidence"])
         if facts["alerts"]:
             for a in facts["alerts"]:
                 st.markdown(f"**{a['level']} · {a['title']}** — {a['text']}")
         else:
             st.info("ยังไม่พบ anomaly ตามเกณฑ์ปัจจุบัน")
-        st.caption("Anomaly เป็นการตรวจจับจาก Ledger / Orders และราคาปัจจุบันแบบ read-only · ไม่ใช่คำแนะนำการลงทุน")
+        st.caption("ระบบตรวจจับแบบ read-only · ไม่มีคำสั่งซื้อ/ขาย")
 
 def _vnext_transaction_cost_analysis (rows :list [dict [str ,Any ]],fee_per_side :float ,slippage_bps :float ,spread_pct :float )->dict [str ,Any ]:
     """Research-only gross-to-net analysis for Shadow observations.
