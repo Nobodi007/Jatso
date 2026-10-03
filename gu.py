@@ -18840,102 +18840,176 @@ market_df :Optional [pd .DataFrame ]=None )->None :
 
 
 
-    # ---- AI Portfolio Intelligence (compact Dashboard hub) ----
-    # Keep the Dashboard clean: one compact summary card, with full AI
-    # modules available only when the user opens the details panel.
+    # ---- AI Portfolio Intelligence (NOBS-style dashboard layout) ----
+    # Keep the AI area visually similar to a terminal/dashboard:
+    # portfolio on the left, breaking news on the right, compact AI metrics below.
     try:
         _ai_top = holdings[0] if holdings else {}
         _ai_top_sym = str(_ai_top.get("sym", "—"))
         _ai_top_pct = float(_ai_top.get("pct", 0.0) or 0.0)
         _ai_risk = "HIGH" if _ai_top_pct >= 40 else ("WATCH" if _ai_top_pct >= 25 else "NORMAL")
-        _ai_risk_cls = "risk-high" if _ai_risk == "HIGH" else ("risk-watch" if _ai_risk == "WATCH" else "risk-ok")
-        _ai_pnl_cls = "up" if coin_pnl_thb >= 0 else "down"
-        _ai_pnl_sign = "+" if coin_pnl_thb >= 0 else ""
-        _ai_pnl_color = "#0ECB81" if coin_pnl_thb >= 0 else "#F6465D"
         _ai_risk_color = "#F6465D" if _ai_risk == "HIGH" else ("#F0B90B" if _ai_risk == "WATCH" else "#0ECB81")
+        _ai_pnl_color = "#0ECB81" if coin_pnl_thb >= 0 else "#F6465D"
+        _ai_pnl_sign = "+" if coin_pnl_thb >= 0 else ""
+
+        # Market facts are calculated once for the compact cards.
+        try:
+            _ai_mi_history = _fetch_market_intelligence_history(tuple(SUPPORTED_ASSETS))
+            _ai_mi_facts = _build_market_intelligence_facts(market_df, _ai_mi_history)
+        except Exception:
+            _ai_mi_facts = {"available": False}
+
+        _ai_regime = str(_ai_mi_facts.get("regime", "Mixed"))
+        _ai_regime_color = {"Risk-on": "#0ECB81", "Risk-off": "#F6465D", "Mixed": "#F0B90B"}.get(_ai_regime, "#AEB4BE")
+        _ai_breadth = float(_ai_mi_facts.get("breadth_positive_7d_pct", 0) or 0)
+        _ai_strongest = _ai_mi_facts.get("strongest_7d", {}) or {}
+        _ai_vol = float(_ai_mi_facts.get("btc_volatility_20d_annualized_pct", 0) or 0)
+
+        # News is real data from the app's existing news source.
+        try:
+            _ai_news = [n for n in (fetch_crypto_news() or []) if isinstance(n, dict) and str(n.get("title", "")).strip()][:5]
+        except Exception:
+            _ai_news = []
+
+        st.markdown("""
+        <style>
+        .ai-terminal{margin:4px 0 20px}
+        .ai-terminal-head{display:flex;align-items:end;justify-content:space-between;gap:16px;margin-bottom:10px}
+        .ai-terminal-title{font-size:22px;font-weight:850;color:#F0F2F5;letter-spacing:-.02em}
+        .ai-terminal-sub{font-size:11px;color:#7F8794;margin-top:3px}
+        .ai-live{font-size:10px;color:#0ECB81;font-weight:800;white-space:nowrap}
+        .ai-main-grid{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(330px,1fr);gap:12px}
+        .ai-panel{background:#0F1319;border:1px solid #252B34;border-radius:10px;overflow:hidden}
+        .ai-panel-head{padding:13px 15px;border-bottom:1px solid #252B34;display:flex;align-items:center;justify-content:space-between}
+        .ai-panel-title{font-size:13px;font-weight:850;color:#EAECEF;letter-spacing:.02em}
+        .ai-panel-sub{font-size:10px;color:#707987;margin-top:2px}
+        .ai-portfolio-body{padding:15px}
+        .ai-value-row{display:flex;justify-content:space-between;align-items:end;gap:20px}
+        .ai-value{font-size:29px;font-weight:850;letter-spacing:-.03em;color:#F0F2F5}
+        .ai-value-label{font-size:10px;color:#7F8794;text-transform:uppercase;letter-spacing:.08em}
+        .ai-change{text-align:right;font-size:16px;font-weight:800}
+        .ai-change-sub{font-size:10px;color:#7F8794;margin-top:3px}
+        .ai-stat-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:16px}
+        .ai-mini{background:#141920;border:1px solid #242A33;border-radius:8px;padding:10px 11px}
+        .ai-mini-k{font-size:9px;color:#707987;text-transform:uppercase;letter-spacing:.05em}
+        .ai-mini-v{font-size:15px;font-weight:800;color:#EAECEF;margin-top:4px}
+        .ai-mini-s{font-size:9px;color:#7F8794;margin-top:2px}
+        .ai-news-list{padding:2px 15px 7px}
+        .ai-news-item{display:block;padding:10px 0;border-bottom:1px solid #20262F;text-decoration:none}
+        .ai-news-item:last-child{border-bottom:0}
+        .ai-news-title{font-size:11px;font-weight:700;line-height:1.35;color:#EAECEF}
+        .ai-news-meta{font-size:9px;color:#697280;margin-top:4px}
+        .ai-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
+        .ai-metric{background:#0F1319;border:1px solid #252B34;border-radius:10px;padding:12px 13px;min-height:84px}
+        .ai-metric-k{font-size:9px;color:#707987;text-transform:uppercase;letter-spacing:.05em}
+        .ai-metric-v{font-size:17px;font-weight:850;margin-top:7px}
+        .ai-metric-s{font-size:9px;color:#7F8794;margin-top:3px}
+        .ai-brief{margin-top:12px;background:#0F1319;border:1px solid #252B34;border-radius:10px;padding:13px 15px}
+        .ai-brief-label{font-size:9px;color:#707987;text-transform:uppercase;letter-spacing:.08em}
+        .ai-brief-text{font-size:11px;line-height:1.65;color:#D8DCE3;margin-top:6px}
+        @media(max-width:950px){.ai-main-grid{grid-template-columns:1fr}.ai-metrics{grid-template-columns:repeat(2,1fr)}}
+        @media(max-width:600px){.ai-stat-row{grid-template-columns:1fr}.ai-metrics{grid-template-columns:1fr 1fr}.ai-value-row{align-items:start;flex-direction:column}.ai-change{text-align:left}}
+        </style>
+        """, unsafe_allow_html=True)
 
         st.markdown(
-            """<style>
-            .ai-hub-card{background:linear-gradient(135deg,#11151c,#0d1015);border:1px solid #2a3039;border-radius:14px;padding:16px 18px;margin:0 0 14px;box-shadow:0 4px 18px rgba(0,0,0,.14)}
-            .ai-hub-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:14px}
-            .ai-hub-title{font-size:20px;font-weight:800;color:#f1f3f5}
-            .ai-hub-sub{font-size:11px;color:#8b93a1;margin-top:4px}
-            .ai-hub-live{font-size:10px;color:#0ecb81;font-weight:700;white-space:nowrap}
-            .ai-hub-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
-            .ai-hub-stat{background:#151920;border:1px solid #252b34;border-radius:10px;padding:11px 12px;min-height:70px}
-            .ai-hub-stat .k{font-size:10px;color:#7f8794;text-transform:uppercase;letter-spacing:.04em}
-            .ai-hub-stat .v{font-size:18px;font-weight:800;color:#eaecef;margin-top:4px}
-            .ai-hub-stat .s{font-size:10px;color:#8b93a1;margin-top:3px}
-            @media(max-width:900px){.ai-hub-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-            </style>""", unsafe_allow_html=True)
-        st.markdown(
-            f'''<div class="ai-hub-card">
-                <div class="ai-hub-head">
-                    <div>
-                        <div class="ai-hub-title">🤖 AI Portfolio Intelligence</div>
-                        <div class="ai-hub-sub">วิเคราะห์พอร์ต ความเสี่ยง ตลาด และสรุปสถานการณ์จากข้อมูลจริง</div>
-                    </div>
-                    <div class="ai-hub-live">● LIVE</div>
-                </div>
-                <div class="ai-hub-grid">
-                    <div class="ai-hub-stat">
-                        <div class="k">Portfolio</div>
-                        <div class="v" style="color:{_ai_pnl_color};">{_ai_pnl_sign}{coin_change_pct:.2f}%</div>
-                        <div class="s">{fmt_baht(coin_pnl_thb, force_sign=True)}</div>
-                    </div>
-                    <div class="ai-hub-stat">
-                        <div class="k">Top Exposure</div>
-                        <div class="v">{_html.escape(_ai_top_sym)}</div>
-                        <div class="s">{_ai_top_pct:.2f}% ของพอร์ต</div>
-                    </div>
-                    <div class="ai-hub-stat">
-                        <div class="k">Risk Scan</div>
-                        <div class="v" style="color:{_ai_risk_color};">{_ai_risk}</div>
-                        <div class="s">Decision Engine</div>
-                    </div>
-                    <div class="ai-hub-stat">
-                        <div class="k">Assets</div>
-                        <div class="v">{len(holdings)}</div>
-                        <div class="s">Market + Portfolio AI</div>
-                    </div>
-                </div>
-            </div>''',
+            '<div class="ai-terminal-head">'
+            '<div><div class="ai-terminal-title">🤖 AI Portfolio Intelligence</div>'
+            '<div class="ai-terminal-sub">Portfolio · Market · Risk · News — ข้อมูลจริงจากระบบของคุณ</div></div>'
+            '<div class="ai-live">● LIVE INTELLIGENCE</div></div>',
             unsafe_allow_html=True,
         )
 
-        with st.expander("🔎 ดูรายละเอียด AI Portfolio Intelligence", expanded=False):
-            ai_tab1, ai_tab2, ai_tab3, ai_tab4 = st.tabs([
-                "🤖 Portfolio Analyst",
-                "📊 Market Intelligence",
-                "🚨 Decision Engine",
-                "🌅 Daily Brief",
-            ])
+        # Top row: Portfolio + Breaking News, matching the information hierarchy of the reference image.
+        left, right = st.columns([1.65, 1], gap="small")
+        with left:
+            st.markdown(
+                f'<div class="ai-panel">'
+                f'<div class="ai-panel-head"><div><div class="ai-panel-title">PORTFOLIO</div>'
+                f'<div class="ai-panel-sub">AI Portfolio Analyst</div></div>'
+                f'<div style="font-size:10px;color:#7F8794;">{len(holdings)} assets</div></div>'
+                f'<div class="ai-portfolio-body">'
+                f'<div class="ai-value-label">CURRENT VALUE</div>'
+                f'<div class="ai-value-row"><div class="ai-value">฿{total_value:,.0f}</div>'
+                f'<div><div class="ai-change" style="color:{_ai_pnl_color};">{_ai_pnl_sign}{coin_change_pct:.2f}%</div>'
+                f'<div class="ai-change-sub">24H / portfolio change</div></div></div>'
+                f'<div class="ai-stat-row">'
+                f'<div class="ai-mini"><div class="ai-mini-k">Top Exposure</div><div class="ai-mini-v">{_html.escape(_ai_top_sym)}</div><div class="ai-mini-s">{_ai_top_pct:.2f}% of portfolio</div></div>'
+                f'<div class="ai-mini"><div class="ai-mini-k">P&L</div><div class="ai-mini-v" style="color:{_ai_pnl_color};">{fmt_baht(coin_pnl_thb, force_sign=True)}</div><div class="ai-mini-s">Unrealized</div></div>'
+                f'<div class="ai-mini"><div class="ai-mini-k">Risk Scan</div><div class="ai-mini-v" style="color:{_ai_risk_color};">{_ai_risk}</div><div class="ai-mini-s">Decision Engine</div></div>'
+                f'</div></div></div>', unsafe_allow_html=True)
 
+        with right:
+            _news_html = ''
+            if _ai_news:
+                for n in _ai_news:
+                    _title = _html.escape(str(n.get("title", "")).strip())
+                    _source = _html.escape(str(n.get("source", "")).strip() or "Market News")
+                    _url = str(n.get("url", "") or "").strip()
+                    if _url:
+                        _news_html += f'<a class="ai-news-item" href="{_html.escape(_url)}" target="_blank"><div class="ai-news-title">{_title}</div><div class="ai-news-meta">↗ {_source}</div></a>'
+                    else:
+                        _news_html += f'<div class="ai-news-item"><div class="ai-news-title">{_title}</div><div class="ai-news-meta">{_source}</div></div>'
+            else:
+                _news_html = '<div style="padding:16px 0;color:#707987;font-size:11px;">ยังไม่มีข่าวตลาดที่ดึงมาได้</div>'
+            st.markdown(
+                f'<div class="ai-panel"><div class="ai-panel-head"><div><div class="ai-panel-title">BREAKING NEWS</div>'
+                f'<div class="ai-panel-sub">High-impact market updates</div></div><div style="font-size:10px;color:#707987;">LIVE</div></div>'
+                f'<div class="ai-news-list">{_news_html}</div></div>', unsafe_allow_html=True)
+
+        # Compact market/risk strip.
+        st.markdown(
+            f'<div class="ai-metrics">'
+            f'<div class="ai-metric"><div class="ai-metric-k">MARKET REGIME</div><div class="ai-metric-v" style="color:{_ai_regime_color};">{_html.escape(_ai_regime)}</div><div class="ai-metric-s">Breadth 7D {_ai_breadth:.1f}% positive</div></div>'
+            f'<div class="ai-metric"><div class="ai-metric-k">RELATIVE STRENGTH</div><div class="ai-metric-v" style="color:#0ECB81;">{_html.escape(str(_ai_strongest.get("asset","—")))}</div><div class="ai-metric-s">7D {float(_ai_strongest.get("return_pct",0) or 0):+.2f}%</div></div>'
+            f'<div class="ai-metric"><div class="ai-metric-k">BTC VOLATILITY</div><div class="ai-metric-v">{_ai_vol:.1f}%</div><div class="ai-metric-s">20D annualized</div></div>'
+            f'<div class="ai-metric"><div class="ai-metric-k">DECISION ENGINE</div><div class="ai-metric-v" style="color:{_ai_risk_color};">{_ai_risk}</div><div class="ai-metric-s">Automatic read-only scan</div></div>'
+            f'</div>', unsafe_allow_html=True)
+
+        # Short daily brief in the main dashboard; full details stay behind one expander.
+        try:
+            _ctx = _build_ai_portfolio_context(cfg, data, market_df)
+            _p = (_ctx.get("portfolio", {}) if isinstance(_ctx, dict) else {}) or {}
+            _d = (_ctx.get("daily_pnl", {}) if isinstance(_ctx, dict) else {}) or {}
+            _brief_short = (
+                f"พอร์ตมีมูลค่า ฿{float(_p.get('total_value_thb', total_value) or total_value):,.0f} "
+                f"และวันนี้เปลี่ยนแปลง {float(_d.get('net_pnl_thb', coin_pnl_thb) or coin_pnl_thb):+,.0f} บาท. "
+                f"สินทรัพย์ที่มีสัดส่วนสูงสุดคือ {_ai_top_sym} {_ai_top_pct:.2f}% "
+                f"ขณะที่ตลาดอยู่ในภาวะ {_ai_regime} และ Relative Strength เด่นสุดคือ {str(_ai_strongest.get('asset','—'))}."
+            )
+        except Exception:
+            _brief_short = f"พอร์ต {_ai_top_sym} มีสัดส่วนสูงสุด {_ai_top_pct:.2f}% และตลาดอยู่ในภาวะ {_ai_regime}."
+        st.markdown(
+            f'<div class="ai-brief"><div class="ai-brief-label">AI DAILY BRIEF</div>'
+            f'<div class="ai-brief-text">{_html.escape(_brief_short)}</div></div>',
+            unsafe_allow_html=True)
+
+        with st.expander("🔎 View Full AI Intelligence", expanded=False):
+            ai_tab1, ai_tab2, ai_tab3, ai_tab4 = st.tabs([
+                "🤖 Portfolio Analyst", "📊 Market Intelligence", "🚨 Decision Engine", "🌅 Daily Brief"
+            ])
             with ai_tab1:
                 try:
                     render_ai_portfolio_analyst(cfg, data, market_df)
                 except Exception:
                     st.caption("Portfolio Analyst ไม่พร้อมใช้งานในขณะนี้")
-
             with ai_tab2:
                 try:
                     render_ai_market_intelligence(cfg, data, market_df)
                 except Exception:
                     st.caption("Market Intelligence ไม่พร้อมใช้งานในขณะนี้")
-
             with ai_tab3:
                 try:
                     render_portfolio_decision_engine(sim, price_thb_map, pct_map)
-                    render_portfolio_anomaly_detector(sim, price_thb_map, pct_map)
+                    with st.expander("รายละเอียด Anomaly Detector", expanded=False):
+                        render_portfolio_anomaly_detector(sim, price_thb_map, pct_map)
                 except Exception:
                     st.caption("Decision Engine ไม่พร้อมใช้งานในขณะนี้")
-
             with ai_tab4:
                 try:
                     _render_ai_daily_portfolio_brief(cfg, data, market_df)
                 except Exception:
                     st.caption("Daily Brief ไม่พร้อมใช้งานในขณะนี้")
-
     except Exception:
         # AI presentation must never take down the main Dashboard.
         pass
