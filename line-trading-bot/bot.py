@@ -1,6 +1,7 @@
 import os
 import json
 import uuid
+import time
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone
@@ -206,43 +207,14 @@ def save_sim_state(sim):
 # PRICE
 # ============================================================
 
-def get_price_usd(asset):
+# Cache ราคาสั้น ๆ เพื่อลดโอกาสโดน API rate limit (HTTP 429)
+_PRICE_CACHE = {}
+_PRICE_CACHE_TTL = 15
 
-    # ใช้ CoinGecko แทน Binance เพราะ Binance API
-    # อาจตอบ HTTP 451 จาก Render region
-    coin_map = {
-        "BTC": "bitcoin",
-        "ETH": "ethereum",
-        "SOL": "solana",
-        "DOGE": "dogecoin",
-        "ADA": "cardano",
-        "HBAR": "hedera-hashgraph",
-        "LINK": "chainlink",
-        "XLM": "stellar",
-        "XRP": "ripple",
-        "USDT": "tether",
-        "USDC": "usd-coin",
-    }
 
-    asset = str(asset).upper().strip()
-
-    if asset not in coin_map:
-        raise ValueError(
-            f"ไม่รองรับเหรียญ {asset}"
-        )
-
-    if asset in ["USDT", "USDC"]:
-        return 1.0
-
-    url = "https://api.coingecko.com/api/v3/simple/price"
-
-    params = urllib.parse.urlencode({
-        "ids": coin_map[asset],
-        "vs_currencies": "usd",
-    })
-
+def _get_json(url, timeout=8):
     req = urllib.request.Request(
-        f"{url}?{params}",
+        url,
         headers={
             "User-Agent": "JATSO-LINE-Bot/1.0",
             "Accept": "application/json",
@@ -251,24 +223,110 @@ def get_price_usd(asset):
 
     with urllib.request.urlopen(
         req,
-        timeout=10
+        timeout=timeout
     ) as response:
-
-        data = json.loads(
+        return json.loads(
             response.read().decode("utf-8")
         )
 
-    coin_id = coin_map[asset]
 
-    if (
-        coin_id not in data
-        or "usd" not in data[coin_id]
-    ):
-        raise RuntimeError(
-            f"ไม่พบราคา {asset} จาก CoinGecko"
+def get_price_usd(asset):
+
+    asset = str(asset).upper().strip()
+
+    stablecoins = {
+        "USDT",
+        "USDC",
+    }
+
+    if asset in stablecoins:
+        return 1.0
+
+    cached = _PRICE_CACHE.get(asset)
+    if cached:
+        cached_at, cached_price = cached
+        if time.time() - cached_at < _PRICE_CACHE_TTL:
+            return cached_price
+
+    if asset not in SUPPORTED_ASSETS:
+        raise ValueError(
+            f"ไม่รองรับเหรียญ {asset}"
         )
 
-    return float(data[coin_id]["usd"])
+    errors = []
+
+    # --------------------------------------------------------
+    # 1) Coinbase public spot API
+    #    ไม่ต้องใช้ API key
+    # --------------------------------------------------------
+    try:
+        data = _get_json(
+            f"https://api.coinbase.com/v2/prices/{asset}-USD/spot",
+            timeout=8,
+        )
+
+        price = float(
+            data["data"]["amount"]
+        )
+
+        _PRICE_CACHE[asset] = (
+            time.time(),
+            price,
+        )
+
+        return price
+
+    except Exception as exc:
+        errors.append(
+            f"Coinbase: {str(exc)[:80]}"
+        )
+
+    # --------------------------------------------------------
+    # 2) CoinPaprika fallback
+    # --------------------------------------------------------
+    paprika_ids = {
+        "BTC": "btc-bitcoin",
+        "ETH": "eth-ethereum",
+        "SOL": "sol-solana",
+        "DOGE": "doge-dogecoin",
+        "ADA": "ada-cardano",
+        "HBAR": "hbar-hedera-hashgraph",
+        "LINK": "link-chainlink",
+        "XLM": "xlm-stellar",
+        "XRP": "xrp-xrp",
+        "USDT": "usdt-tether",
+        "USDC": "usdc-usd-coin",
+    }
+
+    coin_id = paprika_ids.get(asset)
+
+    if coin_id:
+        try:
+            data = _get_json(
+                f"https://api.coinpaprika.com/v1/tickers/{coin_id}?quotes=USD",
+                timeout=8,
+            )
+
+            price = float(
+                data["quotes"]["USD"]["price"]
+            )
+
+            _PRICE_CACHE[asset] = (
+                time.time(),
+                price,
+            )
+
+            return price
+
+        except Exception as exc:
+            errors.append(
+                f"CoinPaprika: {str(exc)[:80]}"
+            )
+
+    raise RuntimeError(
+        f"ไม่สามารถดึงราคา {asset} ได้ | "
+        + " | ".join(errors)
+    )
 
 
 def get_usdthb():
