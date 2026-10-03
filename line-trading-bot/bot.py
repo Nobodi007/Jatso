@@ -1,5 +1,9 @@
 import os
-from datetime import datetime
+import json
+import uuid
+import urllib.request
+import urllib.parse
+from datetime import datetime, timezone
 
 from flask import Flask, request, abort
 
@@ -17,7 +21,6 @@ from linebot.v3.messaging import (
 )
 
 from linebot.v3.messaging.models import PostbackAction
-
 from linebot.v3.webhooks import (
     MessageEvent,
     TextMessageContent,
@@ -26,13 +29,29 @@ from linebot.v3.webhooks import (
 
 
 # ============================================================
-# CONFIG
+# APP
 # ============================================================
 
 app = Flask(__name__)
 
 CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
 CHANNEL_SECRET = os.environ["LINE_CHANNEL_SECRET"]
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY = (
+    os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    or os.environ.get("SUPABASE_KEY")
+    or ""
+)
+
+# สำคัญมาก:
+# ต้องเป็น actor เดียวกับ account ที่เว็บ XSpring ใช้อยู่
+XSPRING_ACTOR = (
+    os.environ.get("XSPRING_LINE_ACTOR_EMAIL")
+    or os.environ.get("XSPRING_EMAIL")
+    or ""
+).strip().lower()
+
 
 configuration = Configuration(
     access_token=CHANNEL_ACCESS_TOKEN
@@ -42,80 +61,283 @@ handler = WebhookHandler(CHANNEL_SECRET)
 
 
 # ============================================================
-# SIMULATED TRADING
+# CONFIG
 # ============================================================
 
-# ราคาเหรียญ "จำลอง"
-# ยังไม่ได้เชื่อม Bitkub
-MOCK_PRICES = {
-    "BTC": 3_500_000,
-    "ETH": 120_000,
-    "XRP": 75,
-}
+SUPPORTED_ASSETS = [
+    "BTC",
+    "ETH",
+    "SOL",
+    "DOGE",
+    "ADA",
+    "HBAR",
+    "LINK",
+    "XLM",
+    "XRP",
+    "USDT",
+    "USDC",
+]
 
-# เงินเริ่มต้นของบัญชีจำลอง
-STARTING_CASH = 100_000.00
+# ตอนนี้ใช้ simulator fee เดียวกับที่หน้า Exchange แสดง
+TRADING_FEE_PCT = float(
+    os.environ.get("XSPRING_TRADING_FEE_PCT", "0.25")
+) / 100.0
 
-# เก็บข้อมูลผู้ใช้ไว้ใน RAM
-# หมายเหตุ: Render restart แล้วข้อมูลจะหาย
-users = {}
+MIN_TRADE_THB = float(
+    os.environ.get("XSPRING_MIN_TRADE_THB", "1")
+)
 
 
 # ============================================================
-# USER DATA
+# SUPABASE REST
 # ============================================================
 
-def create_user():
-    return {
-        "cash": STARTING_CASH,
+def supabase_request(method, path, payload=None, query=None):
 
-        "coins": {
-            "BTC": 0.0,
-            "ETH": 0.0,
-            "XRP": 0.0,
-        },
+    if not SUPABASE_URL:
+        raise RuntimeError("ยังไม่ได้ตั้ง SUPABASE_URL")
 
-        "history": [],
+    if not SUPABASE_KEY:
+        raise RuntimeError(
+            "ยังไม่ได้ตั้ง SUPABASE_SERVICE_ROLE_KEY หรือ SUPABASE_KEY"
+        )
 
-        # สถานะตอนกำลังซื้อ/ขาย
-        "pending_action": None,
-        "pending_coin": None,
+    url = SUPABASE_URL + path
+
+    if query:
+        url += "?" + urllib.parse.urlencode(query)
+
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
     }
 
+    data = None
 
-def get_user(user_id):
+    if payload is not None:
+        data = json.dumps(
+            payload,
+            ensure_ascii=False
+        ).encode("utf-8")
 
-    if user_id not in users:
-        users[user_id] = create_user()
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers=headers,
+        method=method,
+    )
 
-    return users[user_id]
+    with urllib.request.urlopen(
+        req,
+        timeout=10
+    ) as response:
+
+        raw = response.read()
+
+        if not raw:
+            return None
+
+        return json.loads(
+            raw.decode("utf-8")
+        )
+
+
+# ============================================================
+# SIM STATE
+# ============================================================
+
+def load_sim_state():
+
+    if not XSPRING_ACTOR:
+        raise RuntimeError(
+            "ยังไม่ได้ตั้ง XSPRING_LINE_ACTOR_EMAIL"
+        )
+
+    rows = supabase_request(
+        "GET",
+        "/rest/v1/sim_state",
+        query={
+            "select": "data,actor,updated_at",
+            "actor": f"eq.{XSPRING_ACTOR}",
+            "limit": "1",
+        },
+    )
+
+    if not rows:
+        raise RuntimeError(
+            "ไม่พบ XSpring Portfolio ของ actor นี้"
+        )
+
+    data = rows[0].get("data")
+
+    if isinstance(data, str):
+
+        data = json.loads(data)
+
+    if not isinstance(data, dict):
+
+        raise RuntimeError(
+            "sim_state ใน Supabase ไม่ใช่ JSON object"
+        )
+
+    return data
+
+
+def save_sim_state(sim):
+
+    supabase_request(
+        "PATCH",
+        "/rest/v1/sim_state",
+        payload={
+            "data": sim,
+            "updated_at": datetime.now(
+                timezone.utc
+            ).isoformat(),
+        },
+        query={
+            "actor": f"eq.{XSPRING_ACTOR}"
+        },
+    )
+
+
+# ============================================================
+# PRICE
+# ============================================================
+
+def get_price_usd(asset):
+
+    if asset in ["USDT", "USDC"]:
+        return 1.0
+
+    url = (
+        "https://api.binance.com/api/v3/ticker/price"
+        f"?symbol={asset}USDT"
+    )
+
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "JATSO-LINE-Bot"
+        },
+    )
+
+    with urllib.request.urlopen(
+        req,
+        timeout=8
+    ) as response:
+
+        data = json.loads(
+            response.read().decode("utf-8")
+        )
+
+    return float(data["price"])
+
+
+def get_usdthb():
+
+    # ใช้ exchangerate API แบบ public สำหรับ simulator
+    url = (
+        "https://open.er-api.com/v6/latest/USD"
+    )
+
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "JATSO-LINE-Bot"
+        },
+    )
+
+    with urllib.request.urlopen(
+        req,
+        timeout=8
+    ) as response:
+
+        data = json.loads(
+            response.read().decode("utf-8")
+        )
+
+    return float(
+        data["rates"]["THB"]
+    )
+
+
+def get_price_thb(asset):
+
+    usd = get_price_usd(asset)
+    fx = get_usdthb()
+
+    return usd * fx
+
+
+# ============================================================
+# USER SESSION
+# ============================================================
+
+line_sessions = {}
+
+
+def get_session(user_id):
+
+    if user_id not in line_sessions:
+
+        line_sessions[user_id] = {
+            "action": None,
+            "asset": None,
+            "amount": None,
+            "quote": None,
+            "order_id": None,
+        }
+
+    return line_sessions[user_id]
+
+
+def clear_session(user_id):
+
+    line_sessions[user_id] = {
+        "action": None,
+        "asset": None,
+        "amount": None,
+        "quote": None,
+        "order_id": None,
+    }
 
 
 # ============================================================
 # FORMAT
 # ============================================================
 
-def money(value):
-    return f"{value:,.2f} บาท"
+def money(v):
+
+    return f"฿{float(v):,.2f}"
 
 
-def coin_amount(value):
-    return f"{value:,.8f}"
+def coin(v):
 
-
-def portfolio_value(user):
-
-    total = user["cash"]
-
-    for coin, amount in user["coins"].items():
-        total += amount * MOCK_PRICES[coin]
-
-    return total
+    return f"{float(v):,.8f}"
 
 
 # ============================================================
-# QUICK REPLY
+# MENU
 # ============================================================
+
+def menu_text():
+
+    return (
+        "🤖 JATSO Trading Bot\n\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "📊 ราคา\n"
+        "💰 ซื้อ\n"
+        "🔴 ขาย\n"
+        "💼 พอร์ต\n"
+        "📜 ประวัติ\n"
+        "━━━━━━━━━━━━━━━━\n\n"
+        "ระบบนี้เชื่อมกับ XSpring Dealer Suite\n"
+        "⚠️ ยังเป็น Exchange Simulator\n\n"
+        "พิมพ์ \"เมนู\" เพื่อกลับหน้าหลัก"
+    )
+
 
 def quick_menu():
 
@@ -125,60 +347,39 @@ def quick_menu():
             QuickReplyItem(
                 action=PostbackAction(
                     label="📊 ราคา",
-                    data="menu=price"
+                    data="price",
                 )
             ),
 
             QuickReplyItem(
                 action=PostbackAction(
                     label="💰 ซื้อ",
-                    data="menu=buy"
+                    data="buy",
                 )
             ),
 
             QuickReplyItem(
                 action=PostbackAction(
                     label="🔴 ขาย",
-                    data="menu=sell"
+                    data="sell",
                 )
             ),
 
             QuickReplyItem(
                 action=PostbackAction(
                     label="💼 พอร์ต",
-                    data="menu=portfolio"
+                    data="portfolio",
                 )
             ),
 
             QuickReplyItem(
                 action=PostbackAction(
                     label="📜 ประวัติ",
-                    data="menu=history"
+                    data="history",
                 )
             ),
+
         ]
-    )
-
-
-# ============================================================
-# MAIN MENU
-# ============================================================
-
-def main_menu():
-
-    return (
-        "🤖 JATSO Trading Bot\n\n"
-        "ระบบซื้อขาย Cryptocurrency แบบจำลอง\n"
-        "⚠️ ตอนนี้ยังไม่ใช้เงินจริง\n\n"
-        "━━━━━━━━━━━━━━\n\n"
-        "📊 ราคาเหรียญ\n"
-        "💰 ซื้อ\n"
-        "🔴 ขาย\n"
-        "💼 พอร์ต\n"
-        "📜 ประวัติ\n\n"
-        "━━━━━━━━━━━━━━\n\n"
-        "กดปุ่มด้านล่าง หรือพิมพ์:\n"
-        "เมนู"
     )
 
 
@@ -186,20 +387,147 @@ def main_menu():
 # PRICE
 # ============================================================
 
-def price_menu():
+def show_price(asset="BTC"):
+
+    asset = asset.upper()
+
+    if asset not in SUPPORTED_ASSETS:
+
+        return "❌ ไม่รองรับเหรียญนี้"
+
+    try:
+
+        px = get_price_thb(asset)
+
+        return (
+            f"📊 {asset}/THB\n\n"
+            f"ราคาปัจจุบันประมาณ\n"
+            f"{money(px)}\n\n"
+            "⚠️ ราคาสำหรับ Simulator"
+        )
+
+    except Exception as exc:
+
+        return (
+            "❌ ดึงราคาไม่ได้\n\n"
+            f"{str(exc)[:120]}"
+        )
+
+
+# ============================================================
+# PORTFOLIO
+# ============================================================
+
+def show_portfolio():
+
+    sim = load_sim_state()
+
+    cash = float(
+        sim.get(
+            "customer_thb",
+            0
+        ) or 0
+    )
+
+    coins = sim.get(
+        "customer_coins",
+        {}
+    )
+
+    if not isinstance(coins, dict):
+
+        coins = {}
 
     text = (
-        "📊 ราคาคริปโตจำลอง\n\n"
-        f"🟠 BTC\n"
-        f"{money(MOCK_PRICES['BTC'])}\n\n"
-        f"🔵 ETH\n"
-        f"{money(MOCK_PRICES['ETH'])}\n\n"
-        f"⚪ XRP\n"
-        f"{money(MOCK_PRICES['XRP'])}\n\n"
-        "━━━━━━━━━━━━━━\n"
-        "⚠️ ราคานี้เป็นราคาจำลอง\n"
-        "ยังไม่ได้เชื่อม Bitkub"
+        "💼 XSpring Portfolio\n\n"
+        f"💵 THB\n"
+        f"{money(cash)}\n\n"
+        "━━━━━━━━━━━━━━━━\n"
     )
+
+    for asset, qty in coins.items():
+
+        try:
+
+            qty = float(qty)
+
+        except Exception:
+
+            continue
+
+        if qty <= 0:
+            continue
+
+        try:
+
+            px = get_price_thb(asset)
+            value = qty * px
+
+            text += (
+                f"\n🪙 {asset}\n"
+                f"จำนวน {coin(qty)}\n"
+                f"มูลค่า {money(value)}\n"
+            )
+
+        except Exception:
+
+            text += (
+                f"\n🪙 {asset}\n"
+                f"จำนวน {coin(qty)}\n"
+            )
+
+    return text
+
+
+# ============================================================
+# HISTORY
+# ============================================================
+
+def show_history():
+
+    sim = load_sim_state()
+
+    orders = sim.get(
+        "orders",
+        []
+    )
+
+    if not orders:
+
+        return (
+            "📜 ประวัติ\n\n"
+            "ยังไม่มีรายการ"
+        )
+
+    rows = [
+        x
+        for x in orders
+        if isinstance(x, dict)
+        and str(
+            x.get("Source", "")
+        ).lower() == "line"
+    ]
+
+    if not rows:
+
+        return (
+            "📜 ประวัติ LINE\n\n"
+            "ยังไม่มีรายการซื้อขายผ่าน LINE"
+        )
+
+    text = "📜 ประวัติ LINE\n\n"
+
+    for rec in rows[-10:][::-1]:
+
+        text += (
+            f"{'🟢' if rec.get('ฝั่ง') == 'ซื้อ' else '🔴'} "
+            f"{rec.get('ฝั่ง', '—')} "
+            f"{rec.get('เหรียญ', '—')}\n"
+            f"มูลค่า: {money(rec.get('มูลค่า (บาท)', 0))}\n"
+            f"ราคา: {money(rec.get('ราคาที่ลูกค้าได้', 0))}\n"
+            f"Order: {rec.get('Order ID', '—')}\n"
+            "━━━━━━━━━━━━\n"
+        )
 
     return text
 
@@ -208,19 +536,22 @@ def price_menu():
 # BUY
 # ============================================================
 
-def start_buy(user):
+def start_buy(user_id):
 
-    user["pending_action"] = "buy"
-    user["pending_coin"] = None
+    s = get_session(user_id)
+
+    s["action"] = "buy"
+    s["asset"] = None
+    s["amount"] = None
+    s["quote"] = None
+    s["order_id"] = None
 
     return (
-        "💰 ซื้อ Cryptocurrency\n\n"
-        "เลือกเหรียญที่ต้องการซื้อ\n\n"
-        "พิมพ์:\n"
-        "BTC\n"
-        "ETH\n"
-        "XRP\n\n"
-        "หรือพิมพ์ \"ยกเลิก\""
+        "💰 BUY\n\n"
+        "พิมพ์เหรียญที่ต้องการซื้อ\n\n"
+        "ตัวอย่าง:\n"
+        "BTC\n\n"
+        "หรือพิมพ์ /cancel"
     )
 
 
@@ -228,182 +559,248 @@ def start_buy(user):
 # SELL
 # ============================================================
 
-def start_sell(user):
+def start_sell(user_id):
 
-    user["pending_action"] = "sell"
-    user["pending_coin"] = None
+    s = get_session(user_id)
+
+    s["action"] = "sell"
+    s["asset"] = None
+    s["amount"] = None
+    s["quote"] = None
+    s["order_id"] = None
 
     return (
-        "🔴 ขาย Cryptocurrency\n\n"
-        "เลือกเหรียญที่ต้องการขาย\n\n"
-        "พิมพ์:\n"
-        "BTC\n"
-        "ETH\n"
-        "XRP\n\n"
-        "หรือพิมพ์ \"ยกเลิก\""
+        "🔴 SELL\n\n"
+        "พิมพ์เหรียญที่ต้องการขาย\n\n"
+        "ตัวอย่าง:\n"
+        "BTC\n\n"
+        "หรือพิมพ์ /cancel"
     )
 
 
 # ============================================================
-# PORTFOLIO
+# COIN SELECTION
 # ============================================================
 
-def portfolio_menu(user):
+def select_coin(user_id, text):
 
-    total = portfolio_value(user)
+    asset = text.upper().strip()
 
-    btc_value = user["coins"]["BTC"] * MOCK_PRICES["BTC"]
-    eth_value = user["coins"]["ETH"] * MOCK_PRICES["ETH"]
-    xrp_value = user["coins"]["XRP"] * MOCK_PRICES["XRP"]
-
-    return (
-        "💼 JATSO Portfolio\n\n"
-
-        f"💵 เงินสด\n"
-        f"{money(user['cash'])}\n\n"
-
-        "━━━━━━━━━━━━━━\n\n"
-
-        f"🟠 BTC\n"
-        f"จำนวน: {coin_amount(user['coins']['BTC'])}\n"
-        f"มูลค่า: {money(btc_value)}\n\n"
-
-        f"🔵 ETH\n"
-        f"จำนวน: {coin_amount(user['coins']['ETH'])}\n"
-        f"มูลค่า: {money(eth_value)}\n\n"
-
-        f"⚪ XRP\n"
-        f"จำนวน: {coin_amount(user['coins']['XRP'])}\n"
-        f"มูลค่า: {money(xrp_value)}\n\n"
-
-        "━━━━━━━━━━━━━━\n\n"
-
-        f"💼 มูลค่าพอร์ตรวม\n"
-        f"{money(total)}"
-    )
-
-
-# ============================================================
-# HISTORY
-# ============================================================
-
-def history_menu(user):
-
-    history = user["history"]
-
-    if not history:
+    if asset not in SUPPORTED_ASSETS:
 
         return (
-            "📜 ประวัติการซื้อขาย\n\n"
-            "ยังไม่มีรายการซื้อขาย"
-        )
-
-    text = "📜 ประวัติการซื้อขาย\n\n"
-
-    # แสดงสูงสุด 10 รายการล่าสุด
-    for trade in history[-10:][::-1]:
-
-        if trade["action"] == "BUY":
-            emoji = "💰"
-            action_text = "ซื้อ"
-        else:
-            emoji = "🔴"
-            action_text = "ขาย"
-
-        text += (
-            f"{emoji} {action_text} {trade['coin']}\n"
-            f"จำนวน: {coin_amount(trade['amount'])}\n"
-            f"ราคา: {money(trade['price'])}\n"
-            f"มูลค่า: {money(trade['total'])}\n"
-            f"เวลา: {trade['time']}\n"
-            "━━━━━━━━━━━━━━\n"
-        )
-
-    return text
-
-
-# ============================================================
-# PROCESS COIN
-# ============================================================
-
-def process_coin(user, text):
-
-    coin = text.upper().strip()
-
-    if coin not in MOCK_PRICES:
-
-        return (
-            "❌ ไม่พบเหรียญนี้\n\n"
+            "❌ ไม่พบเหรียญ\n\n"
             "รองรับ:\n"
-            "BTC\n"
-            "ETH\n"
-            "XRP\n\n"
-            "หรือพิมพ์ \"ยกเลิก\""
+            + ", ".join(SUPPORTED_ASSETS)
         )
 
-    user["pending_coin"] = coin
+    s = get_session(user_id)
 
-    price = MOCK_PRICES[coin]
+    s["asset"] = asset
 
-    if user["pending_action"] == "buy":
+    if s["action"] == "buy":
 
         return (
-            f"💰 ซื้อ {coin}\n\n"
-            f"ราคาปัจจุบัน:\n"
-            f"{money(price)}\n\n"
-            "ต้องการใช้เงินกี่บาท?\n\n"
+            f"💰 BUY {asset}\n\n"
+            "ต้องการซื้อเป็นเงินกี่บาท?\n\n"
             "ตัวอย่าง:\n"
-            "1000\n\n"
-            "หรือพิมพ์ \"ยกเลิก\""
+            "500000"
         )
 
-    if user["pending_action"] == "sell":
-
-        owned = user["coins"][coin]
-
-        return (
-            f"🔴 ขาย {coin}\n\n"
-            f"ราคาปัจจุบัน:\n"
-            f"{money(price)}\n\n"
-            f"คุณมี:\n"
-            f"{coin_amount(owned)} {coin}\n\n"
-            "ต้องการขายกี่เหรียญ?\n\n"
-            "ตัวอย่าง:\n"
-            "0.001\n\n"
-            "หรือพิมพ์ \"ยกเลิก\""
-        )
-
-    return main_menu()
+    return (
+        f"🔴 SELL {asset}\n\n"
+        "ต้องการขายกี่เหรียญ?\n\n"
+        "ตัวอย่าง:\n"
+        "0.1"
+    )
 
 
 # ============================================================
-# PROCESS TRADE
+# CREATE ORDER
 # ============================================================
 
-def process_trade(user, text):
+def create_order_preview(user_id, amount):
+
+    s = get_session(user_id)
+
+    asset = s["asset"]
+    action = s["action"]
+
+    sim = load_sim_state()
+
+    cash = float(
+        sim.get(
+            "customer_thb",
+            0
+        ) or 0
+    )
+
+    coins = sim.setdefault(
+        "customer_coins",
+        {}
+    )
+
+    owned = float(
+        coins.get(
+            asset,
+            0
+        ) or 0
+    )
 
     try:
 
-        amount = float(
-            text.replace(",", "").strip()
-        )
+        market_price = get_price_thb(asset)
 
-    except ValueError:
+    except Exception as exc:
 
         return (
-            "❌ กรุณาใส่ตัวเลขเท่านั้น\n\n"
-            "ตัวอย่าง:\n"
-            "1000"
+            f"❌ ดึงราคา {asset} ไม่ได้\n"
+            f"{str(exc)[:100]}"
         )
 
-    if amount <= 0:
+    if action == "buy":
+
+        amount_thb = amount
+
+        if amount_thb < MIN_TRADE_THB:
+
+            return "❌ มูลค่าซื้อต่ำเกินไป"
+
+        if amount_thb > cash:
+
+            return (
+                "❌ เงินไม่พอ\n\n"
+                f"เงินคงเหลือ: {money(cash)}\n"
+                f"ต้องการ: {money(amount_thb)}"
+            )
+
+        quote = market_price
+
+        fee = amount_thb * TRADING_FEE_PCT
+
+        qty = amount_thb / quote
+
+        order_id = (
+            "LINE-"
+            + uuid.uuid4().hex[:10].upper()
+        )
+
+        s["amount"] = amount_thb
+        s["quote"] = quote
+        s["order_id"] = order_id
+
+        return (
+            "🟢 ยืนยันคำสั่ง BUY\n\n"
+            f"Order ID: {order_id}\n"
+            f"Source: LINE\n"
+            f"Pair: {asset}/THB\n"
+            f"Type: MARKET\n\n"
+            f"จำนวนเงิน: {money(amount_thb)}\n"
+            f"ราคา: {money(quote)}\n"
+            f"ประมาณได้รับ: {coin(qty)} {asset}\n"
+            f"Fee: {fee:,.2f} บาท\n\n"
+            "⚠️ Exchange Simulator\n\n"
+            "พิมพ์ /confirm เพื่อยืนยัน\n"
+            "หรือ /cancel เพื่อยกเลิก"
+        )
+
+    # SELL
+
+    qty = amount
+
+    if qty <= 0:
 
         return "❌ จำนวนต้องมากกว่า 0"
 
-    action = user["pending_action"]
-    coin = user["pending_coin"]
-    price = MOCK_PRICES[coin]
+    if qty > owned:
 
+        return (
+            "❌ เหรียญไม่พอ\n\n"
+            f"ถืออยู่: {coin(owned)} {asset}\n"
+            f"ต้องการขาย: {coin(qty)} {asset}"
+        )
+
+    quote = market_price
+
+    gross = qty * quote
+
+    fee = gross * TRADING_FEE_PCT
+
+    receive = gross - fee
+
+    order_id = (
+        "LINE-"
+        + uuid.uuid4().hex[:10].upper()
+    )
+
+    s["amount"] = qty
+    s["quote"] = quote
+    s["order_id"] = order_id
+
+    return (
+        "🔴 ยืนยันคำสั่ง SELL\n\n"
+        f"Order ID: {order_id}\n"
+        f"Source: LINE\n"
+        f"Pair: {asset}/THB\n"
+        f"Type: MARKET\n\n"
+        f"จำนวน: {coin(qty)} {asset}\n"
+        f"ราคา: {money(quote)}\n"
+        f"มูลค่าขาย: {money(gross)}\n"
+        f"Fee: {money(fee)}\n"
+        f"ได้รับสุทธิ: {money(receive)}\n\n"
+        "⚠️ Exchange Simulator\n\n"
+        "พิมพ์ /confirm เพื่อยืนยัน\n"
+        "หรือ /cancel เพื่อยกเลิก"
+    )
+
+
+# ============================================================
+# CONFIRM
+# ============================================================
+
+def confirm_order(user_id):
+
+    s = get_session(user_id)
+
+    if not s.get("action"):
+        return "❌ ไม่มีคำสั่งที่รอยืนยัน"
+
+    if not s.get("asset"):
+        return "❌ ยังไม่ได้เลือกเหรียญ"
+
+    if not s.get("amount"):
+        return "❌ ยังไม่ได้ระบุจำนวน"
+
+    sim = load_sim_state()
+
+    cash = float(
+        sim.get(
+            "customer_thb",
+            0
+        ) or 0
+    )
+
+    coins = sim.setdefault(
+        "customer_coins",
+        {}
+    )
+
+    asset = s["asset"]
+    action = s["action"]
+    amount = float(s["amount"])
+    quote = float(s["quote"])
+    order_id = s["order_id"]
+
+    owned = float(
+        coins.get(
+            asset,
+            0
+        ) or 0
+    )
+
+    now = datetime.now(
+        timezone.utc
+    )
 
     # ========================================================
     # BUY
@@ -411,161 +808,165 @@ def process_trade(user, text):
 
     if action == "buy":
 
-        cash_to_use = amount
-
-        if cash_to_use > user["cash"]:
+        if amount > cash:
 
             return (
-                "❌ เงินไม่พอ\n\n"
-                f"เงินที่มี:\n"
-                f"{money(user['cash'])}\n\n"
-                f"ต้องการใช้:\n"
-                f"{money(cash_to_use)}"
+                "❌ ORDER REJECTED\n\n"
+                "เงินคงเหลือไม่พอ"
             )
 
-        bought_amount = cash_to_use / price
+        qty = amount / quote
 
-        user["cash"] -= cash_to_use
+        fee = amount * TRADING_FEE_PCT
 
-        user["coins"][coin] += bought_amount
-
-        user["history"].append({
-
-            "action": "BUY",
-
-            "coin": coin,
-
-            "amount": bought_amount,
-
-            "price": price,
-
-            "total": cash_to_use,
-
-            "time": datetime.now().strftime(
-                "%d/%m/%Y %H:%M:%S"
-            ),
-        })
-
-        # reset state
-        user["pending_action"] = None
-        user["pending_coin"] = None
-
-        return (
-            "✅ ซื้อสำเร็จ\n\n"
-
-            f"🪙 เหรียญ: {coin}\n"
-
-            f"📦 จำนวน:\n"
-            f"{coin_amount(bought_amount)} {coin}\n\n"
-
-            f"💰 ราคา:\n"
-            f"{money(price)}\n\n"
-
-            f"💵 ใช้เงิน:\n"
-            f"{money(cash_to_use)}\n\n"
-
-            "━━━━━━━━━━━━━━\n\n"
-
-            f"💵 เงินคงเหลือ:\n"
-            f"{money(user['cash'])}"
+        coins[asset] = (
+            owned + qty
         )
 
+        sim["customer_thb"] = (
+            cash - amount
+        )
+
+        side_th = "ซื้อ"
+
+        delivered = qty
 
     # ========================================================
     # SELL
     # ========================================================
 
-    if action == "sell":
+    else:
 
-        sell_amount = amount
+        qty = amount
 
-        owned = user["coins"][coin]
-
-        if sell_amount > owned:
+        if qty > owned:
 
             return (
-                "❌ เหรียญไม่พอ\n\n"
-
-                f"คุณมี:\n"
-                f"{coin_amount(owned)} {coin}\n\n"
-
-                f"ต้องการขาย:\n"
-                f"{coin_amount(sell_amount)} {coin}"
+                "❌ ORDER REJECTED\n\n"
+                "เหรียญคงเหลือไม่พอ"
             )
 
-        cash_received = sell_amount * price
+        gross = qty * quote
 
-        user["coins"][coin] -= sell_amount
+        fee = gross * TRADING_FEE_PCT
 
-        user["cash"] += cash_received
+        receive = gross - fee
 
-        user["history"].append({
-
-            "action": "SELL",
-
-            "coin": coin,
-
-            "amount": sell_amount,
-
-            "price": price,
-
-            "total": cash_received,
-
-            "time": datetime.now().strftime(
-                "%d/%m/%Y %H:%M:%S"
-            ),
-        })
-
-        # reset state
-        user["pending_action"] = None
-        user["pending_coin"] = None
-
-        return (
-            "✅ ขายสำเร็จ\n\n"
-
-            f"🪙 เหรียญ: {coin}\n"
-
-            f"📦 จำนวน:\n"
-            f"{coin_amount(sell_amount)} {coin}\n\n"
-
-            f"💰 ราคา:\n"
-            f"{money(price)}\n\n"
-
-            f"💵 ได้รับเงิน:\n"
-            f"{money(cash_received)}\n\n"
-
-            "━━━━━━━━━━━━━━\n\n"
-
-            f"💵 เงินคงเหลือ:\n"
-            f"{money(user['cash'])}"
+        coins[asset] = max(
+            0.0,
+            owned - qty
         )
 
+        sim["customer_thb"] = (
+            cash + receive
+        )
 
-    return main_menu()
+        side_th = "ขาย"
+
+        delivered = qty
+
+        amount = gross
+
+    # ========================================================
+    # ORDER RECORD
+    # ========================================================
+
+    order = {
+
+        "วันที่": now.strftime(
+            "%Y-%m-%d"
+        ),
+
+        "เวลา": now.strftime(
+            "%H:%M:%S"
+        ),
+
+        "ฝั่ง": side_th,
+
+        "เหรียญ": asset,
+
+        "มูลค่า (บาท)": amount,
+
+        "ราคาที่ลูกค้าได้": quote,
+
+        "เหรียญที่ส่งมอบ": delivered,
+
+        "ค่าธรรมเนียม": fee,
+
+        "สถานะ": "Filled",
+
+        "ประเภท": "MARKET",
+
+        "Exchange": "XSpring Simulator",
+
+        "Source": "LINE",
+
+        "Order ID": order_id,
+
+        "Customer": XSPRING_ACTOR,
+
+        "Line User ID": user_id,
+
+    }
+
+    sim.setdefault(
+        "orders",
+        []
+    ).append(order)
+
+    # ========================================================
+    # SAVE
+    # ========================================================
+
+    save_sim_state(sim)
+
+    # clear pending
+    clear_session(user_id)
+
+    return (
+        "✅ ORDER FILLED\n\n"
+        f"Order ID: {order_id}\n"
+        f"Source: LINE\n"
+        f"Exchange: XSpring Simulator\n\n"
+        f"{'ซื้อ' if action == 'buy' else 'ขาย'} "
+        f"{coin(delivered)} {asset}\n"
+        f"ราคา: {money(quote)}\n"
+        f"Fee: {money(fee)}\n\n"
+        f"💵 THB คงเหลือ\n"
+        f"{money(sim['customer_thb'])}\n\n"
+        f"🪙 {asset}\n"
+        f"{coin(coins[asset])}\n\n"
+        "Portfolio ใน XSpring Dealer Suite "
+        "จะใช้รายการนี้เป็น Source: LINE"
+    )
 
 
 # ============================================================
 # REPLY
 # ============================================================
 
-def reply_message(reply_token, text):
+def reply_message(
+    reply_token,
+    text
+):
 
-    with ApiClient(configuration) as api_client:
+    with ApiClient(
+        configuration
+    ) as api_client:
 
-        messaging_api = MessagingApi(api_client)
+        api = MessagingApi(
+            api_client
+        )
 
-        messaging_api.reply_message(
+        api.reply_message(
 
             ReplyMessageRequest(
 
                 reply_token=reply_token,
 
                 messages=[
-
                     TextMessage(
-
                         text=text,
-
                         quick_reply=quick_menu()
                     )
                 ]
@@ -577,7 +978,10 @@ def reply_message(reply_token, text):
 # WEBHOOK
 # ============================================================
 
-@app.route("/webhook", methods=["POST"])
+@app.route(
+    "/webhook",
+    methods=["POST"]
+)
 def webhook():
 
     signature = request.headers.get(
@@ -606,7 +1010,7 @@ def webhook():
 
 
 # ============================================================
-# MESSAGE HANDLER
+# MESSAGE
 # ============================================================
 
 @handler.add(
@@ -617,135 +1021,185 @@ def handle_message(event):
 
     user_id = event.source.user_id
 
-    user = get_user(user_id)
+    text = (
+        event.message.text
+        .strip()
+    )
 
-    user_text = event.message.text.strip()
+    lower = text.lower()
 
-    text_lower = user_text.lower()
+    try:
 
+        # ----------------------------------------------------
+        # CANCEL
+        # ----------------------------------------------------
 
-    # ========================================================
-    # CANCEL
-    # ========================================================
+        if lower in [
+            "/cancel",
+            "cancel",
+            "ยกเลิก",
+        ]:
 
-    if text_lower in [
-        "ยกเลิก",
-        "cancel",
-        "ยกเลิกคำสั่ง"
-    ]:
-
-        user["pending_action"] = None
-        user["pending_coin"] = None
-
-        reply_message(
-            event.reply_token,
-            "❌ ยกเลิกคำสั่งแล้ว\n\n" + main_menu()
-        )
-
-        return
-
-
-    # ========================================================
-    # BUY / SELL FLOW
-    # ========================================================
-
-    if user["pending_action"] in [
-        "buy",
-        "sell"
-    ]:
-
-        # ยังไม่ได้เลือกเหรียญ
-        if user["pending_coin"] is None:
-
-            response = process_coin(
-                user,
-                user_text
+            clear_session(
+                user_id
             )
 
-        # เลือกเหรียญแล้ว กำลังรอจำนวน
+            response = (
+                "❌ ยกเลิกคำสั่งแล้ว\n\n"
+                + menu_text()
+            )
+
+        # ----------------------------------------------------
+        # CONFIRM
+        # ----------------------------------------------------
+
+        elif lower in [
+            "/confirm",
+            "confirm",
+        ]:
+
+            response = confirm_order(
+                user_id
+            )
+
+        # ----------------------------------------------------
+        # MENU
+        # ----------------------------------------------------
+
+        elif lower in [
+            "เมนู",
+            "menu",
+            "/start",
+            "start",
+        ]:
+
+            response = menu_text()
+
+        # ----------------------------------------------------
+        # PRICE
+        # ----------------------------------------------------
+
+        elif lower in [
+            "ราคา",
+            "price",
+            "ราคา btc",
+        ]:
+
+            response = show_price("BTC")
+
+        # ----------------------------------------------------
+        # BUY
+        # ----------------------------------------------------
+
+        elif lower in [
+            "ซื้อ",
+            "buy",
+        ]:
+
+            response = start_buy(
+                user_id
+            )
+
+        # ----------------------------------------------------
+        # SELL
+        # ----------------------------------------------------
+
+        elif lower in [
+            "ขาย",
+            "sell",
+        ]:
+
+            response = start_sell(
+                user_id
+            )
+
+        # ----------------------------------------------------
+        # PORTFOLIO
+        # ----------------------------------------------------
+
+        elif lower in [
+            "พอร์ต",
+            "portfolio",
+            "wallet",
+        ]:
+
+            response = show_portfolio()
+
+        # ----------------------------------------------------
+        # HISTORY
+        # ----------------------------------------------------
+
+        elif lower in [
+            "ประวัติ",
+            "history",
+        ]:
+
+            response = show_history()
+
+        # ----------------------------------------------------
+        # BUY / SELL FLOW
+        # ----------------------------------------------------
+
         else:
 
-            response = process_trade(
-                user,
-                user_text
+            session = get_session(
+                user_id
             )
 
-        reply_message(
-            event.reply_token,
-            response
+            if session["action"]:
+
+                # ขั้นเลือกเหรียญ
+                if session["asset"] is None:
+
+                    response = select_coin(
+                        user_id,
+                        text
+                    )
+
+                # ขั้นกรอกจำนวน
+                else:
+
+                    try:
+
+                        value = float(
+                            text.replace(
+                                ",",
+                                ""
+                            )
+                        )
+
+                    except ValueError:
+
+                        response = (
+                            "❌ กรุณาใส่ตัวเลข\n\n"
+                            "ตัวอย่าง:\n"
+                            "500000"
+                        )
+
+                    else:
+
+                        response = create_order_preview(
+                            user_id,
+                            value
+                        )
+
+            else:
+
+                response = (
+                    "🤖 ไม่พบคำสั่ง\n\n"
+                    "พิมพ์ \"เมนู\" เพื่อเปิด JATSO Trading Bot"
+                )
+
+    except Exception as exc:
+
+        print(
+            f"[LINE ERROR] {type(exc).__name__}: {exc}"
         )
-
-        return
-
-
-    # ========================================================
-    # MAIN COMMANDS
-    # ========================================================
-
-    if text_lower in [
-        "เมนู",
-        "menu",
-        "start",
-        "เริ่ม"
-    ]:
-
-        response = main_menu()
-
-
-    elif text_lower in [
-        "1",
-        "ราคา",
-        "ราคาเหรียญ",
-        "price"
-    ]:
-
-        response = price_menu()
-
-
-    elif text_lower in [
-        "2",
-        "ซื้อ",
-        "buy"
-    ]:
-
-        response = start_buy(user)
-
-
-    elif text_lower in [
-        "3",
-        "ขาย",
-        "sell"
-    ]:
-
-        response = start_sell(user)
-
-
-    elif text_lower in [
-        "4",
-        "พอร์ต",
-        "portfolio"
-    ]:
-
-        response = portfolio_menu(user)
-
-
-    elif text_lower in [
-        "5",
-        "ประวัติ",
-        "history"
-    ]:
-
-        response = history_menu(user)
-
-
-    else:
 
         response = (
-            "🤖 JATSO Trading Bot\n\n"
-            "ไม่พบคำสั่งนี้ครับ\n\n"
-            "พิมพ์ \"เมนู\" เพื่อเปิด Trading Bot"
+            "❌ ระบบเกิดข้อผิดพลาด\n\n"
+            "ลองใหม่อีกครั้งครับ"
         )
-
 
     reply_message(
         event.reply_token,
@@ -754,7 +1208,7 @@ def handle_message(event):
 
 
 # ============================================================
-# POSTBACK HANDLER
+# POSTBACK
 # ============================================================
 
 @handler.add(PostbackEvent)
@@ -762,40 +1216,47 @@ def handle_postback(event):
 
     user_id = event.source.user_id
 
-    user = get_user(user_id)
-
     data = event.postback.data
 
+    try:
 
-    if data == "menu=price":
+        if data == "price":
 
-        response = price_menu()
+            response = show_price("BTC")
 
+        elif data == "buy":
 
-    elif data == "menu=buy":
+            response = start_buy(
+                user_id
+            )
 
-        response = start_buy(user)
+        elif data == "sell":
 
+            response = start_sell(
+                user_id
+            )
 
-    elif data == "menu=sell":
+        elif data == "portfolio":
 
-        response = start_sell(user)
+            response = show_portfolio()
 
+        elif data == "history":
 
-    elif data == "menu=portfolio":
+            response = show_history()
 
-        response = portfolio_menu(user)
+        else:
 
+            response = menu_text()
 
-    elif data == "menu=history":
+    except Exception as exc:
 
-        response = history_menu(user)
+        print(
+            f"[LINE POSTBACK ERROR] {exc}"
+        )
 
-
-    else:
-
-        response = main_menu()
-
+        response = (
+            "❌ ระบบเกิดข้อผิดพลาด"
+        )
 
     reply_message(
         event.reply_token,
@@ -807,10 +1268,12 @@ def handle_postback(event):
 # HOME
 # ============================================================
 
-@app.route("/", methods=["GET"])
+@app.route("/")
 def home():
 
-    return "JATSO LINE Trading Bot is running."
+    return (
+        "JATSO LINE Trading Bot is running."
+    )
 
 
 # ============================================================
@@ -820,9 +1283,7 @@ def home():
 if __name__ == "__main__":
 
     app.run(
-
         host="0.0.0.0",
-
         port=int(
             os.environ.get(
                 "PORT",
