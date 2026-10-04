@@ -7959,7 +7959,7 @@ def render_arb_intelligence_analytics(base: str = "BTC") -> None:
     st.dataframe(matrix[["Category", "Snapshots"]], use_container_width=True, hide_index=True)
     st.caption("Liquidity ใช้ 24h Turnover เป็น proxy เดิมของระบบ · Quality Matrix เป็น research heuristic ไม่ใช่ executable execution score")
 
-def render_perp_venue_table (base :str ="BTC")->None :
+def _render_perp_venue_table_live (base :str ="BTC")->None :
     # Board switch lives in the same visual area.  It changes the actual data
     # source, not just the heading.
     board_labels = ["🇹🇭 กระดานไทย", "🌐 Global"]
@@ -7995,8 +7995,17 @@ def render_perp_venue_table (base :str ="BTC")->None :
                     st.success("บันทึก Key/Secret ใน session แล้ว กำลังโหลดข้อมูลใหม่")
                     st.rerun()
 
+    # Live board: fetch a fresh REST snapshot every 3 seconds.
+    # The fragment reruns only this board section, so the rest of the app is not
+    # forced to rerun on every market-data tick.
     df ,ts =fetch_perp_venues (base, board=board)
     meta ={v ["name"]:v for v in venue_config}
+
+    try:
+        _live_clock = datetime.now().strftime("%H:%M:%S")
+    except Exception:
+        _live_clock = time.strftime("%H:%M:%S")
+    st.caption(f"🟢 LIVE · Auto refresh ทุก 3 วินาที · อัปเดตล่าสุด {_live_clock}")
 
     def _num (x :Any )->Optional [float ]:
         return None if pd .isna (x )else float (x )
@@ -8128,6 +8137,17 @@ def render_perp_venue_table (base :str ="BTC")->None :
 
     with tab_intel:
         render_arb_intelligence_analytics (base=base)
+
+
+# Public board renderer. Streamlit fragments support automatic reruns via
+# run_every; the project already detects fragment support for older runtimes.
+BOARD_AUTO_REFRESH_SEC = 3.0
+if HAS_FRAGMENT:
+    render_perp_venue_table = st.fragment(run_every=BOARD_AUTO_REFRESH_SEC)(
+        _render_perp_venue_table_live
+    )
+else:
+    render_perp_venue_table = _render_perp_venue_table_live
 
 
     # ============================================================
