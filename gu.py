@@ -5934,26 +5934,62 @@ def _spot_aster_global(b: str) -> tuple[float, float, float]:
 # --------------------------------------------------------------------------
 # THAI SPOT VENUES — กระดานไทย (ราคา THB)
 # --------------------------------------------------------------------------
-def _spot_bitkub_th(b: str) -> tuple[float, float, float]:
+def _spot_bitkub_th(b: str) -> dict[str, float]:
     d = _http_json(f"https://api.bitkub.com/api/v3/market/ticker?sym={b.lower()}_thb")
     if isinstance(d, list):
         d = d[0] if d else {}
     if not d or "last" not in d:
         raise ValueError("Bitkub: no ticker")
-    return float(d["last"]), float(d.get("percent_change") or 0.0), float(d.get("quote_volume") or d.get("base_volume") or 0.0)
+    last = float(d["last"])
+    bid = float(d.get("highest_bid") or last)
+    ask = float(d.get("lowest_ask") or last)
+    return {
+        "price": (bid + ask) / 2.0,
+        "bid": bid,
+        "ask": ask,
+        "chg": float(d.get("percent_change") or 0.0),
+        "turnover": float(d.get("quote_volume") or d.get("base_volume") or 0.0),
+        "via": "Bitkub Ticker v3",
+    }
 
 
-def _spot_binance_th(b: str) -> tuple[float, float, float]:
+def _spot_binance_th(b: str) -> dict[str, float]:
     d = _http_json(f"https://api.binance.th/api/v1/ticker/24hr?symbol={b.upper()}THB")
-    return float(d["lastPrice"]), float(d.get("priceChangePercent") or 0.0), float(d.get("quoteVolume") or 0.0)
+    last = float(d["lastPrice"])
+    bid = float(d.get("bidPrice") or last)
+    ask = float(d.get("askPrice") or last)
+    return {
+        "price": (bid + ask) / 2.0,
+        "bid": bid,
+        "ask": ask,
+        "chg": float(d.get("priceChangePercent") or 0.0),
+        "turnover": float(d.get("quoteVolume") or 0.0),
+        "via": "Binance TH Ticker API",
+    }
 
 
-def _spot_upbit_th(b: str) -> tuple[float, float, float]:
-    d = _http_json(f"https://th-api.upbit.com/v1/ticker?markets=THB-{b.upper()}")
-    if not isinstance(d, list) or not d:
+def _spot_upbit_th(b: str) -> dict[str, float]:
+    market = f"THB-{b.upper()}"
+    tick = _http_json(f"https://th-api.upbit.com/v1/ticker?markets={market}")
+    if not isinstance(tick, list) or not tick:
         raise ValueError("Upbit TH: no ticker")
-    d = d[0]
-    return float(d["trade_price"]), float(d.get("signed_change_rate") or 0.0) * 100.0, float(d.get("acc_trade_price_24h") or 0.0)
+    tick = tick[0]
+    last = float(tick["trade_price"])
+    # Upbit's ticker does not carry best bid/ask; use the public orderbook.
+    book = _http_json(f"https://th-api.upbit.com/v1/orderbook?markets={market}")
+    if not isinstance(book, list) or not book or not book[0].get("orderbook_units"):
+        raise ValueError("Upbit TH: no orderbook")
+    unit = book[0]["orderbook_units"][0]
+    bid = float(unit.get("bid_price") or last)
+    ask = float(unit.get("ask_price") or last)
+    return {
+        "price": (bid + ask) / 2.0,
+        "bid": bid,
+        "ask": ask,
+        "chg": float(tick.get("signed_change_rate") or 0.0) * 100.0,
+        "turnover": float(tick.get("acc_trade_price_24h") or 0.0),
+        "via": "Upbit TH Ticker + Orderbook API",
+    }
 
 
 def _get_innovestx_credentials() -> tuple[str, str]:
@@ -6252,8 +6288,8 @@ def _spot_orbix_th(b: str) -> tuple[float, float, float]:
         if best_bid <= 0 or best_ask <= 0 or best_ask < best_bid:
             raise ValueError("Orbix: invalid best bid/ask")
 
-        # Keep the board's existing 3-value contract: price, 24h change,
-        # turnover. Price is now the live order-book midpoint.
+        # The board now displays executable best bid/ask. Keep midpoint as an
+        # internal price for legacy analytics, but do not render it as Price.
         mid = (best_bid + best_ask) / 2.0
         chg = 0.0
         turnover = 0.0
@@ -6271,7 +6307,14 @@ def _spot_orbix_th(b: str) -> tuple[float, float, float]:
         except Exception:
             pass
 
-        return mid, chg, turnover
+        return {
+            "price": mid,
+            "bid": best_bid,
+            "ask": best_ask,
+            "chg": chg,
+            "turnover": turnover,
+            "via": "Orbix V3 Orderbook + Ticker",
+        }
 
     except Exception as e:
         raise RuntimeError(f"Orbix unavailable: {e}") from e
@@ -6545,7 +6588,8 @@ def fetch_perp_venues (base :str ="BTC", board :str ="global")->tuple [pd.DataFr
             if isinstance(result, dict):
                 p = float(result.get("price") or 0.0)
                 c = float(result.get("chg") or 0.0)
-                t = float(result.get("turnover") or 0.0)
+                _t_raw = result.get("turnover")
+                t = float(_t_raw) if _t_raw is not None else None
                 row["bid"] = float(result.get("bid") or 0.0) or None
                 row["ask"] = float(result.get("ask") or 0.0) or None
                 row["via"] = result.get("via")
@@ -6587,6 +6631,17 @@ ARB_ALERT_THRESHOLD_PCT = 0.05
 # (เดิม 0.05% เป็นระดับ perp จึงทำให้ net edge ของ Spot ดูดีเกินจริง)
 # ควรตรวจ fee tier จริงของบัญชีแล้วเพิ่ม preset ใน config.yaml
 DEFAULT_TAKER_FEE_PCT = 0.10
+
+# Thai Spot execution fee presets used by the Thai venue comparison board.
+# These are board-level assumptions for comparing executable quotes; they can
+# be updated later when account-specific fee tiers are wired into the app.
+_THAI_TAKER_FEE_PCT = {
+    "Bitkub": 0.25,
+    "Binance TH": 0.25,
+    "Upbit TH": 0.10,
+    "Orbix": 0.10,
+    "InnovestX": 0.20,
+}
 
 _VENUE_TO_FEE_PRESET = {
     "Binance": "Binance",
@@ -7488,6 +7543,92 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]], currency: str = 
             return f"{currency}{v:,.2f}"
         except Exception:
             return "—"
+
+    # ------------------------------------------------------------------
+    # Thai board: executable quote comparison.  The UI intentionally does
+    # not show the old observed/last Price column.  Bid/Ask are the primary
+    # quote inputs, then Spread, Fee, Net Buy and Net Sell are derived from
+    # those executable sides.
+    # ------------------------------------------------------------------
+    if currency == "฿":
+        def _thai_money(x: Any) -> str:
+            try:
+                return f"฿{float(x):,.0f}"
+            except Exception:
+                return "—"
+
+        def _thai_pct(x: Any) -> str:
+            try:
+                return f"{float(x):.2f}%"
+            except Exception:
+                return "—"
+
+        def _thai_row(r: dict[str, Any]) -> str:
+            name = str(r.get("exchange", "—"))
+            logo_html = (
+                f"<img class='venue-logo' src='{esc(r.get('logo',''))}' "
+                f"onerror=\"this.style.display='none'\" />"
+                if r.get("logo") else ""
+            )
+            symbol = esc(r.get("symbol", "—"))
+            url = esc(r.get("url", ""))
+            symbol_html = f"<a href='{url}' target='_blank' rel='noopener'>{symbol}</a>" if url else symbol
+            err = esc(r.get("err") or "ข้อมูลไม่พร้อม")
+            try:
+                bid = float(r.get("bid")) if r.get("bid") is not None else None
+                ask = float(r.get("ask")) if r.get("ask") is not None else None
+            except (TypeError, ValueError):
+                bid, ask = None, None
+            fee = float(_THAI_TAKER_FEE_PCT.get(name, DEFAULT_TAKER_FEE_PCT))
+            if bid is None or ask is None or bid <= 0 or ask <= 0:
+                return f"""
+                <tr class='thai-exec-row'>
+                  <td class='venue'><div class='venuebox'>{logo_html}<div>{esc(name)}</div></div></td>
+                  <td class='symbol'>{symbol_html}<span class='type type-spot'>SPOT</span></td>
+                  <td>—</td><td>—</td><td>—</td><td>{_thai_pct(fee)}</td>
+                  <td>—</td><td><span class='muted'>รอข้อมูล · {err}</span></td>
+                </tr>"""
+            spread = ask - bid
+            spread_pct = (spread / bid * 100.0) if bid > 0 else 0.0
+            net_buy = ask * (1.0 + fee / 100.0)
+            net_sell = bid * (1.0 - fee / 100.0)
+            spread_cls = "spread-tight" if spread_pct <= 0.05 else "spread-wide"
+            return f"""
+            <tr class='thai-exec-row'>
+              <td class='venue'><div class='venuebox'>{logo_html}<div>{esc(name)}</div></div></td>
+              <td class='symbol'>{symbol_html}<span class='type type-spot'>SPOT</span></td>
+              <td class='bid-cell'>{_thai_money(bid)}</td>
+              <td class='ask-cell'>{_thai_money(ask)}</td>
+              <td class='{spread_cls}'>{_thai_money(spread)} <span class='muted'>({_thai_pct(spread_pct)})</span></td>
+              <td>{_thai_pct(fee)}</td>
+              <td class='net-buy'>{_thai_money(net_buy)}</td>
+              <td class='net-sell'>{_thai_money(net_sell)}</td>
+            </tr>"""
+
+        thai_css = """
+        <style>
+          .thai-exec-wrap{border:1px solid #2b3139;border-radius:12px;overflow:hidden;background:#0d1117;margin:0 0 12px 0}
+          .thai-exec{width:100%;border-collapse:collapse;font-family:Arial,sans-serif;color:#eaecef;font-size:14px}
+          .thai-exec th{background:#171b20;color:#848e9c;text-align:left;font-weight:700;padding:11px 14px;border-bottom:1px solid #2b3139;white-space:nowrap}
+          .thai-exec td{padding:12px 14px;border-bottom:1px solid #252a31;vertical-align:middle;white-space:nowrap}
+          .thai-exec tr:last-child td{border-bottom:0}
+          .thai-exec .venue{font-weight:700;font-size:15px}.thai-exec .venuebox{display:flex;align-items:center;gap:9px}.thai-exec .venue-logo{width:28px;height:28px;border-radius:50%;object-fit:cover;background:#171b20;border:1px solid #2b3139;flex:0 0 28px}
+          .thai-exec .symbol a{color:#2f8cff;text-decoration:none}.thai-exec .type{display:inline-block;margin-left:7px;padding:2px 6px;border-radius:5px;font-size:10px;font-weight:800;letter-spacing:.3px;vertical-align:middle}.thai-exec .type-spot{color:#b7c0cc;background:rgba(132,142,156,.08);border:1px solid #2b3139}
+          .thai-exec .bid-cell{color:#0ecb81;font-weight:700}.thai-exec .ask-cell{color:#f0b90b;font-weight:700}.thai-exec .net-buy{font-weight:800}.thai-exec .net-sell{font-weight:800;color:#0ecb81}
+          .thai-exec .spread-tight{font-weight:700}.thai-exec .spread-wide{font-weight:700;color:#f6465d}.thai-exec .muted{color:#848e9c;font-size:11px}
+          @media(max-width:1000px){.thai-exec-wrap{overflow-x:auto}.thai-exec{min-width:1080px}}
+        </style>
+        """
+        body = "".join(_thai_row(r) for r in display_rows)
+        html = thai_css + (
+            "<div class='thai-exec-wrap'><table class='thai-exec'><thead><tr>"
+            "<th>Exchange</th><th>Symbol</th><th>Bid (ราคารับซื้อ)</th><th>Ask (ราคาเสนอขาย)</th>"
+            "<th>ส่วนต่าง (Spread)</th><th>ค่าธรรมเนียม</th>"
+            "<th>ต้นทุนซื้อสุทธิ/เหรียญ</th><th>รายรับขายสุทธิ/เหรียญ</th>"
+            "</tr></thead><tbody>" + body + "</tbody></table></div>"
+        )
+        st.markdown(html, unsafe_allow_html=True)
+        return
 
     def liquidity_from_share(share: float) -> tuple[str, str, float]:
         # Relative to the Global Spot market, so liquidity is comparable across venues.
