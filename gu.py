@@ -5992,26 +5992,27 @@ def _get_innovestx_credentials() -> tuple[str, str]:
         pass
 
     # 1) Flat Streamlit secrets: INNOVESTX_API_KEY = "..."
+    # Also accept the common short names API_KEY / API_SECRET inside [innovestx].
     try:
-        for name in key_names:
+        secrets_obj = st.secrets
+        for name in key_names + ("API_KEY",):
             if not key:
-                key = _clean(st.secrets.get(name, ""))
-        for name in secret_names:
+                key = _clean(secrets_obj.get(name, ""))
+        for name in secret_names + ("API_SECRET",):
             if not secret:
-                secret = _clean(st.secrets.get(name, ""))
+                secret = _clean(secrets_obj.get(name, ""))
 
         # 2) Nested block: [innovestx]
-        invx = st.secrets.get("innovestx", {})
+        invx = secrets_obj.get("innovestx", {})
         if hasattr(invx, "get"):
-            for name in key_names:
-                short = name.lower()
+            for name in key_names + ("API_KEY",):
                 if not key:
-                    key = _clean(invx.get(name, "")) or _clean(invx.get(short, ""))
-            for name in secret_names:
-                short = name.lower()
+                    key = _clean(invx.get(name, "")) or _clean(invx.get(name.lower(), ""))
+            for name in secret_names + ("API_SECRET",):
                 if not secret:
-                    secret = _clean(invx.get(name, "")) or _clean(invx.get(short, ""))
+                    secret = _clean(invx.get(name, "")) or _clean(invx.get(name.lower(), ""))
     except Exception:
+        # Secrets may be unavailable locally; environment/session-state can still work.
         pass
 
     # 3) Environment variables.
@@ -7696,6 +7697,10 @@ def render_perp_venue_table (base :str ="BTC")->None :
     # Nothing is printed to the page and values are kept in session state only.
     if board == "thai":
         with st.expander("🔐 InnovestX API — ตั้งค่า Key / Secret", expanded=False):
+            _ix_loaded_key, _ix_loaded_secret = _get_innovestx_credentials()
+            _ix_key_status = "🟢 loaded" if _ix_loaded_key else "🔴 missing"
+            _ix_secret_status = "🟢 loaded" if _ix_loaded_secret else "🔴 missing"
+            st.caption(f"API Key: {_ix_key_status} · API Secret: {_ix_secret_status}")
             st.caption("กรอก API Key และ API Secret ของ InnovestX ได้ที่นี่ หรือใช้ Streamlit Secrets / Environment Variables ก็ได้")
             with st.form("innovestx_credentials_form", clear_on_submit=False):
                 _ix_key = st.text_input("API Key", value=st.session_state.get("innovestx_api_key", ""), type="password")
