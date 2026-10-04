@@ -6062,26 +6062,71 @@ def _spot_innovestx_th(b: str) -> tuple[float, float, float]:
 
 
 def _spot_orbix_th(b: str) -> tuple[float, float, float]:
-    # Orbix public market-data endpoint may change; keep this isolated so a
-    # temporary venue outage does not break the Thai board.
-    urls = [
-        f"https://api.orbixtrade.com/api/v1/ticker/24hr?symbol={b.upper()}_THB",
-        f"https://api.orbixtrade.com/api/v1/ticker?symbol={b.upper()}_THB",
-    ]
-    last_err = None
-    for url in urls:
-        try:
-            d = _http_json(url)
-            if isinstance(d, dict):
-                if isinstance(d.get("data"), dict): d = d["data"]
-                if "last" in d or "lastPrice" in d:
-                    last = float(d.get("last", d.get("lastPrice")))
-                    chg = float(d.get("priceChangePercent", d.get("percentChange", d.get("changePercent", 0))) or 0)
-                    vol = float(d.get("quoteVolume", d.get("volume", 0)) or 0)
-                    return last, chg, vol
-        except Exception as e:
-            last_err = e
-    raise RuntimeError(f"Orbix unavailable: {type(last_err).__name__ if last_err else 'no data'}")
+    """Orbix THB spot quote from the documented public V3 endpoints.
+
+    Price is derived from the live order book (best bid / best ask), not from
+    the old v1 ticker endpoint.  The 24h ticker is used only for change and
+    turnover, so a ticker parsing issue cannot make the order-book price fail.
+    """
+    symbol = f"{b.lower()}_thb"
+
+    # 1) Real executable quote: public V3 order depth.
+    depth_url = (
+        "https://www.orbixtrade.com/api/v3/depth"
+        f"?symbol={urllib.parse.quote(symbol, safe='_')}&limit=5"
+    )
+    depth = _http_json(depth_url)
+    if not isinstance(depth, dict):
+        raise RuntimeError("Orbix depth: invalid JSON response")
+
+    bids = depth.get("bids") or []
+    asks = depth.get("asks") or []
+    if not bids or not asks:
+        raise RuntimeError("Orbix depth: empty bids/asks")
+
+    def _level_price(level: object) -> float:
+        if isinstance(level, (list, tuple)) and level:
+            return float(level[0])
+        if isinstance(level, dict):
+            return float(level.get("price", level.get("p")))
+        raise ValueError("invalid order-book level")
+
+    bid_prices = [_level_price(x) for x in bids]
+    ask_prices = [_level_price(x) for x in asks]
+    bid = max(x for x in bid_prices if x > 0)
+    ask = min(x for x in ask_prices if x > 0)
+    if bid <= 0 or ask <= 0:
+        raise RuntimeError("Orbix depth: invalid best bid/ask")
+
+    # Mid is the board's single observed price; Bid/Ask remain available from
+    # the same order book for any executable-quote UI added later.
+    mid = (bid + ask) / 2.0
+
+    # 2) 24h statistics.  These are non-critical for the actual quote.
+    chg = 0.0
+    turnover = 0.0
+    try:
+        ticker_url = (
+            "https://www.orbixtrade.com/api/v3/ticker/24hr"
+            f"?symbol={urllib.parse.quote(symbol, safe='_')}"
+        )
+        ticker = _http_json(ticker_url)
+        if isinstance(ticker, list):
+            ticker = ticker[0] if ticker else {}
+        if isinstance(ticker, dict) and isinstance(ticker.get("data"), dict):
+            ticker = ticker["data"]
+        if isinstance(ticker, dict):
+            chg = float(
+                ticker.get("priceChangePercent", ticker.get("changePercent", 0)) or 0
+            )
+            turnover = float(
+                ticker.get("quoteVolume", ticker.get("volume", 0)) or 0
+            )
+    except Exception:
+        # Keep the live bid/ask-derived price even if 24h stats are unavailable.
+        pass
+
+    return mid, chg, turnover
 
 
 _THAI_SPOT_VENUES = [
@@ -6357,9 +6402,14 @@ def fetch_perp_venues (base :str ="BTC", board :str ="global")->tuple [pd.DataFr
                 raise ValueError("bad price")
             row.update(price=p, chg=c, turnover=t)
         except urllib.error.HTTPError as e:
-            row["err"] = f"HTTP {e.code}"
+            try:
+                detail = e.read().decode("utf-8", errors="replace").strip()
+            except Exception:
+                detail = ""
+            row["err"] = f"HTTP {e.code}: {detail[:180]}" if detail else f"HTTP {e.code}"
         except Exception as e:
-            row["err"] = type(e).__name__
+            msg = str(e).strip().replace("\n", " ")
+            row["err"] = msg[:220] if msg else type(e).__name__
         return row
 
     with ThreadPoolExecutor(max_workers=len(venues)) as ex:
