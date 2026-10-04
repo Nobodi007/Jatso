@@ -6162,7 +6162,7 @@ def _spot_innovestx_th(b: str) -> dict[str, float]:
         raise RuntimeError(
             "InnovestX: API Key/Secret not loaded. "
             "ใส่ INNOVESTX_API_KEY และ INNOVESTX_API_SECRET ใน Secrets "
-            "หรือกรอกในช่อง InnovestX API ด้านบน"
+            "หรือใช้ Streamlit Secrets / Environment Variables"
         )
     if len(api_key) != 64:
         raise RuntimeError(f"InnovestX: API Key length is {len(api_key)}, expected 64")
@@ -7973,27 +7973,6 @@ def _render_perp_venue_table_live (base :str ="BTC")->None :
     st.session_state["pv_board"] = board
 
     venue_config = _THAI_SPOT_VENUES if board == "thai" else _GLOBAL_SPOT_VENUES
-
-    # InnovestX credentials can be supplied directly here when Streamlit
-    # Secrets / Environment Variables are not available in the deployment.
-    # Nothing is printed to the page and values are kept in session state only.
-    if board == "thai":
-        with st.expander("🔐 InnovestX API — ตั้งค่า Key / Secret", expanded=False):
-            _ix_loaded_key, _ix_loaded_secret = _get_innovestx_credentials()
-            _ix_key_status = "🟢 loaded" if _ix_loaded_key else "🔴 missing"
-            _ix_secret_status = "🟢 loaded" if _ix_loaded_secret else "🔴 missing"
-            st.caption(f"API Key: {_ix_key_status} · API Secret: {_ix_secret_status}")
-            st.caption("กรอก API Key และ API Secret ของ InnovestX ได้ที่นี่ หรือใช้ Streamlit Secrets / Environment Variables ก็ได้")
-            with st.form("innovestx_credentials_form", clear_on_submit=False):
-                _ix_key = st.text_input("API Key", value=st.session_state.get("innovestx_api_key", ""), type="password")
-                _ix_secret = st.text_input("API Secret", value=st.session_state.get("innovestx_api_secret", ""), type="password")
-                _ix_save = st.form_submit_button("บันทึกและทดสอบ InnovestX")
-                if _ix_save:
-                    st.session_state["innovestx_api_key"] = _ix_key.strip()
-                    st.session_state["innovestx_api_secret"] = _ix_secret.strip()
-                    st.cache_data.clear()
-                    st.success("บันทึก Key/Secret ใน session แล้ว กำลังโหลดข้อมูลใหม่")
-                    st.rerun()
 
     # Live board: fetch a fresh REST snapshot every 3 seconds.
     # The fragment reruns only this board section, so the rest of the app is not
