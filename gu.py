@@ -7980,11 +7980,6 @@ def _render_perp_venue_table_live (base :str ="BTC")->None :
     df ,ts =fetch_perp_venues (base, board=board)
     meta ={v ["name"]:v for v in venue_config}
 
-    try:
-        _live_clock = datetime.now().strftime("%H:%M:%S")
-    except Exception:
-        _live_clock = time.strftime("%H:%M:%S")
-    st.caption(f"🟢 LIVE · Auto refresh ทุก 30 วินาที · อัปเดตล่าสุด {_live_clock}")
 
     def _num (x :Any )->Optional [float ]:
         return None if pd .isna (x )else float (x )
