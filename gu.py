@@ -6178,8 +6178,8 @@ def _spot_innovestx_th(b: str) -> dict[str, float]:
                         "bid": bid,
                         "ask": ask,
                         "chg": 0.0,
-                        "turnover": 0.0,
-                        "via": "InnovestX Level-2 API",
+                        "turnover": None,
+                        "via": "InnovestX Level-2 API · 24h turnover unavailable",
                     }
                 l2_error = f"order book has no bid/ask (rows={len(rows)})"
     except Exception as e:
@@ -6212,8 +6212,8 @@ def _spot_innovestx_th(b: str) -> dict[str, float]:
             "bid": bid,
             "ask": ask,
             "chg": 0.0,
-            "turnover": 0.0,
-            "via": "InnovestX Ticker API fallback",
+            "turnover": None,
+            "via": "InnovestX Ticker API · 24h turnover unavailable",
         }
     except Exception as ticker_error:
         raise RuntimeError(
@@ -7523,7 +7523,8 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]], currency: str = 
         has_price = r.get("price") is not None and not r.get("err")
         p = float(r["price"]) if has_price else None
         chg = r.get("chg")
-        turn = float(r.get("turnover") or 0.0)
+        turn_raw = r.get("turnover")
+        turn = float(turn_raw) if turn_raw is not None else None
         if not has_price:
             name = str(r.get("exchange", "—"))
             logo_html = f"<img class='venue-logo' src='{esc(r.get('logo',''))}' onerror=\"this.style.display='none'\" />" if r.get("logo") else ""
@@ -7552,10 +7553,14 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]], currency: str = 
         color = "#0ecb81" if dev <= 0 else "#f6465d"
         chg_html = "—" if chg is None else f"<span class='{ 'chg-up' if float(chg)>=0 else 'chg-down' }'>{float(chg):+.2f}%</span>"
         name = str(r.get("exchange", "—"))
-        share = float(stats["shares"].get(name, 0.0))
-        turn_rank = int(stats["turn_rank"].get(name, 0) or 0)
+        turnover_available = turn is not None and turn > 0
+        share = float(stats["shares"].get(name, 0.0)) if turnover_available else None
+        turn_rank = int(stats["turn_rank"].get(name, 0) or 0) if turnover_available else 0
         price_rank = int(stats["price_rank"].get(name, 0) or 0)
-        liq_name, liq_color, liq_width = liquidity_from_share(share)
+        if turnover_available:
+            liq_name, liq_color, liq_width = liquidity_from_share(share)
+        else:
+            liq_name, liq_color, liq_width = "N/A", "#848e9c", 0.0
         row_class = "spot-row"
         role_html = ""
         if global_enabled and name == global_low_name:
@@ -7572,7 +7577,11 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]], currency: str = 
         type_cls = "type-spot"
         type_label = "SPOT"
         share_label = "% ของ Spot"
-        share_html = f"<div class='share'><i style='width:{min(100,share):.1f}%'></i></div><div class='muted'>{share:.1f}{share_label}</div>"
+        share_html = (
+            f"<div class='share'><i style='width:{min(100,share):.1f}%'></i></div><div class='muted'>{share:.1f}{share_label}</div>"
+            if turnover_available else
+            "<div class='muted'>— ไม่รวม Market Share</div>"
+        )
         via_html = f"<span class='via'>via {esc(r.get('via'))}</span>" if r.get("via") else ""
         logo_html = f"<img class='venue-logo' src='{esc(r.get('logo',''))}' onerror=\"this.style.display='none'\" />" if r.get("logo") else ""
         url = esc(r.get("url", ""))
@@ -7585,12 +7594,13 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]], currency: str = 
           <td>{p:,.1f}</td>
           <td>{chg_html}</td>
           <td><div style='display:flex;align-items:center;gap:7px'><div class='bar'><i style='width:{width:.1f}%;background:{color}'></i></div><span style='color:{color};font-size:12px'>{dev:+.3f}%</span></div><div class='muted'>VWAP {vwap:,.1f}</div></td>
-          <td><div style='font-size:15px'>{money(turn)}</div>{share_html}</td>
+          <td><div style='font-size:15px'>{money(turn) if turnover_available else "—"}</div>{share_html}</td>
           <td><span class='liq' style='color:{liq_color}'>{liq_name}</span><div class='liqline'><i style='width:{liq_width:.1f}%;background:{liq_color}'></i></div></td>
         </tr>"""
 
     body = [render_row(r) for r in display_rows]
-    html = css + f"<div class='nobody-pv-wrap'><table class='nobody-pv'><thead><tr><th>Exchange</th><th>Symbol</th><th>Price({currency})</th><th>Chg 24H(%)</th><th>vs VWAP</th><th>Turnover 24h</th><th>Liquidity</th></tr></thead><tbody>" + "".join(body) + "</tbody></table></div>"
+    turnover_note = "<div class='note'>ℹ️ InnovestX: Open API ที่ใช้กับ Board นี้ให้ Volume เป็นช่วง 1 นาที ไม่ใช่ 24h จึงไม่แสดงเป็น Turnover 24h เพื่อไม่ให้ตัวเลขผิด</div>"
+    html = turnover_note + css + f"<div class='nobody-pv-wrap'><table class='nobody-pv'><thead><tr><th>Exchange</th><th>Symbol</th><th>Price({currency})</th><th>Chg 24H(%)</th><th>vs VWAP</th><th>Turnover 24h</th><th>Liquidity</th></tr></thead><tbody>" + "".join(body) + "</tbody></table></div>"
     st.markdown(html, unsafe_allow_html=True)
 
 
