@@ -6326,7 +6326,7 @@ _THAI_SPOT_VENUES = [
          fn=_spot_bitkub_th, sym=lambda b: f"{b}_THB",
          url=lambda b: f"https://www.bitkub.com/market/{b.lower()}", note="Spot · THB"),
     dict(name="Binance TH", bg="#F0B90B", fg="#0b0e11", tx="BN",
-         logo="https://public.saasexch.com/static/cms/cmsSassLandingPage1/202311/e96cd28d6007db1834d9c4995f7dfd91.png",
+         logo="https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/e7/3f/a9/e73fa9d0-85e8-0e24-bc7a-72a03a03d965/AppIcon-0-0-1x_U007ephone-0-1-85-220.png/512x512bb.jpg",
          fn=_spot_binance_th, sym=lambda b: f"{b}THB",
          url=lambda b: f"https://www.binance.th/markets/{b.lower()}-thb", note="Spot · THB"),
     dict(name="Upbit TH", bg="#093687", fg="#ffffff", tx="UP",
@@ -7568,12 +7568,15 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]], currency: str = 
             logo_url = str(r.get("logo") or "")
             if name == "Binance TH":
                 # Official Binance TH by Gulf Binance branding asset.
-                logo_url = "https://public.saasexch.com/static/cms/cmsSassLandingPage1/202311/e96cd28d6007db1834d9c4995f7dfd91.png"
-            logo_html = (
-                f"<img class='venue-logo' src='{esc(logo_url)}' alt='{esc(name)}' "
-                f"onerror=\"this.onerror=null;this.src='https://bin.bnbstatic.com/static/images/common/favicon.ico';\" />"
-                if logo_url else ""
-            )
+                logo_url = "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/e7/3f/a9/e73fa9d0-85e8-0e24-bc7a-72a03a03d965/AppIcon-0-0-1x_U007ephone-0-1-85-220.png/512x512bb.jpg"
+            if logo_url:
+                logo_class = 'venue-logo binance-th-logo' if name == 'Binance TH' else 'venue-logo'
+                logo_html = (
+                    f"<img class='{logo_class}' src='{esc(logo_url)}' alt='{esc(name)}' "
+                    f"onerror=\"this.onerror=null;this.src='https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/e7/3f/a9/e73fa9d0-85e8-0e24-bc7a-72a03a03d965/AppIcon-0-0-1x_U007ephone-0-1-85-220.png/512x512bb.jpg';\" />"
+                )
+            else:
+                logo_html = ''
             symbol = esc(r.get("symbol", "—"))
             url = esc(r.get("url", ""))
             symbol_html = f"<a href='{url}' target='_blank' rel='noopener'>{symbol}</a>" if url else symbol
@@ -7624,7 +7627,7 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]], currency: str = 
           .thai-exec th:nth-child(6),.thai-exec td:nth-child(6){width:8%}
           .thai-exec th:nth-child(7),.thai-exec td:nth-child(7){width:14.5%}
           .thai-exec th:nth-child(8),.thai-exec td:nth-child(8){width:14.5%}
-          .thai-exec .venue{font-weight:700;font-size:14px}.thai-exec .venuebox{display:flex;align-items:center;gap:7px;min-width:0}.thai-exec .venuebox>div:last-child{min-width:0;overflow:visible;white-space:nowrap}.thai-exec .venue-logo{width:30px;height:30px;border-radius:50%;object-fit:contain;object-position:center;background:#171b20;border:1px solid #2b3139;flex:0 0 30px;padding:2px;box-sizing:border-box}
+          .thai-exec .binance-th-logo{background:#181a24;border:1px solid #30333d}.thai-exec .venue{font-weight:700;font-size:14px}.thai-exec .venuebox{display:flex;align-items:center;gap:7px;min-width:0}.thai-exec .venuebox>div:last-child{min-width:0;overflow:visible;white-space:nowrap}.thai-exec .venue-logo{width:30px;height:30px;border-radius:50%;object-fit:contain;object-position:center;background:#171b20;border:1px solid #2b3139;flex:0 0 30px;padding:2px;box-sizing:border-box}
           .thai-exec .symbol a{color:#2f8cff;text-decoration:none}.thai-exec .type{display:inline-block;margin-left:5px;padding:2px 5px;border-radius:5px;font-size:9px;font-weight:800;letter-spacing:.2px;vertical-align:middle}.thai-exec .type-spot{color:#b7c0cc;background:rgba(132,142,156,.08);border:1px solid #2b3139}
           .thai-exec .bid-cell{color:#0ecb81;font-weight:800;font-variant-numeric:tabular-nums}.thai-exec .ask-cell{color:#f0b90b;font-weight:800;font-variant-numeric:tabular-nums}.thai-exec .net-buy{font-weight:800;font-variant-numeric:tabular-nums}.thai-exec .net-sell{font-weight:800;color:#0ecb81;font-variant-numeric:tabular-nums}
           .thai-exec .spread-tight{font-weight:700;font-variant-numeric:tabular-nums}.thai-exec .spread-wide{font-weight:700;color:#f6465d;font-variant-numeric:tabular-nums}.thai-exec .muted{color:#848e9c;font-size:10px}
