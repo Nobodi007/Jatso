@@ -6026,58 +6026,64 @@ def _get_innovestx_credentials() -> tuple[str, str]:
     return key, secret
 
 
-def _spot_innovestx_th(b: str) -> tuple[float, float, float]:
-    """Fetch live InnovestX Spot Level-2 order book.
+def _innovestx_signed_post(path: str, api_key: str, api_secret: str, body: dict) -> dict:
+    """POST to InnovestX with a brand-new UUID and an exact signed body.
 
-    Uses the official InnovestX Open API signing format:
-    APIKEY + METHOD + HOST + PATH + QUERY + CONTENT-TYPE
-    + REQUEST-UID + TIMESTAMP + exact request body.
+    The official docs require the exact same REQUEST-UID, timestamp and body
+    in both the signature and HTTP headers.  We intentionally do not cache or
+    reuse any of these request values.
     """
-    api_key, api_secret = _get_innovestx_credentials()
-    if not api_key or not api_secret:
-        raise RuntimeError(
-            "InnovestX: API Key/Secret not loaded. "
-            "ใส่ INNOVESTX_API_KEY และ INNOVESTX_API_SECRET ใน Secrets "
-            "หรือกรอกในช่อง InnovestX API ด้านบน"
-        )
-
     host = "api.innovestxonline.com"
-    path = "/api/v1/digital-asset/orderbook/lvl2"
     content_type = "application/json"
-    # InnovestX requires REQUEST-UID to be a fresh RFC-4122 UUID string
-    # (exactly 36 chars, including hyphens).  Generate it immediately before
-    # signing so the exact same value is used in both the signature and header.
-    request_uid = str(uuid.uuid4()).lower()
-    if len(request_uid) != 36 or request_uid.count("-") != 4:
-        raise RuntimeError("InnovestX: failed to generate a valid REQUEST-UID")
+    request_uid = str(uuid.uuid4())
     timestamp = str(int(time.time() * 1000))
-    body = {"symbol": f"{str(b).split('/')[0].upper()}THB", "depth": 100}
     body_json = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
 
-    string_to_sign = (api_key + "POST" + host + path + "" + content_type
-                      + request_uid + timestamp + body_json)
-    signature = hmac.new(api_secret.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
+    if len(request_uid) != 36 or request_uid.count("-") != 4:
+        raise RuntimeError("InnovestX: generated REQUEST-UID is not 36-char UUID")
+    if len(timestamp) != 13:
+        raise RuntimeError("InnovestX: generated timestamp is not 13 digits")
 
+    string_to_sign = (
+        api_key + "POST" + host + path + "" + content_type
+        + request_uid + timestamp + body_json
+    )
+    signature = hmac.new(
+        api_secret.encode("utf-8"),
+        string_to_sign.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+    # Keep headers minimal and identical to the official example.  In
+    # particular, do not send a proxy/cache-related header that could alter
+    # the request at an upstream gateway.
     headers = {
         "Content-Type": content_type,
-        "X-INVX-APIKEY": api_key,
-        "X-INVX-SIGNATURE": signature,
         "X-INVX-REQUEST-UID": request_uid,
         "X-INVX-TIMESTAMP": timestamp,
+        "X-INVX-SIGNATURE": signature,
+        "X-INVX-APIKEY": api_key,
         "Accept-Language": "TH",
         "Application-Reference": "Nobody-Dealer-Suite",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
         "Accept": "application/json",
         "User-Agent": "Nobody-Dealer-Suite/1.0",
     }
-    req = urllib.request.Request(f"https://{host}{path}", data=body_json.encode("utf-8"), headers=headers, method="POST")
+
+    req = urllib.request.Request(
+        f"https://{host}{path}",
+        data=body_json.encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
     try:
         with urllib.request.urlopen(req, timeout=10.0) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", errors="replace")[:500]
-        raise RuntimeError(f"InnovestX HTTP {e.code}: {detail}") from e
+        raise RuntimeError(
+            f"InnovestX HTTP {e.code}: {detail}"
+            f" | uid_len={len(request_uid)} timestamp_len={len(timestamp)}"
+        ) from e
     except urllib.error.URLError as e:
         raise RuntimeError(f"InnovestX connection error: {e.reason}") from e
 
@@ -6086,41 +6092,118 @@ def _spot_innovestx_th(b: str) -> tuple[float, float, float]:
     except json.JSONDecodeError as e:
         raise RuntimeError(f"InnovestX returned invalid JSON: {raw[:300]}") from e
 
-    code = str(data.get("code", ""))
-    if code not in {"0000", "0", "200"}:
-        hints = {"4002":"API Key ไม่ถูกต้อง", "4003":"IP ของเครื่องนี้ยังไม่อยู่ใน IP Whitelist ของ API Key",
-                 "4004":"API Key ไม่มีสิทธิ์ Read/Trading", "4005":"Signature ไม่ถูกต้อง",
-                 "4007":"Request ไม่ถูกต้อง", "4008":"Request UID ไม่ถูกต้อง/ซ้ำ",
-                 "4010":"Timestamp format ไม่ถูกต้อง", "4011":"Timestamp ต่างจาก server มากเกินไป",
-                 "4012":"Signature ไม่ถูกต้อง"}
-        hint = hints.get(code, "")
-        msg = str(data.get("message") or "unknown error")
-        raise RuntimeError(f"InnovestX API {code}: {msg}" + (f" — {hint}" if hint else ""))
+    if not isinstance(data, dict):
+        raise RuntimeError("InnovestX returned a non-object JSON response")
+    return data
 
-    rows = data.get("data") or []
-    if not isinstance(rows, list):
-        raise ValueError(f"InnovestX: unexpected orderbook data type: {type(rows).__name__}")
-    bids, asks = [], []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        try:
-            if int(row.get("actionType", 0)) == 2:
-                continue
-            price, qty, side = float(row.get("price")), float(row.get("quantity")), int(row.get("side"))
-        except (TypeError, ValueError):
-            continue
-        if price <= 0 or qty <= 0:
-            continue
-        if side == 0:
-            bids.append((price, qty))
-        elif side == 1:
-            asks.append((price, qty))
-    bids.sort(key=lambda x: x[0], reverse=True)
-    asks.sort(key=lambda x: x[0])
-    if not bids or not asks:
-        raise ValueError(f"InnovestX: order book empty for {body['symbol']} (rows={len(rows)})")
-    return (bids[0][0] + asks[0][0]) / 2.0, 0.0, 0.0
+
+def _spot_innovestx_th(b: str) -> dict[str, float]:
+    """Fetch live InnovestX Spot bid/ask.
+
+    Primary source: official Level-2 order book.
+    Fallback: official Ticker Subscribe endpoint, which also exposes
+    insideBidPrice / insideAskPrice.  Both endpoints use fresh signed
+    requests, so a rejected/stale Level-2 UID cannot poison the next call.
+    """
+    api_key, api_secret = _get_innovestx_credentials()
+    if not api_key or not api_secret:
+        raise RuntimeError(
+            "InnovestX: API Key/Secret not loaded. "
+            "ใส่ INNOVESTX_API_KEY และ INNOVESTX_API_SECRET ใน Secrets "
+            "หรือกรอกในช่อง InnovestX API ด้านบน"
+        )
+    if len(api_key) != 64:
+        raise RuntimeError(f"InnovestX: API Key length is {len(api_key)}, expected 64")
+
+    symbol = f"{str(b).split('/')[0].upper()}THB"
+    l2_error = None
+
+    # 1) Level-2: real order book.
+    try:
+        data = _innovestx_signed_post(
+            "/api/v1/digital-asset/orderbook/lvl2",
+            api_key, api_secret,
+            {"symbol": symbol, "depth": 100},
+        )
+        code = str(data.get("code", ""))
+        if code not in {"0000", "0", "200"}:
+            l2_error = f"API {code}: {data.get('message', 'unknown error')}"
+        else:
+            rows = data.get("data") or []
+            if not isinstance(rows, list):
+                l2_error = "invalid orderbook data type"
+            else:
+                bids, asks = [], []
+                last_trade = 0.0
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    try:
+                        if int(row.get("actionType", 0)) == 2:
+                            continue
+                        px = float(row.get("price") or 0)
+                        qty = float(row.get("quantity") or 0)
+                        side = int(row.get("side"))
+                        last_trade = max(last_trade, float(row.get("lastTradePrice") or 0))
+                    except (TypeError, ValueError):
+                        continue
+                    if px <= 0 or qty <= 0:
+                        continue
+                    if side == 0:
+                        bids.append((px, qty))
+                    elif side == 1:
+                        asks.append((px, qty))
+                if bids and asks:
+                    bids.sort(key=lambda x: x[0], reverse=True)
+                    asks.sort(key=lambda x: x[0])
+                    bid, ask = bids[0][0], asks[0][0]
+                    return {
+                        "price": (bid + ask) / 2.0,
+                        "bid": bid,
+                        "ask": ask,
+                        "chg": 0.0,
+                        "turnover": 0.0,
+                        "via": "InnovestX Level-2 API",
+                    }
+                l2_error = f"order book has no bid/ask (rows={len(rows)})"
+    except Exception as e:
+        l2_error = str(e)
+
+    # 2) Official ticker fallback.  The docs explicitly expose insideBidPrice
+    # and insideAskPrice here, so this is still a real exchange quote rather
+    # than an invented midpoint.
+    try:
+        data = _innovestx_signed_post(
+            "/api/v1/digital-asset/ticker/subscribe",
+            api_key, api_secret,
+            {"symbol": symbol},
+        )
+        code = str(data.get("code", ""))
+        if code not in {"0000", "0", "200"}:
+            raise RuntimeError(f"API {code}: {data.get('message', 'unknown error')}")
+        rows = data.get("data") or []
+        if isinstance(rows, dict):
+            rows = [rows]
+        if not isinstance(rows, list) or not rows:
+            raise RuntimeError("ticker returned no data")
+        row = rows[-1]
+        bid = float(row.get("insideBidPrice") or row.get("insideBid") or 0)
+        ask = float(row.get("insideAskPrice") or row.get("insideAsk") or 0)
+        if bid <= 0 or ask <= 0 or ask < bid:
+            raise RuntimeError("ticker returned invalid inside bid/ask")
+        return {
+            "price": (bid + ask) / 2.0,
+            "bid": bid,
+            "ask": ask,
+            "chg": 0.0,
+            "turnover": 0.0,
+            "via": "InnovestX Ticker API fallback",
+        }
+    except Exception as ticker_error:
+        raise RuntimeError(
+            f"InnovestX unavailable | Level-2: {l2_error or 'no data'} "
+            f"| Ticker fallback: {ticker_error}"
+        ) from ticker_error
 
 def _spot_orbix_th(b: str) -> tuple[float, float, float]:
     """Fetch Orbix Spot THB from the public V3 order book.
@@ -6433,6 +6516,8 @@ def fetch_perp_venues (base :str ="BTC", board :str ="global")->tuple [pd.DataFr
             symbol=v["sym"](base),
             url=v["url"](base),
             price=None,
+            bid=None,
+            ask=None,
             chg=None,
             turnover=None,
             err=None,
@@ -6441,7 +6526,14 @@ def fetch_perp_venues (base :str ="BTC", board :str ="global")->tuple [pd.DataFr
         )
         try:
             result = v["fn"](base)
-            if isinstance(result, tuple) and len(result) == 4:
+            if isinstance(result, dict):
+                p = float(result.get("price") or 0.0)
+                c = float(result.get("chg") or 0.0)
+                t = float(result.get("turnover") or 0.0)
+                row["bid"] = float(result.get("bid") or 0.0) or None
+                row["ask"] = float(result.get("ask") or 0.0) or None
+                row["via"] = result.get("via")
+            elif isinstance(result, tuple) and len(result) == 4:
                 p, c, t, via = result
                 row["via"] = via
             else:
@@ -7740,6 +7832,8 @@ def render_perp_venue_table (base :str ="BTC")->None :
         logo =v .get ("logo",""),
         note =v .get ("note"),
         price =_num (r ["price"]),
+        bid =_num (r.get("bid")),
+        ask =_num (r.get("ask")),
         chg =_num (r ["chg"]),
         turnover =_num (r ["turnover"]),
         err =r ["err"]if isinstance (r ["err"],str )else None ,
@@ -7773,7 +7867,7 @@ def render_perp_venue_table (base :str ="BTC")->None :
                 exchange=r["exchange"], symbol=r["symbol"], url=r["url"],
                 bg=v.get("bg"), fg=v.get("fg"), tx=v.get("tx"),
                 logo=v.get("logo", ""), note=v.get("note"),
-                price=_num(r["price"]), chg=_num(r["chg"]),
+                price=_num(r["price"]), bid=_num(r.get("bid")), ask=_num(r.get("ask")), chg=_num(r["chg"]),
                 turnover=_num(r["turnover"]),
                 err=r["err"] if isinstance(r["err"], str) else None,
                 via=r["via"] if isinstance(r["via"], str) else None,
@@ -7801,7 +7895,6 @@ def render_perp_venue_table (base :str ="BTC")->None :
     c_cap ,c_btn =st .columns ([8 ,2 ])
     with c_btn :
         if st .button ("🔄 รีเฟรช",key =f"pv_refresh_{board}",**WIDE ):
-            fetch_perp_venues .clear ()
             st .rerun ()
 
     # Cross-row Spot arbitrage analysis: observed low/high venue, spread and fee-adjusted edge.
