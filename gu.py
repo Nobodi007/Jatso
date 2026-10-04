@@ -6326,7 +6326,7 @@ _THAI_SPOT_VENUES = [
          fn=_spot_bitkub_th, sym=lambda b: f"{b}_THB",
          url=lambda b: f"https://www.bitkub.com/market/{b.lower()}", note="Spot · THB"),
     dict(name="Binance TH", bg="#F0B90B", fg="#0b0e11", tx="BN",
-         logo="https://www.google.com/s2/favicons?domain=binance.th&sz=64",
+         logo="https://public.saasexch.com/static/cms/cmsSassLandingPage1/202311/e96cd28d6007db1834d9c4995f7dfd91.png",
          fn=_spot_binance_th, sym=lambda b: f"{b}THB",
          url=lambda b: f"https://www.binance.th/markets/{b.lower()}-thb", note="Spot · THB"),
     dict(name="Upbit TH", bg="#093687", fg="#ffffff", tx="UP",
@@ -7565,10 +7565,14 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]], currency: str = 
 
         def _thai_row(r: dict[str, Any]) -> str:
             name = str(r.get("exchange", "—"))
+            logo_url = str(r.get("logo") or "")
+            if name == "Binance TH":
+                # Official Binance TH by Gulf Binance branding asset.
+                logo_url = "https://public.saasexch.com/static/cms/cmsSassLandingPage1/202311/e96cd28d6007db1834d9c4995f7dfd91.png"
             logo_html = (
-                f"<img class='venue-logo' src='{esc(r.get('logo',''))}' "
-                f"onerror=\"this.style.display='none'\" />"
-                if r.get("logo") else ""
+                f"<img class='venue-logo' src='{esc(logo_url)}' alt='{esc(name)}' "
+                f"onerror=\"this.onerror=null;this.src='https://bin.bnbstatic.com/static/images/common/favicon.ico';\" />"
+                if logo_url else ""
             )
             symbol = esc(r.get("symbol", "—"))
             url = esc(r.get("url", ""))
@@ -7607,21 +7611,30 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]], currency: str = 
 
         thai_css = """
         <style>
-          .thai-exec-wrap{border:1px solid #2b3139;border-radius:12px;overflow:hidden;background:#0d1117;margin:0 0 12px 0}
-          .thai-exec{width:100%;border-collapse:collapse;font-family:Arial,sans-serif;color:#eaecef;font-size:14px}
-          .thai-exec th{background:#171b20;color:#848e9c;text-align:left;font-weight:700;padding:11px 14px;border-bottom:1px solid #2b3139;white-space:nowrap}
-          .thai-exec td{padding:12px 14px;border-bottom:1px solid #252a31;vertical-align:middle;white-space:nowrap}
+          .thai-exec-wrap{width:100%;max-width:100%;box-sizing:border-box;border:1px solid #2b3139;border-radius:12px;overflow-x:auto;overflow-y:hidden;background:#0d1117;margin:0 0 12px 0;-webkit-overflow-scrolling:touch}
+          .thai-exec{width:100%;min-width:0;max-width:none;table-layout:fixed;border-collapse:collapse;border-spacing:0;font-family:Arial,sans-serif;color:#eaecef;font-size:13px}
+          .thai-exec th{background:#171b20;color:#9aa4b2;text-align:left;font-weight:700;padding:9px 8px;border-bottom:1px solid #2b3139;white-space:normal;overflow-wrap:anywhere;word-break:break-word;line-height:1.15;vertical-align:middle}
+          .thai-exec td{padding:11px 8px;border-bottom:1px solid #252a31;vertical-align:middle;white-space:nowrap;overflow:visible;text-overflow:clip;min-width:0}
           .thai-exec tr:last-child td{border-bottom:0}
-          .thai-exec .venue{font-weight:700;font-size:15px}.thai-exec .venuebox{display:flex;align-items:center;gap:9px}.thai-exec .venue-logo{width:28px;height:28px;border-radius:50%;object-fit:cover;background:#171b20;border:1px solid #2b3139;flex:0 0 28px}
-          .thai-exec .symbol a{color:#2f8cff;text-decoration:none}.thai-exec .type{display:inline-block;margin-left:7px;padding:2px 6px;border-radius:5px;font-size:10px;font-weight:800;letter-spacing:.3px;vertical-align:middle}.thai-exec .type-spot{color:#b7c0cc;background:rgba(132,142,156,.08);border:1px solid #2b3139}
-          .thai-exec .bid-cell{color:#0ecb81;font-weight:700}.thai-exec .ask-cell{color:#f0b90b;font-weight:700}.thai-exec .net-buy{font-weight:800}.thai-exec .net-sell{font-weight:800;color:#0ecb81}
-          .thai-exec .spread-tight{font-weight:700}.thai-exec .spread-wide{font-weight:700;color:#f6465d}.thai-exec .muted{color:#848e9c;font-size:11px}
-          @media(max-width:1000px){.thai-exec-wrap{overflow-x:auto}.thai-exec{min-width:1080px}}
+          .thai-exec th:nth-child(1),.thai-exec td:nth-child(1){width:14%}
+          .thai-exec th:nth-child(2),.thai-exec td:nth-child(2){width:10%}
+          .thai-exec th:nth-child(3),.thai-exec td:nth-child(3){width:13%}
+          .thai-exec th:nth-child(4),.thai-exec td:nth-child(4){width:13%}
+          .thai-exec th:nth-child(5),.thai-exec td:nth-child(5){width:13%}
+          .thai-exec th:nth-child(6),.thai-exec td:nth-child(6){width:8%}
+          .thai-exec th:nth-child(7),.thai-exec td:nth-child(7){width:14.5%}
+          .thai-exec th:nth-child(8),.thai-exec td:nth-child(8){width:14.5%}
+          .thai-exec .venue{font-weight:700;font-size:14px}.thai-exec .venuebox{display:flex;align-items:center;gap:7px;min-width:0}.thai-exec .venuebox>div:last-child{min-width:0;overflow:visible;white-space:nowrap}.thai-exec .venue-logo{width:30px;height:30px;border-radius:50%;object-fit:contain;object-position:center;background:#171b20;border:1px solid #2b3139;flex:0 0 30px;padding:2px;box-sizing:border-box}
+          .thai-exec .symbol a{color:#2f8cff;text-decoration:none}.thai-exec .type{display:inline-block;margin-left:5px;padding:2px 5px;border-radius:5px;font-size:9px;font-weight:800;letter-spacing:.2px;vertical-align:middle}.thai-exec .type-spot{color:#b7c0cc;background:rgba(132,142,156,.08);border:1px solid #2b3139}
+          .thai-exec .bid-cell{color:#0ecb81;font-weight:800;font-variant-numeric:tabular-nums}.thai-exec .ask-cell{color:#f0b90b;font-weight:800;font-variant-numeric:tabular-nums}.thai-exec .net-buy{font-weight:800;font-variant-numeric:tabular-nums}.thai-exec .net-sell{font-weight:800;color:#0ecb81;font-variant-numeric:tabular-nums}
+          .thai-exec .spread-tight{font-weight:700;font-variant-numeric:tabular-nums}.thai-exec .spread-wide{font-weight:700;color:#f6465d;font-variant-numeric:tabular-nums}.thai-exec .muted{color:#848e9c;font-size:10px}
+          @media(max-width:1250px){.thai-exec{min-width:1180px}.thai-exec-wrap{overflow-x:auto}.thai-exec th,.thai-exec td{padding-left:7px;padding-right:7px}}
+          @media(min-width:1251px){.thai-exec th,.thai-exec td{font-size:13px}.thai-exec .venue{font-size:14px}}
         </style>
         """
         body = "".join(_thai_row(r) for r in display_rows)
         html = thai_css + (
-            "<div class='thai-exec-wrap'><table class='thai-exec'><thead><tr>"
+            "<div class='thai-exec-wrap'><table class='thai-exec'><colgroup><col style=\"width:14%\"><col style=\"width:10%\"><col style=\"width:13%\"><col style=\"width:13%\"><col style=\"width:13%\"><col style=\"width:8%\"><col style=\"width:14.5%\"><col style=\"width:14.5%\"></colgroup><thead><tr>"
             "<th>Exchange</th><th>Symbol</th><th>Bid (ราคารับซื้อ)</th><th>Ask (ราคาเสนอขาย)</th>"
             "<th>ส่วนต่าง (Spread)</th><th>ค่าธรรมเนียม</th>"
             "<th>ต้นทุนซื้อสุทธิ/เหรียญ</th><th>รายรับขายสุทธิ/เหรียญ</th>"
