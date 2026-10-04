@@ -5929,6 +5929,74 @@ def _spot_aster_global(b: str) -> tuple[float, float, float]:
     return float(d["lastPrice"]), float(d.get("priceChangePercent") or 0.0), float(d.get("quoteVolume") or 0.0)
 
 
+
+# --------------------------------------------------------------------------
+# THAI SPOT VENUES — กระดานไทย (ราคา THB)
+# --------------------------------------------------------------------------
+def _spot_bitkub_th(b: str) -> tuple[float, float, float]:
+    d = _http_json(f"https://api.bitkub.com/api/v3/market/ticker?sym={b.lower()}_thb")
+    if isinstance(d, list):
+        d = d[0] if d else {}
+    if not d or "last" not in d:
+        raise ValueError("Bitkub: no ticker")
+    return float(d["last"]), float(d.get("percent_change") or 0.0), float(d.get("quote_volume") or d.get("base_volume") or 0.0)
+
+
+def _spot_binance_th(b: str) -> tuple[float, float, float]:
+    d = _http_json(f"https://api.binance.th/api/v1/ticker/24hr?symbol={b.upper()}THB")
+    return float(d["lastPrice"]), float(d.get("priceChangePercent") or 0.0), float(d.get("quoteVolume") or 0.0)
+
+
+def _spot_upbit_th(b: str) -> tuple[float, float, float]:
+    d = _http_json(f"https://th-api.upbit.com/v1/ticker?markets=THB-{b.upper()}")
+    if not isinstance(d, list) or not d:
+        raise ValueError("Upbit TH: no ticker")
+    d = d[0]
+    return float(d["trade_price"]), float(d.get("signed_change_rate") or 0.0) * 100.0, float(d.get("acc_trade_price_24h") or 0.0)
+
+
+def _spot_orbix_th(b: str) -> tuple[float, float, float]:
+    # Orbix public market-data endpoint may change; keep this isolated so a
+    # temporary venue outage does not break the Thai board.
+    urls = [
+        f"https://api.orbixtrade.com/api/v1/ticker/24hr?symbol={b.upper()}_THB",
+        f"https://api.orbixtrade.com/api/v1/ticker?symbol={b.upper()}_THB",
+    ]
+    last_err = None
+    for url in urls:
+        try:
+            d = _http_json(url)
+            if isinstance(d, dict):
+                if isinstance(d.get("data"), dict): d = d["data"]
+                if "last" in d or "lastPrice" in d:
+                    last = float(d.get("last", d.get("lastPrice")))
+                    chg = float(d.get("priceChangePercent", d.get("percentChange", d.get("changePercent", 0))) or 0)
+                    vol = float(d.get("quoteVolume", d.get("volume", 0)) or 0)
+                    return last, chg, vol
+        except Exception as e:
+            last_err = e
+    raise RuntimeError(f"Orbix unavailable: {type(last_err).__name__ if last_err else 'no data'}")
+
+
+_THAI_SPOT_VENUES = [
+    dict(name="Bitkub", bg="#16C784", fg="#0b0e11", tx="BK",
+         logo="https://www.google.com/s2/favicons?domain=bitkub.com&sz=64",
+         fn=_spot_bitkub_th, sym=lambda b: f"{b}_THB",
+         url=lambda b: f"https://www.bitkub.com/market/{b.lower()}", note="Spot · THB"),
+    dict(name="Binance TH", bg="#F0B90B", fg="#0b0e11", tx="BN",
+         logo="https://www.google.com/s2/favicons?domain=binance.th&sz=64",
+         fn=_spot_binance_th, sym=lambda b: f"{b}THB",
+         url=lambda b: f"https://www.binance.th/markets/{b.lower()}-thb", note="Spot · THB"),
+    dict(name="Upbit TH", bg="#093687", fg="#ffffff", tx="UP",
+         logo="https://www.google.com/s2/favicons?domain=upbit.com&sz=64",
+         fn=_spot_upbit_th, sym=lambda b: f"THB-{b}",
+         url=lambda b: f"https://upbit.com/exchange?code=THB-{b}", note="Spot · THB"),
+    dict(name="Orbix", bg="#6C5CE7", fg="#ffffff", tx="OX",
+         logo="https://www.google.com/s2/favicons?domain=orbixtrade.com&sz=64",
+         fn=_spot_orbix_th, sym=lambda b: f"{b}_THB",
+         url=lambda b: "https://orbixtrade.com/", note="Spot · THB"),
+]
+
 _SPOT_VENUES =[
     dict(name="Kraken", bg="#5741D9", fg="#ffffff", tx="K",
          logo="https://www.google.com/s2/favicons?domain=kraken.com&sz=64",
@@ -6145,13 +6213,14 @@ rows :list [dict ],v :dict ,base :str
 
 
 @_cache_data (ttl =30 ,show_spinner =False )
-def fetch_perp_venues (base :str ="BTC")->tuple [pd.DataFrame ,str ]:
-    """Fetch the Global Spot Venue Board.
+def fetch_perp_venues (base :str ="BTC", board :str ="global")->tuple [pd.DataFrame ,str ]:
+    """Fetch the selected Spot Venue Board.
 
-    Kept under the historical function name so existing callers do not break.
-    Every venue on this board is now SPOT; no perpetual ticker is used here.
+    Historical function name is retained for compatibility. ``board`` can be
+    ``global`` or ``thai``; both boards are Spot-only.
     """
-    venues = [(v, "spot") for v in _GLOBAL_SPOT_VENUES]
+    venue_config = _THAI_SPOT_VENUES if board == "thai" else _GLOBAL_SPOT_VENUES
+    venues = [(v, "spot") for v in venue_config]
 
     def one(item: tuple[dict, str]) -> dict:
         v, market_type = item
@@ -7025,7 +7094,7 @@ run();
 
 
 
-def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
+def _render_perp_venue_table_static(rows: list[dict[str, Any]], currency: str = "$") -> None:
     """Render the Global Venue Board with real comparison logic for both markets.
 
     All venues are shown as Spot in one board, with one shared Spot VWAP, turnover share, liquidity ranking and price ranking.
@@ -7096,12 +7165,12 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
         try:
             v = float(x)
             if v >= 1_000_000_000:
-                return f"${v/1_000_000_000:.2f}B"
+                return f"{currency}{v/1_000_000_000:.2f}B"
             if v >= 1_000_000:
-                return f"${v/1_000_000:.2f}M"
+                return f"{currency}{v/1_000_000:.2f}M"
             if v >= 1_000:
-                return f"${v/1_000:.2f}K"
-            return f"${v:,.2f}"
+                return f"{currency}{v/1_000:.2f}K"
+            return f"{currency}{v:,.2f}"
         except Exception:
             return "—"
 
@@ -7206,16 +7275,15 @@ def _render_perp_venue_table_static(rows: list[dict[str, Any]]) -> None:
         </tr>"""
 
     body = [render_row(r) for r in display_rows]
-    html = css + "<div class='nobody-pv-wrap'><table class='nobody-pv'><thead><tr><th>Exchange</th><th>Symbol</th><th>Price($)</th><th>Chg 24H(%)</th><th>vs VWAP</th><th>Turnover 24h</th><th>Liquidity</th></tr></thead><tbody>" + "".join(body) + "</tbody></table></div>"
+    html = css + f"<div class='nobody-pv-wrap'><table class='nobody-pv'><thead><tr><th>Exchange</th><th>Symbol</th><th>Price({currency})</th><th>Chg 24H(%)</th><th>vs VWAP</th><th>Turnover 24h</th><th>Liquidity</th></tr></thead><tbody>" + "".join(body) + "</tbody></table></div>"
     st.markdown(html, unsafe_allow_html=True)
 
 
 def _render_global_perp_coin_tabs(default_base: str = "BTC") -> str:
     """Coin switcher styled as real tabs, with coin logos.
 
-    The control is intentionally rendered as a horizontal tab strip rather
-    than a row of action buttons.  The selected coin is stored in Streamlit
-    session state and drives the Global Spot comparison below.
+    The selected coin is stored in Streamlit session state and drives the
+    currently selected Thai/Global Spot comparison board.
     """
     choices = [a for a in SUPPORTED_ASSETS if a not in STABLECOINS]
     if not choices:
@@ -7410,10 +7478,21 @@ def render_arb_intelligence_analytics(base: str = "BTC") -> None:
     st.caption("Liquidity ใช้ 24h Turnover เป็น proxy เดิมของระบบ · Quality Matrix เป็น research heuristic ไม่ใช่ executable execution score")
 
 def render_perp_venue_table (base :str ="BTC")->None :
-    # Fetch/build the venue rows first so the comparison table is the first
-    # visual element in this section.  Analysis controls/cards follow below.
-    df ,ts =fetch_perp_venues (base )
-    meta ={v ["name"]:v for v in _GLOBAL_SPOT_VENUES}
+    # Board switch lives in the same visual area.  It changes the actual data
+    # source, not just the heading.
+    board_labels = ["🇹🇭 กระดานไทย", "🌐 Global"]
+    board_default = st.session_state.get("pv_board", "global")
+    board_index = 0 if board_default == "thai" else 1
+    board_choice = st.radio(
+        "กระดาน", board_labels, index=board_index, horizontal=True,
+        key="pv_board_switch", label_visibility="collapsed",
+    )
+    board = "thai" if board_choice == board_labels[0] else "global"
+    st.session_state["pv_board"] = board
+
+    venue_config = _THAI_SPOT_VENUES if board == "thai" else _GLOBAL_SPOT_VENUES
+    df ,ts =fetch_perp_venues (base, board=board)
+    meta ={v ["name"]:v for v in venue_config}
 
     def _num (x :Any )->Optional [float ]:
         return None if pd .isna (x )else float (x )
@@ -7440,8 +7519,12 @@ def render_perp_venue_table (base :str ="BTC")->None :
         )
         )
 
-    section ("🌐 เทียบราคา — Global Spot Venue Board")
-    st.caption (f"Spot {len(_GLOBAL_SPOT_VENUES)} กระดาน · ทุกแถวใช้ราคาตลาด Spot จริง · Arb/Ranking คำนวณจาก Spot ทั้งหมด")
+    if board == "thai":
+        section ("🇹🇭 เทียบราคา — กระดานไทย")
+        st.caption (f"Spot {len(_THAI_SPOT_VENUES)} กระดาน · ราคา THB · ทุกแถวเป็น Spot จริง")
+    else:
+        section ("🌐 เทียบราคา — Global Spot Venue Board")
+        st.caption (f"Spot {len(_GLOBAL_SPOT_VENUES)} กระดาน · ราคา USD/USDT · ทุกแถวเป็น Spot จริง")
 
     # The exchange comparison table is the hero element.  Read the selected
     # coin from session state first, then render the coin tabs underneath it.
@@ -7453,7 +7536,7 @@ def render_perp_venue_table (base :str ="BTC")->None :
         current_base = base if base in choices else choices[0]
     if current_base != base:
         base = current_base
-        df, ts = fetch_perp_venues(base)
+        df, ts = fetch_perp_venues(base, board=board)
         rows = []
         for _, r in df.iterrows():
             v = meta.get(r["exchange"], {})
@@ -7477,7 +7560,7 @@ def render_perp_venue_table (base :str ="BTC")->None :
 
     # Render server-side so the comparison table cannot disappear when the
     # embedded components iframe/JS is suppressed by a deployed browser.
-    _render_perp_venue_table_static(rows)
+    _render_perp_venue_table_static(rows, currency="฿" if board == "thai" else "$")
 
     # All venues are Spot now, so the board-level highlight compares Spot
     # venues directly and feeds the same observed-price analysis/history.
@@ -7488,7 +7571,7 @@ def render_perp_venue_table (base :str ="BTC")->None :
 
     c_cap ,c_btn =st .columns ([8 ,2 ])
     with c_btn :
-        if st .button ("🔄 รีเฟรช",key ="pv_refresh",**WIDE ):
+        if st .button ("🔄 รีเฟรช",key =f"pv_refresh_{board}",**WIDE ):
             fetch_perp_venues .clear ()
             st .rerun ()
 
@@ -7511,8 +7594,9 @@ def render_perp_venue_table (base :str ="BTC")->None :
             )
     with c_size :
         order_size =st .number_input (
-            "ขนาดออเดอร์ (USD)",value =10000.0,min_value =100.0,step =1000.0,
-            key =f"arb_size_{base}",
+            f"ขนาดออเดอร์ ({'THB' if board == 'thai' else 'USD'})",
+            value =10000.0,min_value =100.0,step =1000.0,
+            key =f"arb_size_{board}_{base}",
         )
 
     # Compact analysis navigation: keep the venue table as the main view,
