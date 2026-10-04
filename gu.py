@@ -5957,52 +5957,100 @@ def _spot_upbit_th(b: str) -> tuple[float, float, float]:
 
 
 def _get_innovestx_credentials() -> tuple[str, str]:
-    """Read InnovestX Digital Asset Open API credentials from Streamlit Secrets/env.
+    """Read InnovestX credentials from Streamlit Secrets or environment.
 
-    Never hard-code the API key/secret in this source file.  Recommended
-    Streamlit Cloud secrets:
-        INNOVESTX_API_KEY = "..."
-        INNOVESTX_API_SECRET = "..."
+    Supports both flat Streamlit secrets and a nested ``[innovestx]`` block,
+    plus common environment-variable aliases.  Never hard-code credentials.
     """
+    key_names = (
+        "INNOVESTX_API_KEY", "INNOVESTX_KEY",
+        "INVX_API_KEY", "INVX_KEY",
+    )
+    secret_names = (
+        "INNOVESTX_API_SECRET", "INNOVESTX_SECRET",
+        "INVX_API_SECRET", "INVX_SECRET",
+    )
+
+    def _clean(v):
+        if v is None:
+            return ""
+        # Streamlit secrets can return a SecretStr-like value.
+        try:
+            v = str(v)
+        except Exception:
+            return ""
+        return v.strip().strip('\"').strip("'")
+
+    key = secret = ""
+
+    # 0) Credentials entered in the app UI (highest priority).
+    # These live only in Streamlit session state and are never rendered back.
     try:
-        key = str(st.secrets.get("INNOVESTX_API_KEY", "") or "").strip()
-        secret = str(st.secrets.get("INNOVESTX_API_SECRET", "") or "").strip()
+        key = _clean(st.session_state.get("innovestx_api_key", ""))
+        secret = _clean(st.session_state.get("innovestx_api_secret", ""))
     except Exception:
-        key, secret = "", ""
-    key = key or str(os.environ.get("INNOVESTX_API_KEY", "") or "").strip()
-    secret = secret or str(os.environ.get("INNOVESTX_API_SECRET", "") or "").strip()
+        pass
+
+    # 1) Flat Streamlit secrets: INNOVESTX_API_KEY = "..."
+    try:
+        for name in key_names:
+            if not key:
+                key = _clean(st.secrets.get(name, ""))
+        for name in secret_names:
+            if not secret:
+                secret = _clean(st.secrets.get(name, ""))
+
+        # 2) Nested block: [innovestx]
+        invx = st.secrets.get("innovestx", {})
+        if hasattr(invx, "get"):
+            for name in key_names:
+                short = name.lower()
+                if not key:
+                    key = _clean(invx.get(name, "")) or _clean(invx.get(short, ""))
+            for name in secret_names:
+                short = name.lower()
+                if not secret:
+                    secret = _clean(invx.get(name, "")) or _clean(invx.get(short, ""))
+    except Exception:
+        pass
+
+    # 3) Environment variables.
+    for name in key_names:
+        if not key:
+            key = _clean(os.environ.get(name, ""))
+    for name in secret_names:
+        if not secret:
+            secret = _clean(os.environ.get(name, ""))
+
     return key, secret
 
 
 def _spot_innovestx_th(b: str) -> tuple[float, float, float]:
-    """Fetch InnovestX Spot Level-2 order book (THB).
+    """Fetch live InnovestX Spot Level-2 order book.
 
-    InnovestX requires an authenticated POST even for Level-2 market data.
-    Signature follows the official Open API rule:
-    APIKEY + METHOD + HOST + PATH + QUERY + CONTENT-TYPE + REQUEST-UID
-    + TIMESTAMP + exact request body.
+    Uses the official InnovestX Open API signing format:
+    APIKEY + METHOD + HOST + PATH + QUERY + CONTENT-TYPE
+    + REQUEST-UID + TIMESTAMP + exact request body.
     """
     api_key, api_secret = _get_innovestx_credentials()
     if not api_key or not api_secret:
-        raise RuntimeError("InnovestX: missing INNOVESTX_API_KEY / INNOVESTX_API_SECRET")
+        raise RuntimeError(
+            "InnovestX: API Key/Secret not loaded. "
+            "ใส่ INNOVESTX_API_KEY และ INNOVESTX_API_SECRET ใน Secrets "
+            "หรือกรอกในช่อง InnovestX API ด้านบน"
+        )
 
     host = "api.innovestxonline.com"
     path = "/api/v1/digital-asset/orderbook/lvl2"
     content_type = "application/json"
     request_uid = str(uuid.uuid4())
     timestamp = str(int(time.time() * 1000))
-    body = {"symbol": f"{b.upper()}THB", "depth": 20}
+    body = {"symbol": f"{str(b).split('/')[0].upper()}THB", "depth": 100}
     body_json = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
 
-    string_to_sign = (
-        api_key + "POST" + host + path + "" + content_type
-        + request_uid + timestamp + body_json
-    )
-    signature = hmac.new(
-        api_secret.encode("utf-8"),
-        string_to_sign.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
+    string_to_sign = (api_key + "POST" + host + path + "" + content_type
+                      + request_uid + timestamp + body_json)
+    signature = hmac.new(api_secret.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
 
     headers = {
         "Content-Type": content_type,
@@ -6011,122 +6059,114 @@ def _spot_innovestx_th(b: str) -> tuple[float, float, float]:
         "X-INVX-REQUEST-UID": request_uid,
         "X-INVX-TIMESTAMP": timestamp,
         "Accept-Language": "TH",
+        "Accept": "application/json",
+        "User-Agent": "Nobody-Dealer-Suite/1.0",
     }
-
-    req = urllib.request.Request(
-        f"https://{host}{path}",
-        data=body_json.encode("utf-8"),
-        headers=headers,
-        method="POST",
-    )
+    req = urllib.request.Request(f"https://{host}{path}", data=body_json.encode("utf-8"), headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=8.0) as resp:
-            d = json.loads(resp.read().decode("utf-8"))
+        with urllib.request.urlopen(req, timeout=10.0) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", errors="replace")[:300]
+        detail = e.read().decode("utf-8", errors="replace")[:500]
         raise RuntimeError(f"InnovestX HTTP {e.code}: {detail}") from e
-    if str(d.get("code", "0000")) not in {"0000", "0", "200"}:
-        raise RuntimeError(
-            f"InnovestX API {d.get('code')}: {d.get('message', 'unknown error')}"
-        )
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"InnovestX connection error: {e.reason}") from e
 
-    rows = d.get("data") or []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"InnovestX returned invalid JSON: {raw[:300]}") from e
+
+    code = str(data.get("code", ""))
+    if code not in {"0000", "0", "200"}:
+        hints = {"4002":"API Key ไม่ถูกต้อง", "4003":"IP ของเครื่องนี้ยังไม่อยู่ใน IP Whitelist ของ API Key",
+                 "4004":"API Key ไม่มีสิทธิ์ Read/Trading", "4005":"Signature ไม่ถูกต้อง",
+                 "4007":"Request ไม่ถูกต้อง", "4008":"Request UID ไม่ถูกต้อง/ซ้ำ",
+                 "4010":"Timestamp format ไม่ถูกต้อง", "4011":"Timestamp ต่างจาก server มากเกินไป",
+                 "4012":"Signature ไม่ถูกต้อง"}
+        hint = hints.get(code, "")
+        msg = str(data.get("message") or "unknown error")
+        raise RuntimeError(f"InnovestX API {code}: {msg}" + (f" — {hint}" if hint else ""))
+
+    rows = data.get("data") or []
     if not isinstance(rows, list):
-        raise ValueError("InnovestX: invalid orderbook data")
-
+        raise ValueError(f"InnovestX: unexpected orderbook data type: {type(rows).__name__}")
     bids, asks = [], []
-    last_price = 0.0
-    for r in rows:
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
         try:
-            px = float(r.get("price") or 0)
-            qty = float(r.get("quantity") or 0)
-            side = int(r.get("side"))
-            last_price = max(last_price, float(r.get("lastTradePrice") or 0))
+            if int(row.get("actionType", 0)) == 2:
+                continue
+            price, qty, side = float(row.get("price")), float(row.get("quantity")), int(row.get("side"))
         except (TypeError, ValueError):
             continue
-        if px <= 0 or qty <= 0:
+        if price <= 0 or qty <= 0:
             continue
         if side == 0:
-            bids.append((px, qty))
+            bids.append((price, qty))
         elif side == 1:
-            asks.append((px, qty))
-
+            asks.append((price, qty))
+    bids.sort(key=lambda x: x[0], reverse=True)
+    asks.sort(key=lambda x: x[0])
     if not bids or not asks:
-        raise ValueError("InnovestX: order book has no bid/ask")
-
-    bid = max(x[0] for x in bids)
-    ask = min(x[0] for x in asks)
-    # Level-2 does not provide a 24h percentage change.  Use 0 here so the
-    # comparison board can still render; price itself is the live L2 quote.
-    return (ask + bid) / 2.0 if last_price <= 0 else last_price, 0.0, 0.0
-
+        raise ValueError(f"InnovestX: order book empty for {body['symbol']} (rows={len(rows)})")
+    return (bids[0][0] + asks[0][0]) / 2.0, 0.0, 0.0
 
 def _spot_orbix_th(b: str) -> tuple[float, float, float]:
-    """Orbix THB spot quote from the documented public V3 endpoints.
+    """Fetch Orbix Spot THB from the public V3 order book.
 
-    Price is derived from the live order book (best bid / best ask), not from
-    the old v1 ticker endpoint.  The 24h ticker is used only for change and
-    turnover, so a ticker parsing issue cannot make the order-book price fail.
+    IMPORTANT: the Thai comparison board is supposed to use an executable
+    market quote, not only the last-traded ticker price. Orbix's current
+    public V3 API exposes the order book at /api/v3/depth?symbol=btc_thb.
+    We therefore derive the displayed price from the best bid/ask midpoint.
     """
     symbol = f"{b.lower()}_thb"
+    depth_url = f"https://www.orbixtrade.com/api/v3/depth?symbol={symbol}&limit=5"
+    ticker_url = f"https://www.orbixtrade.com/api/v3/ticker/24hr?symbol={symbol}"
 
-    # 1) Real executable quote: public V3 order depth.
-    depth_url = (
-        "https://www.orbixtrade.com/api/v3/depth"
-        f"?symbol={urllib.parse.quote(symbol, safe='_')}&limit=5"
-    )
-    depth = _http_json(depth_url)
-    if not isinstance(depth, dict):
-        raise RuntimeError("Orbix depth: invalid JSON response")
-
-    bids = depth.get("bids") or []
-    asks = depth.get("asks") or []
-    if not bids or not asks:
-        raise RuntimeError("Orbix depth: empty bids/asks")
-
-    def _level_price(level: object) -> float:
-        if isinstance(level, (list, tuple)) and level:
-            return float(level[0])
-        if isinstance(level, dict):
-            return float(level.get("price", level.get("p")))
-        raise ValueError("invalid order-book level")
-
-    bid_prices = [_level_price(x) for x in bids]
-    ask_prices = [_level_price(x) for x in asks]
-    bid = max(x for x in bid_prices if x > 0)
-    ask = min(x for x in ask_prices if x > 0)
-    if bid <= 0 or ask <= 0:
-        raise RuntimeError("Orbix depth: invalid best bid/ask")
-
-    # Mid is the board's single observed price; Bid/Ask remain available from
-    # the same order book for any executable-quote UI added later.
-    mid = (bid + ask) / 2.0
-
-    # 2) 24h statistics.  These are non-critical for the actual quote.
-    chg = 0.0
-    turnover = 0.0
     try:
-        ticker_url = (
-            "https://www.orbixtrade.com/api/v3/ticker/24hr"
-            f"?symbol={urllib.parse.quote(symbol, safe='_')}"
-        )
-        ticker = _http_json(ticker_url)
-        if isinstance(ticker, list):
-            ticker = ticker[0] if ticker else {}
-        if isinstance(ticker, dict) and isinstance(ticker.get("data"), dict):
-            ticker = ticker["data"]
-        if isinstance(ticker, dict):
-            chg = float(
-                ticker.get("priceChangePercent", ticker.get("changePercent", 0)) or 0
-            )
-            turnover = float(
-                ticker.get("quoteVolume", ticker.get("volume", 0)) or 0
-            )
-    except Exception:
-        # Keep the live bid/ask-derived price even if 24h stats are unavailable.
-        pass
+        book = _http_json(depth_url, timeout=8.0)
+        if not isinstance(book, dict):
+            raise ValueError("Orbix: invalid depth response")
 
-    return mid, chg, turnover
+        # V3 returns Binance-style arrays: bids=[[price, qty], ...],
+        # asks=[[price, qty], ...]. Keep parsing tolerant of a data wrapper.
+        if isinstance(book.get("data"), dict):
+            book = book["data"]
+        bids = book.get("bids") or []
+        asks = book.get("asks") or []
+        if not bids or not asks:
+            raise ValueError("Orbix: order book has no bid/ask")
+
+        best_bid = max(float(x[0]) for x in bids if isinstance(x, (list, tuple)) and len(x) >= 2 and float(x[0]) > 0 and float(x[1]) > 0)
+        best_ask = min(float(x[0]) for x in asks if isinstance(x, (list, tuple)) and len(x) >= 2 and float(x[0]) > 0 and float(x[1]) > 0)
+        if best_bid <= 0 or best_ask <= 0 or best_ask < best_bid:
+            raise ValueError("Orbix: invalid best bid/ask")
+
+        # Keep the board's existing 3-value contract: price, 24h change,
+        # turnover. Price is now the live order-book midpoint.
+        mid = (best_bid + best_ask) / 2.0
+        chg = 0.0
+        turnover = 0.0
+
+        # Ticker is only used for the non-critical 24h change/turnover fields.
+        # If ticker is temporarily unavailable, the real bid/ask price still
+        # remains usable instead of making Orbix disappear from the board.
+        try:
+            tick = _http_json(ticker_url, timeout=8.0)
+            if isinstance(tick, dict) and isinstance(tick.get("data"), dict):
+                tick = tick["data"]
+            if isinstance(tick, dict):
+                chg = float(tick.get("priceChangePercent", tick.get("percentChange", tick.get("changePercent", 0))) or 0.0)
+                turnover = float(tick.get("quoteVolume", tick.get("volume", tick.get("quoteVol", 0))) or 0.0)
+        except Exception:
+            pass
+
+        return mid, chg, turnover
+
+    except Exception as e:
+        raise RuntimeError(f"Orbix unavailable: {e}") from e
 
 
 _THAI_SPOT_VENUES = [
@@ -6402,12 +6442,10 @@ def fetch_perp_venues (base :str ="BTC", board :str ="global")->tuple [pd.DataFr
                 raise ValueError("bad price")
             row.update(price=p, chg=c, turnover=t)
         except urllib.error.HTTPError as e:
-            try:
-                detail = e.read().decode("utf-8", errors="replace").strip()
-            except Exception:
-                detail = ""
-            row["err"] = f"HTTP {e.code}: {detail[:180]}" if detail else f"HTTP {e.code}"
+            row["err"] = f"HTTP {e.code}"
         except Exception as e:
+            # Keep the useful API error visible in the table.  Never include
+            # the API key or secret in this message.
             msg = str(e).strip().replace("\n", " ")
             row["err"] = msg[:220] if msg else type(e).__name__
         return row
@@ -7652,6 +7690,24 @@ def render_perp_venue_table (base :str ="BTC")->None :
     st.session_state["pv_board"] = board
 
     venue_config = _THAI_SPOT_VENUES if board == "thai" else _GLOBAL_SPOT_VENUES
+
+    # InnovestX credentials can be supplied directly here when Streamlit
+    # Secrets / Environment Variables are not available in the deployment.
+    # Nothing is printed to the page and values are kept in session state only.
+    if board == "thai":
+        with st.expander("🔐 InnovestX API — ตั้งค่า Key / Secret", expanded=False):
+            st.caption("กรอก API Key และ API Secret ของ InnovestX ได้ที่นี่ หรือใช้ Streamlit Secrets / Environment Variables ก็ได้")
+            with st.form("innovestx_credentials_form", clear_on_submit=False):
+                _ix_key = st.text_input("API Key", value=st.session_state.get("innovestx_api_key", ""), type="password")
+                _ix_secret = st.text_input("API Secret", value=st.session_state.get("innovestx_api_secret", ""), type="password")
+                _ix_save = st.form_submit_button("บันทึกและทดสอบ InnovestX")
+                if _ix_save:
+                    st.session_state["innovestx_api_key"] = _ix_key.strip()
+                    st.session_state["innovestx_api_secret"] = _ix_secret.strip()
+                    st.cache_data.clear()
+                    st.success("บันทึก Key/Secret ใน session แล้ว กำลังโหลดข้อมูลใหม่")
+                    st.rerun()
+
     df ,ts =fetch_perp_venues (base, board=board)
     meta ={v ["name"]:v for v in venue_config}
 
