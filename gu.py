@@ -6027,11 +6027,14 @@ def _get_innovestx_credentials() -> tuple[str, str]:
 
 
 def _innovestx_signed_post(path: str, api_key: str, api_secret: str, body: dict) -> dict:
-    """POST to InnovestX with a brand-new UUID and an exact signed body.
+    """Exact InnovestX signed POST, matching the official Node/Axios example.
 
-    The official docs require the exact same REQUEST-UID, timestamp and body
-    in both the signature and HTTP headers.  We intentionally do not cache or
-    reuse any of these request values.
+    IMPORTANT: keep this function deliberately boring.  InnovestX validates
+    REQUEST-UID before signature validation and currently returns 4008 for the
+    deployed gateway when the request does not match its expected header
+    representation.  We therefore use only the mandatory authentication
+    headers plus Accept-Language, and send the exact same compact JSON string
+    that is included in the HMAC input.
     """
     host = "api.innovestxonline.com"
     content_type = "application/json"
@@ -6054,9 +6057,6 @@ def _innovestx_signed_post(path: str, api_key: str, api_secret: str, body: dict)
         hashlib.sha256,
     ).hexdigest()
 
-    # Keep headers minimal and identical to the official example.  In
-    # particular, do not send a proxy/cache-related header that could alter
-    # the request at an upstream gateway.
     headers = {
         "Content-Type": content_type,
         "X-INVX-REQUEST-UID": request_uid,
@@ -6064,28 +6064,44 @@ def _innovestx_signed_post(path: str, api_key: str, api_secret: str, body: dict)
         "X-INVX-SIGNATURE": signature,
         "X-INVX-APIKEY": api_key,
         "Accept-Language": "TH",
-        "Application-Reference": "Nobody-Dealer-Suite",
-        "Accept": "application/json",
-        "User-Agent": "Nobody-Dealer-Suite/1.0",
     }
 
-    req = urllib.request.Request(
-        f"https://{host}{path}",
-        data=body_json.encode("utf-8"),
-        headers=headers,
-        method="POST",
-    )
+    # Prefer requests because this is the same header/body model as Axios
+    # in InnovestX's official example. Fall back to urllib if requests is not
+    # installed in the deployment environment.
+    url = f"https://{host}{path}"
     try:
-        with urllib.request.urlopen(req, timeout=10.0) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", errors="replace")[:500]
-        raise RuntimeError(
-            f"InnovestX HTTP {e.code}: {detail}"
-            f" | uid_len={len(request_uid)} timestamp_len={len(timestamp)}"
-        ) from e
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"InnovestX connection error: {e.reason}") from e
+        import requests
+        r = requests.post(
+            url,
+            data=body_json.encode("utf-8"),
+            headers=headers,
+            timeout=10.0,
+        )
+        raw = r.text
+        if r.status_code >= 400:
+            detail = raw[:500]
+            raise RuntimeError(
+                f"InnovestX HTTP {r.status_code}: {detail}"
+                f" | uid={request_uid} | uid_len={len(request_uid)}"
+                f" timestamp_len={len(timestamp)} transport=requests"
+            )
+    except ImportError:
+        req = urllib.request.Request(
+            url, data=body_json.encode("utf-8"), headers=headers, method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10.0) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")[:500]
+            raise RuntimeError(
+                f"InnovestX HTTP {e.code}: {detail}"
+                f" | uid={request_uid} | uid_len={len(request_uid)}"
+                f" timestamp_len={len(timestamp)} transport=urllib"
+            ) from e
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"InnovestX connection error: {e.reason}") from e
 
     try:
         data = json.loads(raw)
