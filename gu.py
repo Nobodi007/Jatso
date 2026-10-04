@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64 
 import hashlib 
+import hmac 
 import json 
 import math 
 import os 
@@ -5955,6 +5956,111 @@ def _spot_upbit_th(b: str) -> tuple[float, float, float]:
     return float(d["trade_price"]), float(d.get("signed_change_rate") or 0.0) * 100.0, float(d.get("acc_trade_price_24h") or 0.0)
 
 
+def _get_innovestx_credentials() -> tuple[str, str]:
+    """Read InnovestX Digital Asset Open API credentials from Streamlit Secrets/env.
+
+    Never hard-code the API key/secret in this source file.  Recommended
+    Streamlit Cloud secrets:
+        INNOVESTX_API_KEY = "..."
+        INNOVESTX_API_SECRET = "..."
+    """
+    try:
+        key = str(st.secrets.get("INNOVESTX_API_KEY", "") or "").strip()
+        secret = str(st.secrets.get("INNOVESTX_API_SECRET", "") or "").strip()
+    except Exception:
+        key, secret = "", ""
+    key = key or str(os.environ.get("INNOVESTX_API_KEY", "") or "").strip()
+    secret = secret or str(os.environ.get("INNOVESTX_API_SECRET", "") or "").strip()
+    return key, secret
+
+
+def _spot_innovestx_th(b: str) -> tuple[float, float, float]:
+    """Fetch InnovestX Spot Level-2 order book (THB).
+
+    InnovestX requires an authenticated POST even for Level-2 market data.
+    Signature follows the official Open API rule:
+    APIKEY + METHOD + HOST + PATH + QUERY + CONTENT-TYPE + REQUEST-UID
+    + TIMESTAMP + exact request body.
+    """
+    api_key, api_secret = _get_innovestx_credentials()
+    if not api_key or not api_secret:
+        raise RuntimeError("InnovestX: missing INNOVESTX_API_KEY / INNOVESTX_API_SECRET")
+
+    host = "api.innovestxonline.com"
+    path = "/api/v1/digital-asset/orderbook/lvl2"
+    content_type = "application/json"
+    request_uid = str(uuid.uuid4())
+    timestamp = str(int(time.time() * 1000))
+    body = {"symbol": f"{b.upper()}THB", "depth": 20}
+    body_json = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
+
+    string_to_sign = (
+        api_key + "POST" + host + path + "" + content_type
+        + request_uid + timestamp + body_json
+    )
+    signature = hmac.new(
+        api_secret.encode("utf-8"),
+        string_to_sign.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+    headers = {
+        "Content-Type": content_type,
+        "X-INVX-APIKEY": api_key,
+        "X-INVX-SIGNATURE": signature,
+        "X-INVX-REQUEST-UID": request_uid,
+        "X-INVX-TIMESTAMP": timestamp,
+        "Accept-Language": "TH",
+    }
+
+    req = urllib.request.Request(
+        f"https://{host}{path}",
+        data=body_json.encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8.0) as resp:
+            d = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")[:300]
+        raise RuntimeError(f"InnovestX HTTP {e.code}: {detail}") from e
+    if str(d.get("code", "0000")) not in {"0000", "0", "200"}:
+        raise RuntimeError(
+            f"InnovestX API {d.get('code')}: {d.get('message', 'unknown error')}"
+        )
+
+    rows = d.get("data") or []
+    if not isinstance(rows, list):
+        raise ValueError("InnovestX: invalid orderbook data")
+
+    bids, asks = [], []
+    last_price = 0.0
+    for r in rows:
+        try:
+            px = float(r.get("price") or 0)
+            qty = float(r.get("quantity") or 0)
+            side = int(r.get("side"))
+            last_price = max(last_price, float(r.get("lastTradePrice") or 0))
+        except (TypeError, ValueError):
+            continue
+        if px <= 0 or qty <= 0:
+            continue
+        if side == 0:
+            bids.append((px, qty))
+        elif side == 1:
+            asks.append((px, qty))
+
+    if not bids or not asks:
+        raise ValueError("InnovestX: order book has no bid/ask")
+
+    bid = max(x[0] for x in bids)
+    ask = min(x[0] for x in asks)
+    # Level-2 does not provide a 24h percentage change.  Use 0 here so the
+    # comparison board can still render; price itself is the live L2 quote.
+    return (ask + bid) / 2.0 if last_price <= 0 else last_price, 0.0, 0.0
+
+
 def _spot_orbix_th(b: str) -> tuple[float, float, float]:
     # Orbix public market-data endpoint may change; keep this isolated so a
     # temporary venue outage does not break the Thai board.
@@ -5995,6 +6101,11 @@ _THAI_SPOT_VENUES = [
          logo="https://www.google.com/s2/favicons?domain=orbixtrade.com&sz=64",
          fn=_spot_orbix_th, sym=lambda b: f"{b}_THB",
          url=lambda b: "https://orbixtrade.com/", note="Spot · THB"),
+    dict(name="InnovestX", bg="#E8B84A", fg="#0b0e11", tx="IX",
+         logo="https://www.google.com/s2/favicons?domain=innovestx.co.th&sz=64",
+         fn=_spot_innovestx_th, sym=lambda b: f"{b}THB",
+         url=lambda b: "https://trade.innovestxonline.com/",
+         note="Spot · THB · API Key required"),
 ]
 
 _SPOT_VENUES =[
