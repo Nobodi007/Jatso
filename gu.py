@@ -7984,7 +7984,7 @@ def _render_perp_venue_table_live (base :str ="BTC")->None :
         _live_clock = datetime.now().strftime("%H:%M:%S")
     except Exception:
         _live_clock = time.strftime("%H:%M:%S")
-    st.caption(f"🟢 LIVE · Auto refresh ทุก 3 วินาที · อัปเดตล่าสุด {_live_clock}")
+    st.caption(f"🟢 LIVE · Auto refresh ทุก 30 วินาที · อัปเดตล่าสุด {_live_clock}")
 
     def _num (x :Any )->Optional [float ]:
         return None if pd .isna (x )else float (x )
@@ -8120,7 +8120,7 @@ def _render_perp_venue_table_live (base :str ="BTC")->None :
 
 # Public board renderer. Streamlit fragments support automatic reruns via
 # run_every; the project already detects fragment support for older runtimes.
-BOARD_AUTO_REFRESH_SEC = 3.0
+BOARD_AUTO_REFRESH_SEC = 30.0
 if HAS_FRAGMENT:
     render_perp_venue_table = st.fragment(run_every=BOARD_AUTO_REFRESH_SEC)(
         _render_perp_venue_table_live
