@@ -6044,7 +6044,12 @@ def _spot_innovestx_th(b: str) -> tuple[float, float, float]:
     host = "api.innovestxonline.com"
     path = "/api/v1/digital-asset/orderbook/lvl2"
     content_type = "application/json"
-    request_uid = str(uuid.uuid4())
+    # InnovestX requires REQUEST-UID to be a fresh RFC-4122 UUID string
+    # (exactly 36 chars, including hyphens).  Generate it immediately before
+    # signing so the exact same value is used in both the signature and header.
+    request_uid = str(uuid.uuid4()).lower()
+    if len(request_uid) != 36 or request_uid.count("-") != 4:
+        raise RuntimeError("InnovestX: failed to generate a valid REQUEST-UID")
     timestamp = str(int(time.time() * 1000))
     body = {"symbol": f"{str(b).split('/')[0].upper()}THB", "depth": 100}
     body_json = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
@@ -6060,6 +6065,9 @@ def _spot_innovestx_th(b: str) -> tuple[float, float, float]:
         "X-INVX-REQUEST-UID": request_uid,
         "X-INVX-TIMESTAMP": timestamp,
         "Accept-Language": "TH",
+        "Application-Reference": "Nobody-Dealer-Suite",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
         "Accept": "application/json",
         "User-Agent": "Nobody-Dealer-Suite/1.0",
     }
@@ -6409,7 +6417,6 @@ rows :list [dict ],v :dict ,base :str
     return best 
 
 
-@_cache_data (ttl =30 ,show_spinner =False )
 def fetch_perp_venues (base :str ="BTC", board :str ="global")->tuple [pd.DataFrame ,str ]:
     """Fetch the selected Spot Venue Board.
 
