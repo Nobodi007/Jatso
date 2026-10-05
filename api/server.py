@@ -413,8 +413,54 @@ def _load_existing_sim(gu):
 
 
 def _portfolio_response(gu, sim, px_row):
-    price_thb = _safe_float(px_row["Global_USD"]) * _safe_float(px_row["USDTHB"])
-    snap = gu.portfolio_snapshot(sim, {str(sim.get("asset")): price_thb})
+    """
+    Build a true multi-asset portfolio snapshot.
+
+    Reuse gu.py's existing market overview and portfolio_snapshot logic.
+    Do not invent another pricing source. The Streamlit app already builds
+    portfolio prices from fetch_market_overview(SUPPORTED_ASSETS) and the
+    latest USDTHB from the selected market frame.
+    """
+    usdthb = _safe_float(px_row.get("USDTHB"), 0.0)
+    if usdthb <= 0:
+        raise HTTPException(
+            status_code=503,
+            detail="ไม่สามารถอ่าน USD/THB ล่าสุดเพื่อคำนวณ Portfolio ได้",
+        )
+
+    prices = {"THB": 1.0}
+
+    try:
+        market_df = gu.fetch_market_overview(getattr(gu, "SUPPORTED_ASSETS", []))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "โหลดราคาตลาดหลายเหรียญจาก gu.py ไม่สำเร็จ",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
+
+    if market_df is not None and not market_df.empty:
+        for _, row in market_df.iterrows():
+            try:
+                symbol = str(row.get("symbol", "")).upper().strip()
+                price_usd = _safe_float(row.get("price_usd"), 0.0)
+                if symbol and price_usd > 0:
+                    prices[symbol] = price_usd * usdthb
+            except Exception:
+                continue
+
+    # Keep the selected asset's exact historical/global price as a fallback
+    # in case market overview did not return that symbol.
+    selected_asset = str(sim.get("asset") or "").upper().strip()
+    selected_usd = _safe_float(px_row.get("Global_USD"), 0.0)
+    if selected_asset and selected_usd > 0:
+        prices[selected_asset] = selected_usd * usdthb
+
+    snap = gu.portfolio_snapshot(sim, prices)
+
     return {
         "cash_thb": snap["cash_thb"],
         "market_value_thb": snap["market_value_thb"],
