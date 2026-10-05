@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+streamlit
+pandas
+requests
+yfinance
+supabase
+python-dotenv
