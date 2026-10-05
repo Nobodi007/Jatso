@@ -6,6 +6,9 @@ from threading import RLock
 import importlib.util
 import os
 import math
+import urllib
+import urllib.parse
+import urllib.request
 
 import pandas as pd
 
