@@ -25,14 +25,17 @@ def health():
 @app.get("/api/market/{asset}")
 def market(asset: str):
     asset = asset.upper()
+    symbol = f"{asset}_THB"
 
-    url = f"https://api.bitkub.com/api/market/ticker?sym={asset}_THB"
+    url = "https://api.bitkub.com/api/v3/market/ticker"
 
     response = requests.get(
         url,
+        params={"sym": symbol.lower()},
         timeout=10,
         headers={
-            "User-Agent": "XSpring-Dealer-Suite/1.0"
+            "Accept": "application/json",
+            "User-Agent": "XSpring-Dealer-Suite/1.0",
         },
     )
 
@@ -40,23 +43,23 @@ def market(asset: str):
 
     data = response.json()
 
-    key = f"{asset}_THB"
-
-    if key not in data:
+    # Bitkub V3 returns a list
+    if not isinstance(data, list) or len(data) == 0:
         return {
             "error": f"ไม่พบราคา {asset}/THB",
             "asset": asset,
+            "raw": data,
         }
 
-    ticker = data[key]
+    ticker = data[0]
 
     return {
         "asset": asset,
-        "symbol": f"{asset}/THB",
-        "price": ticker.get("last"),
-        "high_24h": ticker.get("high24hr"),
-        "low_24h": ticker.get("low24hr"),
-        "volume_24h": ticker.get("baseVolume"),
-        "quote_volume_24h": ticker.get("quoteVolume"),
-        "change_24h": ticker.get("percentChange"),
+        "symbol": ticker.get("symbol", symbol),
+        "price": float(ticker["last"]),
+        "high_24h": float(ticker["high_24_hr"]),
+        "low_24h": float(ticker["low_24_hr"]),
+        "volume_24h": float(ticker["base_volume"]),
+        "quote_volume_24h": float(ticker["quote_volume"]),
+        "change_24h": float(ticker["percent_change"]),
     }
