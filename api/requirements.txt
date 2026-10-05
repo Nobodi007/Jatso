@@ -1,6 +1,6 @@
+streamlit>=1.40
 fastapi
 uvicorn[standard]
-streamlit
 pandas
 numpy
 requests
