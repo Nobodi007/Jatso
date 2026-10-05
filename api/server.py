@@ -86,6 +86,16 @@ def _actor():
     return actor
 
 
+def _sync_gu_actor(gu, actor: str) -> None:
+    # FastAPI has no Streamlit signed-in user. Bridge the exact persistent
+    # actor into every actor variable used by gu.py versions.
+    actor = str(actor or "").strip()
+    if not actor:
+        raise HTTPException(status_code=503, detail="ไม่พบ actor สำหรับโหลด Portfolio")
+    os.environ["XSPRING_USER"] = actor
+    os.environ["XSPRING_REPORT_ACTOR"] = actor
+
+
 def _set_api_role(gu, actor: str):
     """
     Bridge the existing gu.py RBAC into FastAPI.
@@ -365,6 +375,8 @@ def portfolio():
     """
     try:
         gu = load_gu()
+        actor = _actor()
+        _sync_gu_actor(gu, actor)
         sim = _load_existing_sim(gu)
 
         asset = str(sim.get("asset") or "BTC").upper().strip()
@@ -404,6 +416,7 @@ def create_order(order: OrderRequest):
         try:
             gu = load_gu()
             actor = _actor()
+            _sync_gu_actor(gu, actor)
             role = _set_api_role(gu, actor)
 
             asset = order.asset.upper().strip()
