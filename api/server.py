@@ -406,21 +406,45 @@ def _load_market_frame(gu, asset: str):
 # =========================================================
 
 def _load_existing_sim(gu):
+    """Load the existing persisted portfolio without creating a new one."""
     sim = gu.load_sim_state()
 
-    # SAFETY:
-    # Never create a new portfolio here.
-    # Never silently fallback to a default wallet.
-    # Never overwrite old data.
+    # SAFETY: never create/fallback/overwrite a portfolio here.
     if not isinstance(sim, dict):
+        try:
+            session_state = getattr(gu.st, "session_state", {})
+        except Exception:
+            session_state = {}
+
+        def _diag(name: str) -> str:
+            try:
+                return str(session_state.get(name, "") or "")
+            except Exception:
+                return ""
+
+        diagnostic = {
+            "sim_state_load_error": _diag("sim_state_load_error"),
+            "sim_state_rest_error": _diag("sim_state_rest_error"),
+            "sim_state_source": _diag("sim_state_source"),
+            "sim_state_actor": _diag("sim_state_actor"),
+            "x_spring_user": os.environ.get("XSPRING_USER", ""),
+            "x_spring_report_actor": os.environ.get("XSPRING_REPORT_ACTOR", ""),
+            "gu_file": str(getattr(gu, "__file__", "")),
+            "supabase_url_configured": bool(os.environ.get("SUPABASE_URL", "").strip()),
+            "supabase_service_role_configured": bool(
+                os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+            ),
+        }
+
         raise HTTPException(
             status_code=503,
-            detail=(
-                "ไม่สามารถโหลด Portfolio เดิมจาก "
-                "Supabase ได้ — "
-                "ไม่สร้างพอร์ตใหม่เพื่อป้องกันข้อมูลเดิม "
-                "ถูกเขียนทับ"
-            ),
+            detail={
+                "message": (
+                    "ไม่สามารถโหลด Portfolio เดิมจาก Supabase ได้ — "
+                    "ไม่สร้างพอร์ตใหม่เพื่อป้องกันข้อมูลเดิมถูกเขียนทับ"
+                ),
+                "diagnostic": diagnostic,
+            },
         )
 
     return sim
