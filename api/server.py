@@ -718,26 +718,40 @@ def order_history(limit: int = 100, asset: str = ""):
 
             # Normalize every timestamp to UTC before sorting.
             # This prevents: Cannot compare tz-naive and tz-aware timestamps.
-            def sort_key(row):
+            def sort_key(item):
+                # Use the actual ledger index as a tie-breaker.
+                # gu.execute_order() records a date-only value for some orders,
+                # so multiple orders can legitimately have the same timestamp
+                # after normalization. The newest appended ledger row must still
+                # appear first in Order History.
+                row, original_index = item
+
                 try:
                     value = row.get("timestamp") or row.get("date") or ""
                     if not value:
-                        return pd.Timestamp("1970-01-01", tz="UTC")
+                        ts = pd.Timestamp("1970-01-01", tz="UTC")
+                    else:
+                        ts = pd.to_datetime(
+                            value,
+                            errors="coerce",
+                            utc=True,
+                        )
 
-                    ts = pd.to_datetime(
-                        value,
-                        errors="coerce",
-                        utc=True,
+                        if pd.isna(ts):
+                            ts = pd.Timestamp("1970-01-01", tz="UTC")
+
+                    return (ts, original_index)
+                except Exception:
+                    return (
+                        pd.Timestamp("1970-01-01", tz="UTC"),
+                        original_index,
                     )
 
-                    if pd.isna(ts):
-                        return pd.Timestamp("1970-01-01", tz="UTC")
-
-                    return ts
-                except Exception:
-                    return pd.Timestamp("1970-01-01", tz="UTC")
-
-            rows.sort(key=sort_key, reverse=True)
+            # Keep original ledger position so a newly appended order wins
+            # when several records have the same date / missing time.
+            rows_with_index = list(zip(rows, range(len(rows))))
+            rows_with_index.sort(key=sort_key, reverse=True)
+            rows = [row for row, _ in rows_with_index]
 
             try:
                 safe_limit = max(1, min(int(limit), 500))
