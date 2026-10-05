@@ -2402,6 +2402,20 @@ _supabase_client :Optional ["_SupabaseClient"]=None
 _supabase_checked =False 
 
 
+def _safe_secret_get(key, default=""):
+    """
+    อ่าน Streamlit secrets แบบปลอดภัย
+
+    บน Render ฝั่ง FastAPI อาจไม่มี .streamlit/secrets.toml
+    ดังนั้น st.secrets.get(...) อาจโยน NoSecretsError และขัด
+    การ fallback ไปอ่าน os.environ
+    """
+    try:
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
+
 def _get_supabase ()->Optional ["_SupabaseClient"]:
     """คืน Supabase client ถ้าตั้งค่าไว้ครบ; รองรับทั้ง [supabase] และ top-level secrets/env."""
     global _supabase_client ,_supabase_checked 
@@ -2412,7 +2426,7 @@ def _get_supabase ()->Optional ["_SupabaseClient"]:
         return None 
     try :
         # รองรับรูปแบบเดิม: [supabase] url/key
-        cfg =st .secrets .get ("supabase",{})
+        cfg =_safe_secret_get ("supabase",{})
         if not isinstance (cfg,Mapping ):
             cfg ={}
         url =str (cfg .get ("url","")or "").strip ()
@@ -2420,7 +2434,7 @@ def _get_supabase ()->Optional ["_SupabaseClient"]:
         # It is required here because sim_state may be protected by RLS.
         key =str (
             cfg .get ("service_role_key","")
-            or st .secrets .get ("SUPABASE_SERVICE_ROLE_KEY","")
+            or _safe_secret_get ("SUPABASE_SERVICE_ROLE_KEY","")
             or os .environ .get ("SUPABASE_SERVICE_ROLE_KEY","")
             or cfg .get ("key","")
             or ""
@@ -2428,9 +2442,9 @@ def _get_supabase ()->Optional ["_SupabaseClient"]:
 
         # รองรับรูปแบบ Streamlit secrets/env ที่ใช้กันอีกแบบ
         if not url :
-            url =str (st .secrets .get ("SUPABASE_URL","")or os .environ .get ("SUPABASE_URL","")or "").strip ()
+            url =str (_safe_secret_get ("SUPABASE_URL","")or os .environ .get ("SUPABASE_URL","")or "").strip ()
         if not key :
-            key =str (st .secrets .get ("SUPABASE_KEY","")or os .environ .get ("SUPABASE_KEY","")or "").strip ()
+            key =str (_safe_secret_get ("SUPABASE_KEY","")or os .environ .get ("SUPABASE_KEY","")or "").strip ()
 
         if not (url and key ):
             return None 
@@ -3006,15 +3020,15 @@ def _sim_state_from_rest (actor :str )->Optional[dict [str ,Any ]]:
     arbitrary user's state.
     """
     try:
-        cfg =st .secrets .get ("supabase",{})
+        cfg =_safe_secret_get ("supabase",{})
         if not isinstance (cfg ,Mapping ):
             cfg ={}
-        url =str (cfg .get ("url","")or st .secrets .get ("SUPABASE_URL","")or os .environ .get ("SUPABASE_URL","")).strip ()
+        url =str (cfg .get ("url","")or _safe_secret_get ("SUPABASE_URL","")or os .environ .get ("SUPABASE_URL","")).strip ()
         key =str (
             cfg .get ("service_role_key","")
-            or st .secrets .get ("SUPABASE_SERVICE_ROLE_KEY","")
+            or _safe_secret_get ("SUPABASE_SERVICE_ROLE_KEY","")
             or cfg .get ("key","")
-            or st .secrets .get ("SUPABASE_KEY","")
+            or _safe_secret_get ("SUPABASE_KEY","")
             or os .environ .get ("SUPABASE_SERVICE_ROLE_KEY","")
             or os .environ .get ("SUPABASE_KEY","")
             or ""
@@ -3119,15 +3133,15 @@ def load_sim_state (path :Optional [Path ]=None )->Optional[dict [str ,Any ]]:
     # actor locally so URL/operator encoding cannot prevent a valid match.
     for actor in candidates:
         try:
-            cfg =st .secrets .get ("supabase",{})
+            cfg =_safe_secret_get ("supabase",{})
             if not isinstance (cfg ,Mapping ):
                 cfg ={}
-            url =str (cfg .get ("url","")or st .secrets .get ("SUPABASE_URL","")or os .environ .get ("SUPABASE_URL","")).strip ()
+            url =str (cfg .get ("url","")or _safe_secret_get ("SUPABASE_URL","")or os .environ .get ("SUPABASE_URL","")).strip ()
             key =str (
                 cfg .get ("service_role_key","")
-                or st .secrets .get ("SUPABASE_SERVICE_ROLE_KEY","")
+                or _safe_secret_get ("SUPABASE_SERVICE_ROLE_KEY","")
                 or cfg .get ("key","")
-                or st .secrets .get ("SUPABASE_KEY","")
+                or _safe_secret_get ("SUPABASE_KEY","")
                 or os .environ .get ("SUPABASE_SERVICE_ROLE_KEY","")
                 or os .environ .get ("SUPABASE_KEY","")
                 or ""
