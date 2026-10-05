@@ -13,18 +13,33 @@ GU_PATH = Path(__file__).resolve().parent.parent / "gu.py"
 
 def load_gu():
     """
-    โหลด gu.py จาก root ของ GitHub repo แบบ lazy
-    ไม่เรียก main() ของ Streamlit
+    โหลด gu.py สำหรับ API โดยเตรียม Streamlit
+    ให้พร้อมก่อน import business logic
     """
     if not GU_PATH.exists():
         raise FileNotFoundError(f"ไม่พบ gu.py ที่ {GU_PATH}")
 
-    spec = importlib.util.spec_from_file_location("xspring_gu", GU_PATH)
+    import streamlit as st
+
+    # บางเวอร์ชัน/โหมดของ gu.py ใช้ st.cache_data ตอน import
+    # ตรวจสอบให้แน่ใจว่า cache_data มีอยู่ก่อนโหลด gu.py
+    if not hasattr(st, "cache_data"):
+        raise RuntimeError(
+            "Streamlit ที่ Render ใช้งานไม่มี st.cache_data"
+        )
+
+    spec = importlib.util.spec_from_file_location(
+        "xspring_gu",
+        GU_PATH,
+    )
 
     if spec is None or spec.loader is None:
-        raise ImportError("ไม่สามารถสร้าง module spec สำหรับ gu.py ได้")
+        raise ImportError(
+            "ไม่สามารถสร้าง module spec สำหรับ gu.py ได้"
+        )
 
     module = importlib.util.module_from_spec(spec)
+
     spec.loader.exec_module(module)
 
     return module
