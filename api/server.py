@@ -952,6 +952,15 @@ def create_order(order: OrderRequest):
                     },
                 )
 
+            # gu.execute_order() ใช้ order_date เป็นวันที่ของ market data
+            # ซึ่งเป็น date-only จึงไม่ควรเอาไปแสดงเป็นเวลา execution
+            # (เช่น 2026-10-05 จะถูก browser แปลงเป็น 07:00 ในไทย)
+            # เก็บเวลา execution จริงแยกต่างหาก โดยไม่แตะ order_date
+            # ที่ใช้คำนวณราคา / month / hedge / portfolio
+            execution_time = pd.Timestamp.now(tz="Asia/Bangkok")
+            rec["เวลา"] = execution_time.isoformat()
+            rec["timestamp"] = execution_time.isoformat()
+
             result = str(rec.get("ผลด่าน", ""))
 
             # -------------------------------------------------
