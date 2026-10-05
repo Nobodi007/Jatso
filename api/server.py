@@ -959,18 +959,43 @@ def create_order(order: OrderRequest):
             # gu.execute_order() ใช้ order_date เป็นวันที่ของ market data
             # ซึ่งเป็น date-only จึงไม่ควรเอาไปแสดงเป็นเวลา execution
             # (เช่น 2026-10-05 จะถูก browser แปลงเป็น 07:00 ในไทย)
-            # เก็บเวลา execution จริงแยกต่างหาก โดยไม่แตะ order_date
-            # ที่ใช้คำนวณราคา / month / hedge / portfolio
-            execution_time = pd.Timestamp.now(tz="Asia/Bangkok")
-            rec["เวลา"] = execution_time.isoformat()
-            rec["timestamp"] = execution_time.isoformat()
-
-            # gu.execute_order() may record only the market date (for example
-            # "2026-10-05"). Stamp the actual API execution time explicitly
-            # so Order History never turns a date-only value into 07:00:00.
-            rec["เวลา"] = execution_time.isoformat()
-            rec["timestamp"] = execution_time.isoformat()
+            # เก็บเวลา execution จริงลงทั้ง rec และรายการที่ engine append
+            # เข้า sim["orders"] โดยตรง เพื่อให้ /api/orders อ่านค่าจริงได้แน่นอน
+            execution_iso = execution_time.isoformat()
+            rec["เวลา"] = execution_iso
+            rec["timestamp"] = execution_iso
             rec["วันที่"] = execution_time.strftime("%Y-%m-%d")
+
+            # execute_order() บางเวอร์ชันอาจ append สำเนา rec เข้า ledger
+            # ดังนั้นแก้ entry ใน sim["orders"] โดยตรงด้วย
+            ledger_orders = sim.get("orders")
+            if isinstance(ledger_orders, list) and ledger_orders:
+                rec_order_id = str(
+                    rec.get("Order ID")
+                    or rec.get("order_id")
+                    or rec.get("id")
+                    or ""
+                )
+                target = None
+                if rec_order_id:
+                    for ledger_order in reversed(ledger_orders):
+                        if isinstance(ledger_order, dict):
+                            ledger_id = str(
+                                ledger_order.get("Order ID")
+                                or ledger_order.get("order_id")
+                                or ledger_order.get("id")
+                                or ""
+                            )
+                            if ledger_id == rec_order_id:
+                                target = ledger_order
+                                break
+                if target is None and isinstance(ledger_orders[-1], dict):
+                    target = ledger_orders[-1]
+
+                if target is not None:
+                    target["เวลา"] = execution_iso
+                    target["timestamp"] = execution_iso
+                    target["วันที่"] = execution_time.strftime("%Y-%m-%d")
 
             result = str(rec.get("ผลด่าน", ""))
 
