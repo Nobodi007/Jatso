@@ -1,1649 +1,735 @@
-import TradingViewChart from "@/components/trading/TradingViewChart"
-import { useEffect, useState } from "react"
-import {
-  LayoutDashboard,
-  CandlestickChart,
-  ArrowLeftRight,
-  BookOpen,
-  Wallet,
-  ClipboardList,
-  BarChart3,
-  ShieldAlert,
-  FlaskConical,
-  Newspaper,
-  Settings,
-  Menu,
-  Search,
-  Bell,
-  ChevronDown,
-  TrendingUp,
-  TrendingDown,
-} from "lucide-react"
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from datetime import datetime, timezone
+from pathlib import Path
+from threading import RLock
+import importlib.util
+import os
+import math
+import json
+import urllib
+import urllib.parse
+import urllib.request
 
-type Page =
-  | "dashboard"
-  | "markets"
-  | "trade"
-  | "orderbook"
-  | "portfolio"
-  | "orders"
-  | "positions"
-  | "risk"
-  | "quant"
-  | "news"
-  | "settings"
+import pandas as pd
 
-type Asset = "BTC" | "ETH" | "SOL" | "XRP"
-type OrderSide = "BUY" | "SELL"
+app = FastAPI(
+    title="Dealer Suite API",
+    version="1.1.0",
+)
 
-type PortfolioHolding = {
-  asset: string
-  qty: number
-  avg_cost: number
-  price: number
-  market_value: number
-  cost_basis: number
-  unrealized_pnl: number
-  allocation_pct: number
-  pnl_pct: number
-}
+# Browser frontend (Vite/local or deployed frontend) calls this API from a
+# different origin.  Without CORS, the browser reports the request simply as
+# "Failed to fetch" even when /api/portfolio itself is healthy.
+#
+# Keep the default limited to local development plus an explicitly configured
+# frontend origin. Do NOT use "*" because /api/order is a state-changing route.
+_configured_frontend_origin = str(
+    os.environ.get("FRONTEND_ORIGIN", "") or ""
+).strip().rstrip("/")
 
-type PortfolioData = {
-  cash_thb: number
-  market_value_thb: number
-  total_value_thb: number
-  realized_pnl_thb: number
-  unrealized_pnl_thb: number
-  total_pnl_thb: number
-  pnl_pct: number
-  fees_thb: number
-  holdings: PortfolioHolding[]
-}
+_cors_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+]
+if _configured_frontend_origin:
+    _cors_origins.append(_configured_frontend_origin)
 
-const API_BASE_URL = "https://xspring-api.onrender.com"
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=sorted(set(_cors_origins)),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
+)
 
-function formatTHB(value: number) {
-  return `฿${Number(value || 0).toLocaleString("th-TH", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`
-}
+# server.py is expected to live in the api/ directory and gu.py at repo root.
+GU_PATH = Path(__file__).resolve().parent.parent / "gu.py"
 
-function formatQty(value: number) {
-  return Number(value || 0).toLocaleString("en-US", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 8,
-  })
-}
+# Prevent two concurrent orders from loading the same wallet snapshot and
+# overwriting each other in Supabase.
+ORDER_LOCK = RLock()
 
 
-const navigation = [
-  {
-    id: "dashboard",
-    label: "Dashboard",
-    icon: LayoutDashboard,
-  },
-  {
-    id: "markets",
-    label: "Markets",
-    icon: CandlestickChart,
-  },
-  {
-    id: "trade",
-    label: "Trade",
-    icon: ArrowLeftRight,
-  },
-  {
-    id: "orderbook",
-    label: "Order Book",
-    icon: BookOpen,
-  },
-  {
-    id: "portfolio",
-    label: "Portfolio",
-    icon: Wallet,
-  },
-  {
-    id: "orders",
-    label: "Orders",
-    icon: ClipboardList,
-    count: 3,
-  },
-  {
-    id: "positions",
-    label: "Positions",
-    icon: BarChart3,
-  },
-  {
-    id: "risk",
-    label: "Risk Center",
-    icon: ShieldAlert,
-  },
-  {
-    id: "quant",
-    label: "Quant Lab",
-    icon: FlaskConical,
-  },
-  {
-    id: "news",
-    label: "News",
-    icon: Newspaper,
-  },
-  {
-    id: "settings",
-    label: "Settings",
-    icon: Settings,
-  },
-] as const
+def load_gu():
+    if not GU_PATH.exists():
+        raise FileNotFoundError(f"ไม่พบ gu.py ที่ {GU_PATH}")
 
-const marketData: Record<
-  Asset,
-  {
-    name: string
-    price: number
-    change: number
-    bid: number
-    ask: number
-    high: number
-    low: number
-    volume: number
-  }
-> = {
-  BTC: {
-    name: "Bitcoin",
-    price: 3684250,
-    change: 2.34,
-    bid: 3684000,
-    ask: 3684500,
-    high: 3721000,
-    low: 3598000,
-    volume: 124.52,
-  },
+    import streamlit as st  # gu.py itself uses Streamlit state/persistence
 
-  ETH: {
-    name: "Ethereum",
-    price: 128450,
-    change: 1.82,
-    bid: 128400,
-    ask: 128500,
-    high: 130200,
-    low: 125800,
-    volume: 2840.31,
-  },
+    spec = importlib.util.spec_from_file_location("xspring_gu", GU_PATH)
+    if spec is None or spec.loader is None:
+        raise ImportError("โหลด gu.py ไม่สำเร็จ")
 
-  SOL: {
-    name: "Solana",
-    price: 6240,
-    change: -0.74,
-    bid: 6238,
-    ask: 6242,
-    high: 6380,
-    low: 6120,
-    volume: 18420.5,
-  },
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
-  XRP: {
-    name: "XRP",
-    price: 82.45,
-    change: 3.12,
-    bid: 82.42,
-    ask: 82.48,
-    high: 84.2,
-    low: 79.8,
-    volume: 4820000,
-  },
-}
 
-/* =========================================================
-   APP
-========================================================= */
+class OrderRequest(BaseModel):
+    asset: str
+    side: str
+    amount_thb: float
+    # Optional customer-facing quote. If omitted, the existing engine calculates
+    # the quote from Global_USD x USDTHB + local premium + dealer spread.
+    quote_thb: float | None = None
 
-function App() {
-  const [page, setPage] = useState<Page>("dashboard")
-  const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [portfolio, setPortfolio] = useState<PortfolioData | null>(null)
-  const [portfolioLoading, setPortfolioLoading] = useState(false)
-  const [portfolioError, setPortfolioError] = useState("")
 
-  const loadPortfolio = async () => {
-    setPortfolioLoading(true)
-    setPortfolioError("")
+def _safe_float(value, default=0.0):
+    try:
+        value = float(value)
+        return value if math.isfinite(value) else default
+    except (TypeError, ValueError):
+        return default
 
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/portfolio`, {
-        method: "GET",
-        headers: { Accept: "application/json" },
-      })
 
-      const body = await response.json()
-
-      if (!response.ok || body?.status !== "ok" || !body?.portfolio) {
-        throw new Error(
-          body?.detail?.message ||
-            body?.detail ||
-            "ไม่สามารถโหลด Portfolio จาก Backend ได้"
+def _actor():
+    actor = str(os.environ.get("XSPRING_USER", "") or "").strip()
+    if not actor:
+        raise HTTPException(
+            status_code=503,
+            detail="ยังไม่ได้ตั้ง XSPRING_USER สำหรับบัญชี API — หยุดไว้เพื่อป้องกันการเขียนพอร์ตผิดบัญชี",
         )
-      }
+    return actor
 
-      setPortfolio(body.portfolio as PortfolioData)
-    } catch (error) {
-      setPortfolioError(
-        error instanceof Error
-          ? error.message
-          : "ไม่สามารถโหลด Portfolio จาก Backend ได้"
-      )
-    } finally {
-      setPortfolioLoading(false)
+
+def _sync_gu_actor(gu, actor: str) -> None:
+    """
+    Make FastAPI use the exact same actor identity that gu.py uses for
+    sim_state persistence.
+
+    gu.py's load_sim_state() checks st.user.email first and then the
+    XSPRING_REPORT_ACTOR environment variable. Render/FastAPI has no
+    Streamlit signed-in user, so explicitly bridge XSPRING_USER -> the
+    existing persistence actor variable.
+
+    This only sets process-local identity; it never creates or saves state.
+    """
+    actor = str(actor or "").strip()
+    if not actor:
+        raise HTTPException(
+            status_code=503,
+            detail="ไม่พบ actor สำหรับโหลด Portfolio — หยุดเพื่อป้องกันการอ่าน/เขียนผิดบัญชี",
+        )
+
+    # Use the exact XSPRING_USER identity expected by the current gu.py.
+    os.environ["XSPRING_USER"] = actor
+
+
+def _set_api_role(gu, actor: str):
+    """
+    Bridge the existing gu.py RBAC into FastAPI.
+
+    Priority:
+      1. user_profiles.role for XSPRING_USER
+      2. XSPRING_API_ROLE as an explicit deployment fallback
+
+    We never silently promote an unknown API caller to Trader.
+    """
+    import streamlit as st
+
+    role = None
+
+    # Prefer the same Supabase user_profiles table used by gu.py.
+    try:
+        sb = gu._get_supabase()
+        if sb is not None:
+            res = (
+                sb.table("user_profiles")
+                .select("email,role")
+                .eq("email", actor)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                role = str(res.data[0].get("role") or "").strip().lower()
+    except Exception:
+        role = None
+
+    if role not in {"viewer", "trader", "admin"}:
+        role = str(os.environ.get("XSPRING_API_ROLE", "viewer") or "").strip().lower()
+
+    if role not in {"viewer", "trader", "admin"}:
+        role = "viewer"
+
+    st.session_state["guest_mode"] = False
+    st.session_state["current_role"] = role
+    return role
+
+
+def _remote_config(gu, actor: str) -> dict:
+    """
+    Read the same dealer_remote_config row used by the existing application.
+    Missing/failed remote config is not fatal; gu.py's existing UI defaults
+    remain the fallback.
+    """
+    try:
+        sb = gu._get_supabase()
+        if sb is None:
+            return {}
+        res = (
+            sb.table("dealer_remote_config")
+            .select("config,updated_at")
+            .eq("actor", actor.strip().lower())
+            .limit(1)
+            .execute()
+        )
+        if not res.data:
+            return {}
+        cfg = res.data[0].get("config") or {}
+        return cfg if isinstance(cfg, dict) else {}
+    except Exception:
+        return {}
+
+
+def _api_cfg(gu, asset: str, actor: str) -> dict:
+    """
+    Reproduce the defaults from gu.py's build_sidebar() without invoking
+    Streamlit widgets, then overlay the user's persisted dealer_remote_config.
+    """
+    ui = getattr(gu, "UI_DEFAULTS", {}) or {}
+    exchanges = list(getattr(gu, "GLOBAL_EXCHANGE_FEE_PRESET", {}).keys())
+    exchange = exchanges[0] if exchanges else "Binance"
+
+    remote = _remote_config(gu, actor)
+
+    remote_asset = str(remote.get("asset") or asset).upper()
+    if remote_asset in getattr(gu, "SUPPORTED_ASSETS", []):
+        asset = remote_asset
+
+    exchange = str(remote.get("exchange") or exchange)
+    fee_map = getattr(gu, "GLOBAL_EXCHANGE_FEE_PRESET", {})
+    if exchange not in fee_map:
+        exchange = exchanges[0] if exchanges else exchange
+
+    maker_ratio = _safe_float(remote.get("maker_ratio"), 0.0) / 100.0
+    taker_pct = _safe_float(remote.get("hedge_taker"), fee_map.get(exchange, 0.0))
+    maker_pct = _safe_float(
+        remote.get("hedge_maker"),
+        gu.default_maker_fee_pct(exchange),
+    )
+    hedge_fee = gu.blend_hedge_fee(
+        taker_pct / 100.0,
+        maker_pct / 100.0,
+        maker_ratio,
+    )
+
+    monthly_volume = _safe_float(remote.get("monthly_volume"), 80_000_000.0)
+    settlement_days = int(_safe_float(remote.get("lag"), 1))
+    confidence = _safe_float(remote.get("confidence"), 99.0)
+    z_alpha = getattr(gu, "Z_SCORE_MAP", {}).get(confidence)
+    if z_alpha is None:
+        z_alpha = getattr(gu, "Z_SCORE_MAP", {}).get(99, 2.576)
+
+    is_custodian = bool(remote.get("custodian", True))
+    fixed_min_nc = (
+        getattr(gu, "NC_FIXED_MIN_CUSTODIAN_THB", 25_000_000.0)
+        if is_custodian
+        else getattr(gu, "NC_FIXED_MIN_NON_CUSTODIAN_THB", 5_000_000.0)
+    )
+
+    cex_margin_asset = str(remote.get("margin_asset") or "Stablecoin")
+    if cex_margin_asset not in {"Stablecoin", "เหรียญเดียวกับที่เทรด"}:
+        cex_margin_asset = "Stablecoin"
+
+    hot_wallet_pct = _safe_float(remote.get("hot_wallet"), 30.0) / 100.0
+    cold_domestic_pct = _safe_float(remote.get("cold_domestic"), 80.0) / 100.0
+    cold_foreign_rate = _safe_float(remote.get("cold_foreign"), 1.5) / 100.0
+
+    cfg = {
+        "asset": asset,
+        "global_exchange": exchange,
+        "trade_vol": _safe_float(remote.get("trade_vol"), 100_000.0),
+        "dealer_spread": _safe_float(
+            remote.get("spread"),
+            ui.get("dealer_spread_pct", 0.5),
+        ) / 100.0,
+        "hedge_fee": hedge_fee,
+        "hedge_fee_taker": taker_pct / 100.0,
+        "hedge_fee_maker": maker_pct / 100.0,
+        "maker_ratio": maker_ratio,
+        "market_depth_usd": _safe_float(remote.get("depth"), 0.0),
+        "impact_penalty": _safe_float(
+            remote.get("impact_penalty"),
+            ui.get("impact_penalty_pct", 0.5),
+        ) / 100.0,
+        "use_fx_proxy": False,
+        "fx_limit_max": _safe_float(
+            remote.get("fx_limit"),
+            ui.get("fx_limit_usd", 5_000_000.0),
+        ),
+        "local_premium": _safe_float(
+            remote.get("premium"),
+            ui.get("local_premium_pct", 0.1),
+        ) / 100.0,
+        "include_trading_fee_revenue": True,
+        "withdrawal_fee_markup_pct": 0.0,
+        "settlements_per_day": 1,
+        "bank_type": "SCB",
+        "use_ktb_fx": True,
+        "ktb_fx_spread_bps": 15.0,
+        "ktb_wd_fee_thb": 15.0,
+        "peg_target": 1.0,
+        "depeg_capture_pct": 0.80,
+        "carry_apy": 0.04,
+        "slippage_sensitivity": 0.10 if asset not in getattr(gu, "STABLECOINS", set()) else 0.0,
+        "monthly_volume_thb": monthly_volume,
+        "daily_volume_thb": monthly_volume / 30.0,
+        "net_bias_pct": _safe_float(remote.get("net_bias"), 15.0) / 100.0,
+        "flow_cv_pct": _safe_float(remote.get("flow_cv"), 50.0) / 100.0,
+        "settlement_days": settlement_days,
+        "confidence": confidence,
+        "z_alpha": z_alpha,
+        "total_capital_thb": _safe_float(remote.get("capital"), 150_000_000.0),
+        "cex_margin_thb": _safe_float(remote.get("margin"), 30_000_000.0),
+        "liab_thb": _safe_float(remote.get("liab"), 100_000_000.0),
+        "cex_margin_asset": cex_margin_asset,
+        "cex_counterparty_haircut": _safe_float(remote.get("cp_haircut"), 2.0) / 100.0,
+        "is_custodian": is_custodian,
+        "fixed_min_nc": fixed_min_nc,
+        "trading_risk_rate": _safe_float(remote.get("trading_risk"), 2.0) / 100.0,
+        "cold_foreign_rate": cold_foreign_rate,
+        "hot_wallet_pct": hot_wallet_pct,
+        "cold_domestic_split_pct": cold_domestic_pct,
+        "hedge_trigger_pct": _safe_float(remote.get("hedge_trigger"), 0.0) / 100.0,
+        "hedge_vol_block_pct": _safe_float(remote.get("hedge_vol_block"), 0.0) / 100.0,
     }
-  }
 
-  useEffect(() => {
-    loadPortfolio()
-  }, [])
-
-  const currentPage = navigation.find(
-    (item) => item.id === page
-  )
-
-  return (
-    <div className="min-h-screen bg-background text-foreground">
-      <div className="flex min-h-screen">
-
-        {/* =================================================
-            SIDEBAR
-        ================================================= */}
-
-        <aside
-          className={`border-r bg-card transition-all duration-200 ${
-            sidebarOpen ? "w-64" : "w-16"
-          }`}
-        >
-          {/* LOGO */}
-
-          <div className="flex h-16 items-center border-b px-4">
-
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary font-bold text-primary-foreground">
-              X
-            </div>
-
-            {sidebarOpen && (
-              <div className="ml-3 min-w-0">
-
-                <div className="truncate text-sm font-semibold">
-                  XSpring
-                </div>
-
-                <div className="truncate text-xs text-muted-foreground">
-                  Dealer Suite
-                </div>
-
-              </div>
-            )}
-
-          </div>
-
-
-          {/* NAVIGATION */}
-
-          <nav className="space-y-1 p-2">
-
-            {navigation.map((item) => {
-
-              const Icon = item.icon
-              const active = page === item.id
-
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setPage(item.id)}
-                  className={`group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${
-                    active
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                  }`}
-                >
-
-                  <Icon className="size-4 shrink-0" />
-
-                  {sidebarOpen && (
-                    <>
-                      <span className="flex-1 truncate">
-                        {item.label}
-                      </span>
-
-                      {item.count && (
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                            active
-                              ? "bg-primary-foreground/20"
-                              : "bg-muted"
-                          }`}
-                        >
-                          {item.count}
-                        </span>
-                      )}
-                    </>
-                  )}
-
-                </button>
-              )
-            })}
-
-          </nav>
-        </aside>
-
-
-        {/* =================================================
-            MAIN
-        ================================================= */}
-
-        <div className="flex min-w-0 flex-1 flex-col">
-
-          {/* =================================================
-              TOPBAR
-          ================================================= */}
-
-          <header className="flex h-16 items-center gap-3 border-b bg-background px-4">
-
-            {/* SIDEBAR TOGGLE */}
-
-            <button
-              onClick={() =>
-                setSidebarOpen(!sidebarOpen)
-              }
-              className="rounded-lg p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
-            >
-              <Menu className="size-5" />
-            </button>
-
-
-            {/* PAGE TITLE */}
-
-            <div className="flex-1">
-
-              <h1 className="text-sm font-semibold">
-                {currentPage?.label}
-              </h1>
-
-            </div>
-
-
-            {/* SEARCH */}
-
-            <button
-              className="rounded-lg p-2 text-muted-foreground hover:bg-accent"
-              aria-label="Search"
-            >
-              <Search className="size-5" />
-            </button>
-
-
-            {/* NOTIFICATION */}
-
-            <button
-              className="rounded-lg p-2 text-muted-foreground hover:bg-accent"
-              aria-label="Notifications"
-            >
-              <Bell className="size-5" />
-            </button>
-
-
-            {/* USER */}
-
-            <div className="ml-2 flex size-8 items-center justify-center rounded-full bg-muted text-xs font-semibold">
-              N
-            </div>
-
-          </header>
-
-
-          {/* =================================================
-              CONTENT
-          ================================================= */}
-
-          <main className="flex-1 overflow-auto p-6">
-
-            {page === "dashboard" && (
-              <Dashboard
-                portfolio={portfolio}
-                loading={portfolioLoading}
-                error={portfolioError}
-                onRefresh={loadPortfolio}
-              />
-            )}
-
-            {page === "trade" && (
-              <TradePage />
-            )}
-
-            {page === "portfolio" && (
-              <PortfolioPage
-                portfolio={portfolio}
-                loading={portfolioLoading}
-                error={portfolioError}
-                onRefresh={loadPortfolio}
-              />
-            )}
-
-            {page !== "dashboard" &&
-              page !== "trade" &&
-              page !== "portfolio" && (
-                <PlaceholderPage
-                  title={currentPage?.label ?? ""}
-                />
-              )}
-
-          </main>
-
-        </div>
-
-      </div>
-    </div>
-  )
-}
-
-
-/* =========================================================
-   DASHBOARD
-========================================================= */
-
-function Dashboard({
-  portfolio,
-  loading,
-  error,
-  onRefresh,
-}: {
-  portfolio: PortfolioData | null
-  loading: boolean
-  error: string
-  onRefresh: () => void
-}) {
-  const openPositions =
-    portfolio?.holdings.filter((holding) => Number(holding.qty || 0) > 0).length ?? 0
-
-  const pnlPositive = Number(portfolio?.total_pnl_thb || 0) >= 0
-
-  return (
-    <div className="space-y-6">
-
-      {/* HEADER */}
-
-      <div>
-
-        <h2 className="text-2xl font-bold">
-          Dashboard
-        </h2>
-
-        <p className="mt-1 text-sm text-muted-foreground">
-          XSpring Dealer Suite
-        </p>
-
-      </div>
-
-
-      {/* STAT CARDS */}
-
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-
-        <StatCard
-          title="Portfolio Value"
-          value={
-            loading
-              ? "Loading..."
-              : formatTHB(portfolio?.total_value_thb ?? 0)
-          }
-          change={
-            error
-              ? "โหลดข้อมูลไม่สำเร็จ"
-              : "มูลค่าพอร์ตจาก Backend"
-          }
-        />
-
-        <StatCard
-          title="Available Balance"
-          value={
-            loading
-              ? "Loading..."
-              : formatTHB(portfolio?.cash_thb ?? 0)
-          }
-          change="Cash / THB"
-        />
-
-        <StatCard
-          title="Total P&L"
-          value={
-            loading
-              ? "Loading..."
-              : formatTHB(portfolio?.total_pnl_thb ?? 0)
-          }
-          change={
-            loading
-              ? "—"
-              : `${pnlPositive ? "+" : ""}${Number(
-                  portfolio?.pnl_pct ?? 0
-                ).toFixed(2)}%`
-          }
-        />
-
-        <StatCard
-          title="Open Positions"
-          value={loading ? "—" : String(openPositions)}
-          change={
-            loading
-              ? "—"
-              : `${portfolio?.holdings.length ?? 0} assets in portfolio`
-          }
-        />
-
-      </div>
-
-
-      {error && (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm">
-          <span className="text-red-500">{error}</span>
-          <button
-            onClick={onRefresh}
-            className="rounded-lg border px-3 py-1.5 text-xs font-medium hover:bg-accent"
-          >
-            Retry
-          </button>
-        </div>
-      )}
-
-      {/* DASHBOARD GRID */}
-
-      <div className="grid gap-4 xl:grid-cols-3">
-
-        {/* MARKET OVERVIEW */}
-
-        <div className="min-h-[400px] rounded-xl border bg-card p-5 xl:col-span-2">
-
-          <div className="mb-4">
-
-            <h3 className="font-semibold">
-              Market Overview
-            </h3>
-
-            <p className="text-xs text-muted-foreground">
-              Real-time market data
-            </p>
-
-          </div>
-
-
-          <div className="flex h-[320px] items-center justify-center rounded-lg bg-muted/30">
-
-            <div className="text-center">
-
-              <CandlestickChart className="mx-auto mb-3 size-10 text-muted-foreground" />
-
-              <p className="text-sm font-medium">
-                Trading Chart
-              </p>
-
-              <p className="mt-1 text-xs text-muted-foreground">
-                TradingView จะถูกเชื่อมในขั้นต่อไป
-              </p>
-
-            </div>
-
-          </div>
-
-        </div>
-
-
-        {/* WATCHLIST */}
-
-        <div className="min-h-[400px] rounded-xl border bg-card p-5">
-
-          <h3 className="font-semibold">
-            Watchlist
-          </h3>
-
-          <div className="mt-4 space-y-2">
-
-            {loading ? (
-              <div className="py-10 text-center text-sm text-muted-foreground">
-                Loading market prices...
-              </div>
-            ) : (
-              ["BTC", "ETH", "SOL", "XRP"].map((symbol) => {
-                const holding = portfolio?.holdings.find(
-                  (item) => item.asset.toUpperCase() === symbol
+    cfg["custody_rate_blended"] = gu.blended_custody_rate(
+        cfg["hot_wallet_pct"],
+        cfg["cold_domestic_split_pct"],
+        cfg["cold_foreign_rate"],
+    )
+    cfg["hot_wallet_cap_breach"] = (
+        cfg["liab_thb"] < getattr(gu, "HOT_WALLET_CAP_LIAB_THRESHOLD", 1_000_000_000.0)
+        and cfg["hot_wallet_pct"] > getattr(gu, "HOT_WALLET_CAP", 0.50)
+    )
+
+    return cfg
+
+
+def _load_market_frame(gu, asset: str):
+    # The engine's build_dealer_ctx/risk_profile needs historical Global_USD,
+    # USDTHB and Volatility_Pct. Use the same gu.py data layer, not a new price
+    # calculation in FastAPI.
+    end = pd.Timestamp.now().normalize()
+    start = end - pd.Timedelta(days=365)
+    data, err = gu.fetch_price_data(asset, start, end, use_fx_proxy=False)
+    if data is None or data.empty:
+        raise HTTPException(
+            status_code=503,
+            detail=f"โหลดข้อมูลตลาดสำหรับ {asset} ไม่สำเร็จ: {err or 'ไม่มีข้อมูล'}",
+        )
+    return data
+
+
+def _load_existing_sim(gu):
+    """
+    Load the existing portfolio for the API actor.
+
+    Primary path remains gu.load_sim_state() so the real gu.py persistence
+    logic stays the source of truth. If Streamlit's runtime cannot expose
+    st.secrets/session state under FastAPI, use the same Supabase sim_state
+    row through the server's own credentials. This is READ-ONLY and strictly
+    scoped to XSPRING_USER; it never creates a wallet or chooses another user.
+    """
+    sim = None
+
+    try:
+        sim = gu.load_sim_state()
+    except Exception as exc:
+        try:
+            gu.st.session_state["sim_state_load_error"] = str(exc)
+        except Exception:
+            pass
+
+    if isinstance(sim, dict):
+        try:
+            gu.st.session_state["sim_state_loaded_ok"] = True
+            gu.st.session_state["sim_state_source"] = (
+                gu.st.session_state.get("sim_state_source") or "supabase"
+            )
+            gu.st.session_state["sim_state_actor"] = _actor()
+        except Exception:
+            pass
+        return sim
+
+    actor = _actor().strip()
+    url = str(os.environ.get("SUPABASE_URL", "") or "").strip()
+    key = str(
+        os.environ.get("SUPABASE_SECRET_KEY", "")
+        or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+        or os.environ.get("SUPABASE_KEY", "")
+        or ""
+    ).strip()
+
+    if not url or not key:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "โหลด Portfolio เดิมไม่สำเร็จ",
+                "reason": "Render ไม่มี SUPABASE_URL/SUPABASE_KEY ที่ใช้สำหรับอ่าน sim_state",
+            },
+        )
+
+    try:
+        query = urllib.parse.urlencode({
+            "select": "data,actor,updated_at",
+            "actor": f"eq.{actor}",
+            "limit": "1",
+        })
+        endpoint = f"{url.rstrip('/')}/rest/v1/sim_state?{query}"
+        req = urllib.request.Request(
+            endpoint,
+            headers={
+                "apikey": key,
+                "Authorization": f"Bearer {key}",
+                "Accept": "application/json",
+            },
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            rows = json.loads(resp.read().decode("utf-8"))
+
+        if isinstance(rows, list) and rows:
+            row = rows[0]
+            row_actor = str(row.get("actor") or "").strip()
+            if row_actor.lower() != actor.lower():
+                raise HTTPException(
+                    status_code=503,
+                    detail="พบ sim_state แต่ actor ไม่ตรงกับบัญชี API — หยุดเพื่อป้องกันการอ่านผิดบัญชี",
                 )
 
-                if (!holding) return null
+            data = row.get("data")
+            if isinstance(data, str):
+                data = json.loads(data)
 
-                const positionPnl = Number(holding.pnl_pct || 0)
-                const positive = positionPnl >= 0
+            if isinstance(data, dict):
+                try:
+                    gu.st.session_state["sim_state_loaded_ok"] = True
+                    gu.st.session_state["sim_state_source"] = "supabase_rest_api"
+                    gu.st.session_state["sim_state_actor"] = row_actor
+                    gu.st.session_state.pop("sim_state_load_error", None)
+                except Exception:
+                    pass
+                return data
 
-                return (
-                  <div
-                    key={symbol}
-                    className="flex items-center justify-between rounded-lg px-3 py-3 hover:bg-accent"
-                  >
-                    <div>
-                      <div className="font-medium">
-                        {symbol}/THB
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        Current Price
-                      </div>
-                    </div>
+            raise HTTPException(
+                status_code=503,
+                detail="พบ sim_state ของบัญชีนี้ แต่ช่อง data ไม่ใช่ JSON object — ไม่เขียนทับข้อมูล",
+            )
 
-                    <div className="text-right">
-                      <div className="text-sm">
-                        {formatTHB(holding.price)}
-                      </div>
-                      <div
-                        className={`text-xs ${
-                          positive
-                            ? "text-emerald-500"
-                            : "text-red-500"
-                        }`}
-                      >
-                        Position P&L {positive ? "+" : ""}
-                        {positionPnl.toFixed(2)}%
-                      </div>
-                    </div>
-                  </div>
+        raise HTTPException(
+            status_code=503,
+            detail="ไม่พบ sim_state ของบัญชี teerapat30204@gmail.com — ไม่สร้างพอร์ตใหม่",
+        )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "อ่าน sim_state จาก Supabase ไม่สำเร็จ",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
+
+
+def _portfolio_response(gu, sim, px_row):
+    """Build the real multi-asset portfolio snapshot.
+
+    Reuse gu.py's existing market overview + portfolio_snapshot logic.
+    This endpoint is READ-ONLY: it never changes or saves sim_state.
+    """
+    usdthb = _safe_float(px_row.get("USDTHB"), 0.0)
+    if usdthb <= 0:
+        raise HTTPException(
+            status_code=503,
+            detail="ไม่สามารถอ่าน USD/THB ล่าสุดเพื่อคำนวณ Portfolio ได้",
+        )
+
+    prices = {"THB": 1.0}
+    supported = list(getattr(gu, "SUPPORTED_ASSETS", []) or [])
+
+    try:
+        market_df = gu.fetch_market_overview(supported)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "โหลดราคาตลาดหลายเหรียญจาก gu.py ไม่สำเร็จ",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
+
+    if market_df is not None and not market_df.empty:
+        for _, row in market_df.iterrows():
+            symbol = str(row.get("symbol", "")).upper().strip()
+            price_usd = _safe_float(row.get("price_usd"), 0.0)
+            if symbol and price_usd > 0:
+                prices[symbol] = price_usd * usdthb
+
+    # Keep the selected asset's exact historical/global price as a fallback.
+    selected_asset = str(sim.get("asset") or "").upper().strip()
+    selected_usd = _safe_float(px_row.get("Global_USD"), 0.0)
+    if selected_asset and selected_usd > 0:
+        prices[selected_asset] = selected_usd * usdthb
+
+    snap = gu.portfolio_snapshot(sim, prices)
+
+    return {
+        "cash_thb": snap["cash_thb"],
+        "market_value_thb": snap["market_value_thb"],
+        "total_value_thb": snap["total_value_thb"],
+        "realized_pnl_thb": snap["realized_pnl_thb"],
+        "unrealized_pnl_thb": snap["unrealized_pnl_thb"],
+        "total_pnl_thb": snap["total_pnl_thb"],
+        "pnl_pct": snap["pnl_pct"],
+        "fees_thb": snap["fees_thb"],
+        "holdings": snap["rows"],
+    }
+
+
+@app.get("/")
+def root():
+    return {"service": "Dealer Suite API", "status": "online"}
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.get("/api/engine/status")
+def engine_status():
+    try:
+        gu = load_gu()
+        return {
+            "status": "ok",
+            "gu_loaded": True,
+            "gu_path": str(GU_PATH),
+            "supported_assets": getattr(gu, "SUPPORTED_ASSETS", []),
+            "has_execute_order": callable(getattr(gu, "execute_order", None)),
+            "has_can_trade": callable(getattr(gu, "can_trade", None)),
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "gu_loaded": False,
+                "error_type": type(e).__name__,
+                "error": str(e),
+            },
+        )
+
+
+@app.get("/api/portfolio")
+def portfolio():
+    """
+    Read-only portfolio check.
+
+    IMPORTANT:
+    - Uses the exact XSPRING_USER -> XSPRING_USER bridge used by gu.py.
+    - Calls gu.load_sim_state() only.
+    - Never creates a default wallet.
+    - Never saves/mutates sim_state.
+    """
+    try:
+        gu = load_gu()
+        actor = _actor()
+        _sync_gu_actor(gu, actor)
+
+        sim = _load_existing_sim(gu)
+
+        asset = str(sim.get("asset") or "BTC").upper().strip()
+        if asset not in getattr(gu, "SUPPORTED_ASSETS", []):
+            asset = "BTC"
+
+        data = _load_market_frame(gu, asset)
+        order_date = pd.Timestamp(data.index[-1])
+        px_row = data.loc[order_date]
+
+        return {
+            "status": "ok",
+            "actor": actor,
+            "sim_state_source": getattr(gu, "st", None).session_state.get("sim_state_source"),
+            "sim_state_actor": getattr(gu, "st", None).session_state.get("sim_state_actor"),
+            "as_of": order_date.isoformat(),
+            "asset": asset,
+            "portfolio": _portfolio_response(gu, sim, px_row),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_type": type(e).__name__,
+                "error": str(e),
+            },
+        )
+
+
+@app.post("/api/order")
+def create_order(order: OrderRequest):
+    with ORDER_LOCK:
+        try:
+            gu = load_gu()
+            actor = _actor()
+            _sync_gu_actor(gu, actor)
+            role = _set_api_role(gu, actor)
+
+            asset = order.asset.upper().strip()
+            side = order.side.lower().strip()
+            amount_thb = _safe_float(order.amount_thb, -1.0)
+
+            if asset not in gu.SUPPORTED_ASSETS:
+                raise HTTPException(status_code=400, detail=f"ไม่รองรับเหรียญ {asset}")
+            if side not in ("buy", "sell"):
+                raise HTTPException(status_code=400, detail="side ต้องเป็น buy หรือ sell")
+            if amount_thb < float(getattr(gu, "MIN_TRADE_THB", 50)):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"ยอดขั้นต่ำคือ {getattr(gu, 'MIN_TRADE_THB', 50)} บาท",
                 )
-              })
-            )}
 
-          </div>
-
-        </div>
-
-      </div>
-
-    </div>
-  )
-}
-
-
-/* =========================================================
-   TRADE PAGE
-========================================================= */
-
-function TradePage() {
-
-  const [asset, setAsset] =
-    useState<Asset>("BTC")
-
-  const [side, setSide] =
-    useState<OrderSide>("BUY")
-
-  const [amount, setAmount] =
-    useState("")
-
-  const market = marketData[asset]
-
-  return (
-    <div className="space-y-5">
-
-      {/* =================================================
-          MARKET SELECTOR
-      ================================================= */}
-
-      <div className="flex flex-wrap items-center justify-between gap-4">
-
-        <div className="flex items-center gap-3">
-
-          {/* ASSET ICON */}
-
-          <div className="flex size-11 items-center justify-center rounded-full bg-muted text-lg font-bold">
-            {asset[0]}
-          </div>
-
-
-          {/* ASSET NAME */}
-
-          <div>
-
-            <div className="flex items-center gap-2">
-
-              <h2 className="text-xl font-bold">
-                {asset}/THB
-              </h2>
-
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px]">
-                Bitkub
-              </span>
-
-            </div>
-
-            <p className="text-xs text-muted-foreground">
-              {market.name}
-            </p>
-
-          </div>
-
-        </div>
-
-
-        {/* ASSET SELECT */}
-
-        <div className="relative">
-
-          <select
-            value={asset}
-            onChange={(e) =>
-              setAsset(
-                e.target.value as Asset
-              )
-            }
-            className="appearance-none rounded-lg border bg-card px-4 py-2 pr-9 text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
-          >
-            <option value="BTC">
-              BTC/THB
-            </option>
-
-            <option value="ETH">
-              ETH/THB
-            </option>
-
-            <option value="SOL">
-              SOL/THB
-            </option>
-
-            <option value="XRP">
-              XRP/THB
-            </option>
-
-          </select>
-
-          <ChevronDown className="pointer-events-none absolute right-2 top-2.5 size-4 text-muted-foreground" />
-
-        </div>
-
-      </div>
-
-
-      {/* =================================================
-          MARKET DATA
-      ================================================= */}
-
-      <div className="grid gap-3 md:grid-cols-4">
-
-        <MarketStat
-          label="ราคา"
-          value={`฿${market.price.toLocaleString()}`}
-          positive={market.change >= 0}
-          sub={`${
-            market.change >= 0
-              ? "+"
-              : ""
-          }${market.change.toFixed(2)}% 24H`}
-        />
-
-        <MarketStat
-          label="Bid"
-          value={`฿${market.bid.toLocaleString()}`}
-        />
-
-        <MarketStat
-          label="Ask"
-          value={`฿${market.ask.toLocaleString()}`}
-        />
-
-        <MarketStat
-          label="Volume 24H"
-          value={market.volume.toLocaleString()}
-          sub={asset}
-        />
-
-      </div>
-
-
-      {/* =================================================
-          MAIN TRADE GRID
-      ================================================= */}
-
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
-
-        {/* =================================================
-            CHART
-        ================================================= */}
-
-        <div className="rounded-xl border bg-card p-5">
-
-          {/* CHART HEADER */}
-
-          <div className="mb-4 flex items-center justify-between">
-
-            <div>
-
-              <h3 className="font-semibold">
-                กราฟตลาด · Bitkub
-              </h3>
-
-              <p className="text-xs text-muted-foreground">
-                {asset}/THB · 1H
-              </p>
-
-            </div>
-
-
-            {/* TIMEFRAME */}
-
-            <div className="flex gap-1">
-
-              {[
-                "1m",
-                "5m",
-                "1H",
-                "4H",
-                "1D",
-              ].map((timeframe) => (
-
-                <button
-                  key={timeframe}
-                  className={`rounded-md px-2 py-1 text-[11px] ${
-                    timeframe === "1H"
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:bg-accent"
-                  }`}
-                >
-                  {timeframe}
-                </button>
-
-              ))}
-
-            </div>
-
-          </div>
-
-
-          {/* =================================================
-              TRADINGVIEW
-          ================================================= */}
-
-          <div className="relative overflow-hidden rounded-lg">
-
-            <TradingViewChart
-              symbol={`BITKUB:${asset}THB`}
-              interval="60"
-              height={480}
-            />
-
-          </div>
-
-
-          {/* =================================================
-              MARKET RANGE
-          ================================================= */}
-
-          <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4">
-
-            <MiniStat
-              label="สูงสุด 24H"
-              value={`฿${market.high.toLocaleString()}`}
-            />
-
-            <MiniStat
-              label="ต่ำสุด 24H"
-              value={`฿${market.low.toLocaleString()}`}
-            />
-
-            <MiniStat
-              label={`Volume (${asset})`}
-              value={market.volume.toLocaleString()}
-            />
-
-            <MiniStat
-              label="Spread"
-              value={`฿${(
-                market.ask -
-                market.bid
-              ).toLocaleString()}`}
-            />
-
-          </div>
-
-        </div>
-
-
-        {/* =================================================
-            ORDER TICKET
-        ================================================= */}
-
-        <div className="rounded-xl border bg-card p-5">
-
-          <div className="mb-5">
-
-            <h3 className="font-semibold">
-              Order
-            </h3>
-
-            <p className="text-xs text-muted-foreground">
-              Spot Trading · {asset}/THB
-            </p>
-
-          </div>
-
-
-          {/* =================================================
-              BUY / SELL
-          ================================================= */}
-
-          <div className="grid grid-cols-2 rounded-lg bg-muted p-1">
-
-            <button
-              onClick={() =>
-                setSide("BUY")
-              }
-              className={`rounded-md py-2 text-sm font-semibold transition ${
-                side === "BUY"
-                  ? "bg-emerald-500 text-white shadow"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              ซื้อ
-            </button>
-
-
-            <button
-              onClick={() =>
-                setSide("SELL")
-              }
-              className={`rounded-md py-2 text-sm font-semibold transition ${
-                side === "SELL"
-                  ? "bg-red-500 text-white shadow"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              ขาย
-            </button>
-
-          </div>
-
-
-          {/* =================================================
-              BALANCE
-          ================================================= */}
-
-          <div className="mt-5 flex items-center justify-between text-xs">
-
-            <span className="text-muted-foreground">
-              Available
-            </span>
-
-            <span className="font-medium">
-              ฿0.00
-            </span>
-
-          </div>
-
-
-          {/* =================================================
-              PRICE
-          ================================================= */}
-
-          <div className="mt-4">
-
-            <label className="mb-2 block text-xs text-muted-foreground">
-              ราคา
-            </label>
-
-            <div className="flex items-center rounded-lg border bg-background">
-
-              <input
-                value={market.price}
-                readOnly
-                className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm outline-none"
-              />
-
-              <span className="px-3 text-xs text-muted-foreground">
-                THB
-              </span>
-
-            </div>
-
-          </div>
-
-
-          {/* =================================================
-              AMOUNT
-          ================================================= */}
-
-          <div className="mt-4">
-
-            <label className="mb-2 block text-xs text-muted-foreground">
-              จำนวน {asset}
-            </label>
-
-            <div className="flex items-center rounded-lg border bg-background">
-
-              <input
-                value={amount}
-                onChange={(e) =>
-                  setAmount(
-                    e.target.value
-                  )
+            if not gu.can_trade():
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"บัญชี {actor} ไม่มีสิทธิ์ Trader (role={role})",
+                )
+
+            data = _load_market_frame(gu, asset)
+            order_date = pd.Timestamp(data.index[-1])
+            px_row = data.loc[order_date]
+
+            cfg = _api_cfg(gu, asset, actor)
+            built = gu.build_dealer_ctx(cfg, data)
+            if built is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail="สร้าง Dealer context จาก market history ไม่สำเร็จ",
+                )
+            ctx, target_stock_thb = built
+
+            sim = _load_existing_sim(gu)
+            sim = gu.sim_normalize_state(
+                sim,
+                asset,
+                order_date,
+                float(px_row["Global_USD"]),
+                float(px_row["USDTHB"]),
+                float(target_stock_thb),
+            )
+            # The existing engine is multi-asset; the selected API asset is the
+            # asset for this transaction, while the customer's other holdings
+            # remain untouched.
+            sim["asset"] = asset
+            sim["target_thb"] = float(target_stock_thb)
+            gu.ensure_portfolio_ledger(sim)
+
+            customer_thb = _safe_float(sim.get("customer_thb"), 0.0)
+            customer_coins = sim.setdefault("customer_coins", {})
+            held_qty = _safe_float(customer_coins.get(asset), 0.0)
+
+            if side == "buy" and amount_thb > customer_thb + 1e-9:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"ยอด THB ใน Wallet ไม่พอ: มี {customer_thb:,.2f} บาท",
+                )
+
+            # execute_order itself historically assumes the UI has already
+            # checked sell quantity. Do that check here so the API cannot create
+            # a negative customer balance by selling coins the customer lacks.
+            # We use the engine's own quote when no explicit quote was supplied.
+            if side == "sell" and held_qty <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Wallet ไม่มี {asset} สำหรับขาย",
+                )
+
+            forced_quote = (
+                _safe_float(order.quote_thb, 0.0)
+                if order.quote_thb is not None
+                else None
+            )
+            if forced_quote is not None and forced_quote <= 0:
+                forced_quote = None
+
+            steps, rec = gu.execute_order(
+                sim,
+                side,
+                amount_thb,
+                order_date,
+                px_row,
+                ctx,
+                affect_wallet=True,
+                forced_quote=forced_quote,
+            )
+
+            if rec is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "message": "คำสั่งไม่ผ่าน engine",
+                        "steps": steps,
+                    },
+                )
+
+            # execute_order can return a Reject record. Do not persist a rejected
+            # transaction as a successful order.
+            result = str(rec.get("ผลด่าน", ""))
+            if result.lower().startswith("reject"):
+                return {
+                    "status": "rejected",
+                    "asset": asset,
+                    "side": side,
+                    "amount_thb": amount_thb,
+                    "order": rec,
+                    "steps": steps,
                 }
-                placeholder="0.00000000"
-                className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm outline-none"
-              />
 
-              <span className="px-3 text-xs text-muted-foreground">
-                {asset}
-              </span>
-
-            </div>
-
-          </div>
-
-
-          {/* =================================================
-              QUICK AMOUNT
-          ================================================= */}
-
-          <div className="mt-3 grid grid-cols-4 gap-2">
-
-            {[
-              "25%",
-              "50%",
-              "75%",
-              "100%",
-            ].map((percent) => (
-
-              <button
-                key={percent}
-                className="rounded-md border py-1.5 text-[11px] text-muted-foreground hover:bg-accent"
-              >
-                {percent}
-              </button>
-
-            ))}
-
-          </div>
-
-
-          {/* =================================================
-              TOTAL
-          ================================================= */}
-
-          <div className="mt-5 space-y-2 rounded-lg bg-muted/50 p-3">
-
-            <div className="flex justify-between text-xs">
-
-              <span className="text-muted-foreground">
-                Estimated Total
-              </span>
-
-              <span>
-                ฿0.00
-              </span>
-
-            </div>
-
-
-            <div className="flex justify-between text-xs">
-
-              <span className="text-muted-foreground">
-                Fee
-              </span>
-
-              <span>
-                ฿0.00
-              </span>
-
-            </div>
-
-          </div>
-
-
-          {/* =================================================
-              SUBMIT
-          ================================================= */}
-
-          <button
-            disabled
-            className={`mt-5 w-full rounded-lg py-3 text-sm font-semibold text-white ${
-              side === "BUY"
-                ? "bg-emerald-500"
-                : "bg-red-500"
-            } opacity-60`}
-          >
-            {side === "BUY"
-              ? `ซื้อ ${asset}`
-              : `ขาย ${asset}`}
-          </button>
-
-
-          <p className="mt-3 text-center text-[10px] text-muted-foreground">
-            Trading engine ยังไม่ได้เชื่อมกับ Backend
-          </p>
-
-        </div>
-
-      </div>
-
-
-      {/* =================================================
-          ORDER BOOK
-      ================================================= */}
-
-      <div className="rounded-xl border bg-card p-5">
-
-        {/* ORDER BOOK HEADER */}
-
-        <div className="mb-4 flex items-center justify-between">
-
-          <div>
-
-            <h3 className="font-semibold">
-              Order Book
-            </h3>
-
-            <p className="text-xs text-muted-foreground">
-              {asset}/THB
-            </p>
-
-          </div>
-
-          <span className="rounded-full bg-muted px-2 py-1 text-[10px]">
-            Live
-          </span>
-
-        </div>
-
-
-        {/* ORDER BOOK COLUMNS */}
-
-        <div className="grid grid-cols-2 gap-6">
-
-          {/* =================================================
-              ASK
-          ================================================= */}
-
-          <div>
-
-            <div className="mb-2 grid grid-cols-3 text-[10px] text-muted-foreground">
-
-              <span>
-                Price
-              </span>
-
-              <span className="text-right">
-                Amount
-              </span>
-
-              <span className="text-right">
-                Total
-              </span>
-
-            </div>
-
-
-            {[
-              [market.ask + 1000, 0.42],
-              [market.ask + 500, 0.31],
-              [market.ask, 0.18],
-            ].map(
-              ([price, amount], index) => (
-
-                <div
-                  key={index}
-                  className="grid grid-cols-3 py-1.5 text-xs"
-                >
-
-                  <span className="text-red-500">
-                    ฿
-                    {Number(
-                      price
-                    ).toLocaleString()}
-                  </span>
-
-                  <span className="text-right">
-                    {amount}
-                  </span>
-
-                  <span className="text-right text-muted-foreground">
-                    {(
-                      Number(price) *
-                      Number(amount)
-                    ).toLocaleString()}
-                  </span>
-
-                </div>
-
-              )
-            )}
-
-          </div>
-
-
-          {/* =================================================
-              BID
-          ================================================= */}
-
-          <div>
-
-            <div className="mb-2 grid grid-cols-3 text-[10px] text-muted-foreground">
-
-              <span>
-                Price
-              </span>
-
-              <span className="text-right">
-                Amount
-              </span>
-
-              <span className="text-right">
-                Total
-              </span>
-
-            </div>
-
-
-            {[
-              [market.bid, 0.22],
-              [market.bid - 500, 0.37],
-              [market.bid - 1000, 0.54],
-            ].map(
-              ([price, amount], index) => (
-
-                <div
-                  key={index}
-                  className="grid grid-cols-3 py-1.5 text-xs"
-                >
-
-                  <span className="text-emerald-500">
-                    ฿
-                    {Number(
-                      price
-                    ).toLocaleString()}
-                  </span>
-
-                  <span className="text-right">
-                    {amount}
-                  </span>
-
-                  <span className="text-right text-muted-foreground">
-                    {(
-                      Number(price) *
-                      Number(amount)
-                    ).toLocaleString()}
-                  </span>
-
-                </div>
-
-              )
-            )}
-
-          </div>
-
-        </div>
-
-      </div>
-
-    </div>
-  )
-}
-
-
-
-/* =========================================================
-   PORTFOLIO PAGE
-========================================================= */
-
-function PortfolioPage({
-  portfolio,
-  loading,
-  error,
-  onRefresh,
-}: {
-  portfolio: PortfolioData | null
-  loading: boolean
-  error: string
-  onRefresh: () => void
-}) {
-  const pnlPositive = (portfolio?.total_pnl_thb ?? 0) >= 0
-
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold">Portfolio</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            ข้อมูลพอร์ตจริงจาก Backend
-          </p>
-        </div>
-
-        <button
-          onClick={onRefresh}
-          disabled={loading}
-          className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {loading ? "กำลังโหลด..." : "Refresh"}
-        </button>
-      </div>
-
-      {error && (
-        <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4">
-          <p className="text-sm font-medium text-red-500">
-            โหลด Portfolio ไม่สำเร็จ
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">{error}</p>
-        </div>
-      )}
-
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Total Portfolio"
-          value={portfolio ? formatTHB(portfolio.total_value_thb) : "—"}
-          change={portfolio ? "มูลค่าพอร์ตทั้งหมด" : "กำลังโหลด"}
-        />
-
-        <StatCard
-          title="Cash Balance"
-          value={portfolio ? formatTHB(portfolio.cash_thb) : "—"}
-          change="THB Available"
-        />
-
-        <StatCard
-          title="Market Value"
-          value={portfolio ? formatTHB(portfolio.market_value_thb) : "—"}
-          change="มูลค่าสินทรัพย์"
-        />
-
-        <StatCard
-          title="Total P&L"
-          value={portfolio ? formatTHB(portfolio.total_pnl_thb) : "—"}
-          change={
-            portfolio
-              ? `${pnlPositive ? "+" : ""}${portfolio.pnl_pct.toFixed(2)}%`
-              : "—"
-          }
-        />
-      </div>
-
-      <div className="rounded-xl border bg-card p-5">
-        <div className="mb-5 flex items-center justify-between gap-3">
-          <div>
-            <h3 className="font-semibold">Holdings</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              สินทรัพย์ทั้งหมดใน Portfolio
-            </p>
-          </div>
-
-          {portfolio && (
-            <span className="rounded-full bg-muted px-2.5 py-1 text-[10px]">
-              {portfolio.holdings.length} Assets
-            </span>
-          )}
-        </div>
-
-        {loading && !portfolio ? (
-          <div className="flex min-h-[220px] items-center justify-center">
-            <p className="text-sm text-muted-foreground">
-              กำลังโหลด Portfolio จาก Backend...
-            </p>
-          </div>
-        ) : portfolio?.holdings?.length ? (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-sm">
-              <thead>
-                <tr className="border-b text-left text-xs text-muted-foreground">
-                  <th className="px-3 py-3 font-medium">Asset</th>
-                  <th className="px-3 py-3 text-right font-medium">Quantity</th>
-                  <th className="px-3 py-3 text-right font-medium">Avg Cost</th>
-                  <th className="px-3 py-3 text-right font-medium">Price</th>
-                  <th className="px-3 py-3 text-right font-medium">Market Value</th>
-                  <th className="px-3 py-3 text-right font-medium">P&L</th>
-                  <th className="px-3 py-3 text-right font-medium">P&L %</th>
-                  <th className="px-3 py-3 text-right font-medium">Allocation</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {portfolio.holdings.map((holding) => {
-                  const positive = holding.unrealized_pnl >= 0
-
-                  return (
-                    <tr
-                      key={holding.asset}
-                      className="border-b last:border-0 hover:bg-accent/40"
-                    >
-                      <td className="px-3 py-4">
-                        <span className="font-semibold">
-                          {holding.asset}
-                        </span>
-                        <span className="ml-2 text-xs text-muted-foreground">
-                          /THB
-                        </span>
-                      </td>
-
-                      <td className="px-3 py-4 text-right">
-                        {formatQty(holding.qty)}
-                      </td>
-
-                      <td className="px-3 py-4 text-right">
-                        {formatTHB(holding.avg_cost)}
-                      </td>
-
-                      <td className="px-3 py-4 text-right font-medium">
-                        {formatTHB(holding.price)}
-                      </td>
-
-                      <td className="px-3 py-4 text-right font-medium">
-                        {formatTHB(holding.market_value)}
-                      </td>
-
-                      <td
-                        className={`px-3 py-4 text-right font-medium ${
-                          positive ? "text-emerald-500" : "text-red-500"
-                        }`}
-                      >
-                        {positive ? "+" : ""}
-                        {formatTHB(holding.unrealized_pnl)}
-                      </td>
-
-                      <td
-                        className={`px-3 py-4 text-right ${
-                          positive ? "text-emerald-500" : "text-red-500"
-                        }`}
-                      >
-                        {positive ? "+" : ""}
-                        {holding.pnl_pct.toFixed(2)}%
-                      </td>
-
-                      <td className="px-3 py-4 text-right">
-                        {holding.allocation_pct.toFixed(2)}%
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="flex min-h-[220px] items-center justify-center">
-            <p className="text-sm text-muted-foreground">
-              ยังไม่มีข้อมูล Holdings
-            </p>
-          </div>
-        )}
-      </div>
-
-      {portfolio && (
-        <div className="grid gap-4 md:grid-cols-3">
-          <MiniStat
-            label="Realized P&L"
-            value={formatTHB(portfolio.realized_pnl_thb)}
-          />
-          <MiniStat
-            label="Unrealized P&L"
-            value={formatTHB(portfolio.unrealized_pnl_thb)}
-          />
-          <MiniStat
-            label="Fees"
-            value={formatTHB(portfolio.fees_thb)}
-          />
-        </div>
-      )}
-    </div>
-  )
-}
-
-/* =========================================================
-   MARKET STAT
-========================================================= */
-
-function MarketStat({
-  label,
-  value,
-  sub,
-  positive,
-}: {
-  label: string
-  value: string
-  sub?: string
-  positive?: boolean
-}) {
-  return (
-    <div className="rounded-xl border bg-card p-4">
-
-      <p className="text-xs text-muted-foreground">
-        {label}
-      </p>
-
-
-      <div className="mt-2 text-lg font-bold">
-        {value}
-      </div>
-
-
-      {sub && (
-        <div
-          className={`mt-1 flex items-center gap-1 text-xs ${
-            positive === undefined
-              ? "text-muted-foreground"
-              : positive
-                ? "text-emerald-500"
-                : "text-red-500"
-          }`}
-        >
-
-          {positive !== undefined &&
-            (positive ? (
-              <TrendingUp className="size-3" />
-            ) : (
-              <TrendingDown className="size-3" />
-            ))}
-
-          {sub}
-
-        </div>
-      )}
-
-    </div>
-  )
-}
-
-
-/* =========================================================
-   MINI STAT
-========================================================= */
-
-function MiniStat({
-  label,
-  value,
-}: {
-  label: string
-  value: string
-}) {
-  return (
-    <div>
-
-      <p className="text-[10px] text-muted-foreground">
-        {label}
-      </p>
-
-      <p className="mt-1 text-xs font-medium">
-        {value}
-      </p>
-
-    </div>
-  )
-}
-
-
-/* =========================================================
-   STAT CARD
-========================================================= */
-
-function StatCard({
-  title,
-  value,
-  change,
-}: {
-  title: string
-  value: string
-  change: string
-}) {
-  return (
-    <div className="rounded-xl border bg-card p-5">
-
-      <p className="text-sm text-muted-foreground">
-        {title}
-      </p>
-
-      <div className="mt-3 text-2xl font-bold">
-        {value}
-      </div>
-
-      <p className="mt-1 text-xs text-muted-foreground">
-        {change}
-      </p>
-
-    </div>
-  )
-}
-
-
-/* =========================================================
-   PLACEHOLDER PAGE
-========================================================= */
-
-function PlaceholderPage({
-  title,
-}: {
-  title: string
-}) {
-  return (
-    <div>
-
-      <h2 className="text-2xl font-bold">
-        {title}
-      </h2>
-
-
-      <div className="mt-6 flex min-h-[400px] items-center justify-center rounded-xl border bg-card">
-
-        <div className="text-center">
-
-          <p className="font-medium">
-            {title}
-          </p>
-
-          <p className="mt-1 text-sm text-muted-foreground">
-            กำลังเชื่อมระบบจาก gu.py
-          </p>
-
-        </div>
-
-      </div>
-
-    </div>
-  )
-}
-
-
-/* =========================================================
-   EXPORT
-========================================================= */
-
-export default App
+            # Same persistence function as the existing Streamlit Exchange.
+            gu.save_sim_state(sim)
+            save_error = getattr(gu.st, "session_state", {}).get("sim_state_save_error")
+            if save_error:
+                # Do not claim success when the wallet was mutated only in memory.
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "message": "Engine ประมวลผลแล้ว แต่บันทึก Portfolio ถาวรไม่สำเร็จ",
+                        "save_error": save_error,
+                        "order": rec,
+                    },
+                )
+
+            return {
+                "status": "filled",
+                "actor": actor,
+                "asset": asset,
+                "side": side,
+                "amount_thb": amount_thb,
+                "quote_thb": rec.get("ราคาที่ลูกค้าได้"),
+                "quantity": rec.get("เหรียญที่ส่งมอบ"),
+                "order": rec,
+                "steps": steps,
+                "portfolio": _portfolio_response(gu, sim, px_row),
+            }
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error_type": type(e).__name__,
+                    "error": str(e),
+                },
+            )
