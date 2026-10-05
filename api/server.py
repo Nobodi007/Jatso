@@ -64,6 +64,29 @@ def _actor():
     return actor
 
 
+def _sync_gu_actor(gu, actor: str) -> None:
+    """
+    Make FastAPI use the exact same actor identity that gu.py uses for
+    sim_state persistence.
+
+    gu.py's load_sim_state() checks st.user.email first and then the
+    XSPRING_REPORT_ACTOR environment variable. Render/FastAPI has no
+    Streamlit signed-in user, so explicitly bridge XSPRING_USER -> the
+    existing persistence actor variable.
+
+    This only sets process-local identity; it never creates or saves state.
+    """
+    actor = str(actor or "").strip()
+    if not actor:
+        raise HTTPException(
+            status_code=503,
+            detail="ไม่พบ actor สำหรับโหลด Portfolio — หยุดเพื่อป้องกันการอ่าน/เขียนผิดบัญชี",
+        )
+
+    # Keep the existing gu.py variable as the source of truth for sim_state.
+    os.environ["XSPRING_REPORT_ACTOR"] = actor
+
+
 def _set_api_role(gu, actor: str):
     """
     Bridge the existing gu.py RBAC into FastAPI.
@@ -335,33 +358,37 @@ def engine_status():
 @app.get("/api/portfolio")
 def portfolio():
     """
-    Read-only portfolio endpoint.
+    Read-only portfolio check.
 
-    Uses the same persistent sim_state and portfolio_snapshot logic as gu.py.
-    It never creates a default wallet and never saves/mutates sim_state.
-    Optional ?asset=BTC selects the market price used for the snapshot.
+    IMPORTANT:
+    - Uses the exact XSPRING_USER -> XSPRING_REPORT_ACTOR bridge used by gu.py.
+    - Calls gu.load_sim_state() only.
+    - Never creates a default wallet.
+    - Never saves/mutates sim_state.
     """
     try:
         gu = load_gu()
+        actor = _actor()
+        _sync_gu_actor(gu, actor)
+
         sim = _load_existing_sim(gu)
 
         asset = str(sim.get("asset") or "BTC").upper().strip()
-        requested_asset = str(os.environ.get("XSPRING_PORTFOLIO_ASSET", "") or "").strip().upper()
-        if requested_asset and requested_asset in getattr(gu, "SUPPORTED_ASSETS", []):
-            asset = requested_asset
+        if asset not in getattr(gu, "SUPPORTED_ASSETS", []):
+            asset = "BTC"
 
         data = _load_market_frame(gu, asset)
         order_date = pd.Timestamp(data.index[-1])
         px_row = data.loc[order_date]
 
-        portfolio = _portfolio_response(gu, sim, px_row)
-
         return {
             "status": "ok",
-            "actor": _actor(),
-            "asset": asset,
+            "actor": actor,
+            "sim_state_source": getattr(gu, "st", None).session_state.get("sim_state_source"),
+            "sim_state_actor": getattr(gu, "st", None).session_state.get("sim_state_actor"),
             "as_of": order_date.isoformat(),
-            "portfolio": portfolio,
+            "asset": asset,
+            "portfolio": _portfolio_response(gu, sim, px_row),
         }
 
     except HTTPException:
@@ -382,6 +409,7 @@ def create_order(order: OrderRequest):
         try:
             gu = load_gu()
             actor = _actor()
+            _sync_gu_actor(gu, actor)
             role = _set_api_role(gu, actor)
 
             asset = order.asset.upper().strip()
