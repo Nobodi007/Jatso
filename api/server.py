@@ -66,15 +66,15 @@ def _actor():
 
 def _sync_gu_actor(gu, actor: str) -> None:
     """
-    Make FastAPI use the exact same actor identity that gu.py uses for
-    sim_state persistence.
+    Bridge FastAPI's XSPRING_USER to the actor identity used by gu.py.
 
-    gu.py's load_sim_state() checks st.user.email first and then the
-    XSPRING_REPORT_ACTOR environment variable. Render/FastAPI has no
-    Streamlit signed-in user, so explicitly bridge XSPRING_USER -> the
-    existing persistence actor variable.
+    IMPORTANT:
+    gu.py defines AUDIT_ACTOR_ENV_VAR = "XSPRING_USER" and its
+    _current_actor() falls back to that environment variable when
+    Streamlit st.user.email is unavailable (as it is under FastAPI).
 
-    This only sets process-local identity; it never creates or saves state.
+    This only validates the actor and keeps the existing process-local
+    identity. It never creates, resets, or saves sim_state.
     """
     actor = str(actor or "").strip()
     if not actor:
@@ -83,8 +83,9 @@ def _sync_gu_actor(gu, actor: str) -> None:
             detail="ไม่พบ actor สำหรับโหลด Portfolio — หยุดเพื่อป้องกันการอ่าน/เขียนผิดบัญชี",
         )
 
-    # Keep the existing gu.py variable as the source of truth for sim_state.
-    os.environ["XSPRING_REPORT_ACTOR"] = actor
+    # gu.py itself reads XSPRING_USER in _current_actor().
+    # Do NOT redirect this to XSPRING_REPORT_ACTOR.
+    os.environ["XSPRING_USER"] = actor
 
 
 def _set_api_role(gu, actor: str):
@@ -361,7 +362,7 @@ def portfolio():
     Read-only portfolio check.
 
     IMPORTANT:
-    - Uses the exact XSPRING_USER -> XSPRING_REPORT_ACTOR bridge used by gu.py.
+    - Uses the exact XSPRING_USER actor identity used by gu.py.
     - Calls gu.load_sim_state() only.
     - Never creates a default wallet.
     - Never saves/mutates sim_state.
