@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,33 @@ import pandas as pd
 app = FastAPI(
     title="Dealer Suite API",
     version="1.1.0",
+)
+
+# Browser frontend (Vite/local or deployed frontend) calls this API from a
+# different origin.  Without CORS, the browser reports the request simply as
+# "Failed to fetch" even when /api/portfolio itself is healthy.
+#
+# Keep the default limited to local development plus an explicitly configured
+# frontend origin. Do NOT use "*" because /api/order is a state-changing route.
+_configured_frontend_origin = str(
+    os.environ.get("FRONTEND_ORIGIN", "") or ""
+).strip().rstrip("/")
+
+_cors_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+]
+if _configured_frontend_origin:
+    _cors_origins.append(_configured_frontend_origin)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=sorted(set(_cors_origins)),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
 )
 
 # server.py is expected to live in the api/ directory and gu.py at repo root.
@@ -413,54 +441,8 @@ def _load_existing_sim(gu):
 
 
 def _portfolio_response(gu, sim, px_row):
-    """
-    Build a true multi-asset portfolio snapshot.
-
-    Reuse gu.py's existing market overview and portfolio_snapshot logic.
-    Do not invent another pricing source. The Streamlit app already builds
-    portfolio prices from fetch_market_overview(SUPPORTED_ASSETS) and the
-    latest USDTHB from the selected market frame.
-    """
-    usdthb = _safe_float(px_row.get("USDTHB"), 0.0)
-    if usdthb <= 0:
-        raise HTTPException(
-            status_code=503,
-            detail="ไม่สามารถอ่าน USD/THB ล่าสุดเพื่อคำนวณ Portfolio ได้",
-        )
-
-    prices = {"THB": 1.0}
-
-    try:
-        market_df = gu.fetch_market_overview(getattr(gu, "SUPPORTED_ASSETS", []))
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "message": "โหลดราคาตลาดหลายเหรียญจาก gu.py ไม่สำเร็จ",
-                "error_type": type(exc).__name__,
-                "error": str(exc),
-            },
-        )
-
-    if market_df is not None and not market_df.empty:
-        for _, row in market_df.iterrows():
-            try:
-                symbol = str(row.get("symbol", "")).upper().strip()
-                price_usd = _safe_float(row.get("price_usd"), 0.0)
-                if symbol and price_usd > 0:
-                    prices[symbol] = price_usd * usdthb
-            except Exception:
-                continue
-
-    # Keep the selected asset's exact historical/global price as a fallback
-    # in case market overview did not return that symbol.
-    selected_asset = str(sim.get("asset") or "").upper().strip()
-    selected_usd = _safe_float(px_row.get("Global_USD"), 0.0)
-    if selected_asset and selected_usd > 0:
-        prices[selected_asset] = selected_usd * usdthb
-
-    snap = gu.portfolio_snapshot(sim, prices)
-
+    price_thb = _safe_float(px_row["Global_USD"]) * _safe_float(px_row["USDTHB"])
+    snap = gu.portfolio_snapshot(sim, {str(sim.get("asset")): price_thb})
     return {
         "cash_thb": snap["cash_thb"],
         "market_value_thb": snap["market_value_thb"],
