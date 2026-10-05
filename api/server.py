@@ -19,7 +19,7 @@ import pandas as pd
 
 app = FastAPI(
     title="Dealer Suite API",
-    version="1.3.0",
+    version="1.3.1",
 )
 
 
@@ -455,16 +455,52 @@ def _load_existing_sim(gu):
 # =========================================================
 
 def _portfolio_response(gu, sim, px_row):
-    price_thb = (
-        _safe_float(px_row["Global_USD"])
-        * _safe_float(px_row["USDTHB"])
+    """Build a snapshot using live THB prices for every held asset."""
+    selected_asset = str(sim.get("asset") or "").upper().strip()
+    selected_price_thb = (
+        _safe_float(px_row.get("Global_USD"))
+        * _safe_float(px_row.get("USDTHB"))
     )
 
-    snap = gu.portfolio_snapshot(
-        sim,
-        {str(sim.get("asset")): price_thb},
-    )
+    price_map = {}
+    if selected_asset and selected_price_thb > 0:
+        price_map[selected_asset] = selected_price_thb
 
+    held_assets = set()
+    customer_coins = sim.get("customer_coins", {})
+    if isinstance(customer_coins, dict):
+        for asset, qty in customer_coins.items():
+            if _safe_float(qty) > 1e-12:
+                held_assets.add(str(asset).upper().strip())
+
+    for tx in sim.get("portfolio_ledger", []) or []:
+        if not isinstance(tx, dict):
+            continue
+        asset = str(tx.get("asset") or "").upper().strip()
+        if asset and asset != "THB":
+            held_assets.add(asset)
+
+    usdthb = _safe_float(px_row.get("USDTHB"))
+    if usdthb <= 0:
+        try:
+            usdthb, _ = gu.get_reference_usdthb()
+        except Exception:
+            usdthb = 0.0
+
+    remaining = sorted(a for a in held_assets if a not in price_map)
+    if remaining:
+        try:
+            overview = gu.fetch_market_overview(remaining)
+        except Exception:
+            overview = pd.DataFrame()
+        if overview is not None and not overview.empty and usdthb > 0:
+            for _, row in overview.iterrows():
+                asset = str(row.get("symbol") or "").upper().strip()
+                usd_price = _safe_float(row.get("price_usd"))
+                if asset and usd_price > 0:
+                    price_map[asset] = usd_price * usdthb
+
+    snap = gu.portfolio_snapshot(sim, price_map)
     return {
         "cash_thb": snap["cash_thb"],
         "market_value_thb": snap["market_value_thb"],
