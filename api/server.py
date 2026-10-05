@@ -66,15 +66,15 @@ def _actor():
 
 def _sync_gu_actor(gu, actor: str) -> None:
     """
-    Bridge FastAPI's XSPRING_USER to the actor identity used by gu.py.
+    Make FastAPI use the exact same actor identity that gu.py uses for
+    sim_state persistence.
 
-    IMPORTANT:
-    gu.py defines AUDIT_ACTOR_ENV_VAR = "XSPRING_USER" and its
-    _current_actor() falls back to that environment variable when
-    Streamlit st.user.email is unavailable (as it is under FastAPI).
+    gu.py's load_sim_state() checks st.user.email first and then the
+    XSPRING_REPORT_ACTOR environment variable. Render/FastAPI has no
+    Streamlit signed-in user, so explicitly bridge XSPRING_USER -> the
+    existing persistence actor variable.
 
-    This only validates the actor and keeps the existing process-local
-    identity. It never creates, resets, or saves sim_state.
+    This only sets process-local identity; it never creates or saves state.
     """
     actor = str(actor or "").strip()
     if not actor:
@@ -83,8 +83,7 @@ def _sync_gu_actor(gu, actor: str) -> None:
             detail="ไม่พบ actor สำหรับโหลด Portfolio — หยุดเพื่อป้องกันการอ่าน/เขียนผิดบัญชี",
         )
 
-    # gu.py itself reads XSPRING_USER in _current_actor().
-    # Do NOT redirect this to XSPRING_REPORT_ACTOR.
+    # Use the exact XSPRING_USER identity expected by the current gu.py.
     os.environ["XSPRING_USER"] = actor
 
 
@@ -296,15 +295,117 @@ def _load_market_frame(gu, asset: str):
 
 
 def _load_existing_sim(gu):
-    sim = gu.load_sim_state()
-    if not isinstance(sim, dict):
-        # Critical safety rule: never manufacture a new 1,000,000 THB wallet
-        # from an API request when the persistent portfolio cannot be read.
+    """
+    Load the existing portfolio for the API actor.
+
+    Primary path remains gu.load_sim_state() so the real gu.py persistence
+    logic stays the source of truth. If Streamlit's runtime cannot expose
+    st.secrets/session state under FastAPI, use the same Supabase sim_state
+    row through the server's own credentials. This is READ-ONLY and strictly
+    scoped to XSPRING_USER; it never creates a wallet or chooses another user.
+    """
+    sim = None
+
+    try:
+        sim = gu.load_sim_state()
+    except Exception as exc:
+        try:
+            gu.st.session_state["sim_state_load_error"] = str(exc)
+        except Exception:
+            pass
+
+    if isinstance(sim, dict):
+        try:
+            gu.st.session_state["sim_state_loaded_ok"] = True
+            gu.st.session_state["sim_state_source"] = (
+                gu.st.session_state.get("sim_state_source") or "supabase"
+            )
+            gu.st.session_state["sim_state_actor"] = _actor()
+        except Exception:
+            pass
+        return sim
+
+    actor = _actor().strip()
+    url = str(os.environ.get("SUPABASE_URL", "") or "").strip()
+    key = str(
+        os.environ.get("SUPABASE_SECRET_KEY", "")
+        or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+        or os.environ.get("SUPABASE_KEY", "")
+        or ""
+    ).strip()
+
+    if not url or not key:
         raise HTTPException(
             status_code=503,
-            detail="ไม่สามารถโหลด Portfolio เดิมจาก Supabase ได้ — ไม่สร้างพอร์ตใหม่เพื่อป้องกันข้อมูลเดิมถูกเขียนทับ",
+            detail={
+                "message": "โหลด Portfolio เดิมไม่สำเร็จ",
+                "reason": "Render ไม่มี SUPABASE_URL/SUPABASE_KEY ที่ใช้สำหรับอ่าน sim_state",
+            },
         )
-    return sim
+
+    try:
+        query = urllib.parse.urlencode({
+            "select": "data,actor,updated_at",
+            "actor": f"eq.{actor}",
+            "limit": "1",
+        })
+        endpoint = f"{url.rstrip('/')}/rest/v1/sim_state?{query}"
+        req = urllib.request.Request(
+            endpoint,
+            headers={
+                "apikey": key,
+                "Authorization": f"Bearer {key}",
+                "Accept": "application/json",
+            },
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            rows = json.loads(resp.read().decode("utf-8"))
+
+        if isinstance(rows, list) and rows:
+            row = rows[0]
+            row_actor = str(row.get("actor") or "").strip()
+            if row_actor.lower() != actor.lower():
+                raise HTTPException(
+                    status_code=503,
+                    detail="พบ sim_state แต่ actor ไม่ตรงกับบัญชี API — หยุดเพื่อป้องกันการอ่านผิดบัญชี",
+                )
+
+            data = row.get("data")
+            if isinstance(data, str):
+                data = json.loads(data)
+
+            if isinstance(data, dict):
+                try:
+                    gu.st.session_state["sim_state_loaded_ok"] = True
+                    gu.st.session_state["sim_state_source"] = "supabase_rest_api"
+                    gu.st.session_state["sim_state_actor"] = row_actor
+                    gu.st.session_state.pop("sim_state_load_error", None)
+                except Exception:
+                    pass
+                return data
+
+            raise HTTPException(
+                status_code=503,
+                detail="พบ sim_state ของบัญชีนี้ แต่ช่อง data ไม่ใช่ JSON object — ไม่เขียนทับข้อมูล",
+            )
+
+        raise HTTPException(
+            status_code=503,
+            detail="ไม่พบ sim_state ของบัญชี teerapat30204@gmail.com — ไม่สร้างพอร์ตใหม่",
+        )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "อ่าน sim_state จาก Supabase ไม่สำเร็จ",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
 
 
 def _portfolio_response(gu, sim, px_row):
@@ -362,7 +463,7 @@ def portfolio():
     Read-only portfolio check.
 
     IMPORTANT:
-    - Uses the exact XSPRING_USER actor identity used by gu.py.
+    - Uses the exact XSPRING_USER -> XSPRING_USER bridge used by gu.py.
     - Calls gu.load_sim_state() only.
     - Never creates a default wallet.
     - Never saves/mutates sim_state.
