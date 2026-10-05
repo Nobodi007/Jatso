@@ -542,9 +542,13 @@ def _fetch_binance_orderbook(symbol: str, limit: int = 20):
     })
 
     urls = [
+        f"https://data-api.binance.vision/api/v3/depth?{params}",
         f"https://api.binance.com/api/v3/depth?{params}",
         f"https://api1.binance.com/api/v3/depth?{params}",
         f"https://api2.binance.com/api/v3/depth?{params}",
+        f"https://api3.binance.com/api/v3/depth?{params}",
+        f"https://api4.binance.com/api/v3/depth?{params}",
+        f"https://api-gcp.binance.com/api/v3/depth?{params}",
     ]
 
     last_error = None
@@ -589,19 +593,14 @@ def orderbook(
     limit: int = 20,
 ):
     try:
-        gu = load_gu()
-
-        actor = _actor()
-        _sync_gu_actor(gu, actor)
-
         asset = str(asset or "BTC").strip().upper()
 
-        supported_assets = getattr(gu, "SUPPORTED_ASSETS", [])
-
-        if asset not in supported_assets:
+        # Order Book is public market-depth data. It must NOT depend on
+        # XSPRING_USER / XSPRING_REPORT_ACTOR or a customer portfolio.
+        if asset not in BINANCE_SYMBOL_MAP:
             raise HTTPException(
                 status_code=400,
-                detail=f"ไม่รองรับเหรียญ {asset}",
+                detail=f"ไม่รองรับ Orderbook สำหรับ {asset}",
             )
 
         symbol = BINANCE_SYMBOL_MAP.get(asset)
@@ -629,6 +628,7 @@ def orderbook(
         usdthb = 0.0
 
         try:
+            gu = load_gu()
             usdthb, _ = gu.get_reference_usdthb()
             usdthb = _safe_float(usdthb)
         except Exception:
