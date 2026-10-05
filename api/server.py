@@ -332,6 +332,50 @@ def engine_status():
         )
 
 
+@app.get("/api/portfolio")
+def portfolio():
+    """
+    Read-only portfolio endpoint.
+
+    Uses the same persistent sim_state and portfolio_snapshot logic as gu.py.
+    It never creates a default wallet and never saves/mutates sim_state.
+    Optional ?asset=BTC selects the market price used for the snapshot.
+    """
+    try:
+        gu = load_gu()
+        sim = _load_existing_sim(gu)
+
+        asset = str(sim.get("asset") or "BTC").upper().strip()
+        requested_asset = str(os.environ.get("XSPRING_PORTFOLIO_ASSET", "") or "").strip().upper()
+        if requested_asset and requested_asset in getattr(gu, "SUPPORTED_ASSETS", []):
+            asset = requested_asset
+
+        data = _load_market_frame(gu, asset)
+        order_date = pd.Timestamp(data.index[-1])
+        px_row = data.loc[order_date]
+
+        portfolio = _portfolio_response(gu, sim, px_row)
+
+        return {
+            "status": "ok",
+            "actor": _actor(),
+            "asset": asset,
+            "as_of": order_date.isoformat(),
+            "portfolio": portfolio,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_type": type(e).__name__,
+                "error": str(e),
+            },
+        )
+
+
 @app.post("/api/order")
 def create_order(order: OrderRequest):
     with ORDER_LOCK:
