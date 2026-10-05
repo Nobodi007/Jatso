@@ -12,63 +12,33 @@ import math
 
 import pandas as pd
 
+
+# =========================================================
+# APP
+# =========================================================
+
 app = FastAPI(
     title="Dealer Suite API",
     version="1.3.0",
 )
 
+
 # =========================================================
 # CORS
 # =========================================================
-#
-# Production frontend ต้องสามารถเรียก API ได้
-#
-# FRONTEND_ORIGIN:
-#   https://your-frontend.example.com
-#
-# FRONTEND_ORIGINS:
-#   https://site-a.example.com,https://site-b.example.com
-#
-# FRONTEND_ORIGIN_REGEX (optional, สำหรับ preview deployments):
-#   https://.*-yourteam\.vercel\.app
-#
+# ใช้ allow_origins=["*"] เพราะ frontend production อาจมี origin
+# ที่เปลี่ยนได้ เช่น deployment/preview URL
+# ไม่เปิด credentials เพราะ API นี้ไม่ได้ใช้ cookie authentication
 # =========================================================
-
-_configured_frontend_origin = str(
-    os.environ.get("FRONTEND_ORIGIN", "") or ""
-).strip().rstrip("/")
-
-_configured_frontend_origins = str(
-    os.environ.get("FRONTEND_ORIGINS", "") or ""
-).strip()
-
-_cors_origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:4173",
-    "http://127.0.0.1:4173",
-]
-
-if _configured_frontend_origin:
-    _cors_origins.append(_configured_frontend_origin)
-
-if _configured_frontend_origins:
-    _cors_origins.extend(
-        origin.strip().rstrip("/")
-        for origin in _configured_frontend_origins.split(",")
-        if origin.strip()
-    )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=sorted(set(_cors_origins)),
-    allow_origin_regex=(
-        os.environ.get("FRONTEND_ORIGIN_REGEX", "").strip() or None
-    ),
+    allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "Accept", "Authorization", "X-API-Key"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+
 
 # =========================================================
 # GU.PY
@@ -81,15 +51,16 @@ ORDER_LOCK = RLock()
 
 @lru_cache(maxsize=1)
 def load_gu():
-    if not GU_PATH.exists():
-        raise FileNotFoundError(
-            f"ไม่พบ gu.py ที่ {GU_PATH}"
-        )
+    """
+    Load the existing gu.py engine (cached, โหลดครั้งเดียว).
 
-    spec = importlib.util.spec_from_file_location(
-        "xspring_gu",
-        GU_PATH,
-    )
+    IMPORTANT:
+    Do not create a replacement engine or fallback state.
+    """
+    if not GU_PATH.exists():
+        raise FileNotFoundError(f"ไม่พบ gu.py ที่ {GU_PATH}")
+
+    spec = importlib.util.spec_from_file_location("xspring_gu", GU_PATH)
 
     if spec is None or spec.loader is None:
         raise ImportError("โหลด gu.py ไม่สำเร็จ")
@@ -104,34 +75,28 @@ def load_gu():
 # AUTH
 # =========================================================
 
-
 def require_api_key(x_api_key: str = Header(default="")):
     expected = os.environ.get("DEALER_API_KEY", "").strip()
 
     if not expected or not hmac.compare_digest(x_api_key, expected):
-        raise HTTPException(
-            status_code=401,
-            detail="Unauthorized",
-        )
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 # =========================================================
-# MODELS
+# REQUEST MODEL
 # =========================================================
-
 
 class OrderRequest(BaseModel):
     asset: str
     side: str
     amount_thb: float
-    # รับไว้เพื่อไม่ให้ frontend เดิมพัง แต่ server จะไม่ใช้ค่านี้
+    # รับไว้เพื่อไม่ให้ frontend เดิมพัง แต่ server ไม่ใช้ค่านี้
     quote_thb: Optional[float] = None
 
 
 # =========================================================
-# SAFE HELPERS
+# SAFE FLOAT
 # =========================================================
-
 
 def _safe_float(value, default=0.0):
     try:
@@ -149,26 +114,19 @@ def _safe_float(value, default=0.0):
 # =========================================================
 # ACTOR
 # =========================================================
-#
-# IMPORTANT:
-# Portfolio เดิมต้องอ่านด้วย actor เดิม
-#
-# รองรับทั้ง:
-#   XSPRING_USER
-#   XSPRING_REPORT_ACTOR
-#
-# แต่จะไม่สร้าง actor ใหม่เอง.
-# =========================================================
-
 
 def _actor():
-    user_actor = str(
-        os.environ.get("XSPRING_USER", "") or ""
-    ).strip()
+    """
+    Resolve the persistent account actor.
 
-    report_actor = str(
-        os.environ.get("XSPRING_REPORT_ACTOR", "") or ""
-    ).strip()
+    Priority:
+        1. XSPRING_USER
+        2. XSPRING_REPORT_ACTOR
+
+    IMPORTANT: Never invent a new actor.
+    """
+    user_actor = str(os.environ.get("XSPRING_USER", "") or "").strip()
+    report_actor = str(os.environ.get("XSPRING_REPORT_ACTOR", "") or "").strip()
 
     actor = user_actor or report_actor
 
@@ -186,6 +144,7 @@ def _actor():
 
 
 def _sync_gu_actor(gu, actor: str) -> None:
+    """Synchronize both actor env vars before gu.py reads persistent state."""
     actor = str(actor or "").strip()
 
     if not actor:
@@ -194,16 +153,13 @@ def _sync_gu_actor(gu, actor: str) -> None:
             detail="ไม่พบ actor สำหรับโหลด Portfolio",
         )
 
-    # Keep both names synchronized so different gu.py versions
-    # resolve the same persistent account.
     os.environ["XSPRING_USER"] = actor
     os.environ["XSPRING_REPORT_ACTOR"] = actor
 
 
 # =========================================================
-# RBAC
+# ROLE
 # =========================================================
-
 
 def _set_api_role(gu, actor: str):
     import streamlit as st
@@ -223,20 +179,14 @@ def _set_api_role(gu, actor: str):
             )
 
             if res.data:
-                role = str(
-                    res.data[0].get("role") or ""
-                ).strip().lower()
+                role = str(res.data[0].get("role") or "").strip().lower()
 
     except Exception:
         role = None
 
     if role not in {"viewer", "trader", "admin"}:
         role = str(
-            os.environ.get(
-                "XSPRING_API_ROLE",
-                "viewer",
-            )
-            or ""
+            os.environ.get("XSPRING_API_ROLE", "viewer") or ""
         ).strip().lower()
 
     if role not in {"viewer", "trader", "admin"}:
@@ -251,7 +201,6 @@ def _set_api_role(gu, actor: str):
 # =========================================================
 # REMOTE CONFIG
 # =========================================================
-
 
 def _remote_config(gu, actor: str) -> dict:
     try:
@@ -283,70 +232,28 @@ def _remote_config(gu, actor: str) -> dict:
 # API CONFIG
 # =========================================================
 
-
 def _api_cfg(gu, asset: str, actor: str) -> dict:
-
     ui = getattr(gu, "UI_DEFAULTS", {}) or {}
+    fee_map = getattr(gu, "GLOBAL_EXCHANGE_FEE_PRESET", {})
+    exchanges = list(fee_map.keys())
 
-    exchanges = list(
-        getattr(
-            gu,
-            "GLOBAL_EXCHANGE_FEE_PRESET",
-            {},
-        ).keys()
-    )
+    exchange = exchanges[0] if exchanges else "Binance"
 
-    exchange = (
-        exchanges[0]
-        if exchanges
-        else "Binance"
-    )
+    remote = _remote_config(gu, actor)
 
-    remote = _remote_config(
-        gu,
-        actor,
-    )
+    remote_asset = str(remote.get("asset") or asset).upper()
 
-    remote_asset = str(
-        remote.get("asset") or asset
-    ).upper()
-
-    if remote_asset in getattr(
-        gu,
-        "SUPPORTED_ASSETS",
-        [],
-    ):
+    if remote_asset in getattr(gu, "SUPPORTED_ASSETS", []):
         asset = remote_asset
 
-    exchange = str(
-        remote.get("exchange") or exchange
-    )
-
-    fee_map = getattr(
-        gu,
-        "GLOBAL_EXCHANGE_FEE_PRESET",
-        {},
-    )
+    exchange = str(remote.get("exchange") or exchange)
 
     if exchange not in fee_map:
-        exchange = (
-            exchanges[0]
-            if exchanges
-            else exchange
-        )
+        exchange = exchanges[0] if exchanges else exchange
 
-    maker_ratio = (
-        _safe_float(
-            remote.get("maker_ratio"),
-            0.0,
-        )
-        / 100.0
-    )
+    maker_ratio = _safe_float(remote.get("maker_ratio"), 0.0) / 100.0
 
-    taker_pct = _safe_float(
-        remote.get("hedge_taker"),
-        fee_map.get(exchange, 0.0),
-    )
+    taker_pct = _safe_float(remote.get("hedge_taker"), fee_map.get(exchange, 0.0))
 
     maker_pct = _safe_float(
         remote.get("hedge_maker"),
@@ -359,158 +266,57 @@ def _api_cfg(gu, asset: str, actor: str) -> dict:
         maker_ratio,
     )
 
-    monthly_volume = _safe_float(
-        remote.get("monthly_volume"),
-        80_000_000.0,
-    )
+    monthly_volume = _safe_float(remote.get("monthly_volume"), 80_000_000.0)
 
-    settlement_days = int(
-        _safe_float(
-            remote.get("lag"),
-            1,
-        )
-    )
+    settlement_days = int(_safe_float(remote.get("lag"), 1))
 
-    confidence = _safe_float(
-        remote.get("confidence"),
-        99.0,
-    )
+    confidence = _safe_float(remote.get("confidence"), 99.0)
 
-    z_alpha = getattr(
-        gu,
-        "Z_SCORE_MAP",
-        {},
-    ).get(confidence)
+    z_map = getattr(gu, "Z_SCORE_MAP", {})
+    z_alpha = z_map.get(confidence)
 
     if z_alpha is None:
-        z_alpha = getattr(
-            gu,
-            "Z_SCORE_MAP",
-            {},
-        ).get(
-            99,
-            2.576,
-        )
+        z_alpha = z_map.get(99, 2.576)
 
-    is_custodian = bool(
-        remote.get(
-            "custodian",
-            True,
-        )
-    )
+    is_custodian = bool(remote.get("custodian", True))
 
     fixed_min_nc = (
-        getattr(
-            gu,
-            "NC_FIXED_MIN_CUSTODIAN_THB",
-            25_000_000.0,
-        )
+        getattr(gu, "NC_FIXED_MIN_CUSTODIAN_THB", 25_000_000.0)
         if is_custodian
-        else getattr(
-            gu,
-            "NC_FIXED_MIN_NON_CUSTODIAN_THB",
-            5_000_000.0,
-        )
+        else getattr(gu, "NC_FIXED_MIN_NON_CUSTODIAN_THB", 5_000_000.0)
     )
 
-    cex_margin_asset = str(
-        remote.get(
-            "margin_asset",
-            "Stablecoin",
-        )
-    )
+    cex_margin_asset = str(remote.get("margin_asset", "Stablecoin"))
 
-    if cex_margin_asset not in {
-        "Stablecoin",
-        "เหรียญเดียวกับที่เทรด",
-    }:
+    if cex_margin_asset not in {"Stablecoin", "เหรียญเดียวกับที่เทรด"}:
         cex_margin_asset = "Stablecoin"
 
-    hot_wallet_pct = (
-        _safe_float(
-            remote.get("hot_wallet"),
-            30.0,
-        )
-        / 100.0
-    )
-
-    cold_domestic_pct = (
-        _safe_float(
-            remote.get("cold_domestic"),
-            80.0,
-        )
-        / 100.0
-    )
-
-    cold_foreign_rate = (
-        _safe_float(
-            remote.get("cold_foreign"),
-            1.5,
-        )
-        / 100.0
-    )
+    hot_wallet_pct = _safe_float(remote.get("hot_wallet"), 30.0) / 100.0
+    cold_domestic_pct = _safe_float(remote.get("cold_domestic"), 80.0) / 100.0
+    cold_foreign_rate = _safe_float(remote.get("cold_foreign"), 1.5) / 100.0
 
     cfg = {
         "asset": asset,
         "global_exchange": exchange,
-
-        "trade_vol": _safe_float(
-            remote.get("trade_vol"),
-            100_000.0,
-        ),
-
+        "trade_vol": _safe_float(remote.get("trade_vol"), 100_000.0),
         "dealer_spread": _safe_float(
-            remote.get(
-                "spread",
-                ui.get(
-                    "dealer_spread_pct",
-                    0.5,
-                ),
-            ),
+            remote.get("spread", ui.get("dealer_spread_pct", 0.5))
         ) / 100.0,
-
         "hedge_fee": hedge_fee,
         "hedge_fee_taker": taker_pct / 100.0,
         "hedge_fee_maker": maker_pct / 100.0,
         "maker_ratio": maker_ratio,
-
-        "market_depth_usd": _safe_float(
-            remote.get("depth"),
-            0.0,
-        ),
-
+        "market_depth_usd": _safe_float(remote.get("depth"), 0.0),
         "impact_penalty": _safe_float(
-            remote.get(
-                "impact_penalty",
-                ui.get(
-                    "impact_penalty_pct",
-                    0.5,
-                ),
-            ),
+            remote.get("impact_penalty", ui.get("impact_penalty_pct", 0.5))
         ) / 100.0,
-
         "use_fx_proxy": False,
-
         "fx_limit_max": _safe_float(
-            remote.get(
-                "fx_limit",
-                ui.get(
-                    "fx_limit_usd",
-                    5_000_000.0,
-                ),
-            ),
+            remote.get("fx_limit", ui.get("fx_limit_usd", 5_000_000.0))
         ),
-
         "local_premium": _safe_float(
-            remote.get(
-                "premium",
-                ui.get(
-                    "local_premium_pct",
-                    0.1,
-                ),
-            ),
+            remote.get("premium", ui.get("local_premium_pct", 0.1))
         ) / 100.0,
-
         "include_trading_fee_revenue": True,
         "withdrawal_fee_markup_pct": 0.0,
         "settlements_per_day": 1,
@@ -521,133 +327,48 @@ def _api_cfg(gu, asset: str, actor: str) -> dict:
         "peg_target": 1.0,
         "depeg_capture_pct": 0.80,
         "carry_apy": 0.04,
-
         "slippage_sensitivity": (
-            0.10
-            if asset not in getattr(
-                gu,
-                "STABLECOINS",
-                set(),
-            )
-            else 0.0
+            0.10 if asset not in getattr(gu, "STABLECOINS", set()) else 0.0
         ),
-
         "monthly_volume_thb": monthly_volume,
         "daily_volume_thb": monthly_volume / 30.0,
-
-        "net_bias_pct": _safe_float(
-            remote.get(
-                "net_bias",
-                15.0,
-            ),
-        ) / 100.0,
-
-        "flow_cv_pct": _safe_float(
-            remote.get(
-                "flow_cv",
-                50.0,
-            ),
-        ) / 100.0,
-
+        "net_bias_pct": _safe_float(remote.get("net_bias", 15.0)) / 100.0,
+        "flow_cv_pct": _safe_float(remote.get("flow_cv", 50.0)) / 100.0,
         "settlement_days": settlement_days,
         "confidence": confidence,
         "z_alpha": z_alpha,
-
-        "total_capital_thb": _safe_float(
-            remote.get(
-                "capital",
-                150_000_000.0,
-            ),
-        ),
-
-        "cex_margin_thb": _safe_float(
-            remote.get(
-                "margin",
-                30_000_000.0,
-            ),
-        ),
-
-        "liab_thb": _safe_float(
-            remote.get(
-                "liab",
-                100_000_000.0,
-            ),
-        ),
-
+        "total_capital_thb": _safe_float(remote.get("capital", 150_000_000.0)),
+        "cex_margin_thb": _safe_float(remote.get("margin", 30_000_000.0)),
+        "liab_thb": _safe_float(remote.get("liab", 100_000_000.0)),
         "cex_margin_asset": cex_margin_asset,
-
-        "cex_counterparty_haircut": (
-            _safe_float(
-                remote.get(
-                    "cp_haircut",
-                    2.0,
-                ),
-            )
-            / 100.0
-        ),
-
+        "cex_counterparty_haircut": _safe_float(
+            remote.get("cp_haircut", 2.0)
+        ) / 100.0,
         "is_custodian": is_custodian,
         "fixed_min_nc": fixed_min_nc,
-
-        "trading_risk_rate": (
-            _safe_float(
-                remote.get(
-                    "trading_risk",
-                    2.0,
-                ),
-            )
-            / 100.0
-        ),
-
+        "trading_risk_rate": _safe_float(
+            remote.get("trading_risk", 2.0)
+        ) / 100.0,
         "cold_foreign_rate": cold_foreign_rate,
         "hot_wallet_pct": hot_wallet_pct,
-
-        "cold_domestic_split_pct": (
-            cold_domestic_pct
-        ),
-
-        "hedge_trigger_pct": (
-            _safe_float(
-                remote.get(
-                    "hedge_trigger",
-                    0.0,
-                ),
-            )
-            / 100.0
-        ),
-
-        "hedge_vol_block_pct": (
-            _safe_float(
-                remote.get(
-                    "hedge_vol_block",
-                    0.0,
-                ),
-            )
-            / 100.0
-        ),
+        "cold_domestic_split_pct": cold_domestic_pct,
+        "hedge_trigger_pct": _safe_float(
+            remote.get("hedge_trigger", 0.0)
+        ) / 100.0,
+        "hedge_vol_block_pct": _safe_float(
+            remote.get("hedge_vol_block", 0.0)
+        ) / 100.0,
     }
 
-    cfg["custody_rate_blended"] = (
-        gu.blended_custody_rate(
-            cfg["hot_wallet_pct"],
-            cfg["cold_domestic_split_pct"],
-            cfg["cold_foreign_rate"],
-        )
+    cfg["custody_rate_blended"] = gu.blended_custody_rate(
+        cfg["hot_wallet_pct"],
+        cfg["cold_domestic_split_pct"],
+        cfg["cold_foreign_rate"],
     )
 
     cfg["hot_wallet_cap_breach"] = (
-        cfg["liab_thb"]
-        < getattr(
-            gu,
-            "HOT_WALLET_CAP_LIAB_THRESHOLD",
-            1_000_000_000.0,
-        )
-        and cfg["hot_wallet_pct"]
-        > getattr(
-            gu,
-            "HOT_WALLET_CAP",
-            0.50,
-        )
+        cfg["liab_thb"] < getattr(gu, "HOT_WALLET_CAP_LIAB_THRESHOLD", 1_000_000_000.0)
+        and cfg["hot_wallet_pct"] > getattr(gu, "HOT_WALLET_CAP", 0.50)
     )
 
     return cfg
@@ -657,12 +378,7 @@ def _api_cfg(gu, asset: str, actor: str) -> dict:
 # MARKET DATA
 # =========================================================
 
-
-def _load_market_frame(
-    gu,
-    asset: str,
-):
-
+def _load_market_frame(gu, asset: str):
     end = pd.Timestamp.now().normalize()
     start = end - pd.Timedelta(days=365)
 
@@ -678,8 +394,7 @@ def _load_market_frame(
             status_code=503,
             detail=(
                 f"โหลดข้อมูลตลาดสำหรับ {asset} "
-                f"ไม่สำเร็จ: "
-                f"{err or 'ไม่มีข้อมูล'}"
+                f"ไม่สำเร็จ: {err or 'ไม่มีข้อมูล'}"
             ),
         )
 
@@ -687,21 +402,17 @@ def _load_market_frame(
 
 
 # =========================================================
-# EXISTING PORTFOLIO
+# LOAD EXISTING PORTFOLIO
 # =========================================================
-#
-# SAFETY:
-# Never create default wallet.
-# Never replace missing Supabase state.
-# =========================================================
-
 
 def _load_existing_sim(gu):
-
     sim = gu.load_sim_state()
 
+    # SAFETY:
+    # Never create a new portfolio here.
+    # Never silently fallback to a default wallet.
+    # Never overwrite old data.
     if not isinstance(sim, dict):
-
         raise HTTPException(
             status_code=503,
             detail=(
@@ -719,28 +430,15 @@ def _load_existing_sim(gu):
 # PORTFOLIO RESPONSE
 # =========================================================
 
-
-def _portfolio_response(
-    gu,
-    sim,
-    px_row,
-):
-
+def _portfolio_response(gu, sim, px_row):
     price_thb = (
-        _safe_float(
-            px_row["Global_USD"]
-        )
-        *
-        _safe_float(
-            px_row["USDTHB"]
-        )
+        _safe_float(px_row["Global_USD"])
+        * _safe_float(px_row["USDTHB"])
     )
 
     snap = gu.portfolio_snapshot(
         sim,
-        {
-            str(sim.get("asset")): price_thb
-        },
+        {str(sim.get("asset")): price_thb},
     )
 
     return {
@@ -757,71 +455,41 @@ def _portfolio_response(
 
 
 # =========================================================
-# ROOT
+# ROOT / HEALTH
 # =========================================================
-
 
 @app.get("/")
 def root():
-
     return {
         "service": "Dealer Suite API",
         "status": "online",
     }
 
 
-# =========================================================
-# HEALTH
-# =========================================================
-
-
 @app.get("/api/health")
 def health():
-
-    return {
-        "status": "ok",
-    }
+    return {"status": "ok"}
 
 
 # =========================================================
 # ENGINE STATUS
 # =========================================================
 
-
 @app.get("/api/engine/status")
 def engine_status():
-
     try:
-
         gu = load_gu()
 
         return {
             "status": "ok",
             "gu_loaded": True,
             "gu_path": str(GU_PATH),
-            "supported_assets": getattr(
-                gu,
-                "SUPPORTED_ASSETS",
-                [],
-            ),
-            "has_execute_order": callable(
-                getattr(
-                    gu,
-                    "execute_order",
-                    None,
-                )
-            ),
-            "has_can_trade": callable(
-                getattr(
-                    gu,
-                    "can_trade",
-                    None,
-                )
-            ),
+            "supported_assets": getattr(gu, "SUPPORTED_ASSETS", []),
+            "has_execute_order": callable(getattr(gu, "execute_order", None)),
+            "has_can_trade": callable(getattr(gu, "can_trade", None)),
         }
 
     except Exception as e:
-
         raise HTTPException(
             status_code=500,
             detail={
@@ -833,92 +501,50 @@ def engine_status():
 
 
 # =========================================================
-# PORTFOLIO
+# GET PORTFOLIO
 # =========================================================
-
 
 @app.get("/api/portfolio")
 def portfolio():
-
     with ORDER_LOCK:
-
         try:
-
             gu = load_gu()
 
-            # Resolve existing actor first.
+            # Resolve the EXISTING actor, then make gu.py use the same one.
             actor = _actor()
+            _sync_gu_actor(gu, actor)
 
-            # Synchronize actor names before load_sim_state().
-            _sync_gu_actor(
-                gu,
-                actor,
-            )
+            # READ ONLY. ห้ามสร้าง wallet / ตั้งค่าเริ่มต้น / save / เขียนทับ
+            sim = _load_existing_sim(gu)
 
-            # CRITICAL:
-            # This is read-only.
-            # No fallback wallet.
-            # No save.
-            # No mutation.
-            sim = _load_existing_sim(
-                gu
-            )
-
-            asset = str(
-                sim.get("asset") or "BTC"
-            ).upper().strip()
+            asset = str(sim.get("asset") or "BTC").upper().strip()
 
             requested_asset = str(
-                os.environ.get(
-                    "XSPRING_PORTFOLIO_ASSET",
-                    "",
-                )
-                or ""
+                os.environ.get("XSPRING_PORTFOLIO_ASSET", "") or ""
             ).strip().upper()
 
-            if (
-                requested_asset
-                and requested_asset
-                in getattr(
-                    gu,
-                    "SUPPORTED_ASSETS",
-                    [],
-                )
+            if requested_asset and requested_asset in getattr(
+                gu, "SUPPORTED_ASSETS", []
             ):
                 asset = requested_asset
 
-            data = _load_market_frame(
-                gu,
-                asset,
-            )
+            data = _load_market_frame(gu, asset)
 
-            order_date = pd.Timestamp(
-                data.index[-1]
-            )
-
-            px_row = data.loc[
-                order_date
-            ]
-
-            portfolio_data = _portfolio_response(
-                gu,
-                sim,
-                px_row,
-            )
+            order_date = pd.Timestamp(data.index[-1])
+            px_row = data.loc[order_date]
 
             return {
                 "status": "ok",
                 "actor": actor,
                 "asset": asset,
                 "as_of": order_date.isoformat(),
-                "portfolio": portfolio_data,
+                "portfolio": _portfolio_response(gu, sim, px_row),
             }
 
         except HTTPException:
             raise
 
         except Exception as e:
-
             raise HTTPException(
                 status_code=500,
                 detail={
@@ -929,111 +555,75 @@ def portfolio():
 
 
 # =========================================================
-# ORDER
+# CREATE ORDER
 # =========================================================
 
-
 @app.post("/api/order", dependencies=[Depends(require_api_key)])
-def create_order(
-    order: OrderRequest,
-):
-
+def create_order(order: OrderRequest):
     with ORDER_LOCK:
-
         try:
-
             gu = load_gu()
 
             actor = _actor()
+            _sync_gu_actor(gu, actor)
 
-            _sync_gu_actor(
-                gu,
-                actor,
-            )
-
-            role = _set_api_role(
-                gu,
-                actor,
-            )
+            role = _set_api_role(gu, actor)
 
             asset = order.asset.upper().strip()
             side = order.side.lower().strip()
+            amount_thb = _safe_float(order.amount_thb, -1.0)
 
-            amount_thb = _safe_float(
-                order.amount_thb,
-                -1.0,
-            )
+            # -------------------------------------------------
+            # VALIDATION
+            # -------------------------------------------------
 
             if asset not in gu.SUPPORTED_ASSETS:
-
                 raise HTTPException(
                     status_code=400,
                     detail=f"ไม่รองรับเหรียญ {asset}",
                 )
 
-            if side not in (
-                "buy",
-                "sell",
-            ):
-
+            if side not in ("buy", "sell"):
                 raise HTTPException(
                     status_code=400,
                     detail="side ต้องเป็น buy หรือ sell",
                 )
 
-            if amount_thb < float(
-                getattr(
-                    gu,
-                    "MIN_TRADE_THB",
-                    50,
-                )
-            ):
+            min_trade = float(getattr(gu, "MIN_TRADE_THB", 50))
 
+            if amount_thb < min_trade:
                 raise HTTPException(
                     status_code=400,
-                    detail=(
-                        f"ยอดขั้นต่ำคือ "
-                        f"{getattr(gu, 'MIN_TRADE_THB', 50)} บาท"
-                    ),
+                    detail=f"ยอดขั้นต่ำคือ {min_trade:g} บาท",
                 )
 
             if not gu.can_trade():
-
                 raise HTTPException(
                     status_code=403,
                     detail=(
-                        f"บัญชี {actor} "
-                        f"ไม่มีสิทธิ์ Trader "
+                        f"บัญชี {actor} ไม่มีสิทธิ์ Trader "
                         f"(role={role})"
                     ),
                 )
 
-            data = _load_market_frame(
-                gu,
-                asset,
-            )
+            # -------------------------------------------------
+            # MARKET DATA
+            # -------------------------------------------------
 
-            order_date = pd.Timestamp(
-                data.index[-1]
-            )
+            data = _load_market_frame(gu, asset)
 
-            px_row = data.loc[
-                order_date
-            ]
+            order_date = pd.Timestamp(data.index[-1])
+            px_row = data.loc[order_date]
 
-            cfg = _api_cfg(
-                gu,
-                asset,
-                actor,
-            )
+            # -------------------------------------------------
+            # DEALER CONFIG
+            # -------------------------------------------------
 
-            built = gu.build_dealer_ctx(
-                cfg,
-                data,
-            )
+            cfg = _api_cfg(gu, asset, actor)
+
+            built = gu.build_dealer_ctx(cfg, data)
 
             if built is None:
-
                 raise HTTPException(
                     status_code=503,
                     detail=(
@@ -1044,67 +634,42 @@ def create_order(
 
             ctx, target_stock_thb = built
 
-            # IMPORTANT:
-            # Load the existing portfolio only.
-            sim = _load_existing_sim(
-                gu
-            )
+            # -------------------------------------------------
+            # LOAD EXISTING PORTFOLIO (never create a new wallet)
+            # -------------------------------------------------
+
+            sim = _load_existing_sim(gu)
 
             sim = gu.sim_normalize_state(
                 sim,
                 asset,
                 order_date,
-                float(
-                    px_row["Global_USD"]
-                ),
-                float(
-                    px_row["USDTHB"]
-                ),
+                float(px_row["Global_USD"]),
+                float(px_row["USDTHB"]),
                 float(target_stock_thb),
             )
 
             sim["asset"] = asset
-            sim["target_thb"] = float(
-                target_stock_thb
-            )
+            sim["target_thb"] = float(target_stock_thb)
 
-            gu.ensure_portfolio_ledger(
-                sim
-            )
+            gu.ensure_portfolio_ledger(sim)
 
-            customer_thb = _safe_float(
-                sim.get(
-                    "customer_thb"
-                ),
-                0.0,
-            )
+            # -------------------------------------------------
+            # WALLET CHECKS
+            # -------------------------------------------------
 
-            customer_coins = sim.setdefault(
-                "customer_coins",
-                {},
-            )
+            customer_thb = _safe_float(sim.get("customer_thb"), 0.0)
 
-            held_qty = _safe_float(
-                customer_coins.get(asset),
-                0.0,
-            )
+            customer_coins = sim.setdefault("customer_coins", {})
+
+            held_qty = _safe_float(customer_coins.get(asset), 0.0)
 
             market_price_thb = (
-                _safe_float(
-                    px_row["Global_USD"]
-                )
-                *
-                _safe_float(
-                    px_row["USDTHB"]
-                )
+                _safe_float(px_row["Global_USD"])
+                * _safe_float(px_row["USDTHB"])
             )
 
-            if (
-                side == "buy"
-                and amount_thb
-                > customer_thb + 1e-9
-            ):
-
+            if side == "buy" and amount_thb > customer_thb + 1e-9:
                 raise HTTPException(
                     status_code=400,
                     detail=(
@@ -1113,45 +678,34 @@ def create_order(
                     ),
                 )
 
-            if (
-                side == "sell"
-                and held_qty <= 0
-            ):
-
+            if side == "sell" and held_qty <= 0:
                 raise HTTPException(
                     status_code=400,
-                    detail=(
-                        f"Wallet ไม่มี "
-                        f"{asset} สำหรับขาย"
-                    ),
+                    detail=f"Wallet ไม่มี {asset} สำหรับขาย",
                 )
 
-            if (
-                side == "sell"
-                and market_price_thb > 0
-            ):
+            if side == "sell" and market_price_thb > 0:
+                held_value_thb = held_qty * market_price_thb
 
-                held_value_thb = (
-                    held_qty
-                    * market_price_thb
-                )
-
-                if (
-                    amount_thb
-                    > held_value_thb + 1e-9
-                ):
-
+                if amount_thb > held_value_thb + 1e-9:
                     raise HTTPException(
                         status_code=400,
                         detail=(
-                            f"ยอดขายเกินจำนวน "
-                            f"{asset} ที่ถืออยู่: "
+                            f"ยอดขายเกินจำนวน {asset} ที่ถืออยู่: "
                             f"มูลค่าปัจจุบันประมาณ "
                             f"{held_value_thb:,.2f} บาท"
                         ),
                     )
 
+            # -------------------------------------------------
+            # FORCED QUOTE
+            # -------------------------------------------------
+
             forced_quote = None  # ไม่รับราคาจาก client
+
+            # -------------------------------------------------
+            # EXECUTE
+            # -------------------------------------------------
 
             steps, rec = gu.execute_order(
                 sim,
@@ -1165,7 +719,6 @@ def create_order(
             )
 
             if rec is None:
-
                 raise HTTPException(
                     status_code=422,
                     detail={
@@ -1174,17 +727,13 @@ def create_order(
                     },
                 )
 
-            result = str(
-                rec.get(
-                    "ผลด่าน",
-                    "",
-                )
-            )
+            result = str(rec.get("ผลด่าน", ""))
 
-            if result.lower().startswith(
-                "reject"
-            ):
+            # -------------------------------------------------
+            # REJECT
+            # -------------------------------------------------
 
+            if result.lower().startswith("reject"):
                 return {
                     "status": "rejected",
                     "asset": asset,
@@ -1194,23 +743,20 @@ def create_order(
                     "steps": steps,
                 }
 
-            # Only successful orders are persisted.
+            # -------------------------------------------------
+            # SAVE ONLY AFTER SUCCESS
+            # -------------------------------------------------
+
             # ล้าง error เก่าก่อน เพราะ gu ถูก cache ข้าม request
             gu.st.session_state.pop("sim_state_save_error", None)
-            gu.save_sim_state(
-                sim
-            )
 
-            save_error = getattr(
-                gu.st,
-                "session_state",
-                {},
-            ).get(
+            gu.save_sim_state(sim)
+
+            save_error = getattr(gu.st, "session_state", {}).get(
                 "sim_state_save_error"
             )
 
             if save_error:
-
                 raise HTTPException(
                     status_code=503,
                     detail={
@@ -1224,32 +770,27 @@ def create_order(
                     },
                 )
 
+            # -------------------------------------------------
+            # SUCCESS
+            # -------------------------------------------------
+
             return {
                 "status": "filled",
                 "actor": actor,
                 "asset": asset,
                 "side": side,
                 "amount_thb": amount_thb,
-                "quote_thb": rec.get(
-                    "ราคาที่ลูกค้าได้"
-                ),
-                "quantity": rec.get(
-                    "เหรียญที่ส่งมอบ"
-                ),
+                "quote_thb": rec.get("ราคาที่ลูกค้าได้"),
+                "quantity": rec.get("เหรียญที่ส่งมอบ"),
                 "order": rec,
                 "steps": steps,
-                "portfolio": _portfolio_response(
-                    gu,
-                    sim,
-                    px_row,
-                ),
+                "portfolio": _portfolio_response(gu, sim, px_row),
             }
 
         except HTTPException:
             raise
 
         except Exception as e:
-
             raise HTTPException(
                 status_code=500,
                 detail={
