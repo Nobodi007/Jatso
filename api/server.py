@@ -19,7 +19,7 @@ import pandas as pd
 
 app = FastAPI(
     title="Dealer Suite API",
-    version="1.3.1",
+    version="1.3.0",
 )
 
 
@@ -455,52 +455,16 @@ def _load_existing_sim(gu):
 # =========================================================
 
 def _portfolio_response(gu, sim, px_row):
-    """Build a snapshot using live THB prices for every held asset."""
-    selected_asset = str(sim.get("asset") or "").upper().strip()
-    selected_price_thb = (
-        _safe_float(px_row.get("Global_USD"))
-        * _safe_float(px_row.get("USDTHB"))
+    price_thb = (
+        _safe_float(px_row["Global_USD"])
+        * _safe_float(px_row["USDTHB"])
     )
 
-    price_map = {}
-    if selected_asset and selected_price_thb > 0:
-        price_map[selected_asset] = selected_price_thb
+    snap = gu.portfolio_snapshot(
+        sim,
+        {str(sim.get("asset")): price_thb},
+    )
 
-    held_assets = set()
-    customer_coins = sim.get("customer_coins", {})
-    if isinstance(customer_coins, dict):
-        for asset, qty in customer_coins.items():
-            if _safe_float(qty) > 1e-12:
-                held_assets.add(str(asset).upper().strip())
-
-    for tx in sim.get("portfolio_ledger", []) or []:
-        if not isinstance(tx, dict):
-            continue
-        asset = str(tx.get("asset") or "").upper().strip()
-        if asset and asset != "THB":
-            held_assets.add(asset)
-
-    usdthb = _safe_float(px_row.get("USDTHB"))
-    if usdthb <= 0:
-        try:
-            usdthb, _ = gu.get_reference_usdthb()
-        except Exception:
-            usdthb = 0.0
-
-    remaining = sorted(a for a in held_assets if a not in price_map)
-    if remaining:
-        try:
-            overview = gu.fetch_market_overview(remaining)
-        except Exception:
-            overview = pd.DataFrame()
-        if overview is not None and not overview.empty and usdthb > 0:
-            for _, row in overview.iterrows():
-                asset = str(row.get("symbol") or "").upper().strip()
-                usd_price = _safe_float(row.get("price_usd"))
-                if asset and usd_price > 0:
-                    price_map[asset] = usd_price * usdthb
-
-    snap = gu.portfolio_snapshot(sim, price_map)
     return {
         "cash_thb": snap["cash_thb"],
         "market_value_thb": snap["market_value_thb"],
@@ -604,6 +568,144 @@ def portfolio():
         except HTTPException:
             raise
 
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error_type": type(e).__name__,
+                    "error": str(e),
+                },
+            )
+
+
+# =========================================================
+# ORDER HISTORY
+# =========================================================
+
+@app.get("/api/orders", dependencies=[Depends(require_api_key)])
+def order_history(limit: int = 100, asset: str = ""):
+    with ORDER_LOCK:
+        try:
+            gu = load_gu()
+            actor = _actor()
+            _sync_gu_actor(gu, actor)
+            sim = _load_existing_sim(gu)
+
+            raw_orders = sim.get("orders", [])
+            if not isinstance(raw_orders, list):
+                raw_orders = []
+
+            asset_filter = str(asset or "").strip().upper()
+            rows = []
+
+            for idx, order in enumerate(raw_orders):
+                if not isinstance(order, dict):
+                    continue
+
+                row_asset = str(
+                    order.get("เหรียญ")
+                    or order.get("asset")
+                    or order.get("symbol")
+                    or ""
+                ).strip().upper()
+
+                if asset_filter and row_asset != asset_filter:
+                    continue
+
+                side = str(
+                    order.get("ฝั่ง")
+                    or order.get("side")
+                    or ""
+                ).strip().upper()
+
+                status = str(
+                    order.get("สถานะ")
+                    or order.get("status")
+                    or "Filled"
+                ).strip()
+
+                order_id = str(
+                    order.get("Order ID")
+                    or order.get("order_id")
+                    or order.get("id")
+                    or f"ORDER-{idx + 1:06d}"
+                )
+
+                timestamp = (
+                    order.get("เวลา")
+                    or order.get("timestamp")
+                    or order.get("time")
+                    or order.get("วันที่")
+                    or ""
+                )
+
+                amount = _safe_float(
+                    order.get("มูลค่า (บาท)")
+                    if order.get("มูลค่า (บาท)") is not None
+                    else order.get("amount_thb"),
+                    0.0,
+                )
+                quote = _safe_float(
+                    order.get("ราคาที่ลูกค้าได้")
+                    if order.get("ราคาที่ลูกค้าได้") is not None
+                    else order.get("price_thb"),
+                    0.0,
+                )
+                quantity = _safe_float(
+                    order.get("เหรียญที่ส่งมอบ")
+                    if order.get("เหรียญที่ส่งมอบ") is not None
+                    else order.get("quantity"),
+                    0.0,
+                )
+                fee = _safe_float(
+                    order.get("ค่าธรรมเนียม")
+                    if order.get("ค่าธรรมเนียม") is not None
+                    else order.get("fee_thb"),
+                    0.0,
+                )
+
+                rows.append({
+                    "order_id": order_id,
+                    "timestamp": timestamp,
+                    "date": order.get("วันที่") or "",
+                    "asset": row_asset,
+                    "side": side,
+                    "status": status,
+                    "type": str(order.get("ประเภท") or order.get("type") or "MARKET"),
+                    "amount_thb": amount,
+                    "quote_thb": quote,
+                    "quantity": quantity,
+                    "fee_thb": fee,
+                    "exchange": str(order.get("Exchange") or order.get("exchange") or "—"),
+                    "source": str(order.get("Source") or order.get("source") or "Web"),
+                })
+
+            # Most recent orders first. Keep the original order if timestamps
+            # are not parseable, which is safer than inventing dates.
+            def sort_key(row):
+                try:
+                    return pd.Timestamp(row.get("timestamp") or row.get("date"))
+                except Exception:
+                    return pd.Timestamp.min
+
+            rows.sort(key=sort_key, reverse=True)
+
+            try:
+                safe_limit = max(1, min(int(limit), 500))
+            except (TypeError, ValueError):
+                safe_limit = 100
+
+            rows = rows[:safe_limit]
+
+            return {
+                "status": "ok",
+                "actor": actor,
+                "count": len(rows),
+                "orders": rows,
+            }
+
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(
                 status_code=500,
