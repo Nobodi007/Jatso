@@ -7,10 +7,6 @@ from threading import RLock
 import importlib.util
 import os
 import math
-import json
-import urllib
-import urllib.parse
-import urllib.request
 
 import pandas as pd
 
@@ -19,12 +15,6 @@ app = FastAPI(
     version="1.1.0",
 )
 
-# Browser frontend (Vite/local or deployed frontend) calls this API from a
-# different origin.  Without CORS, the browser reports the request simply as
-# "Failed to fetch" even when /api/portfolio itself is healthy.
-#
-# Keep the default limited to local development plus an explicitly configured
-# frontend origin. Do NOT use "*" because /api/order is a state-changing route.
 _configured_frontend_origin = str(
     os.environ.get("FRONTEND_ORIGIN", "") or ""
 ).strip().rstrip("/")
@@ -43,7 +33,7 @@ app.add_middleware(
     allow_origins=sorted(set(_cors_origins)),
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Accept"],
 )
 
 # server.py is expected to live in the api/ directory and gu.py at repo root.
@@ -94,29 +84,6 @@ def _actor():
             detail="ยังไม่ได้ตั้ง XSPRING_USER สำหรับบัญชี API — หยุดไว้เพื่อป้องกันการเขียนพอร์ตผิดบัญชี",
         )
     return actor
-
-
-def _sync_gu_actor(gu, actor: str) -> None:
-    """
-    Make FastAPI use the exact same actor identity that gu.py uses for
-    sim_state persistence.
-
-    gu.py's load_sim_state() checks st.user.email first and then the
-    XSPRING_REPORT_ACTOR environment variable. Render/FastAPI has no
-    Streamlit signed-in user, so explicitly bridge XSPRING_USER -> the
-    existing persistence actor variable.
-
-    This only sets process-local identity; it never creates or saves state.
-    """
-    actor = str(actor or "").strip()
-    if not actor:
-        raise HTTPException(
-            status_code=503,
-            detail="ไม่พบ actor สำหรับโหลด Portfolio — หยุดเพื่อป้องกันการอ่าน/เขียนผิดบัญชี",
-        )
-
-    # Use the exact XSPRING_USER identity expected by the current gu.py.
-    os.environ["XSPRING_USER"] = actor
 
 
 def _set_api_role(gu, actor: str):
@@ -327,162 +294,20 @@ def _load_market_frame(gu, asset: str):
 
 
 def _load_existing_sim(gu):
-    """
-    Load the existing portfolio for the API actor.
-
-    Primary path remains gu.load_sim_state() so the real gu.py persistence
-    logic stays the source of truth. If Streamlit's runtime cannot expose
-    st.secrets/session state under FastAPI, use the same Supabase sim_state
-    row through the server's own credentials. This is READ-ONLY and strictly
-    scoped to XSPRING_USER; it never creates a wallet or chooses another user.
-    """
-    sim = None
-
-    try:
-        sim = gu.load_sim_state()
-    except Exception as exc:
-        try:
-            gu.st.session_state["sim_state_load_error"] = str(exc)
-        except Exception:
-            pass
-
-    if isinstance(sim, dict):
-        try:
-            gu.st.session_state["sim_state_loaded_ok"] = True
-            gu.st.session_state["sim_state_source"] = (
-                gu.st.session_state.get("sim_state_source") or "supabase"
-            )
-            gu.st.session_state["sim_state_actor"] = _actor()
-        except Exception:
-            pass
-        return sim
-
-    actor = _actor().strip()
-    url = str(os.environ.get("SUPABASE_URL", "") or "").strip()
-    key = str(
-        os.environ.get("SUPABASE_SECRET_KEY", "")
-        or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-        or os.environ.get("SUPABASE_KEY", "")
-        or ""
-    ).strip()
-
-    if not url or not key:
+    sim = gu.load_sim_state()
+    if not isinstance(sim, dict):
+        # Critical safety rule: never manufacture a new 1,000,000 THB wallet
+        # from an API request when the persistent portfolio cannot be read.
         raise HTTPException(
             status_code=503,
-            detail={
-                "message": "โหลด Portfolio เดิมไม่สำเร็จ",
-                "reason": "Render ไม่มี SUPABASE_URL/SUPABASE_KEY ที่ใช้สำหรับอ่าน sim_state",
-            },
+            detail="ไม่สามารถโหลด Portfolio เดิมจาก Supabase ได้ — ไม่สร้างพอร์ตใหม่เพื่อป้องกันข้อมูลเดิมถูกเขียนทับ",
         )
-
-    try:
-        query = urllib.parse.urlencode({
-            "select": "data,actor,updated_at",
-            "actor": f"eq.{actor}",
-            "limit": "1",
-        })
-        endpoint = f"{url.rstrip('/')}/rest/v1/sim_state?{query}"
-        req = urllib.request.Request(
-            endpoint,
-            headers={
-                "apikey": key,
-                "Authorization": f"Bearer {key}",
-                "Accept": "application/json",
-            },
-            method="GET",
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            rows = json.loads(resp.read().decode("utf-8"))
-
-        if isinstance(rows, list) and rows:
-            row = rows[0]
-            row_actor = str(row.get("actor") or "").strip()
-            if row_actor.lower() != actor.lower():
-                raise HTTPException(
-                    status_code=503,
-                    detail="พบ sim_state แต่ actor ไม่ตรงกับบัญชี API — หยุดเพื่อป้องกันการอ่านผิดบัญชี",
-                )
-
-            data = row.get("data")
-            if isinstance(data, str):
-                data = json.loads(data)
-
-            if isinstance(data, dict):
-                try:
-                    gu.st.session_state["sim_state_loaded_ok"] = True
-                    gu.st.session_state["sim_state_source"] = "supabase_rest_api"
-                    gu.st.session_state["sim_state_actor"] = row_actor
-                    gu.st.session_state.pop("sim_state_load_error", None)
-                except Exception:
-                    pass
-                return data
-
-            raise HTTPException(
-                status_code=503,
-                detail="พบ sim_state ของบัญชีนี้ แต่ช่อง data ไม่ใช่ JSON object — ไม่เขียนทับข้อมูล",
-            )
-
-        raise HTTPException(
-            status_code=503,
-            detail="ไม่พบ sim_state ของบัญชี teerapat30204@gmail.com — ไม่สร้างพอร์ตใหม่",
-        )
-
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "message": "อ่าน sim_state จาก Supabase ไม่สำเร็จ",
-                "error_type": type(exc).__name__,
-                "error": str(exc),
-            },
-        )
+    return sim
 
 
 def _portfolio_response(gu, sim, px_row):
-    """Build the real multi-asset portfolio snapshot.
-
-    Reuse gu.py's existing market overview + portfolio_snapshot logic.
-    This endpoint is READ-ONLY: it never changes or saves sim_state.
-    """
-    usdthb = _safe_float(px_row.get("USDTHB"), 0.0)
-    if usdthb <= 0:
-        raise HTTPException(
-            status_code=503,
-            detail="ไม่สามารถอ่าน USD/THB ล่าสุดเพื่อคำนวณ Portfolio ได้",
-        )
-
-    prices = {"THB": 1.0}
-    supported = list(getattr(gu, "SUPPORTED_ASSETS", []) or [])
-
-    try:
-        market_df = gu.fetch_market_overview(supported)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "message": "โหลดราคาตลาดหลายเหรียญจาก gu.py ไม่สำเร็จ",
-                "error_type": type(exc).__name__,
-                "error": str(exc),
-            },
-        )
-
-    if market_df is not None and not market_df.empty:
-        for _, row in market_df.iterrows():
-            symbol = str(row.get("symbol", "")).upper().strip()
-            price_usd = _safe_float(row.get("price_usd"), 0.0)
-            if symbol and price_usd > 0:
-                prices[symbol] = price_usd * usdthb
-
-    # Keep the selected asset's exact historical/global price as a fallback.
-    selected_asset = str(sim.get("asset") or "").upper().strip()
-    selected_usd = _safe_float(px_row.get("Global_USD"), 0.0)
-    if selected_asset and selected_usd > 0:
-        prices[selected_asset] = selected_usd * usdthb
-
-    snap = gu.portfolio_snapshot(sim, prices)
-
+    price_thb = _safe_float(px_row["Global_USD"]) * _safe_float(px_row["USDTHB"])
+    snap = gu.portfolio_snapshot(sim, {str(sim.get("asset")): price_thb})
     return {
         "cash_thb": snap["cash_thb"],
         "market_value_thb": snap["market_value_thb"],
@@ -532,37 +357,33 @@ def engine_status():
 @app.get("/api/portfolio")
 def portfolio():
     """
-    Read-only portfolio check.
+    Read-only portfolio endpoint.
 
-    IMPORTANT:
-    - Uses the exact XSPRING_USER -> XSPRING_USER bridge used by gu.py.
-    - Calls gu.load_sim_state() only.
-    - Never creates a default wallet.
-    - Never saves/mutates sim_state.
+    Uses the same persistent sim_state and portfolio_snapshot logic as gu.py.
+    It never creates a default wallet and never saves/mutates sim_state.
+    Optional ?asset=BTC selects the market price used for the snapshot.
     """
     try:
         gu = load_gu()
-        actor = _actor()
-        _sync_gu_actor(gu, actor)
-
         sim = _load_existing_sim(gu)
 
         asset = str(sim.get("asset") or "BTC").upper().strip()
-        if asset not in getattr(gu, "SUPPORTED_ASSETS", []):
-            asset = "BTC"
+        requested_asset = str(os.environ.get("XSPRING_PORTFOLIO_ASSET", "") or "").strip().upper()
+        if requested_asset and requested_asset in getattr(gu, "SUPPORTED_ASSETS", []):
+            asset = requested_asset
 
         data = _load_market_frame(gu, asset)
         order_date = pd.Timestamp(data.index[-1])
         px_row = data.loc[order_date]
 
+        portfolio = _portfolio_response(gu, sim, px_row)
+
         return {
             "status": "ok",
-            "actor": actor,
-            "sim_state_source": getattr(gu, "st", None).session_state.get("sim_state_source"),
-            "sim_state_actor": getattr(gu, "st", None).session_state.get("sim_state_actor"),
-            "as_of": order_date.isoformat(),
+            "actor": _actor(),
             "asset": asset,
-            "portfolio": _portfolio_response(gu, sim, px_row),
+            "as_of": order_date.isoformat(),
+            "portfolio": portfolio,
         }
 
     except HTTPException:
@@ -583,7 +404,6 @@ def create_order(order: OrderRequest):
         try:
             gu = load_gu()
             actor = _actor()
-            _sync_gu_actor(gu, actor)
             role = _set_api_role(gu, actor)
 
             asset = order.asset.upper().strip()
@@ -639,6 +459,11 @@ def create_order(order: OrderRequest):
             customer_coins = sim.setdefault("customer_coins", {})
             held_qty = _safe_float(customer_coins.get(asset), 0.0)
 
+            market_price_thb = (
+                _safe_float(px_row["Global_USD"])
+                * _safe_float(px_row["USDTHB"])
+            )
+
             if side == "buy" and amount_thb > customer_thb + 1e-9:
                 raise HTTPException(
                     status_code=400,
@@ -654,6 +479,17 @@ def create_order(order: OrderRequest):
                     status_code=400,
                     detail=f"Wallet ไม่มี {asset} สำหรับขาย",
                 )
+
+            if side == "sell" and market_price_thb > 0:
+                held_value_thb = held_qty * market_price_thb
+                if amount_thb > held_value_thb + 1e-9:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"ยอดขายเกินจำนวน {asset} ที่ถืออยู่: "
+                            f"มูลค่าปัจจุบันประมาณ {held_value_thb:,.2f} บาท"
+                        ),
+                    )
 
             forced_quote = (
                 _safe_float(order.quote_thb, 0.0)
