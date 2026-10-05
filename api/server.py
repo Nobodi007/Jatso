@@ -932,6 +932,10 @@ def create_order(order: OrderRequest):
             # EXECUTE
             # -------------------------------------------------
 
+            # Keep order_date for market/portfolio calculations.
+            # execution_time is the REAL time this API accepted the order.
+            execution_time = pd.Timestamp.now(tz="Asia/Bangkok")
+
             steps, rec = gu.execute_order(
                 sim,
                 side,
@@ -960,6 +964,13 @@ def create_order(order: OrderRequest):
             execution_time = pd.Timestamp.now(tz="Asia/Bangkok")
             rec["เวลา"] = execution_time.isoformat()
             rec["timestamp"] = execution_time.isoformat()
+
+            # gu.execute_order() may record only the market date (for example
+            # "2026-10-05"). Stamp the actual API execution time explicitly
+            # so Order History never turns a date-only value into 07:00:00.
+            rec["เวลา"] = execution_time.isoformat()
+            rec["timestamp"] = execution_time.isoformat()
+            rec["วันที่"] = execution_time.strftime("%Y-%m-%d")
 
             result = str(rec.get("ผลด่าน", ""))
 
