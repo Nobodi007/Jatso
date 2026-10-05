@@ -1,10 +1,33 @@
-from fastapi import FastAPI
-import requests
+from fastapi import FastAPI, HTTPException
+import importlib.util
+import os
+from pathlib import Path
 
 app = FastAPI(
     title="XSpring Dealer Suite API",
     version="1.0.0",
 )
+
+GU_PATH = Path(__file__).resolve().parent.parent / "gu.py"
+
+
+def load_gu():
+    """
+    โหลด gu.py จาก root ของ GitHub repo แบบ lazy
+    ไม่เรียก main() ของ Streamlit
+    """
+    if not GU_PATH.exists():
+        raise FileNotFoundError(f"ไม่พบ gu.py ที่ {GU_PATH}")
+
+    spec = importlib.util.spec_from_file_location("xspring_gu", GU_PATH)
+
+    if spec is None or spec.loader is None:
+        raise ImportError("ไม่สามารถสร้าง module spec สำหรับ gu.py ได้")
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    return module
 
 
 @app.get("/")
@@ -22,44 +45,34 @@ def health():
     }
 
 
-@app.get("/api/market/{asset}")
-def market(asset: str):
-    asset = asset.upper()
-    symbol = f"{asset}_THB"
+@app.get("/api/engine/status")
+def engine_status():
+    try:
+        gu = load_gu()
 
-    url = "https://api.bitkub.com/api/v3/market/ticker"
-
-    response = requests.get(
-        url,
-        params={"sym": symbol.lower()},
-        timeout=10,
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "XSpring-Dealer-Suite/1.0",
-        },
-    )
-
-    response.raise_for_status()
-
-    data = response.json()
-
-    # Bitkub V3 returns a list
-    if not isinstance(data, list) or len(data) == 0:
         return {
-            "error": f"ไม่พบราคา {asset}/THB",
-            "asset": asset,
-            "raw": data,
+            "status": "ok",
+            "gu_loaded": True,
+            "gu_path": str(GU_PATH),
+            "supported_assets": getattr(
+                gu,
+                "SUPPORTED_ASSETS",
+                [],
+            ),
+            "has_execute_order": callable(
+                getattr(gu, "execute_order", None)
+            ),
+            "has_can_trade": callable(
+                getattr(gu, "can_trade", None)
+            ),
         }
 
-    ticker = data[0]
-
-    return {
-        "asset": asset,
-        "symbol": ticker.get("symbol", symbol),
-        "price": float(ticker["last"]),
-        "high_24h": float(ticker["high_24_hr"]),
-        "low_24h": float(ticker["low_24_hr"]),
-        "volume_24h": float(ticker["base_volume"]),
-        "quote_volume_24h": float(ticker["quote_volume"]),
-        "change_24h": float(ticker["percent_change"]),
-    }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "gu_loaded": False,
+                "error_type": type(e).__name__,
+                "error": str(e),
+            },
+        )
