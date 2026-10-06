@@ -558,6 +558,20 @@ def _portfolio_response(gu, sim, px_row=None):
             held_assets.add(asset)
 
     price_map = _fetch_bitkub_ticker_prices(held_assets)
+
+    # Never silently value a real holding at zero. That would make the UI
+    # report a fake -100% P/L when Bitkub market data is temporarily unavailable.
+    missing_prices = sorted(asset for asset in held_assets if asset not in price_map)
+    if missing_prices:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "โหลดราคาพอร์ตจาก Bitkub ไม่ครบ — ไม่แสดงค่า -100% ปลอม",
+                "missing_assets": missing_prices,
+                "source": "Bitkub Public Ticker",
+            },
+        )
+
     snap = gu.portfolio_snapshot(sim, price_map)
 
     return {
