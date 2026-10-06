@@ -804,7 +804,7 @@ function OrderBookPage() {
               key={item}
               type="button"
               onClick={() => setAsset(item)}
-              className={`rounded-lg border px-3 py-2 text-sm font-medium ${
+              className={`shrink-0 rounded-lg border px-3 py-2 text-sm font-medium ${
                 asset === item ? "bg-primary text-primary-foreground" : "hover:bg-accent"
               }`}
             >
@@ -820,7 +820,7 @@ function OrderBookPage() {
         </div>
       )}
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
         <div className="rounded-xl border bg-card p-5">
           <div className="text-sm text-muted-foreground">Best Bid</div>
           <div className="mt-2 text-xl font-semibold">
