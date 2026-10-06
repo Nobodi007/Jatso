@@ -115,68 +115,6 @@ def _safe_float(value, default=0.0):
 
 
 # =========================================================
-# TIMEZONE
-# =========================================================
-# Server/frontend ใช้เวลาไทยเป็นมาตรฐานเดียวกัน
-# ทุก timestamp ที่สร้างจาก API จะมี +07:00 ติดไปด้วย
-BANGKOK_TZ = "Asia/Bangkok"
-
-
-def _bangkok_now():
-    return pd.Timestamp.now(tz=BANGKOK_TZ)
-
-
-def _fix_legacy_order_display_time(value):
-    """
-    Compatibility for historical orders created before the timezone fix.
-    Those records can contain a Bangkok-looking timestamp that is exactly
-    two hours in the future. Execution orders are created immediately, so an
-    execution timestamp materially in the future is treated as legacy +2h.
-    New orders have an explicit +07:00 timestamp and are never shifted unless
-    they are actually in the future.
-    """
-    normalized = _normalize_bangkok_timestamp(value, default=None)
-    if not normalized:
-        return normalized
-    try:
-        ts = pd.Timestamp(normalized)
-        now = _bangkok_now()
-        delta = ts - now
-        # Legacy records observed in this app are +2 hours ahead.
-        # Allow a small clock skew around the exact 2h offset.
-        if pd.Timedelta(hours=1, minutes=30) <= delta <= pd.Timedelta(hours=2, minutes=30):
-            ts = ts - pd.Timedelta(hours=2)
-            return ts.isoformat()
-    except Exception:
-        pass
-    return normalized
-
-
-def _normalize_bangkok_timestamp(value, default=None):
-    """
-    Convert an order timestamp to an explicit Asia/Bangkok ISO timestamp.
-    - tz-aware values: convert to Bangkok
-    - tz-naive/date-only values: treat them as Bangkok time (legacy records)
-    """
-    if value is None or str(value).strip() == "":
-        return default
-
-    try:
-        ts = pd.to_datetime(value, errors="coerce")
-        if pd.isna(ts):
-            return default
-
-        if getattr(ts, "tzinfo", None) is None:
-            ts = ts.tz_localize(BANGKOK_TZ)
-        else:
-            ts = ts.tz_convert(BANGKOK_TZ)
-
-        return ts.isoformat()
-    except Exception:
-        return default
-
-
-# =========================================================
 # ACTOR
 # =========================================================
 
@@ -780,7 +718,9 @@ def orderbook(
             "symbol": symbol,
             "quote": "USDT",
             "usdthb": usdthb,
-            "timestamp": _bangkok_now().isoformat(),
+            "timestamp": pd.Timestamp.now(
+                tz="Asia/Bangkok"
+            ).isoformat(),
             "best_bid_usd": best_bid,
             "best_ask_usd": best_ask,
             "mid_price_usd": mid_price_usd,
@@ -886,9 +826,7 @@ def portfolio():
                 "status": "ok",
                 "actor": actor,
                 "asset": asset,
-                "as_of": _normalize_bangkok_timestamp(
-                    order_date.strftime("%Y-%m-%d")
-                ),
+                "as_of": order_date.isoformat(),
                 "portfolio": _portfolio_response(gu, sim, px_row),
             }
 
@@ -903,6 +841,46 @@ def portfolio():
                     "error": str(e),
                 },
             )
+
+
+# =========================================================
+# ORDER TIMESTAMP NORMALIZATION
+# =========================================================
+
+BANGKOK_TZ = "Asia/Bangkok"
+
+def _display_order_timestamp(value):
+    """Return an order timestamp in Bangkok time.
+
+    New records contain an explicit timezone and are left untouched.
+    Legacy records in this ledger may have been written with a +2 hour
+    clock error; only timestamps that are implausibly in the future are
+    shifted back two hours for display. This also handles midnight rollover.
+    """
+    if value in (None, ""):
+        return ""
+    raw = str(value).strip()
+    try:
+        ts = pd.to_datetime(raw, errors="coerce")
+        if pd.isna(ts):
+            return raw
+
+        now = pd.Timestamp.now(tz=BANGKOK_TZ)
+
+        if getattr(ts, "tzinfo", None) is None:
+            # Naive legacy timestamps are interpreted as Bangkok local time.
+            ts = ts.tz_localize(BANGKOK_TZ)
+        else:
+            ts = ts.tz_convert(BANGKOK_TZ)
+
+        # The affected legacy rows are exactly two hours ahead of the real
+        # Bangkok clock. Do not touch valid current/past timestamps.
+        if ts > now + pd.Timedelta(minutes=5) and ts - pd.Timedelta(hours=2) <= now + pd.Timedelta(minutes=5):
+            ts = ts - pd.Timedelta(hours=2)
+
+        return ts.isoformat()
+    except Exception:
+        return raw
 
 
 # =========================================================
@@ -933,8 +911,6 @@ def order_history(limit: int = 100, asset: str = ""):
                     order.get("เหรียญ")
                     or order.get("asset")
                     or order.get("symbol")
-                    or meta.get("asset")
-                    or meta.get("symbol")
                     or ""
                 ).strip().upper()
 
@@ -944,7 +920,6 @@ def order_history(limit: int = 100, asset: str = ""):
                 side = str(
                     order.get("ฝั่ง")
                     or order.get("side")
-                    or meta.get("side")
                     or ""
                 ).strip().upper()
 
@@ -954,38 +929,21 @@ def order_history(limit: int = 100, asset: str = ""):
                     or "Filled"
                 ).strip()
 
-                # Accept legacy / LINE field names too. Older ledger rows can
-                # store these fields with different casing/names.
-                meta = order.get("metadata") or order.get("meta") or {}
-                if not isinstance(meta, dict):
-                    meta = {}
-
                 order_id = str(
                     order.get("Order ID")
                     or order.get("order_id")
-                    or order.get("orderId")
-                    or order.get("OrderId")
                     or order.get("id")
-                    or order.get("LINE Order ID")
-                    or order.get("line_order_id")
-                    or meta.get("Order ID")
-                    or meta.get("order_id")
-                    or meta.get("orderId")
-                    or meta.get("id")
                     or f"ORDER-{idx + 1:06d}"
-                ).strip()
+                )
 
                 timestamp = (
                     order.get("เวลา")
                     or order.get("timestamp")
                     or order.get("time")
-                    or order.get("execution_time")
-                    or order.get("executed_at")
-                    or meta.get("timestamp")
-                    or meta.get("time")
                     or order.get("วันที่")
                     or ""
                 )
+                timestamp = _display_order_timestamp(timestamp)
 
                 amount = _safe_float(
                     order.get("มูลค่า (บาท)")
@@ -1012,13 +970,9 @@ def order_history(limit: int = 100, asset: str = ""):
                     0.0,
                 )
 
-                normalized_timestamp = _fix_legacy_order_display_time(
-                    timestamp or order.get("วันที่") or ""
-                )
-
                 rows.append({
                     "order_id": order_id,
-                    "timestamp": normalized_timestamp or "",
+                    "timestamp": timestamp,
                     "date": order.get("วันที่") or "",
                     "asset": row_asset,
                     "side": side,
@@ -1028,23 +982,8 @@ def order_history(limit: int = 100, asset: str = ""):
                     "quote_thb": quote,
                     "quantity": quantity,
                     "fee_thb": fee,
-                    "exchange": str(
-                        order.get("Exchange")
-                        or order.get("exchange")
-                        or order.get("exchange_name")
-                        or order.get("Exchange Name")
-                        or meta.get("Exchange")
-                        or meta.get("exchange")
-                        or "Bitkub"
-                    ).strip(),
-                    "source": str(
-                        order.get("Source")
-                        or order.get("source")
-                        or order.get("channel")
-                        or meta.get("Source")
-                        or meta.get("source")
-                        or "LINE"
-                    ).strip(),
+                    "exchange": str(order.get("Exchange") or order.get("exchange") or "—"),
+                    "source": str(order.get("Source") or order.get("source") or "Web"),
                 })
 
             # Normalize every timestamp to UTC before sorting.
@@ -1062,17 +1001,14 @@ def order_history(limit: int = 100, asset: str = ""):
                     if not value:
                         ts = pd.Timestamp("1970-01-01", tz="UTC")
                     else:
-                        normalized = _normalize_bangkok_timestamp(value)
-                        if normalized:
-                            ts = pd.Timestamp(normalized)
-                        else:
-                            ts = pd.Timestamp("1970-01-01", tz=BANGKOK_TZ)
+                        ts = pd.to_datetime(
+                            value,
+                            errors="coerce",
+                            utc=True,
+                        )
 
                         if pd.isna(ts):
-                            ts = pd.Timestamp("1970-01-01", tz=BANGKOK_TZ)
-
-                        # Compare everything on the same timezone.
-                        ts = ts.tz_convert("UTC")
+                            ts = pd.Timestamp("1970-01-01", tz="UTC")
 
                     return (ts, original_index)
                 except Exception:
@@ -1268,7 +1204,7 @@ def create_order(order: OrderRequest):
 
             # Keep order_date for market/portfolio calculations.
             # execution_time is the REAL time this API accepted the order.
-            execution_time = _bangkok_now()
+            execution_time = pd.Timestamp.now(tz="Asia/Bangkok")
 
             steps, rec = gu.execute_order(
                 sim,
