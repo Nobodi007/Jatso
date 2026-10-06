@@ -535,236 +535,6 @@ function App() {
 }
 
 
-
-/* =========================================================
-   ORDER BOOK — BITKUB PUBLIC DEPTH
-========================================================= */
-
-type OrderBookLevel = {
-  price_thb: number
-  quantity: number
-  total_thb: number
-}
-
-type OrderBookResponse = {
-  status?: string
-  asset?: string
-  symbol?: string
-  quote?: string
-  source?: string
-  timestamp?: string
-  best_bid_thb?: number
-  best_ask_thb?: number
-  mid_price_thb?: number
-  spread_thb?: number
-  spread_pct?: number
-  bids?: OrderBookLevel[]
-  asks?: OrderBookLevel[]
-}
-
-const ORDERBOOK_ASSETS = ["BTC", "ETH", "SOL", "DOGE", "ADA", "HBAR", "LINK", "XLM", "XRP"]
-
-function formatOrderBookPrice(value: number) {
-  const n = Number(value || 0)
-  if (!Number.isFinite(n) || n <= 0) return "—"
-  return `฿${n.toLocaleString("th-TH", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`
-}
-
-function formatOrderBookQty(value: number) {
-  const n = Number(value || 0)
-  if (!Number.isFinite(n)) return "—"
-  return n.toLocaleString("en-US", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 8,
-  })
-}
-
-function OrderBookPage() {
-  const [asset, setAsset] = useState("BTC")
-  const [book, setBook] = useState<OrderBookResponse | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState("")
-  const [lastUpdated, setLastUpdated] = useState("")
-
-  const loadOrderBook = async () => {
-    setLoading(true)
-    setError("")
-
-    try {
-      if (!DEALER_API_KEY) {
-        throw new Error("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
-      }
-
-      const response = await fetch(
-        `${API_BASE_URL}/api/orderbook?asset=${encodeURIComponent(asset)}&limit=20`,
-        {
-          method: "GET",
-          headers: {
-            Accept: "application/json",
-            "X-API-Key": DEALER_API_KEY,
-          },
-          cache: "no-store",
-        }
-      )
-
-      const body = await response.json()
-
-      if (!response.ok) {
-        const detail =
-          typeof body?.detail === "string"
-            ? body.detail
-            : body?.detail?.message || "โหลด Order Book ไม่สำเร็จ"
-        throw new Error(detail)
-      }
-
-      if (body?.status !== "ok") {
-        throw new Error("Backend ไม่ได้ตอบ Order Book เป็น status=ok")
-      }
-
-      setBook(body as OrderBookResponse)
-      setLastUpdated(
-        new Date().toLocaleTimeString("th-TH", {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        })
-      )
-    } catch (err) {
-      setBook(null)
-      setError(err instanceof Error ? err.message : "โหลด Order Book ไม่สำเร็จ")
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    loadOrderBook()
-    const timer = window.setInterval(loadOrderBook, 3000)
-    return () => window.clearInterval(timer)
-  }, [asset])
-
-  const bids = Array.isArray(book?.bids) ? book!.bids! : []
-  const asks = Array.isArray(book?.asks) ? book!.asks! : []
-  const bestBid = Number(book?.best_bid_thb || bids[0]?.price_thb || 0)
-  const bestAsk = Number(book?.best_ask_thb || asks[0]?.price_thb || 0)
-  const mid = Number(book?.mid_price_thb || (bestBid && bestAsk ? (bestBid + bestAsk) / 2 : 0))
-  const spread = Number(book?.spread_thb || (bestBid && bestAsk ? bestAsk - bestBid : 0))
-  const spreadPct = Number(book?.spread_pct || (bestBid ? (spread / bestBid) * 100 : 0))
-
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold">Order Book</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Live market depth จาก Bitkub Public API · THB
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={asset}
-            onChange={(e) => setAsset(e.target.value)}
-            className="rounded-lg border bg-card px-3 py-2 text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
-          >
-            {ORDERBOOK_ASSETS.map((symbol) => (
-              <option key={symbol} value={symbol}>{symbol}/THB</option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={loadOrderBook}
-            disabled={loading}
-            className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
-          >
-            {loading ? "Loading..." : "Refresh"}
-          </button>
-        </div>
-      </div>
-
-      {error && (
-        <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-500">
-          {error}
-        </div>
-      )}
-
-      <div className="grid gap-4 md:grid-cols-4">
-        <StatCard title="Best Bid" value={bestBid > 0 ? formatOrderBookPrice(bestBid) : "—"} change={`${asset}/THB`} />
-        <StatCard title="Best Ask" value={bestAsk > 0 ? formatOrderBookPrice(bestAsk) : "—"} change={`${asset}/THB`} />
-        <StatCard title="Mid Price" value={mid > 0 ? formatOrderBookPrice(mid) : "—"} change="Bitkub" />
-        <StatCard title="Spread" value={spread > 0 ? formatOrderBookPrice(spread) : "—"} change={`${spreadPct.toFixed(4)}%`} />
-      </div>
-
-      <div className="rounded-xl border bg-card p-5">
-        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="font-semibold">{asset}/THB Market Depth</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Real-time bids / asks · Auto refresh 3s
-            </p>
-          </div>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="size-2 rounded-full bg-emerald-500" />
-            {error ? "Disconnected" : "Connected"}
-            {lastUpdated && <span>· {lastUpdated}</span>}
-          </div>
-        </div>
-
-        <div className="grid gap-6 lg:grid-cols-2">
-          <div>
-            <div className="mb-2 flex items-center justify-between">
-              <h4 className="font-medium text-red-500">Asks</h4>
-              <span className="text-[11px] text-muted-foreground">Price · Amount · Total</span>
-            </div>
-            <div className="grid grid-cols-3 border-b px-3 py-2 text-[10px] text-muted-foreground">
-              <span>Price</span><span className="text-right">Amount</span><span className="text-right">Total</span>
-            </div>
-            <div className="divide-y rounded-lg border">
-              {asks.map((row, index) => (
-                <div key={`ask-${index}`} className="grid grid-cols-3 px-3 py-2 text-xs">
-                  <span className="font-medium text-red-500">{formatOrderBookPrice(row.price_thb)}</span>
-                  <span className="text-right">{formatOrderBookQty(row.quantity)}</span>
-                  <span className="text-right text-muted-foreground">{formatOrderBookPrice(row.total_thb)}</span>
-                </div>
-              ))}
-              {!asks.length && <div className="px-3 py-8 text-center text-sm text-muted-foreground">{loading ? "กำลังโหลด..." : "ไม่มีข้อมูล Asks"}</div>}
-            </div>
-          </div>
-
-          <div>
-            <div className="mb-2 flex items-center justify-between">
-              <h4 className="font-medium text-emerald-500">Bids</h4>
-              <span className="text-[11px] text-muted-foreground">Price · Amount · Total</span>
-            </div>
-            <div className="grid grid-cols-3 border-b px-3 py-2 text-[10px] text-muted-foreground">
-              <span>Price</span><span className="text-right">Amount</span><span className="text-right">Total</span>
-            </div>
-            <div className="divide-y rounded-lg border">
-              {bids.map((row, index) => (
-                <div key={`bid-${index}`} className="grid grid-cols-3 px-3 py-2 text-xs">
-                  <span className="font-medium text-emerald-500">{formatOrderBookPrice(row.price_thb)}</span>
-                  <span className="text-right">{formatOrderBookQty(row.quantity)}</span>
-                  <span className="text-right text-muted-foreground">{formatOrderBookPrice(row.total_thb)}</span>
-                </div>
-              ))}
-              {!bids.length && <div className="px-3 py-8 text-center text-sm text-muted-foreground">{loading ? "กำลังโหลด..." : "ไม่มีข้อมูล Bids"}</div>}
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-5 grid gap-3 sm:grid-cols-3 text-xs">
-          <div className="rounded-lg bg-muted/40 px-3 py-2"><span className="text-muted-foreground">Source</span><div className="mt-1 font-medium">{book?.source || "Bitkub Public Order Book"}</div></div>
-          <div className="rounded-lg bg-muted/40 px-3 py-2"><span className="text-muted-foreground">Symbol</span><div className="mt-1 font-medium">{book?.symbol || `${asset}_THB`}</div></div>
-          <div className="rounded-lg bg-muted/40 px-3 py-2"><span className="text-muted-foreground">Quote</span><div className="mt-1 font-medium">THB</div></div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 /* =========================================================
    WALLET
 ========================================================= */
@@ -874,6 +644,255 @@ function WalletPage({
             <MiniStat label="Total Equity" value={formatTHB(totalValue)} />
             <MiniStat label="Fees Paid" value={formatTHB(fees)} />
             <MiniStat label="Cash Ratio" value={`${cashRatio.toFixed(2)}%`} />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+/* =========================================================
+   ORDER BOOK — BITKUB PUBLIC DEPTH
+========================================================= */
+
+type OrderBookLevel = {
+  price_thb: number
+  quantity: number
+  total_thb: number
+}
+
+type OrderBookResponse = {
+  status?: string
+  asset?: string
+  symbol?: string
+  quote?: string
+  source?: string
+  timestamp?: string
+  best_bid_thb?: number
+  best_ask_thb?: number
+  mid_price_thb?: number
+  spread_thb?: number
+  spread_pct?: number
+  bids?: OrderBookLevel[]
+  asks?: OrderBookLevel[]
+}
+
+const ORDERBOOK_ASSETS = ["BTC", "ETH", "SOL", "DOGE", "ADA", "HBAR", "LINK", "XLM", "XRP"]
+
+function formatOrderBookPrice(value: number) {
+  const n = Number(value || 0)
+  if (!Number.isFinite(n) || n <= 0) return "—"
+  return `฿${n.toLocaleString("th-TH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+}
+
+function formatOrderBookQty(value: number) {
+  const n = Number(value || 0)
+  if (!Number.isFinite(n)) return "—"
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 8,
+  })
+}
+
+function OrderBookPage() {
+  const [asset, setAsset] = useState("BTC")
+  const [book, setBook] = useState<OrderBookResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [lastUpdated, setLastUpdated] = useState("")
+
+  useEffect(() => {
+    let cancelled = false
+
+    const load = async () => {
+      setLoading(true)
+      setError("")
+
+      try {
+        if (!DEALER_API_KEY) {
+          throw new Error("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
+        }
+
+        const response = await fetch(
+          `${API_BASE_URL}/api/orderbook?asset=${encodeURIComponent(asset)}&limit=20`,
+          {
+            method: "GET",
+            headers: {
+              Accept: "application/json",
+              "X-API-Key": DEALER_API_KEY,
+            },
+            cache: "no-store",
+          }
+        )
+
+        const body = await response.json().catch(() => ({}))
+
+        if (!response.ok || body?.status !== "ok") {
+          const detail = body?.detail
+          throw new Error(
+            typeof detail === "string"
+              ? detail
+              : detail?.message || `โหลด Order Book ไม่สำเร็จ (${response.status})`
+          )
+        }
+
+        if (!cancelled) {
+          setBook(body as OrderBookResponse)
+          setLastUpdated(new Date().toLocaleTimeString("th-TH"))
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "โหลด Order Book ไม่สำเร็จ")
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    load()
+    const timer = window.setInterval(load, 3000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [asset])
+
+  const bids = Array.isArray(book?.bids) ? book!.bids! : []
+  const asks = Array.isArray(book?.asks) ? book!.asks! : []
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold">Order Book</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Live market depth จาก Bitkub Public API
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {ORDERBOOK_ASSETS.map((item) => (
+            <button
+              key={item}
+              type="button"
+              onClick={() => setAsset(item)}
+              className={`rounded-lg border px-3 py-2 text-sm font-medium ${
+                asset === item ? "bg-primary text-primary-foreground" : "hover:bg-accent"
+              }`}
+            >
+              {item}/THB
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {error && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-400">
+          {error}
+        </div>
+      )}
+
+      <div className="grid gap-4 md:grid-cols-4">
+        <div className="rounded-xl border bg-card p-5">
+          <div className="text-sm text-muted-foreground">Best Bid</div>
+          <div className="mt-2 text-xl font-semibold">
+            {formatOrderBookPrice(book?.best_bid_thb || 0)}
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">{asset}/THB</div>
+        </div>
+
+        <div className="rounded-xl border bg-card p-5">
+          <div className="text-sm text-muted-foreground">Best Ask</div>
+          <div className="mt-2 text-xl font-semibold">
+            {formatOrderBookPrice(book?.best_ask_thb || 0)}
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">{asset}/THB</div>
+        </div>
+
+        <div className="rounded-xl border bg-card p-5">
+          <div className="text-sm text-muted-foreground">Mid Price</div>
+          <div className="mt-2 text-xl font-semibold">
+            {formatOrderBookPrice(book?.mid_price_thb || 0)}
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">THB</div>
+        </div>
+
+        <div className="rounded-xl border bg-card p-5">
+          <div className="text-sm text-muted-foreground">Spread</div>
+          <div className="mt-2 text-xl font-semibold">
+            {formatOrderBookPrice(book?.spread_thb || 0)}
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            {Number(book?.spread_pct || 0).toFixed(4)}%
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-xl border bg-card p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="font-semibold">{asset}/THB Market Depth</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Real-time bids / asks · Auto refresh 3s
+            </p>
+          </div>
+          <div className="text-right text-xs text-muted-foreground">
+            <div>{loading ? "Connecting..." : error ? "Disconnected" : "Connected"}</div>
+            {lastUpdated && <div>Updated · {lastUpdated}</div>}
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-6 lg:grid-cols-2">
+          <div>
+            <div className="mb-2 text-sm font-semibold">Asks</div>
+            <div className="overflow-hidden rounded-lg border">
+              <div className="grid grid-cols-3 border-b px-3 py-2 text-xs font-medium text-muted-foreground">
+                <div>Price</div><div className="text-right">Amount</div><div className="text-right">Total</div>
+              </div>
+              {asks.length === 0 ? (
+                <div className="px-3 py-8 text-center text-sm text-muted-foreground">No asks</div>
+              ) : asks.map((item, index) => (
+                <div key={`ask-${index}`} className="grid grid-cols-3 border-b px-3 py-2 text-sm last:border-b-0">
+                  <div className="font-medium">{formatOrderBookPrice(item.price_thb)}</div>
+                  <div className="text-right">{formatOrderBookQty(item.quantity)}</div>
+                  <div className="text-right">{formatOrderBookPrice(item.total_thb)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-2 text-sm font-semibold">Bids</div>
+            <div className="overflow-hidden rounded-lg border">
+              <div className="grid grid-cols-3 border-b px-3 py-2 text-xs font-medium text-muted-foreground">
+                <div>Price</div><div className="text-right">Amount</div><div className="text-right">Total</div>
+              </div>
+              {bids.length === 0 ? (
+                <div className="px-3 py-8 text-center text-sm text-muted-foreground">No bids</div>
+              ) : bids.map((item, index) => (
+                <div key={`bid-${index}`} className="grid grid-cols-3 border-b px-3 py-2 text-sm last:border-b-0">
+                  <div className="font-medium">{formatOrderBookPrice(item.price_thb)}</div>
+                  <div className="text-right">{formatOrderBookQty(item.quantity)}</div>
+                  <div className="text-right">{formatOrderBookPrice(item.total_thb)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-3 text-sm md:grid-cols-2">
+          <div className="rounded-lg border p-3">
+            <div className="text-xs text-muted-foreground">Source</div>
+            <div className="mt-1 font-medium">{book?.source || "Bitkub Public Order Book"}</div>
+          </div>
+          <div className="rounded-lg border p-3">
+            <div className="text-xs text-muted-foreground">Symbol / Quote</div>
+            <div className="mt-1 font-medium">{book?.symbol || `${asset}_THB`} · {book?.quote || "THB"}</div>
           </div>
         </div>
       </div>
