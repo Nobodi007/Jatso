@@ -66,7 +66,7 @@ def _cleanup_idempotency_cache(now: float) -> None:
     for key in expired:
         _IDEMPOTENCY_RESULTS.pop(key, None)
 
-def _get_idempotent_result(actor: str, key: str):
+def _get_idempotent_result(actor: str, key: str, fingerprint: str = ""):
     if not key:
         return None
     now = time.monotonic()
@@ -74,9 +74,14 @@ def _get_idempotent_result(actor: str, key: str):
     with _IDEMPOTENCY_LOCK:
         _cleanup_idempotency_cache(now)
         item = _IDEMPOTENCY_RESULTS.get(cache_key)
+        if item and item.get("fingerprint") and fingerprint and item["fingerprint"] != fingerprint:
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency-Key ถูกใช้กับคำสั่งคนละรายการ",
+            )
         return item["result"] if item else None
 
-def _store_idempotent_result(actor: str, key: str, result: dict) -> None:
+def _store_idempotent_result(actor: str, key: str, result: dict, fingerprint: str = "") -> None:
     if not key:
         return
     now = time.monotonic()
@@ -84,6 +89,7 @@ def _store_idempotent_result(actor: str, key: str, result: dict) -> None:
         _cleanup_idempotency_cache(now)
         _IDEMPOTENCY_RESULTS[(str(actor), str(key))] = {
             "created_at": now,
+            "fingerprint": fingerprint,
             "result": result,
         }
 
@@ -101,6 +107,21 @@ def _rate_limit_key(request: Request, x_api_key: str) -> str:
     host = request.client.host if request.client else "unknown"
     fingerprint = hashlib.sha256(str(x_api_key).encode("utf-8")).hexdigest()[:16]
     return f"{host}:{fingerprint}"
+
+
+def _internal_server_error(message: str, exc: Exception, status_code: int = 500) -> HTTPException:
+    """Log technical details server-side without exposing internals to clients."""
+    print(f"[api] {message}: {type(exc).__name__}: {exc}")
+    return HTTPException(status_code=status_code, detail=message)
+
+
+def _idempotency_fingerprint(asset: str, side: str, amount_thb: float) -> str:
+    raw = f"{str(asset).upper().strip()}|{str(side).lower().strip()}|{float(amount_thb):.12g}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _idempotency_key_hash(key: str) -> str:
+    return hashlib.sha256(str(key).encode("utf-8")).hexdigest()
 
 
 def _check_rate_limit(request: Request, x_api_key: str) -> None:
@@ -955,13 +976,10 @@ def orderbook(
         raise
 
     except Exception as e:
-        raise HTTPException(
+        raise _internal_server_error(
+            "โหลด Bitkub Orderbook ไม่สำเร็จ",
+            e,
             status_code=503,
-            detail={
-                "message": "โหลด Bitkub Orderbook ไม่สำเร็จ",
-                "error_type": type(e).__name__,
-                "error": str(e),
-            },
         )
 
 # =========================================================
@@ -1000,13 +1018,9 @@ def engine_status():
         }
 
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "gu_loaded": False,
-                "error_type": type(e).__name__,
-                "error": str(e),
-            },
+        raise _internal_server_error(
+            "Engine status ตรวจสอบไม่สำเร็จ",
+            e,
         )
 
 
@@ -1054,12 +1068,9 @@ def portfolio():
             raise
 
         except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error_type": type(e).__name__,
-                    "error": str(e),
-                },
+            raise _internal_server_error(
+                "เกิดข้อผิดพลาดภายใน API",
+                e,
             )
 
 
@@ -1260,12 +1271,9 @@ def order_history(limit: int = 100, asset: str = ""):
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error_type": type(e).__name__,
-                    "error": str(e),
-                },
+            raise _internal_server_error(
+                "เกิดข้อผิดพลาดภายใน API",
+                e,
             )
 
 
@@ -1292,15 +1300,20 @@ def create_order(
                     detail="Idempotency-Key ยาวเกินกำหนด",
                 )
 
-            cached_result = _get_idempotent_result(actor, idempotency_key)
-            if cached_result is not None:
-                return cached_result
-
             role = _set_api_role(gu, actor)
 
             asset = order.asset.upper().strip()
             side = order.side.lower().strip()
             amount_thb = _safe_float(order.amount_thb, -1.0)
+            idempotency_fingerprint = _idempotency_fingerprint(asset, side, amount_thb)
+
+            cached_result = _get_idempotent_result(
+                actor,
+                idempotency_key,
+                idempotency_fingerprint,
+            )
+            if cached_result is not None:
+                return cached_result
 
             # -------------------------------------------------
             # VALIDATION
@@ -1386,6 +1399,50 @@ def create_order(
             # -------------------------------------------------
 
             sim = _load_existing_sim(gu)
+
+            # Persistent idempotency guard: if a previous request was saved
+            # successfully but the server restarted before the in-memory cache
+            # could be reused, do not execute the same order twice.
+            if idempotency_key:
+                key_hash = _idempotency_key_hash(idempotency_key)
+                existing_orders = sim.get("orders", [])
+                if isinstance(existing_orders, list):
+                    for existing_order in reversed(existing_orders):
+                        if not isinstance(existing_order, dict):
+                            continue
+                        if str(existing_order.get("idempotency_key_hash") or "") != key_hash:
+                            continue
+                        existing_asset = str(
+                            existing_order.get("เหรียญ")
+                            or existing_order.get("asset")
+                            or asset
+                        ).upper()
+                        existing_side = str(
+                            existing_order.get("side")
+                            or existing_order.get("ด้าน")
+                            or side
+                        ).lower()
+                        existing_qty = existing_order.get("เหรียญที่ส่งมอบ")
+                        existing_quote = existing_order.get("ราคาที่ลูกค้าได้")
+                        existing_response = {
+                            "status": "filled",
+                            "actor": actor,
+                            "asset": existing_asset,
+                            "side": existing_side,
+                            "amount_thb": amount_thb,
+                            "quote_thb": existing_quote,
+                            "quantity": existing_qty,
+                            "order": existing_order,
+                            "steps": [],
+                            "portfolio": _portfolio_response(gu, sim),
+                        }
+                        _store_idempotent_result(
+                            actor,
+                            idempotency_key,
+                            existing_response,
+                            idempotency_fingerprint,
+                        )
+                        return existing_response
 
             sim = gu.sim_normalize_state(
                 sim,
@@ -1487,6 +1544,8 @@ def create_order(
             rec["เวลา"] = execution_iso
             rec["timestamp"] = execution_iso
             rec["วันที่"] = execution_time.strftime("%Y-%m-%d")
+            if idempotency_key:
+                rec["idempotency_key_hash"] = _idempotency_key_hash(idempotency_key)
 
             # execute_order() บางเวอร์ชันอาจ append สำเนา rec เข้า ledger
             # ดังนั้นแก้ entry ใน sim["orders"] โดยตรงด้วย
@@ -1534,7 +1593,7 @@ def create_order(
                     "order": rec,
                     "steps": steps,
                 }
-                _store_idempotent_result(actor, idempotency_key, rejected_response)
+                _store_idempotent_result(actor, idempotency_key, rejected_response, idempotency_fingerprint)
                 return rejected_response
 
             # -------------------------------------------------
@@ -1580,17 +1639,14 @@ def create_order(
                 "steps": steps,
                 "portfolio": _portfolio_response(gu, sim, px_row),
             }
-            _store_idempotent_result(actor, idempotency_key, filled_response)
+            _store_idempotent_result(actor, idempotency_key, filled_response, idempotency_fingerprint)
             return filled_response
 
         except HTTPException:
             raise
 
         except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error_type": type(e).__name__,
-                    "error": str(e),
-                },
+            raise _internal_server_error(
+                "เกิดข้อผิดพลาดภายใน API",
+                e,
             )
