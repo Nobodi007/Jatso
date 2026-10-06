@@ -12,6 +12,7 @@ import math
 import json
 import urllib.parse
 import urllib.request
+from uuid import uuid4
 
 import pandas as pd
 
@@ -884,6 +885,52 @@ def _display_order_timestamp(value):
 
 
 # =========================================================
+# ORDER ID / SOURCE NORMALIZATION
+# =========================================================
+
+def _order_source(order: dict) -> str:
+    raw = str(
+        order.get("Source")
+        or order.get("source")
+        or order.get("ช่องทาง")
+        or "Web"
+    ).strip()
+    if raw.lower() == "line":
+        return "LINE"
+    return raw or "Web"
+
+
+def _new_order_id(source: str, existing_ids: set[str]) -> str:
+    prefix = "LINE" if str(source).strip().upper() == "LINE" else "ORD"
+    while True:
+        candidate = f"{prefix}-{uuid4().hex[:10].upper()}"
+        if candidate not in existing_ids:
+            return candidate
+
+
+def _ensure_order_id(order: dict, source: str, existing_ids: set[str]) -> str:
+    current = str(
+        order.get("Order ID")
+        or order.get("order_id")
+        or order.get("id")
+        or ""
+    ).strip()
+    source_upper = str(source).strip().upper()
+    valid_prefix = "LINE-" if source_upper == "LINE" else "ORD-"
+
+    # Keep an existing ID only when it is non-empty, unique in this ledger,
+    # and consistent with the channel. Legacy IDs such as ORDER-000001 are
+    # upgraded to the new canonical format when a new order is created.
+    if current and current not in existing_ids and current.upper().startswith(valid_prefix):
+        existing_ids.add(current)
+        return current
+
+    candidate = _new_order_id(source, existing_ids)
+    existing_ids.add(candidate)
+    return candidate
+
+
+# =========================================================
 # ORDER HISTORY
 # =========================================================
 
@@ -902,6 +949,7 @@ def order_history(limit: int = 100, asset: str = ""):
 
             asset_filter = str(asset or "").strip().upper()
             rows = []
+            seen_order_ids = set()
 
             for idx, order in enumerate(raw_orders):
                 if not isinstance(order, dict):
@@ -929,12 +977,28 @@ def order_history(limit: int = 100, asset: str = ""):
                     or "Filled"
                 ).strip()
 
-                order_id = str(
+                source = _order_source(order)
+
+                # API-level canonical ID for every row. This is deliberately
+                # read-only: legacy records are not rewritten just by opening
+                # Order History. Newly-created orders are persisted with a
+                # canonical ID in create_order() below.
+                legacy_id = str(
                     order.get("Order ID")
                     or order.get("order_id")
                     or order.get("id")
-                    or f"ORDER-{idx + 1:06d}"
-                )
+                    or ""
+                ).strip()
+                if legacy_id and legacy_id not in seen_order_ids:
+                    order_id = legacy_id
+                else:
+                    # Read-only migration label: opening Order History never
+                    # rewrites the persisted legacy portfolio. It only guarantees
+                    # that the API response itself has a unique ID per row.
+                    order_id = f"LEGACY-{idx + 1:06d}"
+                    while order_id in seen_order_ids:
+                        order_id = f"LEGACY-{idx + 1:06d}-{len(seen_order_ids) + 1}"
+                seen_order_ids.add(order_id)
 
                 timestamp = (
                     order.get("เวลา")
@@ -983,7 +1047,13 @@ def order_history(limit: int = 100, asset: str = ""):
                     "quantity": quantity,
                     "fee_thb": fee,
                     "exchange": str(order.get("Exchange") or order.get("exchange") or "—"),
-                    "source": str(order.get("Source") or order.get("source") or "Web"),
+                    "source": source,
+                    "transaction_id": str(
+                        order.get("transaction_id")
+                        or order.get("Transaction ID")
+                        or order.get("tx_id")
+                        or ""
+                    ),
                 })
 
             # Normalize every timestamp to UTC before sorting.
@@ -1232,9 +1302,45 @@ def create_order(order: OrderRequest):
             # เก็บเวลา execution จริงลงทั้ง rec และรายการที่ engine append
             # เข้า sim["orders"] โดยตรง เพื่อให้ /api/orders อ่านค่าจริงได้แน่นอน
             execution_iso = execution_time.isoformat()
+
+            # -------------------------------------------------
+            # CANONICAL ORDER ID / SOURCE
+            # -------------------------------------------------
+            # Every newly created order gets a globally unique API Order ID.
+            # Web orders use ORD-..., while a future LINE adapter can submit
+            # Source=LINE and receive LINE-... without changing Order History.
+            existing_ids = set()
+            for existing in sim.get("orders", []) or []:
+                if isinstance(existing, dict):
+                    existing_id = str(
+                        existing.get("Order ID")
+                        or existing.get("order_id")
+                        or existing.get("id")
+                        or ""
+                    ).strip()
+                    if existing_id:
+                        existing_ids.add(existing_id)
+
+            source = _order_source(rec)
+            order_id = _ensure_order_id(rec, source, existing_ids)
+            rec["Order ID"] = order_id
+            rec["order_id"] = order_id
+            rec["Source"] = source
+            rec["source"] = source
             rec["เวลา"] = execution_iso
             rec["timestamp"] = execution_iso
             rec["วันที่"] = execution_time.strftime("%Y-%m-%d")
+
+            # Keep an existing transaction reference if the engine already
+            # creates one. Do not invent a fake transaction linkage here.
+            transaction_id = str(
+                rec.get("transaction_id")
+                or rec.get("Transaction ID")
+                or rec.get("tx_id")
+                or ""
+            ).strip()
+            if transaction_id:
+                rec["transaction_id"] = transaction_id
 
             # execute_order() บางเวอร์ชันอาจ append สำเนา rec เข้า ledger
             # ดังนั้นแก้ entry ใน sim["orders"] โดยตรงด้วย
@@ -1263,9 +1369,15 @@ def create_order(order: OrderRequest):
                     target = ledger_orders[-1]
 
                 if target is not None:
+                    target["Order ID"] = order_id
+                    target["order_id"] = order_id
+                    target["Source"] = source
+                    target["source"] = source
                     target["เวลา"] = execution_iso
                     target["timestamp"] = execution_iso
                     target["วันที่"] = execution_time.strftime("%Y-%m-%d")
+                    if transaction_id:
+                        target["transaction_id"] = transaction_id
 
             result = str(rec.get("ผลด่าน", ""))
 
@@ -1279,6 +1391,8 @@ def create_order(order: OrderRequest):
                     "asset": asset,
                     "side": side,
                     "amount_thb": amount_thb,
+                    "order_id": order_id,
+                    "transaction_id": transaction_id or None,
                     "order": rec,
                     "steps": steps,
                 }
@@ -1322,6 +1436,9 @@ def create_order(order: OrderRequest):
                 "amount_thb": amount_thb,
                 "quote_thb": rec.get("ราคาที่ลูกค้าได้"),
                 "quantity": rec.get("เหรียญที่ส่งมอบ"),
+                "order_id": order_id,
+                "transaction_id": transaction_id or None,
+                "source": source,
                 "order": rec,
                 "steps": steps,
                 "portfolio": _portfolio_response(gu, sim, px_row),
