@@ -698,6 +698,15 @@ function formatOrderBookQty(value: number) {
   })
 }
 
+function formatOrderBookTotal(value: number) {
+  const n = Number(value || 0)
+  if (!Number.isFinite(n) || n < 0) return "—"
+  return `฿${n.toLocaleString("th-TH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+}
+
 function OrderBookPage() {
   const [asset, setAsset] = useState("BTC")
   const [book, setBook] = useState<OrderBookResponse | null>(null)
