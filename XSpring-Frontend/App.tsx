@@ -720,8 +720,8 @@ function Dashboard({
           : []
 
         rows.sort((a, b) => {
-          const dateA = new Date(a.timestamp || a.date || "").getTime()
-          const dateB = new Date(b.timestamp || b.date || "").getTime()
+          const dateA = parseOrderDate(a.timestamp || a.date)?.getTime() ?? NaN
+          const dateB = parseOrderDate(b.timestamp || b.date)?.getTime() ?? NaN
           if (Number.isFinite(dateA) && Number.isFinite(dateB)) {
             return dateB - dateA
           }
@@ -2403,20 +2403,47 @@ type OrderHistoryRow = {
   source?: string
 }
 
+function parseOrderDate(value?: string) {
+  if (!value) return null
+
+  const raw = String(value).trim()
+  if (!raw) return null
+
+  // Date-only values are handled separately so they do not shift across
+  // midnight when converted through the JavaScript Date constructor.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [year, month, day] = raw.split("-").map(Number)
+    return new Date(Date.UTC(year, month - 1, day))
+  }
+
+  // Backend timestamps may be stored as local Bangkok time without an
+  // explicit timezone. Treat timezone-less execution timestamps as Bangkok
+  // time; otherwise JavaScript would interpret them as UTC and shift the
+  // displayed order time. Explicit Z / offsets are respected as-is.
+  let normalized = raw.replace(" ", "T")
+  const hasTimezone = /Z$/i.test(normalized) || /[+-]\d{2}:\d{2}$/.test(normalized)
+
+  if (!hasTimezone) {
+    normalized += "+07:00"
+  }
+
+  const date = new Date(normalized)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
 function formatOrderDate(value?: string) {
   if (!value) return "—"
 
   const raw = String(value).trim()
 
-  // Legacy orders may contain only YYYY-MM-DD. Do NOT parse these as a
-  // JavaScript Date because UTC midnight becomes 07:00 in Thailand.
+  // Legacy orders may contain only YYYY-MM-DD. Keep the stored calendar date.
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
     const [year, month, day] = raw.split("-")
     return `${day}/${month}/${Number(year) + 543}`
   }
 
-  const d = new Date(raw)
-  if (Number.isNaN(d.getTime())) return raw
+  const d = parseOrderDate(raw)
+  if (!d) return raw
 
   return d.toLocaleString("th-TH", {
     timeZone: "Asia/Bangkok",
@@ -2501,8 +2528,8 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
         : []
 
       const sortedOrders = [...rows].sort((a, b) => {
-        const dateA = new Date(a.timestamp || a.date || "").getTime()
-        const dateB = new Date(b.timestamp || b.date || "").getTime()
+        const dateA = parseOrderDate(a.timestamp || a.date)?.getTime() ?? NaN
+        const dateB = parseOrderDate(b.timestamp || b.date)?.getTime() ?? NaN
 
         // ล่าสุด → เก่าสุด
         if (Number.isFinite(dateA) && Number.isFinite(dateB)) {
