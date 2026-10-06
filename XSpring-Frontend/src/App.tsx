@@ -288,8 +288,8 @@ function App() {
         ================================================= */}
 
         <aside
-          className={`border-r bg-card transition-all duration-200 ${
-            sidebarOpen ? "w-64" : "w-16"
+          className={`mobile-sidebar border-r bg-card transition-all duration-200 ${
+            sidebarOpen ? "mobile-sidebar-open w-64" : "mobile-sidebar-closed w-16"
           }`}
         >
           {/* LOGO */}
@@ -329,7 +329,12 @@ function App() {
               return (
                 <button
                   key={item.id}
-                  onClick={() => setPage(item.id)}
+                  onClick={() => {
+                    setPage(item.id)
+                    if (window.innerWidth < 768) {
+                      setSidebarOpen(false)
+                    }
+                  }}
                   className={`group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${
                     active
                       ? "bg-primary text-primary-foreground"
@@ -371,7 +376,7 @@ function App() {
             MAIN
         ================================================= */}
 
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="mobile-main flex min-w-0 flex-1 flex-col">
 
           {/* =================================================
               TOPBAR
