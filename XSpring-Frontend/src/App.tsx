@@ -87,6 +87,37 @@ function formatApiError(
   rawText = ""
 ) {
   const status = response.status
+          throw new Error(formatApiError(response, body, "โหลด Order Book ไม่สำเร็จ"))
+
+  if (status === 400) return detailMessage || `${fallback} — ข้อมูลคำสั่งไม่ถูกต้อง`
+  if (status === 401) return `${fallback} — ไม่ได้รับอนุญาต (API Key ไม่ถูกต้องหรือหมดอายุ)`
+  if (status === 403) return `${fallback} — ไม่มีสิทธิ์ทำรายการนี้`
+  if (status === 409) return `${fallback} — Idempotency-Key ถูกใช้กับคำสั่งคนละรายการ`
+  if (status === 422) return detailMessage || `${fallback} — รูปแบบข้อมูลไม่ถูกต้อง`
+  if (status === 429) {
+    const retry = Number(detail?.retry_after_seconds || response.headers.get("Retry-After") || 0)
+    return `${fallback} — ส่งคำขอถี่เกินไป${retry > 0 ? ` กรุณารอ ${retry} วินาที` : " กรุณารอสักครู่"}`
+  }
+  if (status === 503) return detailMessage || `${fallback} — Backend/Market Data ยังไม่พร้อม กรุณาลองใหม่`
+
+  return detailMessage || rawText || `${fallback} (HTTP ${status})`
+}
+
+function formatNetworkError(error: unknown, fallback: string) {
+  if (error instanceof TypeError) {
+    return `${fallback} — เชื่อมต่อ Backend ไม่สำเร็จ กรุณาตรวจ API URL / Network`
+  }
+  return error instanceof Error ? error.message : fallback
+}
+
+
+function formatApiError(
+  response: Response,
+  body: any,
+  fallback: string,
+  rawText = ""
+) {
+  const status = response.status
   const detail = body?.detail
   const detailMessage =
     typeof detail === "string"
@@ -834,7 +865,86 @@ function OrderBookPage() {
 
       try {
         if (!DEALER_API_KEY) {
-        throw new Error(formatApiError(response, body, "โหลด Order Book ไม่สำเร็จ"))
+          throw new Error("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
+        }
+
+        const response = await fetch(
+          `${API_BASE_URL}/api/orderbook?asset=${encodeURIComponent(asset)}&limit=20`,
+          {
+            method: "GET",
+            headers: {
+              Accept: "application/json",
+              "X-API-Key": DEALER_API_KEY,
+            },
+            cache: "no-store",
+          }
+        )
+
+        const body = await response.json().catch(() => ({}))
+
+        if (!response.ok || body?.status !== "ok") {
+          const detail = body?.detail
+          throw new Error(
+            typeof detail === "string"
+              ? detail
+              : detail?.message || `โหลด Order Book ไม่สำเร็จ (${response.status})`
+          )
+        }
+
+        if (!cancelled) {
+          setBook(body as OrderBookResponse)
+          setLastUpdated(new Date().toLocaleTimeString("th-TH"))
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "โหลด Order Book ไม่สำเร็จ")
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    load()
+    const timer = window.setInterval(load, 3000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [asset])
+
+  const bids = Array.isArray(book?.bids) ? book!.bids! : []
+  const asks = Array.isArray(book?.asks) ? book!.asks! : []
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold">Order Book</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Live market depth จาก Bitkub Public API
+          </p>
+        </div>
+
+        <div className="flex max-w-full gap-2 overflow-x-auto pb-1">
+          {ORDERBOOK_ASSETS.map((item) => {
+            const active = asset === item
+            return (
+              <button
+                key={item}
+                type="button"
+                onClick={() => setAsset(item)}
+                aria-label={`${item}/THB`}
+                className={`flex shrink-0 items-center gap-2 rounded-xl border px-3.5 py-2 text-sm font-medium transition-all ${
+                  active
+                    ? "border-primary bg-primary text-primary-foreground shadow-sm"
+                    : "bg-card hover:bg-accent"
+                }`}
+              >
+                <CoinLogo asset={item} size={22} />
+                <span>{item}/THB</span>
+              </button>
+            )
           })}
         </div>
       </div>
@@ -1478,14 +1588,7 @@ function TradePage({
       const body = await response.json()
 
       if (!response.ok || body?.status !== "ok") {
-        throw new Error(
-          typeof body?.detail === "string"
-            ? body.detail
-            : body?.detail?.message ||
-              `โหลด Order Book ไม่สำเร็จ (HTTP ${response.status})`
-        )
-      }
-
+        throw new Error(formatApiError(response, body, "โหลด Order Book ไม่สำเร็จ"))
       setTradeOrderBook(body as OrderBookResponse)
     } catch (err) {
       setTradeOrderBook(null)
@@ -1625,11 +1728,8 @@ function TradePage({
       }
 
       if (!response.ok) {
-        const detail =
-          typeof body?.detail === "string"
         throw new Error(formatApiError(response, body, "ส่งคำสั่งไม่สำเร็จ", rawText))
-      }
-
+      
       if (body?.status === "rejected") {
         const reason =
           body?.order?.["ผลด่าน"] ||
@@ -2846,11 +2946,8 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
       }
 
       if (!response.ok) {
-        const detail =
-          typeof body?.detail === "string"
         throw new Error(formatApiError(response, body, "โหลด Order History ไม่สำเร็จ", rawText))
-      }
-
+      
       if (body?.status !== "ok") {
         throw new Error(
           body?.detail || "Backend ไม่ได้ตอบ status=ok"
@@ -2885,7 +2982,11 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
       }))
     } catch (err) {
       setOrders([])
-      setError(formatNetworkError(err, "โหลด Order History ไม่สำเร็จ"))
+      setError(
+        err instanceof Error
+          ? err.message
+          : "ไม่สามารถโหลด Order History ได้"
+      )
     } finally {
       setLoading(false)
     }
