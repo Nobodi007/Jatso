@@ -449,7 +449,7 @@ function App() {
               CONTENT
           ================================================= */}
 
-          <main className="flex-1 overflow-auto p-6">
+          <main className="min-w-0 flex-1 overflow-auto p-4 sm:p-6">
 
             {page === "dashboard" && (
               <Dashboard
@@ -1212,7 +1212,7 @@ function Dashboard({
       <div className="grid gap-4 xl:grid-cols-2">
 
         <div className="rounded-xl border bg-card p-5">
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="font-semibold">Top Holdings</h3>
               <p className="mt-1 text-xs text-muted-foreground">
@@ -1529,7 +1529,7 @@ function TradePage({
 
     if (cleanAmount > availableThb + 1e-9) {
       setOrderMessage(
-        `${side === "BUY" ? "???????" : "??????"}เกินยอดที่ทำรายการได้`
+        `${side === "BUY" ? "ยอดซื้อ" : "ยอดขาย"}เกินยอดที่ทำรายการได้`
       )
       return
     }
@@ -1547,7 +1547,7 @@ function TradePage({
     }
 
     const confirmed = window.confirm(
-      `${side === "BUY" ? "????" : "???"} ${asset} ?????? ${formatTHB(cleanAmount)} ?\n\nราคาจะถูกตรวจและกำหนดโดย Backend / Engine`
+      `${side === "BUY" ? "ซื้อ" : "ขาย"} ${asset} มูลค่า ${formatTHB(cleanAmount)}?\n\nราคาจะถูกตรวจและกำหนดโดย Backend / Engine`
     )
 
     if (!confirmed) return
@@ -1706,7 +1706,7 @@ function TradePage({
                 e.target.value as Asset
               )
             }
-            className="appearance-none rounded-lg border bg-card px-4 py-2 pr-9 text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
+            className="w-full appearance-none rounded-lg border bg-card px-4 py-2 pr-9 text-sm font-medium outline-none focus:ring-2 focus:ring-primary sm:w-auto"
           >
             {tradeAssets.map((symbol) => (
               <option key={symbol} value={symbol}>
