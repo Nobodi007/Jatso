@@ -784,7 +784,8 @@ def _portfolio_response(gu, sim, px_row=None):
             detail={
                 "message": "โหลดราคาพอร์ตจาก Bitkub ไม่ครบ — ไม่แสดงค่า -100% ปลอม",
                 "missing_assets": missing_prices,
-                "source": "Bitkub Public Ticker",
+                "source": "gu.py → Bitkub Public Ticker",
+            "gu_loaded": True,
             },
         )
 
@@ -1053,10 +1054,26 @@ def _normalize_bitkub_ticker_row(asset: str, row: dict) -> dict:
 @app.get("/api/markets", dependencies=[Depends(require_api_key)])
 def markets():
     try:
+        # Keep Markets tied to the existing gu.py engine.  gu.py remains the
+        # source-of-truth for supported assets, while the single Bitkub ticker
+        # request keeps this endpoint fast enough for the 10s frontend refresh.
+        gu = load_gu()
+        gu_assets = getattr(gu, "SUPPORTED_ASSETS", None)
+        allowed_assets = {
+            str(asset).upper().strip()
+            for asset in (gu_assets or BITKUB_MARKET_ASSETS.keys())
+            if str(asset).upper().strip() in BITKUB_MARKET_ASSETS
+        }
+        if not allowed_assets:
+            allowed_assets = set(BITKUB_MARKET_ASSETS.keys())
+
         payload = _fetch_bitkub_ticker_map()
         rows = []
 
         for asset in BITKUB_MARKET_ASSETS:
+            if asset not in allowed_assets:
+                continue
+
             raw = payload.get(f"THB_{asset}") or payload.get(f"{asset}_THB")
 
             if not isinstance(raw, dict):
