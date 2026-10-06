@@ -2403,42 +2403,51 @@ _supabase_checked =False
 
 
 def _get_supabase ()->Optional ["_SupabaseClient"]:
-    """คืน Supabase client ถ้าตั้งค่าไว้ครบ; รองรับทั้ง [supabase] และ top-level secrets/env."""
-    global _supabase_client ,_supabase_checked 
-    if _supabase_client is not None :
+    """คืน Supabase client; ใช้ Render environment ก่อน Streamlit secrets เพื่อรองรับ production."""
+    global _supabase_client, _supabase_checked
+    if _supabase_client is not None:
         return _supabase_client
-    _supabase_checked =True
-    if not HAS_SUPABASE_LIB :
-        return None 
-    try :
-        # รองรับรูปแบบเดิม: [supabase] url/key
-        cfg =st .secrets .get ("supabase",{})
-        if not isinstance (cfg,Mapping ):
-            cfg ={}
-        url =str (cfg .get ("url","")or "").strip ()
-        # Prefer the service-role key when explicitly configured.
-        # It is required here because sim_state may be protected by RLS.
-        key =str (
-            cfg .get ("service_role_key","")
-            or st .secrets .get ("SUPABASE_SERVICE_ROLE_KEY","")
-            or os .environ .get ("SUPABASE_SERVICE_ROLE_KEY","")
-            or cfg .get ("key","")
+    _supabase_checked = True
+    if not HAS_SUPABASE_LIB:
+        return None
+    try:
+        # Render production credentials are environment variables.
+        url = str(os.environ.get("SUPABASE_URL", "") or "").strip()
+        key = str(
+            os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+            or os.environ.get("SUPABASE_KEY", "")
             or ""
-        ).strip ()
+        ).strip()
 
-        # รองรับรูปแบบ Streamlit secrets/env ที่ใช้กันอีกแบบ
-        if not url :
-            url =str (st .secrets .get ("SUPABASE_URL","")or os .environ .get ("SUPABASE_URL","")or "").strip ()
-        if not key :
-            key =str (st .secrets .get ("SUPABASE_KEY","")or os .environ .get ("SUPABASE_KEY","")or "").strip ()
+        # Local/Streamlit fallback only when env vars are absent.
+        if not (url and key):
+            try:
+                secrets = st.secrets
+                cfg = secrets.get("supabase", {})
+                if not isinstance(cfg, Mapping):
+                    cfg = {}
+                url = str(cfg.get("url", "") or secrets.get("SUPABASE_URL", "") or url).strip()
+                key = str(
+                    cfg.get("service_role_key", "")
+                    or secrets.get("SUPABASE_SERVICE_ROLE_KEY", "")
+                    or cfg.get("key", "")
+                    or secrets.get("SUPABASE_KEY", "")
+                    or key
+                    or ""
+                ).strip()
+            except Exception:
+                pass
 
-        if not (url and key ):
-            return None 
-        _supabase_client =create_client (url ,key )
-    except Exception as exc :
-        _supabase_client =None 
-        st .session_state ["supabase_init_error"]=str (exc )
-    return _supabase_client 
+        if not (url and key):
+            return None
+        _supabase_client = create_client(url, key)
+    except Exception as exc:
+        _supabase_client = None
+        try:
+            st.session_state["supabase_init_error"] = str(exc)
+        except Exception:
+            pass
+    return _supabase_client
 
 
 PROFILE_STATE_ENV_VAR ="XSPRING_PROFILE_STATE"
@@ -2940,56 +2949,9 @@ def _cloud_has_state (actor :str )->Optional [bool]:
         return None
 
 
-def _preserve_order_history(sim: dict[str, Any]) -> None:
-    """Maintain an append-only Order History archive separate from operational state.
-
-    Resetting/rebuilding the simulator may replace `orders`, but the customer
-    transaction history must remain durable.  The archive is merged by canonical
-    Order ID and is never shortened by a reset.
-    """
-    if not isinstance(sim, dict):
-        return
-
-    archive = sim.get("order_history")
-    if not isinstance(archive, list):
-        archive = []
-
-    current = sim.get("orders")
-    if not isinstance(current, list):
-        current = []
-
-    by_id: dict[str, dict[str, Any]] = {}
-    no_id: list[dict[str, Any]] = []
-
-    for item in archive:
-        if not isinstance(item, dict):
-            continue
-        oid = str(item.get("Order ID") or item.get("order_id") or item.get("id") or "").strip()
-        if oid:
-            by_id[oid] = dict(item)
-        else:
-            no_id.append(dict(item))
-
-    for item in current:
-        if not isinstance(item, dict):
-            continue
-        oid = str(item.get("Order ID") or item.get("order_id") or item.get("id") or "").strip()
-        if oid:
-            # Current ledger is the latest representation of an existing order.
-            by_id[oid] = dict(item)
-        else:
-            no_id.append(dict(item))
-
-    sim["order_history"] = list(by_id.values()) + no_id
-
-
 def save_sim_state (sim :Any ,path :Optional [Path ]=None )->None :
     if is_guest_mode ()or not isinstance (sim ,dict ):
         return
-
-    # Persist history before any operational-state save. This archive is
-    # intentionally not cleared by simulator resets.
-    _preserve_order_history(sim)
 
     sb =_get_supabase ()
     if sb is not None :
@@ -3166,21 +3128,32 @@ def load_sim_state (path :Optional [Path ]=None )->Optional[dict [str ,Any ]]:
     # actor locally so URL/operator encoding cannot prevent a valid match.
     for actor in candidates:
         try:
-            cfg =st .secrets .get ("supabase",{})
-            if not isinstance (cfg ,Mapping ):
-                cfg ={}
-            url =str (cfg .get ("url","")or st .secrets .get ("SUPABASE_URL","")or os .environ .get ("SUPABASE_URL","")).strip ()
-            key =str (
-                cfg .get ("service_role_key","")
-                or st .secrets .get ("SUPABASE_SERVICE_ROLE_KEY","")
-                or cfg .get ("key","")
-                or st .secrets .get ("SUPABASE_KEY","")
-                or os .environ .get ("SUPABASE_SERVICE_ROLE_KEY","")
-                or os .environ .get ("SUPABASE_KEY","")
+            # Render production credentials come from environment variables.
+            # Do not require .streamlit/secrets.toml on Render.
+            url = str(os.environ.get("SUPABASE_URL", "") or "").strip()
+            key = str(
+                os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+                or os.environ.get("SUPABASE_KEY", "")
                 or ""
-            ).strip ()
-            if not url or not key:
-                continue
+            ).strip()
+
+            if not (url and key):
+                try:
+                    secrets = st.secrets
+                    cfg = secrets.get("supabase", {})
+                    if not isinstance(cfg, Mapping):
+                        cfg = {}
+                    url = str(cfg.get("url", "") or secrets.get("SUPABASE_URL", "") or url).strip()
+                    key = str(
+                        cfg.get("service_role_key", "")
+                        or secrets.get("SUPABASE_SERVICE_ROLE_KEY", "")
+                        or cfg.get("key", "")
+                        or secrets.get("SUPABASE_KEY", "")
+                        or key
+                        or ""
+                    ).strip()
+                except Exception:
+                    pass
             req =urllib .request .Request (
                 url.rstrip ("/")+"/rest/v1/sim_state?select=data,actor,updated_at&order=updated_at.desc&limit=50",
                 headers ={"apikey":key ,"Authorization":f"Bearer {key }","Accept":"application/json"},
@@ -24713,12 +24686,8 @@ market_df :Optional [pd .DataFrame ]=None )->None :
             _fresh_sim = sim_defaults(
                 asset, first_day, data.loc[first_day, "Global_USD"],
                 data.loc[first_day, "USDTHB"], target_stock_thb)
-            # Reset operational balances, but NEVER erase the permanent Order History.
-            # Keep both the live ledger and the append-only archive.
+            # Reset operational balances, but never erase the audit trail or last routing view.
             _fresh_sim["orders"] = list(_old_sim.get("orders", []))
-            _fresh_sim["order_history"] = list(
-                _old_sim.get("order_history", _old_sim.get("orders", []))
-            )
             _fresh_sim["portfolio_ledger"] = list(_old_sim.get("portfolio_ledger", []))
             _fresh_sim["last_routing_steps"] = list(_old_sim.get("last_routing_steps", []))
             _fresh_sim["last_routing_order_id"] = _old_sim.get("last_routing_order_id")
