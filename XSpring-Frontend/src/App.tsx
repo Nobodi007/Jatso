@@ -61,7 +61,9 @@ type PortfolioData = {
   holdings: PortfolioHolding[]
 }
 
-const API_BASE_URL = "https://xspring-api.onrender.com"
+const API_BASE_URL = String(
+  import.meta.env.VITE_API_BASE_URL || "https://xspring-api.onrender.com"
+).replace(/\/$/, "")
 const DEALER_API_KEY = String(import.meta.env.VITE_DEALER_API_KEY || "").trim()
 
 function formatTHB(value: number) {
