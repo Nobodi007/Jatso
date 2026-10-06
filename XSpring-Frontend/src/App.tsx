@@ -697,6 +697,61 @@ type OrderBookResponse = {
 
 const ORDERBOOK_ASSETS = ["BTC", "ETH", "SOL", "DOGE", "ADA", "HBAR", "LINK", "XLM", "XRP"]
 
+const COIN_LOGOS: Record<string, { slug: string; color: string }> = {
+  BTC: { slug: "bitcoin", color: "F7931A" },
+  ETH: { slug: "ethereum", color: "627EEA" },
+  SOL: { slug: "solana", color: "9945FF" },
+  DOGE: { slug: "dogecoin", color: "C2A633" },
+  ADA: { slug: "cardano", color: "0033AD" },
+  HBAR: { slug: "hedera", color: "000000" },
+  LINK: { slug: "chainlink", color: "2A5ADA" },
+  XLM: { slug: "stellar", color: "7D00FF" },
+  XRP: { slug: "ripple", color: "23292F" },
+}
+
+function CoinLogo({
+  asset,
+  size = 24,
+  className = "",
+}: {
+  asset: string
+  size?: number
+  className?: string
+}) {
+  const symbol = String(asset || "").toUpperCase()
+  const logo = COIN_LOGOS[symbol]
+  const [failed, setFailed] = useState(false)
+
+  if (!logo || failed) {
+    return (
+      <span
+        className={`inline-flex shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-bold text-foreground ${className}`}
+        style={{ width: size, height: size }}
+        aria-hidden="true"
+      >
+        {symbol.slice(0, 3)}
+      </span>
+    )
+  }
+
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center justify-center rounded-full bg-white ${className}`}
+      style={{ width: size, height: size }}
+    >
+      <img
+        src={`https://cdn.simpleicons.org/${logo.slug}/${logo.color}`}
+        alt=""
+        width={size - 4}
+        height={size - 4}
+        className="block"
+        onError={() => setFailed(true)}
+        aria-hidden="true"
+      />
+    </span>
+  )
+}
+
 function formatOrderBookPrice(value: number) {
   const n = Number(value || 0)
   if (!Number.isFinite(n) || n <= 0) return "—"
@@ -801,18 +856,26 @@ function OrderBookPage() {
           </p>
         </div>
 
-        <div className="flex max-w-full gap-2 overflow-x-auto pb-1">\n          {ORDERBOOK_ASSETS.map((item) => (
-            <button
-              key={item}
-              type="button"
-              onClick={() => setAsset(item)}
-              className={`shrink-0 rounded-lg border px-3 py-2 text-sm font-medium ${
-                asset === item ? "bg-primary text-primary-foreground" : "hover:bg-accent"
-              }`}
-            >
-              {item}/THB
-            </button>
-          ))}
+        <div className="flex max-w-full gap-2 overflow-x-auto pb-1">
+          {ORDERBOOK_ASSETS.map((item) => {
+            const active = asset === item
+            return (
+              <button
+                key={item}
+                type="button"
+                onClick={() => setAsset(item)}
+                aria-label={`${item}/THB`}
+                className={`flex shrink-0 items-center gap-2 rounded-xl border px-3.5 py-2 text-sm font-medium transition-all ${
+                  active
+                    ? "border-primary bg-primary text-primary-foreground shadow-sm"
+                    : "bg-card hover:bg-accent"
+                }`}
+              >
+                <CoinLogo asset={item} size={22} />
+                <span>{item}/THB</span>
+              </button>
+            )
+          })}
         </div>
       </div>
 
@@ -1121,7 +1184,10 @@ function Dashboard({
                       : "border hover:bg-accent"
                   }`}
                 >
-                  {symbol}
+                  <span className="flex items-center gap-1.5">
+                    <CoinLogo asset={symbol} size={18} />
+                    {symbol}
+                  </span>
                 </button>
               ))}
             </div>
@@ -1166,7 +1232,8 @@ function Dashboard({
                   onClick={() => setSelectedAsset(symbol)}
                   className="flex w-full items-center justify-between rounded-lg border px-3 py-3 text-left hover:bg-accent"
                 >
-                  <div>
+                  <div className="flex items-center gap-2">
+                    <CoinLogo asset={symbol} size={24} />
                     <div className="font-medium">{symbol}/THB</div>
                     <div className="text-xs text-muted-foreground">
                       {holding
@@ -1250,9 +1317,7 @@ function Dashboard({
                     className="flex w-full items-center justify-between rounded-lg px-3 py-3 text-left hover:bg-accent"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="flex size-9 items-center justify-center rounded-full bg-muted text-xs font-bold">
-                        {holding.asset.slice(0, 3)}
-                      </div>
+                      <CoinLogo asset={holding.asset} size={36} />
 
                       <div>
                         <div className="font-medium">{holding.asset}/THB</div>
@@ -1667,9 +1732,7 @@ function TradePage({
 
           {/* ASSET ICON */}
 
-          <div className="flex size-11 items-center justify-center rounded-full bg-muted text-lg font-bold">
-            {asset[0]}
-          </div>
+          <CoinLogo asset={asset} size={44} />
 
 
           {/* ASSET NAME */}
