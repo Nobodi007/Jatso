@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pathlib import Path
@@ -6,6 +6,8 @@ from threading import RLock
 from functools import lru_cache
 from typing import Optional
 import hmac
+import base64
+import hashlib
 import importlib.util
 import os
 import math
@@ -96,6 +98,8 @@ class OrderRequest(BaseModel):
     amount_thb: float
     # รับไว้เพื่อไม่ให้ frontend เดิมพัง แต่ server ไม่ใช้ค่านี้
     quote_thb: Optional[float] = None
+    # ช่องทางที่สร้างคำสั่ง: Web หรือ LINE
+    source: Optional[str] = "Web"
 
 
 # =========================================================
@@ -1321,7 +1325,12 @@ def create_order(order: OrderRequest):
                     if existing_id:
                         existing_ids.add(existing_id)
 
-            source = _order_source(rec)
+            requested_source = str(getattr(order, "source", "Web") or "Web").strip()
+            if requested_source.lower() == "line":
+                requested_source = "LINE"
+            elif requested_source.lower() == "web":
+                requested_source = "Web"
+            source = requested_source or _order_source(rec)
             order_id = _ensure_order_id(rec, source, existing_ids)
             rec["Order ID"] = order_id
             rec["order_id"] = order_id
@@ -1455,3 +1464,252 @@ def create_order(order: OrderRequest):
                     "error": str(e),
                 },
             )
+
+# =========================================================
+# LINE TRADING
+# =========================================================
+
+LINE_MAX_MESSAGE_LENGTH = 5000
+
+
+def _line_channel_secret() -> str:
+    return os.environ.get("LINE_CHANNEL_SECRET", "").strip()
+
+
+def _line_channel_access_token() -> str:
+    return os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
+
+
+def _verify_line_signature(body: bytes, signature: str) -> bool:
+    secret = _line_channel_secret()
+    if not secret or not signature:
+        return False
+
+    digest = hmac.new(
+        secret.encode("utf-8"),
+        body,
+        hashlib.sha256,
+    ).digest()
+    expected = base64.b64encode(digest).decode("ascii")
+    return hmac.compare_digest(expected, signature.strip())
+
+
+def _parse_line_trade_command(text: str):
+    """
+    Supported commands:
+        BUY BTC 1000
+        SELL BTC 1000
+
+    Also accepts Thai side words:
+        ซื้อ BTC 1000
+        ขาย BTC 1000
+
+    Optional comma separators are accepted:
+        BUY BTC,1000
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+
+    normalized = raw.replace(",", " ").replace("/", " ")
+    parts = [part for part in normalized.split() if part]
+    if len(parts) != 3:
+        return None
+
+    side_raw = parts[0].strip().lower()
+    side_map = {
+        "buy": "buy",
+        "ซื้อ": "buy",
+        "b": "buy",
+        "sell": "sell",
+        "ขาย": "sell",
+        "s": "sell",
+    }
+    side = side_map.get(side_raw)
+    if not side:
+        return None
+
+    asset = parts[1].upper().strip()
+    try:
+        amount = float(parts[2].replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+
+    if not math.isfinite(amount) or amount <= 0:
+        return None
+
+    return side, asset, amount
+
+
+def _line_help_text() -> str:
+    return (
+        "คำสั่งซื้อขาย\n"
+        "BUY BTC 1000 = ซื้อ BTC 1,000 บาท\n"
+        "SELL BTC 1000 = ขาย BTC 1,000 บาท\n\n"
+        "ใช้ได้กับ BTC / ETH / SOL / XRP และเหรียญที่ Engine รองรับ"
+    )
+
+
+def _line_order_result_text(result: dict) -> str:
+    status = str(result.get("status") or "").lower()
+    order_id = str(result.get("order_id") or "—")
+    asset = str(result.get("asset") or "—")
+    side = str(result.get("side") or "—").upper()
+    amount = _safe_float(result.get("amount_thb"), 0.0)
+    quantity = result.get("quantity")
+    quote = result.get("quote_thb")
+
+    if status == "filled":
+        lines = [
+            "✅ Order Filled",
+            f"Order ID: {order_id}",
+            f"{side} {asset}",
+            f"Amount: ฿{amount:,.2f}",
+        ]
+        if quantity is not None:
+            lines.append(f"Quantity: {float(quantity):,.8f}")
+        if quote is not None:
+            lines.append(f"Executed Price: ฿{float(quote):,.2f}")
+        lines.append("Source: LINE")
+        return "\n".join(lines)
+
+    if status == "rejected":
+        return (
+            "❌ Order Rejected\n"
+            f"Order ID: {order_id}\n"
+            f"{side} {asset}\n"
+            f"Amount: ฿{amount:,.2f}"
+        )
+
+    return "❌ ไม่สามารถดำเนินการ Order ได้"
+
+
+def _line_reply(reply_token: str, messages: list[dict]):
+    token = _line_channel_access_token()
+    if not token:
+        raise RuntimeError("ยังไม่ได้ตั้ง LINE_CHANNEL_ACCESS_TOKEN")
+
+    payload = json.dumps({
+        "replyToken": reply_token,
+        "messages": messages[:5],
+    }).encode("utf-8")
+
+    request = urllib.request.Request(
+        "https://api.line.me/v2/bot/message/reply",
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return response.read().decode("utf-8")
+
+
+@app.get("/api/line/webhook")
+def line_webhook_health():
+    return {
+        "status": "ok",
+        "service": "LINE Trading",
+        "webhook": "POST /api/line/webhook",
+        "configured": bool(_line_channel_secret() and _line_channel_access_token()),
+    }
+
+
+@app.post("/api/line/webhook")
+async def line_webhook(request: Request):
+    body = await request.body()
+    signature = request.headers.get("x-line-signature", "")
+
+    # LINE signature verification is mandatory. Do not expose the endpoint
+    # through the dealer API-key dependency because LINE itself calls it.
+    if not _verify_line_signature(body, signature):
+        raise HTTPException(status_code=401, detail="Invalid LINE signature")
+
+    if not _line_channel_access_token():
+        raise HTTPException(
+            status_code=503,
+            detail="ยังไม่ได้ตั้ง LINE_CHANNEL_ACCESS_TOKEN",
+        )
+
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise HTTPException(status_code=400, detail="LINE webhook payload ไม่ถูกต้อง")
+
+    events = payload.get("events") or []
+
+    # LINE may retry a webhook. Processing is kept serialized by the same
+    # ORDER_LOCK used by Web orders so portfolio writes cannot race.
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+
+        if event.get("type") != "message":
+            continue
+        message = event.get("message") or {}
+        if message.get("type") != "text":
+            continue
+
+        reply_token = str(event.get("replyToken") or "").strip()
+        text = str(message.get("text") or "").strip()
+        if not reply_token:
+            continue
+
+        if text.lower() in {"help", "menu", "คำสั่ง", "ช่วย", "ช่วยเหลือ"}:
+            _line_reply(reply_token, [{"type": "text", "text": _line_help_text()}])
+            continue
+
+        command = _parse_line_trade_command(text)
+        if command is None:
+            _line_reply(
+                reply_token,
+                [{
+                    "type": "text",
+                    "text": (
+                        "ไม่เข้าใจคำสั่ง\n\n"
+                        "ตัวอย่าง: BUY BTC 1000\n"
+                        "พิมพ์ HELP เพื่อดูคำสั่ง"
+                    ),
+                }],
+            )
+            continue
+
+        side, asset, amount_thb = command
+
+        try:
+            result = create_order(
+                OrderRequest(
+                    asset=asset,
+                    side=side,
+                    amount_thb=amount_thb,
+                    source="LINE",
+                )
+            )
+            reply_text = _line_order_result_text(result)
+        except HTTPException as exc:
+            detail = exc.detail
+            if isinstance(detail, dict):
+                message_text = str(
+                    detail.get("message")
+                    or detail.get("error")
+                    or "Order ไม่สำเร็จ"
+                )
+            else:
+                message_text = str(detail or "Order ไม่สำเร็จ")
+            reply_text = f"❌ Order ไม่สำเร็จ\n{message_text}"
+        except Exception as exc:
+            reply_text = f"❌ ระบบขัดข้อง: {type(exc).__name__}: {exc}"
+
+        if len(reply_text) > LINE_MAX_MESSAGE_LENGTH:
+            reply_text = reply_text[: LINE_MAX_MESSAGE_LENGTH - 3] + "..."
+
+        _line_reply(
+            reply_token,
+            [{"type": "text", "text": reply_text}],
+        )
+
+    return {"status": "ok"}
+
