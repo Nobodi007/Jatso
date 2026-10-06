@@ -1028,6 +1028,47 @@ def engine_status():
 # GET PORTFOLIO
 # =========================================================
 
+
+@app.get("/api/markets", dependencies=[Depends(require_api_key)])
+def markets():
+    """Return a live THB market snapshot for the frontend."""
+    symbols = ("BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "AVAX", "DOT", "LINK", "TRX", "MATIC", "TON")
+    url = "https://api.bitkub.com/api/market/ticker"
+    try:
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Dealer-Suite/1.0", "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("Bitkub ticker response ไม่ถูกต้อง")
+
+        rows = []
+        for asset in symbols:
+            raw = payload.get(f"THB_{asset}") or payload.get(f"{asset}_THB")
+            if not isinstance(raw, dict):
+                continue
+            last = _safe_float(raw.get("last"))
+            if last <= 0:
+                continue
+            rows.append({
+                "asset": asset,
+                "symbol": f"{asset}/THB",
+                "name": asset,
+                "price": last,
+                "change_24h": _safe_float(raw.get("percentChange")),
+                "high_24h": _safe_float(raw.get("high24hr")),
+                "low_24h": _safe_float(raw.get("low24hr")),
+                "volume": _safe_float(raw.get("baseVolume")),
+                "bid": _safe_float(raw.get("highestBid")),
+                "ask": _safe_float(raw.get("lowestAsk")),
+            })
+        return {"status": "ok", "source": "Bitkub", "markets": rows}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"โหลด Market Data ไม่สำเร็จ: {exc}")
+
+
 @app.get("/api/portfolio", dependencies=[Depends(require_api_key)])
 def portfolio():
     with ORDER_LOCK:
