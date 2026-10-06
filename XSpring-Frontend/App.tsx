@@ -2670,10 +2670,20 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
 
               <tbody>
                 {orders.map((order, index) => {
-                  const side = String(order.side || "").toUpperCase()
-                  const status = String(order.status || "").toLowerCase()
-                  const timestamp = order.timestamp || order.date
-                  const key = order.order_id || `${timestamp || "order"}-${index}`
+                  const row: any = order as any
+                  const side = String(
+                    row.side || row.Side || row["ฝั่ง"] || ""
+                  ).toUpperCase()
+                  const status = String(
+                    row.status || row.Status || row["สถานะ"] || ""
+                  ).toLowerCase()
+                  const timestamp =
+                    row.timestamp || row.time || row.execution_time || row.date
+                  const orderId =
+                    row.order_id || row.orderId || row["Order ID"] || row.id || ""
+                  const exchange =
+                    row.exchange || row.Exchange || row.exchange_name || "Bitkub"
+                  const key = orderId || `${timestamp || "order"}-${index}`
 
                   return (
                     <tr
@@ -2737,11 +2747,11 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
                       </td>
 
                       <td className="px-3 py-4 text-xs">
-                        {order.exchange || order.source || "—"}
+                        {exchange || row.source || "—"}
                       </td>
 
                       <td className="max-w-[180px] truncate px-3 py-4 font-mono text-[10px] text-muted-foreground">
-                        {order.order_id || "—"}
+                        {orderId || "—"}
                       </td>
 
                       <td className="px-3 py-4 text-right">
