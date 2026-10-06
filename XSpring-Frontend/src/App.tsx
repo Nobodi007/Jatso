@@ -798,8 +798,7 @@ function OrderBookPage() {
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          {ORDERBOOK_ASSETS.map((item) => (
+        <div className="flex max-w-full gap-2 overflow-x-auto pb-1">\n          {ORDERBOOK_ASSETS.map((item) => (
             <button
               key={item}
               type="button"
