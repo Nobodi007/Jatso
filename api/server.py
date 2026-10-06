@@ -126,6 +126,32 @@ def _bangkok_now():
     return pd.Timestamp.now(tz=BANGKOK_TZ)
 
 
+def _fix_legacy_order_display_time(value):
+    """
+    Compatibility for historical orders created before the timezone fix.
+    Those records can contain a Bangkok-looking timestamp that is exactly
+    two hours in the future. Execution orders are created immediately, so an
+    execution timestamp materially in the future is treated as legacy +2h.
+    New orders have an explicit +07:00 timestamp and are never shifted unless
+    they are actually in the future.
+    """
+    normalized = _normalize_bangkok_timestamp(value, default=None)
+    if not normalized:
+        return normalized
+    try:
+        ts = pd.Timestamp(normalized)
+        now = _bangkok_now()
+        delta = ts - now
+        # Legacy records observed in this app are +2 hours ahead.
+        # Allow a small clock skew around the exact 2h offset.
+        if pd.Timedelta(hours=1, minutes=30) <= delta <= pd.Timedelta(hours=2, minutes=30):
+            ts = ts - pd.Timedelta(hours=2)
+            return ts.isoformat()
+    except Exception:
+        pass
+    return normalized
+
+
 def _normalize_bangkok_timestamp(value, default=None):
     """
     Convert an order timestamp to an explicit Asia/Bangkok ISO timestamp.
@@ -965,9 +991,8 @@ def order_history(limit: int = 100, asset: str = ""):
                     0.0,
                 )
 
-                normalized_timestamp = _normalize_bangkok_timestamp(
-                    timestamp or order.get("วันที่") or "",
-                    default=None,
+                normalized_timestamp = _fix_legacy_order_display_time(
+                    timestamp or order.get("วันที่") or ""
                 )
 
                 rows.append({
