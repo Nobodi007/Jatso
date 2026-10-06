@@ -53,6 +53,40 @@ app.add_middleware(
 GU_PATH = Path(__file__).resolve().parent.parent / "gu.py"
 
 ORDER_LOCK = RLock()
+# Optional idempotency protection for order retries/double-clicks.
+_IDEMPOTENCY_LOCK = RLock()
+_IDEMPOTENCY_RESULTS = {}
+_IDEMPOTENCY_TTL_SECONDS = 10 * 60
+
+def _cleanup_idempotency_cache(now: float) -> None:
+    expired = [
+        key for key, item in _IDEMPOTENCY_RESULTS.items()
+        if now - item["created_at"] >= _IDEMPOTENCY_TTL_SECONDS
+    ]
+    for key in expired:
+        _IDEMPOTENCY_RESULTS.pop(key, None)
+
+def _get_idempotent_result(actor: str, key: str):
+    if not key:
+        return None
+    now = time.monotonic()
+    cache_key = (str(actor), str(key))
+    with _IDEMPOTENCY_LOCK:
+        _cleanup_idempotency_cache(now)
+        item = _IDEMPOTENCY_RESULTS.get(cache_key)
+        return item["result"] if item else None
+
+def _store_idempotent_result(actor: str, key: str, result: dict) -> None:
+    if not key:
+        return
+    now = time.monotonic()
+    with _IDEMPOTENCY_LOCK:
+        _cleanup_idempotency_cache(now)
+        _IDEMPOTENCY_RESULTS[(str(actor), str(key))] = {
+            "created_at": now,
+            "result": result,
+        }
+
 
 
 # Lightweight in-memory API rate limiter.
@@ -1240,13 +1274,27 @@ def order_history(limit: int = 100, asset: str = ""):
 # =========================================================
 
 @app.post("/api/order", dependencies=[Depends(require_api_key)])
-def create_order(order: OrderRequest):
+def create_order(
+    order: OrderRequest,
+    idempotency_key: str = Header(default="", alias="Idempotency-Key"),
+):
     with ORDER_LOCK:
         try:
             gu = load_gu()
 
             actor = _actor()
             _sync_gu_actor(gu, actor)
+
+            idempotency_key = str(idempotency_key or "").strip()
+            if len(idempotency_key) > 200:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Idempotency-Key ยาวเกินกำหนด",
+                )
+
+            cached_result = _get_idempotent_result(actor, idempotency_key)
+            if cached_result is not None:
+                return cached_result
 
             role = _set_api_role(gu, actor)
 
@@ -1478,7 +1526,7 @@ def create_order(order: OrderRequest):
             # -------------------------------------------------
 
             if result.lower().startswith("reject"):
-                return {
+                rejected_response = {
                     "status": "rejected",
                     "asset": asset,
                     "side": side,
@@ -1486,6 +1534,8 @@ def create_order(order: OrderRequest):
                     "order": rec,
                     "steps": steps,
                 }
+                _store_idempotent_result(actor, idempotency_key, rejected_response)
+                return rejected_response
 
             # -------------------------------------------------
             # SAVE ONLY AFTER SUCCESS
@@ -1518,7 +1568,7 @@ def create_order(order: OrderRequest):
             # SUCCESS
             # -------------------------------------------------
 
-            return {
+            filled_response = {
                 "status": "filled",
                 "actor": actor,
                 "asset": asset,
@@ -1530,6 +1580,8 @@ def create_order(order: OrderRequest):
                 "steps": steps,
                 "portfolio": _portfolio_response(gu, sim, px_row),
             }
+            _store_idempotent_result(actor, idempotency_key, filled_response)
+            return filled_response
 
         except HTTPException:
             raise
