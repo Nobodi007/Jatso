@@ -710,6 +710,8 @@ const COIN_LOGOS: Record<string, { slug: string; color: string }> = {
   LINK: { slug: "chainlink", color: "2A5ADA" },
   XLM: { slug: "stellar", color: "7D00FF" },
   XRP: { slug: "ripple", color: "23292F" },
+  USDC: { slug: "usdcoin", color: "2775CA" },
+  USDT: { slug: "tether", color: "26A17B" },
 }
 
 function CoinLogo({
@@ -2704,11 +2706,16 @@ function PositionsPage({
                       className="border-b last:border-0 hover:bg-accent/40"
                     >
                       <td className="px-4 py-4">
-                        <div className="font-semibold">
-                          {holding.asset}
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          {holding.asset}/THB
+                        <div className="flex items-center gap-3">
+                          <CoinLogo asset={holding.asset} size={34} />
+                          <div>
+                            <div className="font-semibold">
+                              {holding.asset}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {holding.asset}/THB
+                            </div>
+                          </div>
                         </div>
                       </td>
 
