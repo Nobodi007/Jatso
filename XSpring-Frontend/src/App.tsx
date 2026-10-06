@@ -2307,7 +2307,7 @@ function PortfolioPage({
         <StatCard
           title="Total Portfolio"
           value={portfolio ? formatTHB(portfolio.total_value_thb) : "—"}
-          change={portfolio ? "??????????????????" : "กำลังโหลด"}
+          change={portfolio ? "มูลค่าพอร์ตรวม" : "กำลังโหลด"}
         />
 
         <StatCard
