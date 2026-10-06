@@ -115,6 +115,42 @@ def _safe_float(value, default=0.0):
 
 
 # =========================================================
+# TIMEZONE
+# =========================================================
+# Server/frontend ใช้เวลาไทยเป็นมาตรฐานเดียวกัน
+# ทุก timestamp ที่สร้างจาก API จะมี +07:00 ติดไปด้วย
+BANGKOK_TZ = "Asia/Bangkok"
+
+
+def _bangkok_now():
+    return pd.Timestamp.now(tz=BANGKOK_TZ)
+
+
+def _normalize_bangkok_timestamp(value, default=None):
+    """
+    Convert an order timestamp to an explicit Asia/Bangkok ISO timestamp.
+    - tz-aware values: convert to Bangkok
+    - tz-naive/date-only values: treat them as Bangkok time (legacy records)
+    """
+    if value is None or str(value).strip() == "":
+        return default
+
+    try:
+        ts = pd.to_datetime(value, errors="coerce")
+        if pd.isna(ts):
+            return default
+
+        if getattr(ts, "tzinfo", None) is None:
+            ts = ts.tz_localize(BANGKOK_TZ)
+        else:
+            ts = ts.tz_convert(BANGKOK_TZ)
+
+        return ts.isoformat()
+    except Exception:
+        return default
+
+
+# =========================================================
 # ACTOR
 # =========================================================
 
@@ -718,9 +754,7 @@ def orderbook(
             "symbol": symbol,
             "quote": "USDT",
             "usdthb": usdthb,
-            "timestamp": pd.Timestamp.now(
-                tz="Asia/Bangkok"
-            ).isoformat(),
+            "timestamp": _bangkok_now().isoformat(),
             "best_bid_usd": best_bid,
             "best_ask_usd": best_ask,
             "mid_price_usd": mid_price_usd,
@@ -826,7 +860,9 @@ def portfolio():
                 "status": "ok",
                 "actor": actor,
                 "asset": asset,
-                "as_of": order_date.isoformat(),
+                "as_of": _normalize_bangkok_timestamp(
+                    order_date.strftime("%Y-%m-%d")
+                ),
                 "portfolio": _portfolio_response(gu, sim, px_row),
             }
 
@@ -929,9 +965,14 @@ def order_history(limit: int = 100, asset: str = ""):
                     0.0,
                 )
 
+                normalized_timestamp = _normalize_bangkok_timestamp(
+                    timestamp or order.get("วันที่") or "",
+                    default=None,
+                )
+
                 rows.append({
                     "order_id": order_id,
-                    "timestamp": timestamp,
+                    "timestamp": normalized_timestamp or "",
                     "date": order.get("วันที่") or "",
                     "asset": row_asset,
                     "side": side,
@@ -960,14 +1001,17 @@ def order_history(limit: int = 100, asset: str = ""):
                     if not value:
                         ts = pd.Timestamp("1970-01-01", tz="UTC")
                     else:
-                        ts = pd.to_datetime(
-                            value,
-                            errors="coerce",
-                            utc=True,
-                        )
+                        normalized = _normalize_bangkok_timestamp(value)
+                        if normalized:
+                            ts = pd.Timestamp(normalized)
+                        else:
+                            ts = pd.Timestamp("1970-01-01", tz=BANGKOK_TZ)
 
                         if pd.isna(ts):
-                            ts = pd.Timestamp("1970-01-01", tz="UTC")
+                            ts = pd.Timestamp("1970-01-01", tz=BANGKOK_TZ)
+
+                        # Compare everything on the same timezone.
+                        ts = ts.tz_convert("UTC")
 
                     return (ts, original_index)
                 except Exception:
@@ -1163,7 +1207,7 @@ def create_order(order: OrderRequest):
 
             # Keep order_date for market/portfolio calculations.
             # execution_time is the REAL time this API accepted the order.
-            execution_time = pd.Timestamp.now(tz="Asia/Bangkok")
+            execution_time = _bangkok_now()
 
             steps, rec = gu.execute_order(
                 sim,
