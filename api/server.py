@@ -25,7 +25,7 @@ import pandas as pd
 
 app = FastAPI(
     title="Dealer Suite API",
-    version="1.3.0",
+    version="1.4.0",
 )
 
 
