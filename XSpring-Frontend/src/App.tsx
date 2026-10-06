@@ -87,37 +87,6 @@ function formatApiError(
   rawText = ""
 ) {
   const status = response.status
-          throw new Error(formatApiError(response, body, "โหลด Order Book ไม่สำเร็จ"))
-
-  if (status === 400) return detailMessage || `${fallback} — ข้อมูลคำสั่งไม่ถูกต้อง`
-  if (status === 401) return `${fallback} — ไม่ได้รับอนุญาต (API Key ไม่ถูกต้องหรือหมดอายุ)`
-  if (status === 403) return `${fallback} — ไม่มีสิทธิ์ทำรายการนี้`
-  if (status === 409) return `${fallback} — Idempotency-Key ถูกใช้กับคำสั่งคนละรายการ`
-  if (status === 422) return detailMessage || `${fallback} — รูปแบบข้อมูลไม่ถูกต้อง`
-  if (status === 429) {
-    const retry = Number(detail?.retry_after_seconds || response.headers.get("Retry-After") || 0)
-    return `${fallback} — ส่งคำขอถี่เกินไป${retry > 0 ? ` กรุณารอ ${retry} วินาที` : " กรุณารอสักครู่"}`
-  }
-  if (status === 503) return detailMessage || `${fallback} — Backend/Market Data ยังไม่พร้อม กรุณาลองใหม่`
-
-  return detailMessage || rawText || `${fallback} (HTTP ${status})`
-}
-
-function formatNetworkError(error: unknown, fallback: string) {
-  if (error instanceof TypeError) {
-    return `${fallback} — เชื่อมต่อ Backend ไม่สำเร็จ กรุณาตรวจ API URL / Network`
-  }
-  return error instanceof Error ? error.message : fallback
-}
-
-
-function formatApiError(
-  response: Response,
-  body: any,
-  fallback: string,
-  rawText = ""
-) {
-  const status = response.status
   const detail = body?.detail
   const detailMessage =
     typeof detail === "string"
@@ -883,12 +852,8 @@ function OrderBookPage() {
         const body = await response.json().catch(() => ({}))
 
         if (!response.ok || body?.status !== "ok") {
-          const detail = body?.detail
-          throw new Error(
-            typeof detail === "string"
-              ? detail
-              : detail?.message || `โหลด Order Book ไม่สำเร็จ (${response.status})`
-          )
+          throw new Error(formatApiError(response, body, "โหลด Order Book ไม่สำเร็จ"))
+      }
         }
 
         if (!cancelled) {
