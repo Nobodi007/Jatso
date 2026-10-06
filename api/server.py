@@ -1,11 +1,14 @@
-from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from pathlib import Path
 from threading import RLock
+from collections import defaultdict, deque
 from functools import lru_cache
 from typing import Optional
 import hmac
+import hashlib
+import time
 import importlib.util
 import os
 import math
@@ -52,6 +55,45 @@ GU_PATH = Path(__file__).resolve().parent.parent / "gu.py"
 ORDER_LOCK = RLock()
 
 
+# Lightweight in-memory API rate limiter.
+_RATE_LIMIT_LOCK = RLock()
+_RATE_LIMIT_BUCKETS = defaultdict(deque)
+_RATE_LIMIT_WINDOW_SECONDS = 60.0
+_RATE_LIMIT_GENERAL = 120
+_RATE_LIMIT_ORDER = 30
+
+
+def _rate_limit_key(request: Request, x_api_key: str) -> str:
+    host = request.client.host if request.client else "unknown"
+    fingerprint = hashlib.sha256(str(x_api_key).encode("utf-8")).hexdigest()[:16]
+    return f"{host}:{fingerprint}"
+
+
+def _check_rate_limit(request: Request, x_api_key: str) -> None:
+    limit = _RATE_LIMIT_ORDER if request.url.path == "/api/order" else _RATE_LIMIT_GENERAL
+    now = time.monotonic()
+    key = _rate_limit_key(request, x_api_key)
+
+    with _RATE_LIMIT_LOCK:
+        bucket = _RATE_LIMIT_BUCKETS[key]
+        cutoff = now - _RATE_LIMIT_WINDOW_SECONDS
+        while bucket and bucket[0] <= cutoff:
+            bucket.popleft()
+
+        if len(bucket) >= limit:
+            retry_after = max(1, int(_RATE_LIMIT_WINDOW_SECONDS - (now - bucket[0])))
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "message": "คำขอมากเกินไป กรุณารอสักครู่แล้วลองใหม่",
+                    "retry_after_seconds": retry_after,
+                },
+                headers={"Retry-After": str(retry_after)},
+            )
+
+        bucket.append(now)
+
+
 @lru_cache(maxsize=1)
 def load_gu():
     """
@@ -78,11 +120,20 @@ def load_gu():
 # AUTH
 # =========================================================
 
-def require_api_key(x_api_key: str = Header(default="")):
+def require_api_key(
+    request: Request,
+    x_api_key: str = Header(default=""),
+):
     expected = os.environ.get("DEALER_API_KEY", "").strip()
 
-    if not expected or not hmac.compare_digest(x_api_key, expected):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    if not expected or not x_api_key or not hmac.compare_digest(x_api_key, expected):
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+
+    _check_rate_limit(request, x_api_key)
 
 
 # =========================================================
@@ -900,7 +951,7 @@ def health():
 # ENGINE STATUS
 # =========================================================
 
-@app.get("/api/engine/status")
+@app.get("/api/engine/status", dependencies=[Depends(require_api_key)])
 def engine_status():
     try:
         gu = load_gu()
@@ -929,7 +980,7 @@ def engine_status():
 # GET PORTFOLIO
 # =========================================================
 
-@app.get("/api/portfolio")
+@app.get("/api/portfolio", dependencies=[Depends(require_api_key)])
 def portfolio():
     with ORDER_LOCK:
         try:
