@@ -1418,6 +1418,26 @@ def create_order(order: OrderRequest):
             if transaction_id:
                 target["transaction_id"] = transaction_id
 
+            # -------------------------------------------------
+            # FORCE-PERSIST TRADING FEE
+            # -------------------------------------------------
+            # execute_order() already calculates the local trading fee.
+            # Keep that exact value on the API ledger so LINE/Web Order
+            # History never falls back to 0 just because one record used
+            # the legacy Thai field name. If a legacy engine record omitted
+            # the fee entirely, calculate the configured 0.25% fee once.
+            raw_fee = target.get("fee_thb")
+            if raw_fee is None:
+                raw_fee = target.get("ค่าธรรมเนียม")
+            fee_thb = _safe_float(raw_fee, 0.0)
+            if fee_thb <= 0.0:
+                fee_rate = _safe_float(getattr(gu, "LOCAL_TRADING_FEE_PCT", 0.0025), 0.0025)
+                fee_thb = max(0.0, amount_thb * fee_rate)
+            target["fee_thb"] = fee_thb
+            target["ค่าธรรมเนียม"] = fee_thb
+            rec["fee_thb"] = fee_thb
+            rec["ค่าธรรมเนียม"] = fee_thb
+
             result = str(rec.get("ผลด่าน", ""))
 
             # -------------------------------------------------
