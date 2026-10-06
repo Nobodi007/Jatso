@@ -458,28 +458,79 @@ def _load_existing_sim(gu):
 # =========================================================
 
 def _fetch_bitkub_ticker_prices(assets: set[str]) -> dict[str, float]:
-    """Fetch current THB prices directly from Bitkub public ticker."""
+    """Fetch current THB prices directly from Bitkub public ticker.
+
+    Prefer one all-market request so a temporary per-symbol response format
+    cannot silently turn a real holding into price=0 (which would look like
+    a -100% portfolio). Fall back to per-symbol requests only when needed.
+    """
+    requested = {
+        str(a).upper().strip()
+        for a in assets
+        if str(a).upper().strip() and str(a).upper().strip() != "THB"
+    }
     prices: dict[str, float] = {}
     url = "https://api.bitkub.com/api/market/ticker"
 
-    for raw_asset in sorted({str(a).upper().strip() for a in assets if a}):
-        if raw_asset == "THB":
-            continue
+    def _parse_payload(payload):
+        if not isinstance(payload, dict):
+            return
+
+        for key, row in payload.items():
+            if not isinstance(row, dict):
+                continue
+
+            symbol = str(key).upper().strip()
+            if symbol.startswith("THB_"):
+                asset = symbol[4:]
+            elif symbol.endswith("_THB"):
+                asset = symbol[:-4]
+            else:
+                continue
+
+            if asset not in requested:
+                continue
+
+            value = _safe_float(row.get("last"))
+            if value > 0:
+                prices[asset] = value
+
+    # Primary path: Bitkub returns the public ticker map in one request.
+    try:
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Dealer-Suite/1.0",
+                "Accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        _parse_payload(payload)
+    except Exception as exc:
+        print(f"[portfolio] Bitkub all-ticker request failed: {exc}")
+
+    # Fallback: request any still-missing asset explicitly.
+    for asset in sorted(requested - set(prices)):
         try:
-            params = urllib.parse.urlencode({"sym": f"THB_{raw_asset}"})
+            params = urllib.parse.urlencode({"sym": f"THB_{asset}"})
             request = urllib.request.Request(
                 f"{url}?{params}",
-                headers={"User-Agent": "Dealer-Suite/1.0", "Accept": "application/json"},
+                headers={
+                    "User-Agent": "Dealer-Suite/1.0",
+                    "Accept": "application/json",
+                },
             )
             with urllib.request.urlopen(request, timeout=8) as response:
                 payload = json.loads(response.read().decode("utf-8"))
-            row = payload.get(f"THB_{raw_asset}") or payload.get(f"{raw_asset}_THB")
+
+            row = payload.get(f"THB_{asset}") or payload.get(f"{asset}_THB")
             if isinstance(row, dict):
                 value = _safe_float(row.get("last"))
                 if value > 0:
-                    prices[raw_asset] = value
+                    prices[asset] = value
         except Exception as exc:
-            print(f"[portfolio] Bitkub price failed for {raw_asset}: {exc}")
+            print(f"[portfolio] Bitkub price failed for {asset}: {exc}")
 
     return prices
 
