@@ -12,7 +12,6 @@ import math
 import json
 import urllib.parse
 import urllib.request
-import uuid
 
 import pandas as pd
 
@@ -94,11 +93,8 @@ class OrderRequest(BaseModel):
     asset: str
     side: str
     amount_thb: float
-    # รับไว้เพื่อให้ frontend/LINE สามารถส่ง metadata ของ order ได้
+    # รับไว้เพื่อไม่ให้ frontend เดิมพัง แต่ server ไม่ใช้ค่านี้
     quote_thb: Optional[float] = None
-    order_id: Optional[str] = None
-    source: Optional[str] = None
-    exchange: Optional[str] = None
 
 
 # =========================================================
@@ -848,6 +844,46 @@ def portfolio():
 
 
 # =========================================================
+# ORDER TIMESTAMP NORMALIZATION
+# =========================================================
+
+BANGKOK_TZ = "Asia/Bangkok"
+
+def _display_order_timestamp(value):
+    """Return an order timestamp in Bangkok time.
+
+    New records contain an explicit timezone and are left untouched.
+    Legacy records in this ledger may have been written with a +2 hour
+    clock error; only timestamps that are implausibly in the future are
+    shifted back two hours for display. This also handles midnight rollover.
+    """
+    if value in (None, ""):
+        return ""
+    raw = str(value).strip()
+    try:
+        ts = pd.to_datetime(raw, errors="coerce")
+        if pd.isna(ts):
+            return raw
+
+        now = pd.Timestamp.now(tz=BANGKOK_TZ)
+
+        if getattr(ts, "tzinfo", None) is None:
+            # Naive legacy timestamps are interpreted as Bangkok local time.
+            ts = ts.tz_localize(BANGKOK_TZ)
+        else:
+            ts = ts.tz_convert(BANGKOK_TZ)
+
+        # The affected legacy rows are exactly two hours ahead of the real
+        # Bangkok clock. Do not touch valid current/past timestamps.
+        if ts > now + pd.Timedelta(minutes=5) and ts - pd.Timedelta(hours=2) <= now + pd.Timedelta(minutes=5):
+            ts = ts - pd.Timedelta(hours=2)
+
+        return ts.isoformat()
+    except Exception:
+        return raw
+
+
+# =========================================================
 # ORDER HISTORY
 # =========================================================
 
@@ -896,37 +932,18 @@ def order_history(limit: int = 100, asset: str = ""):
                 order_id = str(
                     order.get("Order ID")
                     or order.get("order_id")
-                    or order.get("orderId")
-                    or order.get("OrderId")
                     or order.get("id")
-                    or order.get("LINE Order ID")
-                    or order.get("line_order_id")
-                    or f"LEGACY-{idx + 1:06d}"
-                ).strip()
+                    or f"ORDER-{idx + 1:06d}"
+                )
 
-                # Prefer a full timestamp over the legacy date-only `เวลา` field.
-                # Some historical records contain both:
-                #   เวลา      = 2026-10-05          (date only)
-                #   timestamp = 2026-10-05T04:10:08+07:00 (real execution time)
-                # If `เวลา` is chosen first, the frontend can only show the date.
-                timestamp_candidates = [
-                    order.get("timestamp"),
-                    order.get("time"),
-                    order.get("เวลา"),
-                    order.get("วันที่"),
-                ]
-                timestamp = ""
-                for candidate in timestamp_candidates:
-                    value = str(candidate or "").strip()
-                    if not value:
-                        continue
-                    # Keep the first value that contains an actual time component.
-                    # ISO timestamps normally contain T/space plus HH:MM:SS.
-                    if "T" in value or (" " in value and ":" in value):
-                        timestamp = value
-                        break
-                    if not timestamp:
-                        timestamp = value
+                timestamp = (
+                    order.get("เวลา")
+                    or order.get("timestamp")
+                    or order.get("time")
+                    or order.get("วันที่")
+                    or ""
+                )
+                timestamp = _display_order_timestamp(timestamp)
 
                 amount = _safe_float(
                     order.get("มูลค่า (บาท)")
@@ -1215,61 +1232,9 @@ def create_order(order: OrderRequest):
             # เก็บเวลา execution จริงลงทั้ง rec และรายการที่ engine append
             # เข้า sim["orders"] โดยตรง เพื่อให้ /api/orders อ่านค่าจริงได้แน่นอน
             execution_iso = execution_time.isoformat()
-
-            # -------------------------------------------------
-            # ORDER ID / SOURCE / EXCHANGE
-            # -------------------------------------------------
-            # Engine บางเวอร์ชันไม่ได้สร้าง Order ID ให้เอง
-            # จึงสร้าง ID ที่ไม่ซ้ำที่ API boundary เสมอ
-            # และเปิดทางให้ LINE ส่ง ID ของตัวเองเข้ามาได้ในอนาคต
-            requested_order_id = str(order.order_id or "").strip()
-            existing_order_id = str(
-                rec.get("Order ID")
-                or rec.get("order_id")
-                or rec.get("orderId")
-                or rec.get("id")
-                or ""
-            ).strip()
-
-            final_order_id = requested_order_id or existing_order_id
-            if not final_order_id:
-                final_order_id = (
-                    f"WEB-{execution_time.strftime('%Y%m%d-%H%M%S')}-"
-                    f"{uuid.uuid4().hex[:8].upper()}"
-                )
-
-            source = str(
-                order.source
-                or rec.get("Source")
-                or rec.get("source")
-                or "Web"
-            ).strip() or "Web"
-
-            exchange = str(
-                order.exchange
-                or rec.get("Exchange")
-                or rec.get("exchange")
-                or "Bitkub"
-            ).strip() or "Bitkub"
-
-            rec["Order ID"] = final_order_id
-            rec["order_id"] = final_order_id
             rec["เวลา"] = execution_iso
             rec["timestamp"] = execution_iso
             rec["วันที่"] = execution_time.strftime("%Y-%m-%d")
-            rec["Source"] = source
-            rec["source"] = source
-            rec["Exchange"] = exchange
-            rec["exchange"] = exchange
-            rec["Asset"] = asset
-            rec["asset"] = asset
-            rec["Side"] = side
-            rec["side"] = side
-            rec["Status"] = str(
-                rec.get("Status")
-                or rec.get("สถานะ")
-                or "Filled"
-            )
 
             # execute_order() บางเวอร์ชันอาจ append สำเนา rec เข้า ledger
             # ดังนั้นแก้ entry ใน sim["orders"] โดยตรงด้วย
@@ -1280,7 +1245,7 @@ def create_order(order: OrderRequest):
                     or rec.get("order_id")
                     or rec.get("id")
                     or ""
-                ).strip()
+                )
                 target = None
                 if rec_order_id:
                     for ledger_order in reversed(ledger_orders):
@@ -1298,19 +1263,9 @@ def create_order(order: OrderRequest):
                     target = ledger_orders[-1]
 
                 if target is not None:
-                    target["Order ID"] = final_order_id
-                    target["order_id"] = final_order_id
                     target["เวลา"] = execution_iso
                     target["timestamp"] = execution_iso
                     target["วันที่"] = execution_time.strftime("%Y-%m-%d")
-                    target["Source"] = source
-                    target["source"] = source
-                    target["Exchange"] = exchange
-                    target["exchange"] = exchange
-                    target["Asset"] = asset
-                    target["asset"] = asset
-                    target["Side"] = side
-                    target["side"] = side
 
             result = str(rec.get("ผลด่าน", ""))
 
