@@ -2692,7 +2692,6 @@ type OrderHistoryRow = {
   fee_thb?: number
   exchange?: string
   source?: string
-  has_execution_time?: boolean
 }
 
 function formatOrderDate(value?: string) {
@@ -2700,13 +2699,15 @@ function formatOrderDate(value?: string) {
 
   const raw = String(value).trim()
 
-  // Legacy records may contain only YYYY-MM-DD. Keep them as a date only;
-  // never let JavaScript convert UTC midnight into a fake Thai time.
+  // Legacy orders may contain only YYYY-MM-DD. Do NOT parse these as a
+  // JavaScript Date because UTC midnight becomes 07:00 in Thailand.
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
     const [year, month, day] = raw.split("-")
     return `${day}/${month}/${Number(year) + 543}`
   }
 
+  // Prefer explicit ISO/offset timestamps. The backend now sends the
+  // real execution timestamp before any legacy date-only field.
   const d = new Date(raw)
   if (Number.isNaN(d.getTime())) return raw
 
@@ -2719,23 +2720,6 @@ function formatOrderDate(value?: string) {
     minute: "2-digit",
     second: "2-digit",
   })
-}
-
-function formatOrderDateTime(order: OrderHistoryRow) {
-  if (order.timestamp && order.has_execution_time !== false) {
-    return formatOrderDate(order.timestamp)
-  }
-
-  if (order.date) {
-    const raw = String(order.date).trim()
-    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-      const [year, month, day] = raw.split("-")
-      return `${day}/${month}/${Number(year) + 543} • เวลาไม่ระบุ`
-    }
-    return formatOrderDate(raw) + " • เวลาไม่ระบุ"
-  }
-
-  return "—"
 }
 
 function formatNumber(value?: number, digits = 8) {
@@ -2965,7 +2949,7 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
                       className="border-b last:border-0 hover:bg-accent/40"
                     >
                       <td className="whitespace-nowrap px-3 py-4 text-xs">
-                        {formatOrderDateTime(order)}
+                        {formatOrderDate(timestamp)}
                       </td>
 
                       <td className="px-3 py-4">
@@ -3064,7 +3048,7 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
                   {selectedOrder.asset || "—"}
                 </h3>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {formatOrderDateTime(selectedOrder)}
+                  {formatOrderDate(selectedOrder.timestamp || selectedOrder.date)}
                 </p>
               </div>
 
