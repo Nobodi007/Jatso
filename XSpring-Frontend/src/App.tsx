@@ -79,6 +79,43 @@ function formatQty(value: number) {
 }
 
 
+
+function formatApiError(
+  response: Response,
+  body: any,
+  fallback: string,
+  rawText = ""
+) {
+  const status = response.status
+  const detail = body?.detail
+  const detailMessage =
+    typeof detail === "string"
+      ? detail
+      : typeof detail?.message === "string"
+        ? detail.message
+        : ""
+
+  if (status === 400) return detailMessage || `${fallback} — ข้อมูลคำสั่งไม่ถูกต้อง`
+  if (status === 401) return `${fallback} — ไม่ได้รับอนุญาต (API Key ไม่ถูกต้องหรือหมดอายุ)`
+  if (status === 403) return `${fallback} — ไม่มีสิทธิ์ทำรายการนี้`
+  if (status === 409) return `${fallback} — Idempotency-Key ถูกใช้กับคำสั่งคนละรายการ`
+  if (status === 422) return detailMessage || `${fallback} — รูปแบบข้อมูลไม่ถูกต้อง`
+  if (status === 429) {
+    const retry = Number(detail?.retry_after_seconds || response.headers.get("Retry-After") || 0)
+    return `${fallback} — ส่งคำขอถี่เกินไป${retry > 0 ? ` กรุณารอ ${retry} วินาที` : " กรุณารอสักครู่"}`
+  }
+  if (status === 503) return detailMessage || `${fallback} — Backend/Market Data ยังไม่พร้อม กรุณาลองใหม่`
+
+  return detailMessage || rawText || `${fallback} (HTTP ${status})`
+}
+
+function formatNetworkError(error: unknown, fallback: string) {
+  if (error instanceof TypeError) {
+    return `${fallback} — เชื่อมต่อ Backend ไม่สำเร็จ กรุณาตรวจ API URL / Network`
+  }
+  return error instanceof Error ? error.message : fallback
+}
+
 type NavigationItem = {
   id: Page
   label: string
@@ -237,23 +274,24 @@ function App() {
         },
       })
 
-      const body = await response.json()
+      const rawText = await response.text()
+      let body: any = null
+      try {
+        body = rawText ? JSON.parse(rawText) : null
+      } catch {
+        body = null
+      }
 
       if (!response.ok || body?.status !== "ok" || !body?.portfolio) {
         const detail = body?.detail
-
-        // Backend diagnostic: keep the original safety message, but expose
-        // the real load failure so we can fix the Supabase/gu.py path.
-        if (detail && typeof detail === "object") {
-          const diagnostic = detail.diagnostic
-          const diagnosticText = diagnostic
-            ? `\n\nDiagnostic:\n${JSON.stringify(diagnostic, null, 2)}`
-            : ""
-
-          throw new Error(
-            `${detail.message || "ไม่สามารถโหลด Portfolio จาก Backend ได้"}${diagnosticText}`
-          )
-        }
+        const diagnostic = detail && typeof detail === "object" ? detail.diagnostic : null
+        const diagnosticText = diagnostic
+          ? `\n\nDiagnostic:\n${JSON.stringify(diagnostic, null, 2)}`
+          : ""
+        throw new Error(
+          `${formatApiError(response, body, "โหลด Portfolio ไม่สำเร็จ", rawText)}${diagnosticText}`
+        )
+      }
 
         throw new Error(
           typeof detail === "string"
