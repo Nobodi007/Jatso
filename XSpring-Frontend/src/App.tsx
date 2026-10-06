@@ -631,9 +631,12 @@ function WalletPage({
                 const positive = pnl >= 0
                 return (
                   <div key={item.asset} className="flex flex-wrap items-center justify-between gap-4 py-4">
-                    <div className="min-w-[120px]">
-                      <div className="font-semibold">{item.asset}/THB</div>
-                      <div className="mt-1 text-xs text-muted-foreground">{formatQty(Number(item.qty || 0))} units</div>
+                    <div className="flex min-w-[150px] items-center gap-3">
+                      <CoinLogo asset={item.asset} size={36} />
+                      <div>
+                        <div className="font-semibold">{item.asset}/THB</div>
+                        <div className="mt-1 text-xs text-muted-foreground">{formatQty(Number(item.qty || 0))} units</div>
+                      </div>
                     </div>
                     <div className="text-right">
                       <div className="font-medium">{formatTHB(Number(item.market_value || 0))}</div>
@@ -2446,12 +2449,17 @@ function PortfolioPage({
                       className="border-b last:border-0 hover:bg-accent/40"
                     >
                       <td className="px-3 py-4">
-                        <span className="font-semibold">
-                          {holding.asset}
-                        </span>
-                        <span className="ml-2 text-xs text-muted-foreground">
-                          /THB
-                        </span>
+                        <div className="flex items-center gap-3">
+                          <CoinLogo asset={holding.asset} size={34} />
+                          <div>
+                            <div className="font-semibold">
+                              {holding.asset}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              /THB
+                            </div>
+                          </div>
+                        </div>
                       </td>
 
                       <td className="px-3 py-4 text-right">
