@@ -1639,11 +1639,12 @@ def line_webhook_health():
     return {
         "status": "ok",
         "service": "LINE Trading",
-        "webhook": "POST /api/line/webhook",
+        "webhook": "POST /webhook",
         "configured": bool(_line_channel_secret() and _line_channel_access_token()),
     }
 
 
+@app.post("/webhook")
 @app.post("/api/line/webhook")
 async def line_webhook(request: Request):
     body = await request.body()
