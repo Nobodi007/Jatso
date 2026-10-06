@@ -231,7 +231,10 @@ function App() {
     try {
       const response = await fetch(`${API_BASE_URL}/api/portfolio`, {
         method: "GET",
-        headers: { Accept: "application/json" },
+        headers: {
+          Accept: "application/json",
+          "X-API-Key": DEALER_API_KEY,
+        },
       })
 
       const body = await response.json()
