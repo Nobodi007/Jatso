@@ -2401,6 +2401,7 @@ type OrderHistoryRow = {
   fee_thb?: number
   exchange?: string
   source?: string
+  transaction_id?: string
 }
 
 function parseOrderDate(value?: string) {
@@ -2872,9 +2873,23 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
               </div>
 
               <div className="rounded-xl border px-4 py-3">
-                <p className="text-xs text-muted-foreground">Exchange / Source</p>
+                <p className="text-xs text-muted-foreground">Exchange</p>
                 <p className="mt-1 text-sm font-medium">
-                  {selectedOrder.exchange || selectedOrder.source || "—"}
+                  {selectedOrder.exchange || "—"}
+                </p>
+              </div>
+
+              <div className="rounded-xl border px-4 py-3">
+                <p className="text-xs text-muted-foreground">Source</p>
+                <p className="mt-1 text-sm font-medium">
+                  {selectedOrder.source || "Web"}
+                </p>
+              </div>
+
+              <div className="rounded-xl border px-4 py-3 sm:col-span-2">
+                <p className="text-xs text-muted-foreground">Transaction ID</p>
+                <p className="mt-1 break-all font-mono text-sm">
+                  {selectedOrder.transaction_id || "ยังไม่มี Transaction ID จาก Engine"}
                 </p>
               </div>
             </div>
