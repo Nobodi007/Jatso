@@ -854,7 +854,6 @@ function OrderBookPage() {
         if (!response.ok || body?.status !== "ok") {
           throw new Error(formatApiError(response, body, "โหลด Order Book ไม่สำเร็จ"))
       }
-        }
 
         if (!cancelled) {
           setBook(body as OrderBookResponse)
@@ -1728,11 +1727,7 @@ function TradePage({
       await onRefresh()
       onOrderCreated()
     } catch (err) {
-      setOrderMessage(
-        err instanceof Error
-          ? err.message
-          : "ส่งคำสั่งไม่สำเร็จ"
-      )
+      setOrderMessage(formatNetworkError(err, "ส่งคำสั่งไม่สำเร็จ"))
     } finally {
       setSubmitting(false)
     }
@@ -2947,11 +2942,7 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
       }))
     } catch (err) {
       setOrders([])
-      setError(
-        err instanceof Error
-          ? err.message
-          : "ไม่สามารถโหลด Order History ได้"
-      )
+      setError(formatNetworkError(err, "โหลด Order History ไม่สำเร็จ"))
     } finally {
       setLoading(false)
     }
