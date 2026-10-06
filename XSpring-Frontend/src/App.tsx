@@ -287,6 +287,15 @@ function App() {
             SIDEBAR
         ================================================= */}
 
+        {sidebarOpen && (
+          <button
+            type="button"
+            aria-label="Close navigation"
+            onClick={() => setSidebarOpen(false)}
+            className="mobile-sidebar-backdrop"
+          />
+        )}
+
         <aside
           className={`mobile-sidebar border-r bg-card transition-all duration-200 ${
             sidebarOpen ? "mobile-sidebar-open w-64" : "mobile-sidebar-closed w-16"
