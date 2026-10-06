@@ -1235,23 +1235,24 @@ function Dashboard({
                   key={symbol}
                   type="button"
                   onClick={() => setSelectedAsset(symbol)}
-                  className="flex w-full items-center justify-between rounded-lg border px-3 py-3 text-left hover:bg-accent"
+                  className="flex w-full min-w-0 items-center gap-3 rounded-lg border px-3 py-3 text-left transition-colors hover:bg-accent"
                 >
-                  <div className="flex items-center gap-2">
-                    <CoinLogo asset={symbol} size={24} />
-                    <div className="font-medium">{symbol}/THB</div>
-                    <div className="text-xs text-muted-foreground">
+                  <CoinLogo asset={symbol} size={28} />
+
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-medium">{symbol}/THB</div>
+                    <div className="truncate text-xs text-muted-foreground">
                       {holding
                         ? `${formatQty(holding.qty)} ${symbol}`
                         : "No position"}
                     </div>
                   </div>
 
-                  <div className="text-right">
-                    <div className="text-sm">
+                  <div className="w-[120px] shrink-0 text-right sm:w-[150px]">
+                    <div className="truncate text-sm font-medium">
                       {holding ? formatTHB(holding.price) : "—"}
                     </div>
-                    <div className="text-xs text-muted-foreground">
+                    <div className="truncate text-xs text-muted-foreground">
                       {holding
                         ? `${Number(holding.allocation_pct || 0).toFixed(1)}% allocation`
                         : "Available"}
