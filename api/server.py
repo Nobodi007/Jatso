@@ -544,7 +544,7 @@ def _fetch_bitkub_orderbook(symbol: str, limit: int = 20):
     """Fetch a THB orderbook snapshot from Bitkub's public V3 API."""
     safe_limit = max(1, min(int(limit), 100))
     params = urllib.parse.urlencode({
-        "sym": symbol,
+        "sym": symbol.lower(),
         "lmt": safe_limit,
     })
 
@@ -571,7 +571,10 @@ def _fetch_bitkub_orderbook(symbol: str, limit: int = 20):
             f"Bitkub orderbook error={payload.get('error')}"
         )
 
-    result = payload.get("result") or {}
+    # Bitkub depth may return asks/bids at the top level or wrapped in
+    # "result". Accept both shapes.
+    raw_result = payload.get("result")
+    result = raw_result if isinstance(raw_result, dict) else payload
     bids = result.get("bids") or []
     asks = result.get("asks") or []
 
