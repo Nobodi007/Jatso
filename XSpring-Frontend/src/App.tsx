@@ -293,20 +293,9 @@ function App() {
         )
       }
 
-        throw new Error(
-          typeof detail === "string"
-            ? detail
-            : "ไม่สามารถโหลด Portfolio จาก Backend ได้"
-        )
-      }
-
       setPortfolio(body.portfolio as PortfolioData)
     } catch (error) {
-      setPortfolioError(
-        error instanceof Error
-          ? error.message
-          : "ไม่สามารถโหลด Portfolio จาก Backend ได้"
-      )
+      setPortfolioError(formatNetworkError(error, "โหลด Portfolio ไม่สำเร็จ"))
     } finally {
       setPortfolioLoading(false)
     }
@@ -1717,14 +1706,7 @@ function TradePage({
       if (!response.ok) {
         const detail =
           typeof body?.detail === "string"
-            ? body.detail
-            : body?.detail?.message ||
-              rawText ||
-              `Backend ตอบ HTTP ${response.status}`
-
-        throw new Error(
-          `ส่งคำสั่งไม่สำเร็จ (HTTP ${response.status}): ${detail}`
-        )
+        throw new Error(formatApiError(response, body, "ส่งคำสั่งไม่สำเร็จ", rawText))
       }
 
       if (body?.status === "rejected") {
@@ -2945,14 +2927,7 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
       if (!response.ok) {
         const detail =
           typeof body?.detail === "string"
-            ? body.detail
-            : body?.detail?.message ||
-              rawText ||
-              `Backend ตอบ HTTP ${response.status}`
-
-        throw new Error(
-          `โหลด Order History ไม่สำเร็จ (HTTP ${response.status}): ${detail}`
-        )
+        throw new Error(formatApiError(response, body, "โหลด Order History ไม่สำเร็จ", rawText))
       }
 
       if (body?.status !== "ok") {
