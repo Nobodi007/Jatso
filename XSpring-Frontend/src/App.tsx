@@ -700,7 +700,7 @@ type OrderBookResponse = {
 
 const ORDERBOOK_ASSETS = ["BTC", "ETH", "SOL", "DOGE", "ADA", "HBAR", "LINK", "XLM", "XRP"]
 
-const COIN_LOGOS: Record<string, { slug: string; color: string }> = {
+const COIN_LOGOS: Record<string, { slug?: string; color?: string; url?: string }> = {
   BTC: { slug: "bitcoin", color: "F7931A" },
   ETH: { slug: "ethereum", color: "627EEA" },
   SOL: { slug: "solana", color: "9945FF" },
@@ -710,7 +710,11 @@ const COIN_LOGOS: Record<string, { slug: string; color: string }> = {
   LINK: { slug: "chainlink", color: "2A5ADA" },
   XLM: { slug: "stellar", color: "7D00FF" },
   XRP: { slug: "ripple", color: "23292F" },
-  USDC: { slug: "usdcoin", color: "2775CA" },
+  USDC: {
+    slug: "usdcoin",
+    color: "2775CA",
+    url: "https://assets.coingecko.com/coins/images/6319/large/USD_Coin_icon.png",
+  },
   USDT: { slug: "tether", color: "26A17B" },
 }
 
@@ -745,11 +749,14 @@ function CoinLogo({
       style={{ width: size, height: size }}
     >
       <img
-        src={`https://cdn.simpleicons.org/${logo.slug}/${logo.color}`}
+        src={
+          logo.url ??
+          `https://cdn.simpleicons.org/${logo.slug}/${logo.color}`
+        }
         alt=""
         width={size - 4}
         height={size - 4}
-        className="block"
+        className="block object-contain"
         onError={() => setFailed(true)}
         aria-hidden="true"
       />
