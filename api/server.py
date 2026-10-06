@@ -933,6 +933,8 @@ def order_history(limit: int = 100, asset: str = ""):
                     order.get("เหรียญ")
                     or order.get("asset")
                     or order.get("symbol")
+                    or meta.get("asset")
+                    or meta.get("symbol")
                     or ""
                 ).strip().upper()
 
@@ -942,6 +944,7 @@ def order_history(limit: int = 100, asset: str = ""):
                 side = str(
                     order.get("ฝั่ง")
                     or order.get("side")
+                    or meta.get("side")
                     or ""
                 ).strip().upper()
 
@@ -951,17 +954,35 @@ def order_history(limit: int = 100, asset: str = ""):
                     or "Filled"
                 ).strip()
 
+                # Accept legacy / LINE field names too. Older ledger rows can
+                # store these fields with different casing/names.
+                meta = order.get("metadata") or order.get("meta") or {}
+                if not isinstance(meta, dict):
+                    meta = {}
+
                 order_id = str(
                     order.get("Order ID")
                     or order.get("order_id")
+                    or order.get("orderId")
+                    or order.get("OrderId")
                     or order.get("id")
+                    or order.get("LINE Order ID")
+                    or order.get("line_order_id")
+                    or meta.get("Order ID")
+                    or meta.get("order_id")
+                    or meta.get("orderId")
+                    or meta.get("id")
                     or f"ORDER-{idx + 1:06d}"
-                )
+                ).strip()
 
                 timestamp = (
                     order.get("เวลา")
                     or order.get("timestamp")
                     or order.get("time")
+                    or order.get("execution_time")
+                    or order.get("executed_at")
+                    or meta.get("timestamp")
+                    or meta.get("time")
                     or order.get("วันที่")
                     or ""
                 )
@@ -1007,8 +1028,23 @@ def order_history(limit: int = 100, asset: str = ""):
                     "quote_thb": quote,
                     "quantity": quantity,
                     "fee_thb": fee,
-                    "exchange": str(order.get("Exchange") or order.get("exchange") or "—"),
-                    "source": str(order.get("Source") or order.get("source") or "Web"),
+                    "exchange": str(
+                        order.get("Exchange")
+                        or order.get("exchange")
+                        or order.get("exchange_name")
+                        or order.get("Exchange Name")
+                        or meta.get("Exchange")
+                        or meta.get("exchange")
+                        or "Bitkub"
+                    ).strip(),
+                    "source": str(
+                        order.get("Source")
+                        or order.get("source")
+                        or order.get("channel")
+                        or meta.get("Source")
+                        or meta.get("source")
+                        or "LINE"
+                    ).strip(),
                 })
 
             # Normalize every timestamp to UTC before sorting.
