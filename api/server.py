@@ -983,6 +983,199 @@ def orderbook(
         )
 
 # =========================================================
+# MARKETS — BITKUB PUBLIC MARKET HUB
+# =========================================================
+
+BITKUB_MARKET_ASSETS = {
+    "BTC": "Bitcoin",
+    "ETH": "Ethereum",
+    "SOL": "Solana",
+    "XRP": "XRP",
+    "DOGE": "Dogecoin",
+    "ADA": "Cardano",
+    "HBAR": "Hedera",
+    "LINK": "Chainlink",
+    "XLM": "Stellar",
+}
+
+
+def _fetch_bitkub_ticker_map():
+    url = "https://api.bitkub.com/api/market/ticker"
+
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Dealer-Suite/1.0",
+            "Accept": "application/json",
+        },
+    )
+
+    with urllib.request.urlopen(request, timeout=8) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+
+    if not isinstance(payload, dict):
+        raise ValueError("Bitkub ticker response ไม่ถูกต้อง")
+
+    if _safe_float(payload.get("error"), 0.0) != 0.0:
+        raise ValueError(f"Bitkub ticker error={payload.get('error')}")
+
+    return payload
+
+
+def _normalize_bitkub_ticker_row(asset: str, row: dict) -> dict:
+    price = _safe_float(row.get("last"))
+    bid = _safe_float(row.get("highestBid"))
+    ask = _safe_float(row.get("lowestAsk"))
+    high = _safe_float(row.get("high24hr"))
+    low = _safe_float(row.get("low24hr"))
+    change = _safe_float(row.get("percentChange"))
+    base_volume = _safe_float(row.get("baseVolume"))
+    quote_volume = _safe_float(row.get("quoteVolume"))
+
+    # Prefer THB quote volume when Bitkub provides it.
+    volume_thb = quote_volume if quote_volume > 0 else price * base_volume
+
+    return {
+        "asset": asset,
+        "name": BITKUB_MARKET_ASSETS.get(asset, asset),
+        "price": price,
+        "change24h": change,
+        "high24h": high,
+        "low24h": low,
+        "volume24h": volume_thb,
+        "bid": bid,
+        "ask": ask,
+        "spread": max(0.0, ask - bid) if ask > 0 and bid > 0 else 0.0,
+        "source": "Bitkub",
+    }
+
+
+@app.get("/api/markets", dependencies=[Depends(require_api_key)])
+def markets():
+    try:
+        payload = _fetch_bitkub_ticker_map()
+        rows = []
+
+        for asset in BITKUB_MARKET_ASSETS:
+            raw = payload.get(f"THB_{asset}") or payload.get(f"{asset}_THB")
+
+            if not isinstance(raw, dict):
+                continue
+
+            row = _normalize_bitkub_ticker_row(asset, raw)
+
+            if row["price"] <= 0:
+                continue
+
+            rows.append(row)
+
+        if not rows:
+            raise HTTPException(
+                status_code=503,
+                detail="Bitkub ไม่ส่งข้อมูล Market Ticker ที่ใช้งานได้",
+            )
+
+        rows.sort(key=lambda item: item["asset"])
+
+        return {
+            "status": "ok",
+            "source": "Bitkub Public Ticker",
+            "timestamp": time.time(),
+            "markets": rows,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"[markets] ticker request failed: {type(exc).__name__}: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="โหลด Market Data จาก Bitkub ไม่สำเร็จ",
+        )
+
+
+@app.get("/api/market/trades", dependencies=[Depends(require_api_key)])
+def market_trades(asset: str = "BTC", limit: int = 20):
+    try:
+        asset = str(asset or "BTC").strip().upper()
+
+        if asset not in BITKUB_MARKET_ASSETS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"ไม่รองรับ Market Trades สำหรับ {asset}",
+            )
+
+        try:
+            safe_limit = max(1, min(int(limit), 50))
+        except (TypeError, ValueError):
+            safe_limit = 20
+
+        symbol = f"THB_{asset}"
+        params = urllib.parse.urlencode({
+            "sym": symbol,
+            "lmt": safe_limit,
+        })
+
+        url = f"https://api.bitkub.com/api/v3/market/trades?{params}"
+
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Dealer-Suite/1.0",
+                "Accept": "application/json",
+            },
+        )
+
+        with urllib.request.urlopen(request, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        if not isinstance(payload, dict):
+            raise ValueError("Bitkub trades response ไม่ถูกต้อง")
+
+        if _safe_float(payload.get("error"), 0.0) != 0.0:
+            raise ValueError(f"Bitkub trades error={payload.get('error')}")
+
+        raw_rows = payload.get("result") or []
+        rows = []
+
+        for row in raw_rows:
+            if not isinstance(row, (list, tuple)) or len(row) < 4:
+                continue
+
+            timestamp = _safe_float(row[0])
+            side = str(row[1] or "").lower()
+            price = _safe_float(row[2])
+            amount = _safe_float(row[3])
+
+            if price <= 0 or amount <= 0:
+                continue
+
+            rows.append({
+                "timestamp": timestamp,
+                "side": side,
+                "price": price,
+                "amount": amount,
+            })
+
+        return {
+            "status": "ok",
+            "asset": asset,
+            "source": "Bitkub Public Trades",
+            "count": len(rows),
+            "trades": rows[:safe_limit],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"[markets] trades request failed: {type(exc).__name__}: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="โหลด Recent Trades จาก Bitkub ไม่สำเร็จ",
+        )
+
+
+# =========================================================
 # ROOT / HEALTH
 # =========================================================
 
