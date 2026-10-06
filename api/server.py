@@ -904,12 +904,20 @@ def order_history(limit: int = 100, asset: str = ""):
                     or f"LEGACY-{idx + 1:06d}"
                 ).strip()
 
-                timestamp = (
+                # Execution timestamp is different from market/order date.
+                # Legacy records may contain only วันที่ (YYYY-MM-DD); do not
+                # pretend that a time exists in that case.
+                raw_timestamp = (
                     order.get("เวลา")
                     or order.get("timestamp")
                     or order.get("time")
-                    or order.get("วันที่")
                     or ""
+                )
+                raw_date = order.get("วันที่") or order.get("date") or ""
+                timestamp = str(raw_timestamp).strip() if raw_timestamp else ""
+                date_only = str(raw_date).strip() if raw_date else ""
+                has_execution_time = bool(timestamp) and not (
+                    len(timestamp) == 10 and timestamp[4:5] == "-" and timestamp[7:8] == "-"
                 )
 
                 amount = _safe_float(
@@ -940,7 +948,8 @@ def order_history(limit: int = 100, asset: str = ""):
                 rows.append({
                     "order_id": order_id,
                     "timestamp": timestamp,
-                    "date": order.get("วันที่") or "",
+                    "date": date_only,
+                    "has_execution_time": has_execution_time,
                     "asset": row_asset,
                     "side": side,
                     "status": status,
