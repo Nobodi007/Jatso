@@ -1396,6 +1396,59 @@ function TradePage({
   const [orderMessage, setOrderMessage] =
     useState("")
 
+  const [tradeOrderBook, setTradeOrderBook] =
+    useState<OrderBookResponse | null>(null)
+
+  const [tradeOrderBookError, setTradeOrderBookError] =
+    useState("")
+
+  const [tradeOrderBookLoading, setTradeOrderBookLoading] =
+    useState(false)
+
+  const loadTradeOrderBook = async () => {
+    setTradeOrderBookLoading(true)
+    setTradeOrderBookError("")
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/orderbook?asset=${encodeURIComponent(asset)}&limit=5`,
+        {
+          headers: {
+            Accept: "application/json",
+            "X-API-Key": DEALER_API_KEY,
+          },
+          cache: "no-store",
+        }
+      )
+
+      const body = await response.json()
+
+      if (!response.ok || body?.status !== "ok") {
+        throw new Error(
+          typeof body?.detail === "string"
+            ? body.detail
+            : body?.detail?.message ||
+              `โหลด Order Book ไม่สำเร็จ (HTTP ${response.status})`
+        )
+      }
+
+      setTradeOrderBook(body as OrderBookResponse)
+    } catch (err) {
+      setTradeOrderBook(null)
+      setTradeOrderBookError(
+        err instanceof Error ? err.message : "โหลด Order Book ไม่สำเร็จ"
+      )
+    } finally {
+      setTradeOrderBookLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadTradeOrderBook()
+    const timer = window.setInterval(loadTradeOrderBook, 3000)
+    return () => window.clearInterval(timer)
+  }, [asset])
+
   const holding = portfolio?.holdings.find(
     (item) => item.asset.toUpperCase() === asset
   )
@@ -2069,13 +2122,13 @@ function TradePage({
             </h3>
 
             <p className="text-xs text-muted-foreground">
-              {asset}/THB
+              {asset}/THB · Bitkub Public Order Book
             </p>
 
           </div>
 
           <span className="rounded-full bg-muted px-2 py-1 text-[10px]">
-            Live
+            {tradeOrderBookLoading ? "Loading..." : tradeOrderBookError ? "Error" : "Live"}
           </span>
 
         </div>
@@ -2108,42 +2161,22 @@ function TradePage({
             </div>
 
 
-            {[
-              [market.ask + 1000, 0.42],
-              [market.ask + 500, 0.31],
-              [market.ask, 0.18],
-            ].map(
-              ([price, amount], index) => (
-
-                <div
-                  key={index}
-                  className="grid grid-cols-3 py-1.5 text-xs"
-                >
-
-                  <span className="text-red-500">
-                    ฿
-                    {Number(
-                      price
-                    ).toLocaleString()}
-                  </span>
-
-                  <span className="text-right">
-                    {amount}
-                  </span>
-
-                  <span className="text-right text-muted-foreground">
-                    {(
-                      Number(price) *
-                      Number(amount)
-                    ).toLocaleString()}
-                  </span>
-
-                </div>
-
-              )
-            )}
-
-          </div>
+            {(tradeOrderBook?.asks || []).map((level, index) => (
+              <div
+                key={`ask-${index}-${level.price_thb}`}
+                className="grid grid-cols-3 py-1.5 text-xs"
+              >
+                <span className="text-red-500">
+                  {formatOrderBookPrice(level.price_thb)}
+                </span>
+                <span className="text-right">
+                  {formatQty(level.quantity)}
+                </span>
+                <span className="text-right text-muted-foreground">
+                  {formatOrderBookTotal(level.total_thb)}
+                </span>
+              </div>
+            ))}          </div>
 
 
           {/* =================================================
@@ -2169,46 +2202,32 @@ function TradePage({
             </div>
 
 
-            {[
-              [market.bid, 0.22],
-              [market.bid - 500, 0.37],
-              [market.bid - 1000, 0.54],
-            ].map(
-              ([price, amount], index) => (
-
-                <div
-                  key={index}
-                  className="grid grid-cols-3 py-1.5 text-xs"
-                >
-
-                  <span className="text-emerald-500">
-                    ฿
-                    {Number(
-                      price
-                    ).toLocaleString()}
-                  </span>
-
-                  <span className="text-right">
-                    {amount}
-                  </span>
-
-                  <span className="text-right text-muted-foreground">
-                    {(
-                      Number(price) *
-                      Number(amount)
-                    ).toLocaleString()}
-                  </span>
-
-                </div>
-
-              )
-            )}
-
-          </div>
+            {(tradeOrderBook?.bids || []).map((level, index) => (
+              <div
+                key={`bid-${index}-${level.price_thb}`}
+                className="grid grid-cols-3 py-1.5 text-xs"
+              >
+                <span className="text-emerald-500">
+                  {formatOrderBookPrice(level.price_thb)}
+                </span>
+                <span className="text-right">
+                  {formatQty(level.quantity)}
+                </span>
+                <span className="text-right text-muted-foreground">
+                  {formatOrderBookTotal(level.total_thb)}
+                </span>
+              </div>
+            ))}          </div>
 
         </div>
 
       </div>
+
+      {tradeOrderBookError && (
+        <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-500">
+          {tradeOrderBookError}
+        </div>
+      )}
 
     </div>
   )
