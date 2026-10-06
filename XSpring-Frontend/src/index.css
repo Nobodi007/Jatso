@@ -150,11 +150,25 @@
     transition: transform 180ms ease;
   }
 
+  .mobile-sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    border: 0;
+    background: rgb(0 0 0 / 35%);
+    cursor: pointer;
+  }
+
   .mobile-sidebar-open {
     transform: translateX(0);
   }
 
   .mobile-sidebar-closed {
     transform: translateX(-100%);
+  }
+
+  .mobile-sidebar {
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 }
