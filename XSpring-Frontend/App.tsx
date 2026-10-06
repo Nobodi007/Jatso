@@ -2416,10 +2416,8 @@ function parseOrderDate(value?: string) {
     return new Date(Date.UTC(year, month - 1, day))
   }
 
-  // Backend timestamps may be stored as local Bangkok time without an
-  // explicit timezone. Treat timezone-less execution timestamps as Bangkok
-  // time; otherwise JavaScript would interpret them as UTC and shift the
-  // displayed order time. Explicit Z / offsets are respected as-is.
+  // Timestamps without an explicit timezone are legacy Bangkok clock values.
+  // Treat them as Asia/Bangkok instead of UTC to avoid the old +7h shift.
   let normalized = raw.replace(" ", "T")
   const hasTimezone = /Z$/i.test(normalized) || /[+-]\d{2}:\d{2}$/.test(normalized)
 
