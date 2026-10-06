@@ -1412,6 +1412,11 @@ def create_order(
                             continue
                         if str(existing_order.get("idempotency_key_hash") or "") != key_hash:
                             continue
+                        if str(existing_order.get("idempotency_fingerprint") or "") != idempotency_fingerprint:
+                            raise HTTPException(
+                                status_code=409,
+                                detail="Idempotency-Key ถูกใช้กับคำสั่งคนละรายการ",
+                            )
                         existing_asset = str(
                             existing_order.get("เหรียญ")
                             or existing_order.get("asset")
@@ -1546,6 +1551,7 @@ def create_order(
             rec["วันที่"] = execution_time.strftime("%Y-%m-%d")
             if idempotency_key:
                 rec["idempotency_key_hash"] = _idempotency_key_hash(idempotency_key)
+                rec["idempotency_fingerprint"] = idempotency_fingerprint
 
             # execute_order() บางเวอร์ชันอาจ append สำเนา rec เข้า ledger
             # ดังนั้นแก้ entry ใน sim["orders"] โดยตรงด้วย
@@ -1577,6 +1583,9 @@ def create_order(
                     target["เวลา"] = execution_iso
                     target["timestamp"] = execution_iso
                     target["วันที่"] = execution_time.strftime("%Y-%m-%d")
+                    if idempotency_key:
+                        target["idempotency_key_hash"] = _idempotency_key_hash(idempotency_key)
+                        target["idempotency_fingerprint"] = idempotency_fingerprint
 
             result = str(rec.get("ผลด่าน", ""))
 
@@ -1618,7 +1627,7 @@ def create_order(
                             "แต่บันทึก Portfolio "
                             "ถาวรไม่สำเร็จ"
                         ),
-                        "save_error": save_error,
+                        "retryable": True,
                         "order": rec,
                     },
                 )
