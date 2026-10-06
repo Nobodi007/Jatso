@@ -1553,6 +1553,7 @@ function TradePage({
 
       if (!response.ok || body?.status !== "ok") {
         throw new Error(formatApiError(response, body, "โหลด Order Book ไม่สำเร็จ"))
+        }
       setTradeOrderBook(body as OrderBookResponse)
     } catch (err) {
       setTradeOrderBook(null)
