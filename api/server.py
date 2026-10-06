@@ -535,6 +535,115 @@ def _fetch_bitkub_ticker_prices(assets: set[str]) -> dict[str, float]:
     return prices
 
 
+def _recompute_realized_pnl_from_orders(sim: dict) -> float:
+    """Recompute realized P&L from the immutable filled-order history.
+
+    Do not trust a stale/corrupted realized_pnl_thb field in an old portfolio
+    ledger. BUY/SELL order history is the source of truth for execution P&L.
+    """
+    orders = sim.get("orders", []) if isinstance(sim, dict) else []
+    if not isinstance(orders, list):
+        return 0.0
+
+    rows = []
+    for idx, order in enumerate(orders):
+        if not isinstance(order, dict):
+            continue
+
+        status = str(
+            order.get("สถานะ")
+            or order.get("status")
+            or "Filled"
+        ).strip().lower()
+        if status not in {"filled", "fill", "completed", "executed", "success", "successful"}:
+            continue
+
+        asset = str(
+            order.get("เหรียญ")
+            or order.get("asset")
+            or order.get("symbol")
+            or ""
+        ).strip().upper()
+        side = str(
+            order.get("ฝั่ง")
+            or order.get("side")
+            or ""
+        ).strip().upper()
+
+        if side in {"ซื้อ", "BUY"}:
+            side = "BUY"
+        elif side in {"ขาย", "SELL"}:
+            side = "SELL"
+        else:
+            continue
+
+        qty = _safe_float(
+            order.get("เหรียญที่ส่งมอบ")
+            if order.get("เหรียญที่ส่งมอบ") is not None
+            else order.get("quantity")
+        )
+        gross = _safe_float(
+            order.get("มูลค่า (บาท)")
+            if order.get("มูลค่า (บาท)") is not None
+            else order.get("amount_thb")
+        )
+        price = _safe_float(
+            order.get("ราคาที่ลูกค้าได้")
+            if order.get("ราคาที่ลูกค้าได้") is not None
+            else order.get("price_thb")
+        )
+
+        if not asset or qty <= 0 or gross <= 0 or price <= 0:
+            continue
+
+        timestamp = (
+            order.get("เวลา")
+            or order.get("timestamp")
+            or order.get("time")
+            or order.get("วันที่")
+            or ""
+        )
+        try:
+            ts = pd.to_datetime(timestamp, errors="coerce", utc=True)
+            if pd.isna(ts):
+                ts = pd.Timestamp("1970-01-01", tz="UTC")
+        except Exception:
+            ts = pd.Timestamp("1970-01-01", tz="UTC")
+
+        rows.append((ts, idx, asset, side, qty, gross, price))
+
+    rows.sort(key=lambda x: (x[0], x[1]))
+
+    qty_map: dict[str, float] = {}
+    cost_map: dict[str, float] = {}
+    realized = 0.0
+
+    for _, _, asset, side, qty, gross, price in rows:
+        if side == "BUY":
+            old_qty = qty_map.get(asset, 0.0)
+            old_cost = cost_map.get(asset, 0.0)
+            new_qty = old_qty + qty
+            cost_map[asset] = (
+                (old_qty * old_cost + gross) / new_qty
+                if new_qty > 0
+                else 0.0
+            )
+            qty_map[asset] = new_qty
+        else:
+            old_qty = qty_map.get(asset, 0.0)
+            avg_cost = cost_map.get(asset, 0.0)
+            sold_qty = min(qty, old_qty) if old_qty > 0 else 0.0
+
+            if sold_qty > 0:
+                realized += gross * (sold_qty / qty) - sold_qty * avg_cost
+                qty_map[asset] = max(0.0, old_qty - sold_qty)
+                if qty_map[asset] <= 1e-12:
+                    qty_map[asset] = 0.0
+                    cost_map[asset] = 0.0
+
+    return realized
+
+
 def _portfolio_response(gu, sim, px_row=None):
     """Build Portfolio using direct Bitkub THB prices; never depend on USD/THB."""
     held_assets: set[str] = set()
@@ -574,14 +683,23 @@ def _portfolio_response(gu, sim, px_row=None):
 
     snap = gu.portfolio_snapshot(sim, price_map)
 
+    # Recalculate realized P&L from the actual filled-order history.
+    # This repairs legacy ledger rows that can carry an incorrect
+    # realized_pnl_thb (which was producing the spurious -10M figure).
+    realized_pnl = _recompute_realized_pnl_from_orders(sim)
+    unrealized_pnl = _safe_float(snap.get("unrealized_pnl_thb"), 0.0)
+    total_pnl = realized_pnl + unrealized_pnl
+    invested_cost = _safe_float(snap.get("invested_cost_thb"), 0.0)
+    pnl_pct = (total_pnl / invested_cost * 100.0) if invested_cost > 0 else 0.0
+
     return {
         "cash_thb": snap["cash_thb"],
         "market_value_thb": snap["market_value_thb"],
         "total_value_thb": snap["total_value_thb"],
-        "realized_pnl_thb": snap["realized_pnl_thb"],
-        "unrealized_pnl_thb": snap["unrealized_pnl_thb"],
-        "total_pnl_thb": snap["total_pnl_thb"],
-        "pnl_pct": snap["pnl_pct"],
+        "realized_pnl_thb": realized_pnl,
+        "unrealized_pnl_thb": unrealized_pnl,
+        "total_pnl_thb": total_pnl,
+        "pnl_pct": pnl_pct,
         "fees_thb": snap["fees_thb"],
         "holdings": snap["rows"],
     }
