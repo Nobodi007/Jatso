@@ -457,23 +457,47 @@ def _load_existing_sim(gu):
 # PORTFOLIO RESPONSE
 # =========================================================
 
-def _portfolio_response(gu, sim, px_row):
+def _fetch_bitkub_ticker_prices(assets: set[str]) -> dict[str, float]:
+    """Fetch current THB prices directly from Bitkub public ticker."""
+    prices: dict[str, float] = {}
+    url = "https://api.bitkub.com/api/market/ticker"
+
+    for raw_asset in sorted({str(a).upper().strip() for a in assets if a}):
+        if raw_asset == "THB":
+            continue
+        try:
+            params = urllib.parse.urlencode({"sym": f"THB_{raw_asset}"})
+            request = urllib.request.Request(
+                f"{url}?{params}",
+                headers={"User-Agent": "Dealer-Suite/1.0", "Accept": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=8) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            row = payload.get(f"THB_{raw_asset}") or payload.get(f"{raw_asset}_THB")
+            if isinstance(row, dict):
+                value = _safe_float(row.get("last"))
+                if value > 0:
+                    prices[raw_asset] = value
+        except Exception as exc:
+            print(f"[portfolio] Bitkub price failed for {raw_asset}: {exc}")
+
+    return prices
+
+
+def _portfolio_response(gu, sim, px_row=None):
+    """Build Portfolio using direct Bitkub THB prices; never depend on USD/THB."""
+    held_assets: set[str] = set()
     selected_asset = str(sim.get("asset") or "").upper().strip()
-    selected_price_thb = (
-        _safe_float(px_row.get("Global_USD"))
-        * _safe_float(px_row.get("USDTHB"))
-    )
+    if selected_asset and selected_asset != "THB":
+        held_assets.add(selected_asset)
 
-    price_map = {}
-    if selected_asset and selected_price_thb > 0:
-        price_map[selected_asset] = selected_price_thb
-
-    held_assets = set()
-    customer_coins = sim.get("customer_coins", {})
-    if isinstance(customer_coins, dict):
-        for asset, qty in customer_coins.items():
-            if _safe_float(qty) > 1e-12:
-                held_assets.add(str(asset).upper().strip())
+    for source in (sim.get("customer_coins"), sim.get("inv_coins")):
+        if isinstance(source, dict):
+            for asset, qty in source.items():
+                if _safe_float(qty) > 1e-12:
+                    name = str(asset).upper().strip()
+                    if name and name != "THB":
+                        held_assets.add(name)
 
     for tx in sim.get("portfolio_ledger", []) or []:
         if not isinstance(tx, dict):
@@ -482,26 +506,7 @@ def _portfolio_response(gu, sim, px_row):
         if asset and asset != "THB":
             held_assets.add(asset)
 
-    usdthb = _safe_float(px_row.get("USDTHB"))
-    if usdthb <= 0:
-        try:
-            usdthb, _ = gu.get_reference_usdthb()
-        except Exception:
-            usdthb = 0.0
-
-    remaining = sorted(a for a in held_assets if a not in price_map)
-    if remaining and usdthb > 0:
-        try:
-            overview = gu.fetch_market_overview(remaining)
-        except Exception:
-            overview = pd.DataFrame()
-        if overview is not None and not overview.empty:
-            for _, row in overview.iterrows():
-                asset = str(row.get("symbol") or "").upper().strip()
-                usd_price = _safe_float(row.get("price_usd"))
-                if asset and usd_price > 0:
-                    price_map[asset] = usd_price * usdthb
-
+    price_map = _fetch_bitkub_ticker_prices(held_assets)
     snap = gu.portfolio_snapshot(sim, price_map)
 
     return {
@@ -517,8 +522,6 @@ def _portfolio_response(gu, sim, px_row):
     }
 
 
-
-# =========================================================
 # ORDERBOOK — BITKUB PUBLIC MARKET DATA
 # =========================================================
 
@@ -766,17 +769,16 @@ def portfolio():
             ):
                 asset = requested_asset
 
-            data = _load_market_frame(gu, asset)
-
-            order_date = pd.Timestamp(data.index[-1])
-            px_row = data.loc[order_date]
+# Portfolio valuation uses Bitkub THB prices directly.
+            # It must not depend on Yahoo Finance or USD/THB (THB=X).
+            now_bkk = pd.Timestamp.now(tz=BANGKOK_TZ)
 
             return {
                 "status": "ok",
                 "actor": actor,
                 "asset": asset,
-                "as_of": order_date.isoformat(),
-                "portfolio": _portfolio_response(gu, sim, px_row),
+                "as_of": now_bkk.isoformat(),
+                "portfolio": _portfolio_response(gu, sim),
             }
 
         except HTTPException:
