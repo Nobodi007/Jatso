@@ -1,5 +1,3 @@
-{
-  "buildCommand": "cd XSpring-Frontend && npm run build",
-  "outputDirectory": "XSpring-Frontend/dist",
-  "framework": "vite"
-}
+   {
+     "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+   }
