@@ -1,4 +1,4 @@
-﻿import TradingViewChart from "./components/trading/TradingViewChart"
+import TradingViewChart from "./components/trading/TradingViewChart"
 import { useEffect, useState } from "react"
 import {
   LayoutDashboard,
@@ -79,12 +79,14 @@ function formatQty(value: number) {
 }
 
 
-const navigation: Array<{
+type NavigationItem = {
   id: Page
   label: string
   icon: typeof LayoutDashboard
   count?: number
-}> = [
+}
+
+const navigation: NavigationItem[] = [
   {
     id: "dashboard",
     label: "Dashboard",
@@ -343,7 +345,7 @@ function App() {
                         {item.label}
                       </span>
 
-                      {item.count && (
+                      {item.count !== undefined && (
                         <span
                           className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
                             active
@@ -455,6 +457,8 @@ function App() {
               />
             )}
 
+            {page === "orderbook" && <OrderBookPage />}
+
             {page === "wallet" && (
               <WalletPage
                 portfolio={portfolio}
@@ -505,8 +509,6 @@ function App() {
             )}
 
             {page === "news" && <NewsPage />}
-
-            {page === "orderbook" && <OrderBookPage />} 
 
             {page !== "dashboard" &&
               page !== "trade" &&
@@ -651,6 +653,255 @@ function WalletPage({
 
 
 /* =========================================================
+   ORDER BOOK — BITKUB PUBLIC DEPTH
+========================================================= */
+
+type OrderBookLevel = {
+  price_thb: number
+  quantity: number
+  total_thb: number
+}
+
+type OrderBookResponse = {
+  status?: string
+  asset?: string
+  symbol?: string
+  quote?: string
+  source?: string
+  timestamp?: string
+  best_bid_thb?: number
+  best_ask_thb?: number
+  mid_price_thb?: number
+  spread_thb?: number
+  spread_pct?: number
+  bids?: OrderBookLevel[]
+  asks?: OrderBookLevel[]
+}
+
+const ORDERBOOK_ASSETS = ["BTC", "ETH", "SOL", "DOGE", "ADA", "HBAR", "LINK", "XLM", "XRP"]
+
+function formatOrderBookPrice(value: number) {
+  const n = Number(value || 0)
+  if (!Number.isFinite(n) || n <= 0) return "—"
+  return `฿${n.toLocaleString("th-TH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+}
+
+function formatOrderBookQty(value: number) {
+  const n = Number(value || 0)
+  if (!Number.isFinite(n)) return "—"
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 8,
+  })
+}
+
+function OrderBookPage() {
+  const [asset, setAsset] = useState("BTC")
+  const [book, setBook] = useState<OrderBookResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [lastUpdated, setLastUpdated] = useState("")
+
+  useEffect(() => {
+    let cancelled = false
+
+    const load = async () => {
+      setLoading(true)
+      setError("")
+
+      try {
+        if (!DEALER_API_KEY) {
+          throw new Error("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
+        }
+
+        const response = await fetch(
+          `${API_BASE_URL}/api/orderbook?asset=${encodeURIComponent(asset)}&limit=20`,
+          {
+            method: "GET",
+            headers: {
+              Accept: "application/json",
+              "X-API-Key": DEALER_API_KEY,
+            },
+            cache: "no-store",
+          }
+        )
+
+        const body = await response.json().catch(() => ({}))
+
+        if (!response.ok || body?.status !== "ok") {
+          const detail = body?.detail
+          throw new Error(
+            typeof detail === "string"
+              ? detail
+              : detail?.message || `โหลด Order Book ไม่สำเร็จ (${response.status})`
+          )
+        }
+
+        if (!cancelled) {
+          setBook(body as OrderBookResponse)
+          setLastUpdated(new Date().toLocaleTimeString("th-TH"))
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "โหลด Order Book ไม่สำเร็จ")
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    load()
+    const timer = window.setInterval(load, 3000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [asset])
+
+  const bids = Array.isArray(book?.bids) ? book!.bids! : []
+  const asks = Array.isArray(book?.asks) ? book!.asks! : []
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold">Order Book</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Live market depth จาก Bitkub Public API
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {ORDERBOOK_ASSETS.map((item) => (
+            <button
+              key={item}
+              type="button"
+              onClick={() => setAsset(item)}
+              className={`rounded-lg border px-3 py-2 text-sm font-medium ${
+                asset === item ? "bg-primary text-primary-foreground" : "hover:bg-accent"
+              }`}
+            >
+              {item}/THB
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {error && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-400">
+          {error}
+        </div>
+      )}
+
+      <div className="grid gap-4 md:grid-cols-4">
+        <div className="rounded-xl border bg-card p-5">
+          <div className="text-sm text-muted-foreground">Best Bid</div>
+          <div className="mt-2 text-xl font-semibold">
+            {formatOrderBookPrice(book?.best_bid_thb || 0)}
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">{asset}/THB</div>
+        </div>
+
+        <div className="rounded-xl border bg-card p-5">
+          <div className="text-sm text-muted-foreground">Best Ask</div>
+          <div className="mt-2 text-xl font-semibold">
+            {formatOrderBookPrice(book?.best_ask_thb || 0)}
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">{asset}/THB</div>
+        </div>
+
+        <div className="rounded-xl border bg-card p-5">
+          <div className="text-sm text-muted-foreground">Mid Price</div>
+          <div className="mt-2 text-xl font-semibold">
+            {formatOrderBookPrice(book?.mid_price_thb || 0)}
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">THB</div>
+        </div>
+
+        <div className="rounded-xl border bg-card p-5">
+          <div className="text-sm text-muted-foreground">Spread</div>
+          <div className="mt-2 text-xl font-semibold">
+            {formatOrderBookPrice(book?.spread_thb || 0)}
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            {Number(book?.spread_pct || 0).toFixed(4)}%
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-xl border bg-card p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="font-semibold">{asset}/THB Market Depth</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Real-time bids / asks · Auto refresh 3s
+            </p>
+          </div>
+          <div className="text-right text-xs text-muted-foreground">
+            <div>{loading ? "Connecting..." : error ? "Disconnected" : "Connected"}</div>
+            {lastUpdated && <div>Updated · {lastUpdated}</div>}
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-6 lg:grid-cols-2">
+          <div>
+            <div className="mb-2 text-sm font-semibold">Asks</div>
+            <div className="overflow-hidden rounded-lg border">
+              <div className="grid grid-cols-3 border-b px-3 py-2 text-xs font-medium text-muted-foreground">
+                <div>Price</div><div className="text-right">Amount</div><div className="text-right">Total</div>
+              </div>
+              {asks.length === 0 ? (
+                <div className="px-3 py-8 text-center text-sm text-muted-foreground">No asks</div>
+              ) : asks.map((item, index) => (
+                <div key={`ask-${index}`} className="grid grid-cols-3 border-b px-3 py-2 text-sm last:border-b-0">
+                  <div className="font-medium">{formatOrderBookPrice(item.price_thb)}</div>
+                  <div className="text-right">{formatOrderBookQty(item.quantity)}</div>
+                  <div className="text-right">{formatOrderBookPrice(item.total_thb)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-2 text-sm font-semibold">Bids</div>
+            <div className="overflow-hidden rounded-lg border">
+              <div className="grid grid-cols-3 border-b px-3 py-2 text-xs font-medium text-muted-foreground">
+                <div>Price</div><div className="text-right">Amount</div><div className="text-right">Total</div>
+              </div>
+              {bids.length === 0 ? (
+                <div className="px-3 py-8 text-center text-sm text-muted-foreground">No bids</div>
+              ) : bids.map((item, index) => (
+                <div key={`bid-${index}`} className="grid grid-cols-3 border-b px-3 py-2 text-sm last:border-b-0">
+                  <div className="font-medium">{formatOrderBookPrice(item.price_thb)}</div>
+                  <div className="text-right">{formatOrderBookQty(item.quantity)}</div>
+                  <div className="text-right">{formatOrderBookPrice(item.total_thb)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-3 text-sm md:grid-cols-2">
+          <div className="rounded-lg border p-3">
+            <div className="text-xs text-muted-foreground">Source</div>
+            <div className="mt-1 font-medium">{book?.source || "Bitkub Public Order Book"}</div>
+          </div>
+          <div className="rounded-lg border p-3">
+            <div className="text-xs text-muted-foreground">Symbol / Quote</div>
+            <div className="mt-1 font-medium">{book?.symbol || `${asset}_THB`} · {book?.quote || "THB"}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+/* =========================================================
    DASHBOARD
 ========================================================= */
 
@@ -721,8 +972,8 @@ function Dashboard({
           : []
 
         rows.sort((a, b) => {
-          const dateA = new Date(a.timestamp || a.date || "").getTime()
-          const dateB = new Date(b.timestamp || b.date || "").getTime()
+          const dateA = parseOrderDate(a.timestamp || a.date)?.getTime() ?? NaN
+          const dateB = parseOrderDate(b.timestamp || b.date)?.getTime() ?? NaN
           if (Number.isFinite(dateA) && Number.isFinite(dateB)) {
             return dateB - dateA
           }
@@ -1202,7 +1453,7 @@ function TradePage({
 
     if (cleanAmount > availableThb + 1e-9) {
       setOrderMessage(
-        `${side === "BUY" ? "ยอดซื้อ" : "ยอดขาย"}เกินยอดที่ทำรายการได้`
+        `${side === "BUY" ? "???????" : "??????"}เกินยอดที่ทำรายการได้`
       )
       return
     }
@@ -1220,7 +1471,7 @@ function TradePage({
     }
 
     const confirmed = window.confirm(
-      `${side === "BUY" ? "ซื้อ" : "ขาย"} ${asset} มูลค่า ${formatTHB(cleanAmount)} ?\n\nราคาจะถูกตรวจและกำหนดโดย Backend / Engine`
+      `${side === "BUY" ? "????" : "???"} ${asset} ?????? ${formatTHB(cleanAmount)} ?\n\nราคาจะถูกตรวจและกำหนดโดย Backend / Engine`
     )
 
     if (!confirmed) return
@@ -1966,294 +2217,6 @@ function TradePage({
 
 
 /* =========================================================
-   ORDER BOOK
-========================================================= */
-
-type OrderbookLevel = {
-  price_usd: number
-  price_thb: number
-  quantity: number
-  total_usd: number
-  total_thb: number
-}
-
-type OrderbookData = {
-  status: string
-  asset: string
-  symbol: string
-  quote: string
-  usdthb: number
-  timestamp: string
-  best_bid_usd: number
-  best_ask_usd: number
-  mid_price_usd: number
-  spread_usd: number
-  spread_pct: number
-  bids: OrderbookLevel[]
-  asks: OrderbookLevel[]
-}
-
-function OrderBookPage() {
-  const assets = ["BTC", "ETH", "SOL", "DOGE", "ADA", "HBAR", "LINK", "XLM", "XRP"]
-  const [asset, setAsset] = useState("BTC")
-  const [data, setData] = useState<OrderbookData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState("")
-
-  const loadOrderbook = async (signal?: AbortSignal) => {
-    try {
-      setError("")
-      const response = await fetch(
-        `${API_BASE_URL}/api/orderbook?asset=${encodeURIComponent(asset)}&limit=20`,
-        {
-          method: "GET",
-          headers: {
-            Accept: "application/json",
-            "X-API-Key": DEALER_API_KEY,
-          },
-          cache: "no-store",
-          signal,
-        },
-      )
-
-      const body = await response.json()
-
-      if (!response.ok || body?.status !== "ok") {
-        const detail =
-          typeof body?.detail === "string"
-            ? body.detail
-            : body?.detail?.message || `Backend ตอบ HTTP ${response.status}`
-        throw new Error(detail)
-      }
-
-      setData(body as OrderbookData)
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return
-      setData(null)
-      setError(
-        err instanceof Error ? err.message : "ไม่สามารถโหลด Order Book ได้",
-      )
-    } finally {
-      if (!signal?.aborted) setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    setLoading(true)
-    const controller = new AbortController()
-
-    loadOrderbook(controller.signal)
-    const timer = window.setInterval(() => {
-      loadOrderbook(controller.signal)
-    }, 3000)
-
-    return () => {
-      controller.abort()
-      window.clearInterval(timer)
-    }
-  }, [asset])
-
-  const formatUsd = (value: number) =>
-    `$${Number(value || 0).toLocaleString("en-US", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })}`
-
-  const formatLevel = (value: number) =>
-    Number(value || 0).toLocaleString("en-US", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })
-
-  const bestBid = Number(data?.best_bid_usd || 0)
-  const bestAsk = Number(data?.best_ask_usd || 0)
-  const mid = Number(data?.mid_price_usd || 0)
-  const spread = Number(data?.spread_usd || 0)
-  const spreadPct = Number(data?.spread_pct || 0)
-
-  return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold">Order Book</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Live market depth จาก Backend
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <select
-            value={asset}
-            onChange={(e) => setAsset(e.target.value)}
-            className="rounded-lg border bg-card px-3 py-2 text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
-          >
-            {assets.map((symbol) => (
-              <option key={symbol} value={symbol}>
-                {symbol}/USDT
-              </option>
-            ))}
-          </select>
-
-          <button
-            type="button"
-            onClick={() => {
-              setLoading(true)
-              loadOrderbook()
-            }}
-            disabled={loading}
-            className="rounded-lg border px-3 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
-          >
-            {loading ? "Loading..." : "Refresh"}
-          </button>
-        </div>
-      </div>
-
-      {!DEALER_API_KEY && (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-500">
-          ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend
-        </div>
-      )}
-
-      {error && (
-        <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-500">
-          <div className="font-medium">โหลด Order Book ไม่สำเร็จ</div>
-          <div className="mt-1 break-words text-xs">{error}</div>
-        </div>
-      )}
-
-      <div className="grid gap-3 md:grid-cols-4">
-        <MarketStat
-          label="Best Bid"
-          value={bestBid > 0 ? formatUsd(bestBid) : "—"}
-          sub={data ? `${data.asset}/USDT` : "—"}
-        />
-        <MarketStat
-          label="Best Ask"
-          value={bestAsk > 0 ? formatUsd(bestAsk) : "—"}
-          sub={data ? `${data.asset}/USDT` : "—"}
-        />
-        <MarketStat
-          label="Mid Price"
-          value={mid > 0 ? formatUsd(mid) : "—"}
-          sub={data?.usdthb ? `USD/THB ${data.usdthb.toFixed(2)}` : "—"}
-        />
-        <MarketStat
-          label="Spread"
-          value={spread > 0 ? formatUsd(spread) : "—"}
-          sub={spreadPct > 0 ? `${spreadPct.toFixed(4)}%` : "—"}
-        />
-      </div>
-
-      <div className="rounded-xl border bg-card">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4">
-          <div>
-            <h3 className="font-semibold">
-              {data?.asset || asset}/USDT Market Depth
-            </h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Real-time bids / asks · Auto refresh 3s
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="size-2 rounded-full bg-emerald-500" />
-            {data ? "Connected" : loading ? "Connecting..." : "Disconnected"}
-            {data?.timestamp ? ` · ${new Date(data.timestamp).toLocaleTimeString("th-TH")}` : ""}
-          </div>
-        </div>
-
-        <div className="grid gap-6 p-5 lg:grid-cols-2">
-          <div>
-            <div className="mb-3 flex items-center justify-between">
-              <span className="text-sm font-semibold text-red-500">Asks</span>
-              <span className="text-[10px] text-muted-foreground">Price · Amount · Total</span>
-            </div>
-
-            <div className="grid grid-cols-3 border-b pb-2 text-[10px] text-muted-foreground">
-              <span>Price</span>
-              <span className="text-right">Amount</span>
-              <span className="text-right">Total</span>
-            </div>
-
-            <div className="divide-y">
-              {data?.asks?.length ? (
-                [...data.asks].reverse().map((level, index) => (
-                  <div key={`ask-${index}`} className="grid grid-cols-3 py-2 text-xs">
-                    <span className="font-medium text-red-500">
-                      {formatUsd(level.price_usd)}
-                    </span>
-                    <span className="text-right">{formatLevel(level.quantity)}</span>
-                    <span className="text-right text-muted-foreground">
-                      {formatUsd(level.total_usd)}
-                    </span>
-                  </div>
-                ))
-              ) : (
-                <div className="py-10 text-center text-xs text-muted-foreground">
-                  {loading ? "กำลังโหลด Order Book..." : "ไม่มีข้อมูล Ask"}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div>
-            <div className="mb-3 flex items-center justify-between">
-              <span className="text-sm font-semibold text-emerald-500">Bids</span>
-              <span className="text-[10px] text-muted-foreground">Price · Amount · Total</span>
-            </div>
-
-            <div className="grid grid-cols-3 border-b pb-2 text-[10px] text-muted-foreground">
-              <span>Price</span>
-              <span className="text-right">Amount</span>
-              <span className="text-right">Total</span>
-            </div>
-
-            <div className="divide-y">
-              {data?.bids?.length ? (
-                data.bids.map((level, index) => (
-                  <div key={`bid-${index}`} className="grid grid-cols-3 py-2 text-xs">
-                    <span className="font-medium text-emerald-500">
-                      {formatUsd(level.price_usd)}
-                    </span>
-                    <span className="text-right">{formatLevel(level.quantity)}</span>
-                    <span className="text-right text-muted-foreground">
-                      {formatUsd(level.total_usd)}
-                    </span>
-                  </div>
-                ))
-              ) : (
-                <div className="py-10 text-center text-xs text-muted-foreground">
-                  {loading ? "กำลังโหลด Order Book..." : "ไม่มีข้อมูล Bid"}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {data && (
-          <div className="grid gap-3 border-t px-5 py-4 text-xs md:grid-cols-3">
-            <div>
-              <span className="text-muted-foreground">Source</span>
-              <div className="mt-1 font-medium">Binance Public Order Book</div>
-            </div>
-            <div>
-              <span className="text-muted-foreground">Symbol</span>
-              <div className="mt-1 font-medium">{data.symbol}</div>
-            </div>
-            <div>
-              <span className="text-muted-foreground">USD/THB</span>
-              <div className="mt-1 font-medium">
-                {data.usdthb > 0 ? data.usdthb.toFixed(4) : "Unavailable"}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-/* =========================================================
    PORTFOLIO PAGE
 ========================================================= */
 
@@ -2302,7 +2265,7 @@ function PortfolioPage({
         <StatCard
           title="Total Portfolio"
           value={portfolio ? formatTHB(portfolio.total_value_thb) : "—"}
-          change={portfolio ? "มูลค่าพอร์ตทั้งหมด" : "กำลังโหลด"}
+          change={portfolio ? "??????????????????" : "กำลังโหลด"}
         />
 
         <StatCard
@@ -2692,20 +2655,45 @@ type OrderHistoryRow = {
   source?: string
 }
 
+function parseOrderDate(value?: string) {
+  if (!value) return null
+
+  const raw = String(value).trim()
+  if (!raw) return null
+
+  // Date-only values are handled separately so they do not shift across
+  // midnight when converted through the JavaScript Date constructor.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [year, month, day] = raw.split("-").map(Number)
+    return new Date(Date.UTC(year, month - 1, day))
+  }
+
+  // Timestamps without an explicit timezone are legacy Bangkok clock values.
+  // Treat them as Asia/Bangkok instead of UTC to avoid the old +7h shift.
+  let normalized = raw.replace(" ", "T")
+  const hasTimezone = /Z$/i.test(normalized) || /[+-]\d{2}:\d{2}$/.test(normalized)
+
+  if (!hasTimezone) {
+    normalized += "+07:00"
+  }
+
+  const date = new Date(normalized)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
 function formatOrderDate(value?: string) {
   if (!value) return "—"
 
   const raw = String(value).trim()
 
-  // Legacy orders may contain only YYYY-MM-DD. Do NOT parse these as a
-  // JavaScript Date because UTC midnight becomes 07:00 in Thailand.
+  // Legacy orders may contain only YYYY-MM-DD. Keep the stored calendar date.
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
     const [year, month, day] = raw.split("-")
     return `${day}/${month}/${Number(year) + 543}`
   }
 
-  const d = new Date(raw)
-  if (Number.isNaN(d.getTime())) return raw
+  const d = parseOrderDate(raw)
+  if (!d) return raw
 
   return d.toLocaleString("th-TH", {
     timeZone: "Asia/Bangkok",
@@ -2790,8 +2778,8 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
         : []
 
       const sortedOrders = [...rows].sort((a, b) => {
-        const dateA = new Date(a.timestamp || a.date || "").getTime()
-        const dateB = new Date(b.timestamp || b.date || "").getTime()
+        const dateA = parseOrderDate(a.timestamp || a.date)?.getTime() ?? NaN
+        const dateB = parseOrderDate(b.timestamp || b.date)?.getTime() ?? NaN
 
         // ล่าสุด → เก่าสุด
         if (Number.isFinite(dateA) && Number.isFinite(dateB)) {
@@ -2934,10 +2922,20 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
 
               <tbody>
                 {orders.map((order, index) => {
-                  const side = String(order.side || "").toUpperCase()
-                  const status = String(order.status || "").toLowerCase()
-                  const timestamp = order.timestamp || order.date
-                  const key = order.order_id || `${timestamp || "order"}-${index}`
+                  const row: any = order as any
+                  const side = String(
+                    row.side || row.Side || row["ฝั่ง"] || ""
+                  ).toUpperCase()
+                  const status = String(
+                    row.status || row.Status || row["สถานะ"] || ""
+                  ).toLowerCase()
+                  const timestamp =
+                    row.timestamp || row.time || row.execution_time || row.date
+                  const orderId =
+                    row.order_id || row.orderId || row["Order ID"] || row.id || ""
+                  const exchange =
+                    row.exchange || row.Exchange || row.exchange_name || "Bitkub"
+                  const key = orderId || `${timestamp || "order"}-${index}`
 
                   return (
                     <tr
@@ -3001,11 +2999,11 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
                       </td>
 
                       <td className="px-3 py-4 text-xs">
-                        {order.exchange || order.source || "—"}
+                        {exchange || row.source || "—"}
                       </td>
 
                       <td className="max-w-[180px] truncate px-3 py-4 font-mono text-[10px] text-muted-foreground">
-                        {order.order_id || "—"}
+                        {orderId || "—"}
                       </td>
 
                       <td className="px-3 py-4 text-right">
