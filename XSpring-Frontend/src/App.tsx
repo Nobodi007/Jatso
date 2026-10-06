@@ -1,5 +1,5 @@
 import TradingViewChart from "./components/trading/TradingViewChart"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
   LayoutDashboard,
   CandlestickChart,
@@ -1486,6 +1486,9 @@ function TradePage({
   const [submitting, setSubmitting] =
     useState(false)
 
+  // Reuse the same key only when retrying the exact same order intent.
+  const pendingIdempotencyRef = useRef<{ signature: string; key: string } | null>(null)
+
   const [orderMessage, setOrderMessage] =
     useState("")
 
@@ -1625,12 +1628,27 @@ function TradePage({
     setSubmitting(true)
 
     try {
+      const signature = `${asset.toUpperCase()}|${side.toLowerCase()}|${cleanAmount}`
+      const existing = pendingIdempotencyRef.current
+      const idempotencyKey =
+        existing?.signature === signature
+          ? existing.key
+          : (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random().toString(36).slice(2)}`)
+
+      pendingIdempotencyRef.current = {
+        signature,
+        key: idempotencyKey,
+      }
+
       const response = await fetch(`${API_BASE_URL}/api/order`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Accept: "application/json",
           "X-API-Key": DEALER_API_KEY,
+          "Idempotency-Key": idempotencyKey,
         },
         body: JSON.stringify({
           asset: asset.toUpperCase(),
@@ -1668,6 +1686,7 @@ function TradePage({
           "Engine ปฏิเสธคำสั่ง"
 
         setOrderMessage(`Engine ปฏิเสธคำสั่ง: ${reason}`)
+        pendingIdempotencyRef.current = null
         return
       }
 
@@ -1685,6 +1704,7 @@ function TradePage({
         `สำเร็จ: ${side === "BUY" ? "ซื้อ" : "ขาย"} ${asset} ${formatTHB(executedQuote)}${executedQty > 0 ? ` · ${formatQty(executedQty)} ${asset}` : ""}`
       )
 
+      pendingIdempotencyRef.current = null
       setAmount("")
 
       // Refresh Portfolio first, then tell Order History to fetch the
