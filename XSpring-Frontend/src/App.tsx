@@ -834,86 +834,7 @@ function OrderBookPage() {
 
       try {
         if (!DEALER_API_KEY) {
-          throw new Error("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
-        }
-
-        const response = await fetch(
-          `${API_BASE_URL}/api/orderbook?asset=${encodeURIComponent(asset)}&limit=20`,
-          {
-            method: "GET",
-            headers: {
-              Accept: "application/json",
-              "X-API-Key": DEALER_API_KEY,
-            },
-            cache: "no-store",
-          }
-        )
-
-        const body = await response.json().catch(() => ({}))
-
-        if (!response.ok || body?.status !== "ok") {
-          const detail = body?.detail
-          throw new Error(
-            typeof detail === "string"
-              ? detail
-              : detail?.message || `โหลด Order Book ไม่สำเร็จ (${response.status})`
-          )
-        }
-
-        if (!cancelled) {
-          setBook(body as OrderBookResponse)
-          setLastUpdated(new Date().toLocaleTimeString("th-TH"))
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "โหลด Order Book ไม่สำเร็จ")
-        }
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-
-    load()
-    const timer = window.setInterval(load, 3000)
-
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [asset])
-
-  const bids = Array.isArray(book?.bids) ? book!.bids! : []
-  const asks = Array.isArray(book?.asks) ? book!.asks! : []
-
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold">Order Book</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Live market depth จาก Bitkub Public API
-          </p>
-        </div>
-
-        <div className="flex max-w-full gap-2 overflow-x-auto pb-1">
-          {ORDERBOOK_ASSETS.map((item) => {
-            const active = asset === item
-            return (
-              <button
-                key={item}
-                type="button"
-                onClick={() => setAsset(item)}
-                aria-label={`${item}/THB`}
-                className={`flex shrink-0 items-center gap-2 rounded-xl border px-3.5 py-2 text-sm font-medium transition-all ${
-                  active
-                    ? "border-primary bg-primary text-primary-foreground shadow-sm"
-                    : "bg-card hover:bg-accent"
-                }`}
-              >
-                <CoinLogo asset={item} size={22} />
-                <span>{item}/THB</span>
-              </button>
-            )
+        throw new Error(formatApiError(response, body, "โหลด Order Book ไม่สำเร็จ"))
           })}
         </div>
       </div>
@@ -2964,11 +2885,7 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
       }))
     } catch (err) {
       setOrders([])
-      setError(
-        err instanceof Error
-          ? err.message
-          : "ไม่สามารถโหลด Order History ได้"
-      )
+      setError(formatNetworkError(err, "โหลด Order History ไม่สำเร็จ"))
     } finally {
       setLoading(false)
     }
