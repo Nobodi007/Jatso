@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pathlib import Path
 from threading import RLock
 from functools import lru_cache
@@ -90,11 +90,12 @@ def require_api_key(x_api_key: str = Header(default="")):
 # =========================================================
 
 class OrderRequest(BaseModel):
-    asset: str
-    side: str
-    amount_thb: float
+    # Validate at the API boundary before the trading engine is touched.
+    asset: str = Field(..., min_length=1, max_length=20)
+    side: str = Field(..., min_length=1, max_length=8)
+    amount_thb: float = Field(..., gt=0, le=1_000_000_000_000)
     # รับไว้เพื่อไม่ให้ frontend เดิมพัง แต่ server ไม่ใช้ค่านี้
-    quote_thb: Optional[float] = None
+    quote_thb: Optional[float] = Field(default=None, ge=0, le=1_000_000_000_000)
 
 
 # =========================================================
@@ -1205,6 +1206,24 @@ def create_order(order: OrderRequest):
             # -------------------------------------------------
             # VALIDATION
             # -------------------------------------------------
+
+            if not asset or len(asset) > 20:
+                raise HTTPException(
+                    status_code=400,
+                    detail="asset ไม่ถูกต้อง",
+                )
+
+            if side not in ("buy", "sell"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="side ต้องเป็น buy หรือ sell",
+                )
+
+            if not math.isfinite(amount_thb) or amount_thb <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="amount_thb ต้องเป็นตัวเลขที่มากกว่า 0",
+                )
 
             if asset not in gu.SUPPORTED_ASSETS:
                 raise HTTPException(
