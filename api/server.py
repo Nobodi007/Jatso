@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Header, Request
+from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pathlib import Path
@@ -6,15 +6,12 @@ from threading import RLock
 from functools import lru_cache
 from typing import Optional
 import hmac
-import base64
-import hashlib
 import importlib.util
 import os
 import math
 import json
 import urllib.parse
 import urllib.request
-from uuid import uuid4
 
 import pandas as pd
 
@@ -98,8 +95,6 @@ class OrderRequest(BaseModel):
     amount_thb: float
     # รับไว้เพื่อไม่ให้ frontend เดิมพัง แต่ server ไม่ใช้ค่านี้
     quote_thb: Optional[float] = None
-    # ช่องทางที่สร้างคำสั่ง: Web หรือ LINE
-    source: Optional[str] = "Web"
 
 
 # =========================================================
@@ -544,7 +539,7 @@ def _fetch_bitkub_orderbook(symbol: str, limit: int = 20):
     """Fetch a THB orderbook snapshot from Bitkub's public V3 API."""
     safe_limit = max(1, min(int(limit), 100))
     params = urllib.parse.urlencode({
-        "sym": symbol.lower(),
+        "sym": symbol,
         "lmt": safe_limit,
     })
 
@@ -571,10 +566,7 @@ def _fetch_bitkub_orderbook(symbol: str, limit: int = 20):
             f"Bitkub orderbook error={payload.get('error')}"
         )
 
-    # Bitkub depth may return asks/bids at the top level or wrapped in
-    # "result". Accept both shapes.
-    raw_result = payload.get("result")
-    result = raw_result if isinstance(raw_result, dict) else payload
+    result = payload.get("result") or {}
     bids = result.get("bids") or []
     asks = result.get("asks") or []
 
@@ -841,52 +833,6 @@ def _display_order_timestamp(value):
 
 
 # =========================================================
-# ORDER ID / SOURCE NORMALIZATION
-# =========================================================
-
-def _order_source(order: dict) -> str:
-    raw = str(
-        order.get("Source")
-        or order.get("source")
-        or order.get("ช่องทาง")
-        or "Web"
-    ).strip()
-    if raw.lower() == "line":
-        return "LINE"
-    return raw or "Web"
-
-
-def _new_order_id(source: str, existing_ids: set[str]) -> str:
-    prefix = "LINE" if str(source).strip().upper() == "LINE" else "ORD"
-    while True:
-        candidate = f"{prefix}-{uuid4().hex[:10].upper()}"
-        if candidate not in existing_ids:
-            return candidate
-
-
-def _ensure_order_id(order: dict, source: str, existing_ids: set[str]) -> str:
-    current = str(
-        order.get("Order ID")
-        or order.get("order_id")
-        or order.get("id")
-        or ""
-    ).strip()
-    source_upper = str(source).strip().upper()
-    valid_prefix = "LINE-" if source_upper == "LINE" else "ORD-"
-
-    # Keep an existing ID only when it is non-empty, unique in this ledger,
-    # and consistent with the channel. Legacy IDs such as ORDER-000001 are
-    # upgraded to the new canonical format when a new order is created.
-    if current and current not in existing_ids and current.upper().startswith(valid_prefix):
-        existing_ids.add(current)
-        return current
-
-    candidate = _new_order_id(source, existing_ids)
-    existing_ids.add(candidate)
-    return candidate
-
-
-# =========================================================
 # ORDER HISTORY
 # =========================================================
 
@@ -899,17 +845,12 @@ def order_history(limit: int = 100, asset: str = ""):
             _sync_gu_actor(gu, actor)
             sim = _load_existing_sim(gu)
 
-            # Order History is append-only and survives operational resets.
-            # Prefer the durable archive; fall back to the live ledger for legacy states.
-            raw_orders = sim.get("order_history")
-            if not isinstance(raw_orders, list):
-                raw_orders = sim.get("orders", [])
+            raw_orders = sim.get("orders", [])
             if not isinstance(raw_orders, list):
                 raw_orders = []
 
             asset_filter = str(asset or "").strip().upper()
             rows = []
-            seen_order_ids = set()
 
             for idx, order in enumerate(raw_orders):
                 if not isinstance(order, dict):
@@ -937,28 +878,12 @@ def order_history(limit: int = 100, asset: str = ""):
                     or "Filled"
                 ).strip()
 
-                source = _order_source(order)
-
-                # API-level canonical ID for every row. This is deliberately
-                # read-only: legacy records are not rewritten just by opening
-                # Order History. Newly-created orders are persisted with a
-                # canonical ID in create_order() below.
-                legacy_id = str(
+                order_id = str(
                     order.get("Order ID")
                     or order.get("order_id")
                     or order.get("id")
-                    or ""
-                ).strip()
-                if legacy_id and legacy_id not in seen_order_ids:
-                    order_id = legacy_id
-                else:
-                    # Read-only migration label: opening Order History never
-                    # rewrites the persisted legacy portfolio. It only guarantees
-                    # that the API response itself has a unique ID per row.
-                    order_id = f"LEGACY-{idx + 1:06d}"
-                    while order_id in seen_order_ids:
-                        order_id = f"LEGACY-{idx + 1:06d}-{len(seen_order_ids) + 1}"
-                seen_order_ids.add(order_id)
+                    or f"ORDER-{idx + 1:06d}"
+                )
 
                 timestamp = (
                     order.get("เวลา")
@@ -1007,13 +932,7 @@ def order_history(limit: int = 100, asset: str = ""):
                     "quantity": quantity,
                     "fee_thb": fee,
                     "exchange": str(order.get("Exchange") or order.get("exchange") or "—"),
-                    "source": source,
-                    "transaction_id": str(
-                        order.get("transaction_id")
-                        or order.get("Transaction ID")
-                        or order.get("tx_id")
-                        or ""
-                    ),
+                    "source": str(order.get("Source") or order.get("source") or "Web"),
                 })
 
             # Normalize every timestamp to UTC before sorting.
@@ -1262,133 +1181,40 @@ def create_order(order: OrderRequest):
             # เก็บเวลา execution จริงลงทั้ง rec และรายการที่ engine append
             # เข้า sim["orders"] โดยตรง เพื่อให้ /api/orders อ่านค่าจริงได้แน่นอน
             execution_iso = execution_time.isoformat()
-
-            # -------------------------------------------------
-            # CANONICAL ORDER ID / SOURCE
-            # -------------------------------------------------
-            # Every newly created order gets a globally unique API Order ID.
-            # Web orders use ORD-..., while a future LINE adapter can submit
-            # Source=LINE and receive LINE-... without changing Order History.
-            existing_ids = set()
-            for existing in sim.get("orders", []) or []:
-                if isinstance(existing, dict):
-                    existing_id = str(
-                        existing.get("Order ID")
-                        or existing.get("order_id")
-                        or existing.get("id")
-                        or ""
-                    ).strip()
-                    if existing_id:
-                        existing_ids.add(existing_id)
-
-            requested_source = str(getattr(order, "source", "Web") or "Web").strip()
-            if requested_source.lower() == "line":
-                requested_source = "LINE"
-            elif requested_source.lower() == "web":
-                requested_source = "Web"
-            source = requested_source or _order_source(rec)
-            order_id = _ensure_order_id(rec, source, existing_ids)
-            rec["Order ID"] = order_id
-            rec["order_id"] = order_id
-            rec["Source"] = source
-            rec["source"] = source
             rec["เวลา"] = execution_iso
             rec["timestamp"] = execution_iso
             rec["วันที่"] = execution_time.strftime("%Y-%m-%d")
 
-            # Keep an existing transaction reference if the engine already
-            # creates one. Do not invent a fake transaction linkage here.
-            transaction_id = str(
-                rec.get("transaction_id")
-                or rec.get("Transaction ID")
-                or rec.get("tx_id")
-                or ""
-            ).strip()
-            if transaction_id:
-                rec["transaction_id"] = transaction_id
-
             # execute_order() บางเวอร์ชันอาจ append สำเนา rec เข้า ledger
             # ดังนั้นแก้ entry ใน sim["orders"] โดยตรงด้วย
-            # -------------------------------------------------
-            # FORCE-SYNC THE SAME RECORD INTO sim["orders"]
-            # -------------------------------------------------
-            # Some gu.execute_order() versions return a record but do not keep
-            # that exact dict in sim["orders"].  LINE orders were therefore
-            # successfully executed while /api/orders could not see them.
-            # Make the API ledger authoritative: update the matching entry;
-            # otherwise append this exact execution record once.
             ledger_orders = sim.get("orders")
-            if not isinstance(ledger_orders, list):
-                ledger_orders = []
-                sim["orders"] = ledger_orders
-
-            rec_order_id = str(
-                rec.get("Order ID")
-                or rec.get("order_id")
-                or rec.get("id")
-                or order_id
-            ).strip()
-
-            target = None
-            for ledger_order in reversed(ledger_orders):
-                if not isinstance(ledger_order, dict):
-                    continue
-                ledger_id = str(
-                    ledger_order.get("Order ID")
-                    or ledger_order.get("order_id")
-                    or ledger_order.get("id")
+            if isinstance(ledger_orders, list) and ledger_orders:
+                rec_order_id = str(
+                    rec.get("Order ID")
+                    or rec.get("order_id")
+                    or rec.get("id")
                     or ""
-                ).strip()
-                if ledger_id == rec_order_id or ledger_id == order_id:
-                    target = ledger_order
-                    break
+                )
+                target = None
+                if rec_order_id:
+                    for ledger_order in reversed(ledger_orders):
+                        if isinstance(ledger_order, dict):
+                            ledger_id = str(
+                                ledger_order.get("Order ID")
+                                or ledger_order.get("order_id")
+                                or ledger_order.get("id")
+                                or ""
+                            )
+                            if ledger_id == rec_order_id:
+                                target = ledger_order
+                                break
+                if target is None and isinstance(ledger_orders[-1], dict):
+                    target = ledger_orders[-1]
 
-            if target is None:
-                # Do not append the same execution twice. A canonical Order ID
-                # is the de-duplication key across Web and LINE.
-                target = dict(rec)
-                ledger_orders.append(target)
-
-            # Write all fields required by Order History onto the persisted row.
-            target["Order ID"] = order_id
-            target["order_id"] = order_id
-            target["Source"] = source
-            target["source"] = source
-            target["เวลา"] = execution_iso
-            target["timestamp"] = execution_iso
-            target["วันที่"] = execution_time.strftime("%Y-%m-%d")
-            target.setdefault("สถานะ", "Filled")
-            target.setdefault("status", "filled")
-            if not target.get("เหรียญ") and asset:
-                target["เหรียญ"] = asset
-            if not target.get("asset") and asset:
-                target["asset"] = asset
-            if not target.get("ฝั่ง"):
-                target["ฝั่ง"] = "ซื้อ" if side == "buy" else "ขาย"
-            if not target.get("side"):
-                target["side"] = side
-            if transaction_id:
-                target["transaction_id"] = transaction_id
-
-            # -------------------------------------------------
-            # FORCE-PERSIST TRADING FEE
-            # -------------------------------------------------
-            # execute_order() already calculates the local trading fee.
-            # Keep that exact value on the API ledger so LINE/Web Order
-            # History never falls back to 0 just because one record used
-            # the legacy Thai field name. If a legacy engine record omitted
-            # the fee entirely, calculate the configured 0.25% fee once.
-            raw_fee = target.get("fee_thb")
-            if raw_fee is None:
-                raw_fee = target.get("ค่าธรรมเนียม")
-            fee_thb = _safe_float(raw_fee, 0.0)
-            if fee_thb <= 0.0:
-                fee_rate = _safe_float(getattr(gu, "LOCAL_TRADING_FEE_PCT", 0.0025), 0.0025)
-                fee_thb = max(0.0, amount_thb * fee_rate)
-            target["fee_thb"] = fee_thb
-            target["ค่าธรรมเนียม"] = fee_thb
-            rec["fee_thb"] = fee_thb
-            rec["ค่าธรรมเนียม"] = fee_thb
+                if target is not None:
+                    target["เวลา"] = execution_iso
+                    target["timestamp"] = execution_iso
+                    target["วันที่"] = execution_time.strftime("%Y-%m-%d")
 
             result = str(rec.get("ผลด่าน", ""))
 
@@ -1402,8 +1228,6 @@ def create_order(order: OrderRequest):
                     "asset": asset,
                     "side": side,
                     "amount_thb": amount_thb,
-                    "order_id": order_id,
-                    "transaction_id": transaction_id or None,
                     "order": rec,
                     "steps": steps,
                 }
@@ -1414,28 +1238,6 @@ def create_order(order: OrderRequest):
 
             # ล้าง error เก่าก่อน เพราะ gu ถูก cache ข้าม request
             gu.st.session_state.pop("sim_state_save_error", None)
-
-            # Keep a durable append-only history in the same Supabase sim_state record.
-            history = sim.get("order_history")
-            if not isinstance(history, list):
-                history = []
-            existing_hist_ids = {
-                str(x.get("Order ID") or x.get("order_id") or x.get("id") or "").strip()
-                for x in history if isinstance(x, dict)
-            }
-            for item in sim.get("orders", []) or []:
-                if not isinstance(item, dict):
-                    continue
-                oid = str(item.get("Order ID") or item.get("order_id") or item.get("id") or "").strip()
-                if oid and oid in existing_hist_ids:
-                    history = [
-                        item if isinstance(h, dict) and str(h.get("Order ID") or h.get("order_id") or h.get("id") or "").strip() == oid else h
-                        for h in history
-                    ]
-                elif oid:
-                    history.append(dict(item))
-                    existing_hist_ids.add(oid)
-            sim["order_history"] = history
 
             gu.save_sim_state(sim)
 
@@ -1469,9 +1271,6 @@ def create_order(order: OrderRequest):
                 "amount_thb": amount_thb,
                 "quote_thb": rec.get("ราคาที่ลูกค้าได้"),
                 "quantity": rec.get("เหรียญที่ส่งมอบ"),
-                "order_id": order_id,
-                "transaction_id": transaction_id or None,
-                "source": source,
                 "order": rec,
                 "steps": steps,
                 "portfolio": _portfolio_response(gu, sim, px_row),
@@ -1488,252 +1287,3 @@ def create_order(order: OrderRequest):
                     "error": str(e),
                 },
             )
-
-# =========================================================
-# LINE TRADING
-# =========================================================
-
-LINE_MAX_MESSAGE_LENGTH = 5000
-
-
-def _line_channel_secret() -> str:
-    return os.environ.get("LINE_CHANNEL_SECRET", "").strip()
-
-
-def _line_channel_access_token() -> str:
-    return os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
-
-
-def _verify_line_signature(body: bytes, signature: str) -> bool:
-    secret = _line_channel_secret()
-    if not secret or not signature:
-        return False
-
-    digest = hmac.new(
-        secret.encode("utf-8"),
-        body,
-        hashlib.sha256,
-    ).digest()
-    expected = base64.b64encode(digest).decode("ascii")
-    return hmac.compare_digest(expected, signature.strip())
-
-
-def _parse_line_trade_command(text: str):
-    """
-    Supported commands:
-        BUY BTC 1000
-        SELL BTC 1000
-
-    Also accepts Thai side words:
-        ซื้อ BTC 1000
-        ขาย BTC 1000
-
-    Optional comma separators are accepted:
-        BUY BTC,1000
-    """
-    raw = str(text or "").strip()
-    if not raw:
-        return None
-
-    normalized = raw.replace(",", " ").replace("/", " ")
-    parts = [part for part in normalized.split() if part]
-    if len(parts) != 3:
-        return None
-
-    side_raw = parts[0].strip().lower()
-    side_map = {
-        "buy": "buy",
-        "ซื้อ": "buy",
-        "b": "buy",
-        "sell": "sell",
-        "ขาย": "sell",
-        "s": "sell",
-    }
-    side = side_map.get(side_raw)
-    if not side:
-        return None
-
-    asset = parts[1].upper().strip()
-    try:
-        amount = float(parts[2].replace(",", ""))
-    except (TypeError, ValueError):
-        return None
-
-    if not math.isfinite(amount) or amount <= 0:
-        return None
-
-    return side, asset, amount
-
-
-def _line_help_text() -> str:
-    return (
-        "คำสั่งซื้อขาย\n"
-        "BUY BTC 1000 = ซื้อ BTC 1,000 บาท\n"
-        "SELL BTC 1000 = ขาย BTC 1,000 บาท\n\n"
-        "ใช้ได้กับ BTC / ETH / SOL / XRP และเหรียญที่ Engine รองรับ"
-    )
-
-
-def _line_order_result_text(result: dict) -> str:
-    status = str(result.get("status") or "").lower()
-    order_id = str(result.get("order_id") or "—")
-    asset = str(result.get("asset") or "—")
-    side = str(result.get("side") or "—").upper()
-    amount = _safe_float(result.get("amount_thb"), 0.0)
-    quantity = result.get("quantity")
-    quote = result.get("quote_thb")
-
-    if status == "filled":
-        lines = [
-            "✅ Order Filled",
-            f"Order ID: {order_id}",
-            f"{side} {asset}",
-            f"Amount: ฿{amount:,.2f}",
-        ]
-        if quantity is not None:
-            lines.append(f"Quantity: {float(quantity):,.8f}")
-        if quote is not None:
-            lines.append(f"Executed Price: ฿{float(quote):,.2f}")
-        lines.append("Source: LINE")
-        return "\n".join(lines)
-
-    if status == "rejected":
-        return (
-            "❌ Order Rejected\n"
-            f"Order ID: {order_id}\n"
-            f"{side} {asset}\n"
-            f"Amount: ฿{amount:,.2f}"
-        )
-
-    return "❌ ไม่สามารถดำเนินการ Order ได้"
-
-
-def _line_reply(reply_token: str, messages: list[dict]):
-    token = _line_channel_access_token()
-    if not token:
-        raise RuntimeError("ยังไม่ได้ตั้ง LINE_CHANNEL_ACCESS_TOKEN")
-
-    payload = json.dumps({
-        "replyToken": reply_token,
-        "messages": messages[:5],
-    }).encode("utf-8")
-
-    request = urllib.request.Request(
-        "https://api.line.me/v2/bot/message/reply",
-        data=payload,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-    )
-
-    with urllib.request.urlopen(request, timeout=10) as response:
-        return response.read().decode("utf-8")
-
-
-@app.get("/api/line/webhook")
-def line_webhook_health():
-    return {
-        "status": "ok",
-        "service": "LINE Trading",
-        "webhook": "POST /webhook",
-        "configured": bool(_line_channel_secret() and _line_channel_access_token()),
-    }
-
-
-@app.post("/webhook")
-@app.post("/api/line/webhook")
-async def line_webhook(request: Request):
-    body = await request.body()
-    signature = request.headers.get("x-line-signature", "")
-
-    # LINE signature verification is mandatory. Do not expose the endpoint
-    # through the dealer API-key dependency because LINE itself calls it.
-    if not _verify_line_signature(body, signature):
-        raise HTTPException(status_code=401, detail="Invalid LINE signature")
-
-    if not _line_channel_access_token():
-        raise HTTPException(
-            status_code=503,
-            detail="ยังไม่ได้ตั้ง LINE_CHANNEL_ACCESS_TOKEN",
-        )
-
-    try:
-        payload = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        raise HTTPException(status_code=400, detail="LINE webhook payload ไม่ถูกต้อง")
-
-    events = payload.get("events") or []
-
-    # LINE may retry a webhook. Processing is kept serialized by the same
-    # ORDER_LOCK used by Web orders so portfolio writes cannot race.
-    for event in events:
-        if not isinstance(event, dict):
-            continue
-
-        if event.get("type") != "message":
-            continue
-        message = event.get("message") or {}
-        if message.get("type") != "text":
-            continue
-
-        reply_token = str(event.get("replyToken") or "").strip()
-        text = str(message.get("text") or "").strip()
-        if not reply_token:
-            continue
-
-        if text.lower() in {"help", "menu", "คำสั่ง", "ช่วย", "ช่วยเหลือ"}:
-            _line_reply(reply_token, [{"type": "text", "text": _line_help_text()}])
-            continue
-
-        command = _parse_line_trade_command(text)
-        if command is None:
-            _line_reply(
-                reply_token,
-                [{
-                    "type": "text",
-                    "text": (
-                        "ไม่เข้าใจคำสั่ง\n\n"
-                        "ตัวอย่าง: BUY BTC 1000\n"
-                        "พิมพ์ HELP เพื่อดูคำสั่ง"
-                    ),
-                }],
-            )
-            continue
-
-        side, asset, amount_thb = command
-
-        try:
-            result = create_order(
-                OrderRequest(
-                    asset=asset,
-                    side=side,
-                    amount_thb=amount_thb,
-                    source="LINE",
-                )
-            )
-            reply_text = _line_order_result_text(result)
-        except HTTPException as exc:
-            detail = exc.detail
-            if isinstance(detail, dict):
-                message_text = str(
-                    detail.get("message")
-                    or detail.get("error")
-                    or "Order ไม่สำเร็จ"
-                )
-            else:
-                message_text = str(detail or "Order ไม่สำเร็จ")
-            reply_text = f"❌ Order ไม่สำเร็จ\n{message_text}"
-        except Exception as exc:
-            reply_text = f"❌ ระบบขัดข้อง: {type(exc).__name__}: {exc}"
-
-        if len(reply_text) > LINE_MAX_MESSAGE_LENGTH:
-            reply_text = reply_text[: LINE_MAX_MESSAGE_LENGTH - 3] + "..."
-
-        _line_reply(
-            reply_token,
-            [{"type": "text", "text": reply_text}],
-        )
-
-    return {"status": "ok"}
