@@ -3010,32 +3010,51 @@ def _sim_state_actor_candidates ()->list [str]:
 def _sim_state_from_rest (actor :str )->Optional[dict [str ,Any ]]:
     """Read the signed-in user's sim_state through Supabase REST.
 
-    Handles JSONB returned as either a dict or a JSON string and tolerates
-    case/whitespace differences in the actor email. It never searches for an
-    arbitrary user's state.
+    Render production credentials come from environment variables first.
+    Streamlit secrets are only consulted when environment variables are absent.
+    This prevents Streamlit's missing-secrets error from blocking the API.
     """
     try:
-        cfg =st .secrets .get ("supabase",{})
-        if not isinstance (cfg ,Mapping ):
-            cfg ={}
-        url =str (cfg .get ("url","")or st .secrets .get ("SUPABASE_URL","")or os .environ .get ("SUPABASE_URL","")).strip ()
+        # Render production: NEVER require .streamlit/secrets.toml.
+        url =str (os .environ .get ("SUPABASE_URL","") or "").strip ()
         key =str (
-            cfg .get ("service_role_key","")
-            or st .secrets .get ("SUPABASE_SERVICE_ROLE_KEY","")
-            or cfg .get ("key","")
-            or st .secrets .get ("SUPABASE_KEY","")
-            or os .environ .get ("SUPABASE_SERVICE_ROLE_KEY","")
+            os .environ .get ("SUPABASE_SERVICE_ROLE_KEY","")
             or os .environ .get ("SUPABASE_KEY","")
             or ""
         ).strip ()
+
+        # Local/Streamlit fallback only if environment variables are absent.
+        if not (url and key):
+            try:
+                secrets =st .secrets
+                cfg =secrets .get ("supabase",{})
+                if not isinstance (cfg ,Mapping ):
+                    cfg ={}
+                url =str (
+                    cfg .get ("url","")
+                    or secrets .get ("SUPABASE_URL","")
+                    or url
+                ).strip ()
+                key =str (
+                    cfg .get ("service_role_key","")
+                    or secrets .get ("SUPABASE_SERVICE_ROLE_KEY","")
+                    or cfg .get ("key","")
+                    or secrets .get ("SUPABASE_KEY","")
+                    or key
+                    or ""
+                ).strip ()
+            except Exception:
+                pass
+
         if not url or not key:
             return None
+
         actor_clean =str (actor or "").strip ()
         q =urllib .parse .urlencode (
             {"select":"data,actor,updated_at","actor":f"ilike.{actor_clean}","limit":"1"}
         )
         req =urllib .request .Request (
-            url.rstrip ("/")+"/rest/v1/sim_state?"+q ,
+            url .rstrip ("/")+"/rest/v1/sim_state?"+q ,
             headers ={
                 "apikey":key ,
                 "Authorization":f"Bearer {key }",
@@ -3055,7 +3074,10 @@ def _sim_state_from_rest (actor :str )->Optional[dict [str ,Any ]]:
             if isinstance (d ,dict ):
                 return d
     except Exception as exc:
-        st .session_state ["sim_state_rest_error"]=str (exc )
+        try:
+            st .session_state ["sim_state_rest_error"]=str (exc )
+        except Exception:
+            pass
     return None
 
 def _normalize_loaded_sim_state (d :Any )->Optional[dict [str ,Any ]]:
