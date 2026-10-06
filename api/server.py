@@ -1353,40 +1353,66 @@ def create_order(order: OrderRequest):
 
             # execute_order() บางเวอร์ชันอาจ append สำเนา rec เข้า ledger
             # ดังนั้นแก้ entry ใน sim["orders"] โดยตรงด้วย
+            # -------------------------------------------------
+            # FORCE-SYNC THE SAME RECORD INTO sim["orders"]
+            # -------------------------------------------------
+            # Some gu.execute_order() versions return a record but do not keep
+            # that exact dict in sim["orders"].  LINE orders were therefore
+            # successfully executed while /api/orders could not see them.
+            # Make the API ledger authoritative: update the matching entry;
+            # otherwise append this exact execution record once.
             ledger_orders = sim.get("orders")
-            if isinstance(ledger_orders, list) and ledger_orders:
-                rec_order_id = str(
-                    rec.get("Order ID")
-                    or rec.get("order_id")
-                    or rec.get("id")
-                    or ""
-                )
-                target = None
-                if rec_order_id:
-                    for ledger_order in reversed(ledger_orders):
-                        if isinstance(ledger_order, dict):
-                            ledger_id = str(
-                                ledger_order.get("Order ID")
-                                or ledger_order.get("order_id")
-                                or ledger_order.get("id")
-                                or ""
-                            )
-                            if ledger_id == rec_order_id:
-                                target = ledger_order
-                                break
-                if target is None and isinstance(ledger_orders[-1], dict):
-                    target = ledger_orders[-1]
+            if not isinstance(ledger_orders, list):
+                ledger_orders = []
+                sim["orders"] = ledger_orders
 
-                if target is not None:
-                    target["Order ID"] = order_id
-                    target["order_id"] = order_id
-                    target["Source"] = source
-                    target["source"] = source
-                    target["เวลา"] = execution_iso
-                    target["timestamp"] = execution_iso
-                    target["วันที่"] = execution_time.strftime("%Y-%m-%d")
-                    if transaction_id:
-                        target["transaction_id"] = transaction_id
+            rec_order_id = str(
+                rec.get("Order ID")
+                or rec.get("order_id")
+                or rec.get("id")
+                or order_id
+            ).strip()
+
+            target = None
+            for ledger_order in reversed(ledger_orders):
+                if not isinstance(ledger_order, dict):
+                    continue
+                ledger_id = str(
+                    ledger_order.get("Order ID")
+                    or ledger_order.get("order_id")
+                    or ledger_order.get("id")
+                    or ""
+                ).strip()
+                if ledger_id == rec_order_id or ledger_id == order_id:
+                    target = ledger_order
+                    break
+
+            if target is None:
+                # Do not append the same execution twice. A canonical Order ID
+                # is the de-duplication key across Web and LINE.
+                target = dict(rec)
+                ledger_orders.append(target)
+
+            # Write all fields required by Order History onto the persisted row.
+            target["Order ID"] = order_id
+            target["order_id"] = order_id
+            target["Source"] = source
+            target["source"] = source
+            target["เวลา"] = execution_iso
+            target["timestamp"] = execution_iso
+            target["วันที่"] = execution_time.strftime("%Y-%m-%d")
+            target.setdefault("สถานะ", "Filled")
+            target.setdefault("status", "filled")
+            if not target.get("เหรียญ") and asset:
+                target["เหรียญ"] = asset
+            if not target.get("asset") and asset:
+                target["asset"] = asset
+            if not target.get("ฝั่ง"):
+                target["ฝั่ง"] = "ซื้อ" if side == "buy" else "ขาย"
+            if not target.get("side"):
+                target["side"] = side
+            if transaction_id:
+                target["transaction_id"] = transaction_id
 
             result = str(rec.get("ผลด่าน", ""))
 
@@ -1613,12 +1639,11 @@ def line_webhook_health():
     return {
         "status": "ok",
         "service": "LINE Trading",
-        "webhook": "POST /webhook",
+        "webhook": "POST /api/line/webhook",
         "configured": bool(_line_channel_secret() and _line_channel_access_token()),
     }
 
 
-@app.post("/webhook")
 @app.post("/api/line/webhook")
 async def line_webhook(request: Request):
     body = await request.body()
