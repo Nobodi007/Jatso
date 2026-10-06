@@ -1693,6 +1693,7 @@ function TradePage({
 
       if (!response.ok) {
         throw new Error(formatApiError(response, body, "ส่งคำสั่งไม่สำเร็จ", rawText))
+      }
       
       if (body?.status === "rejected") {
         const reason =
@@ -2907,6 +2908,7 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
 
       if (!response.ok) {
         throw new Error(formatApiError(response, body, "โหลด Order History ไม่สำเร็จ", rawText))
+      }
       
       if (body?.status !== "ok") {
         throw new Error(
