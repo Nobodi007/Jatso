@@ -947,7 +947,11 @@ def order_history(limit: int = 100, asset: str = ""):
             _sync_gu_actor(gu, actor)
             sim = _load_existing_sim(gu)
 
-            raw_orders = sim.get("orders", [])
+            # Order History is append-only and survives operational resets.
+            # Prefer the durable archive; fall back to the live ledger for legacy states.
+            raw_orders = sim.get("order_history")
+            if not isinstance(raw_orders, list):
+                raw_orders = sim.get("orders", [])
             if not isinstance(raw_orders, list):
                 raw_orders = []
 
@@ -1438,6 +1442,28 @@ def create_order(order: OrderRequest):
 
             # ล้าง error เก่าก่อน เพราะ gu ถูก cache ข้าม request
             gu.st.session_state.pop("sim_state_save_error", None)
+
+            # Keep a durable append-only history in the same Supabase sim_state record.
+            history = sim.get("order_history")
+            if not isinstance(history, list):
+                history = []
+            existing_hist_ids = {
+                str(x.get("Order ID") or x.get("order_id") or x.get("id") or "").strip()
+                for x in history if isinstance(x, dict)
+            }
+            for item in sim.get("orders", []) or []:
+                if not isinstance(item, dict):
+                    continue
+                oid = str(item.get("Order ID") or item.get("order_id") or item.get("id") or "").strip()
+                if oid and oid in existing_hist_ids:
+                    history = [
+                        item if isinstance(h, dict) and str(h.get("Order ID") or h.get("order_id") or h.get("id") or "").strip() == oid else h
+                        for h in history
+                    ]
+                elif oid:
+                    history.append(dict(item))
+                    existing_hist_ids.add(oid)
+            sim["order_history"] = history
 
             gu.save_sim_state(sim)
 
