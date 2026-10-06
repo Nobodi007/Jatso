@@ -2402,20 +2402,6 @@ _supabase_client :Optional ["_SupabaseClient"]=None
 _supabase_checked =False 
 
 
-def _safe_secret_get(key, default=""):
-    """
-    อ่าน Streamlit secrets แบบปลอดภัย
-
-    บน Render ฝั่ง FastAPI อาจไม่มี .streamlit/secrets.toml
-    ดังนั้น st.secrets.get(...) อาจโยน NoSecretsError และขัด
-    การ fallback ไปอ่าน os.environ
-    """
-    try:
-        return st.secrets.get(key, default)
-    except Exception:
-        return default
-
-
 def _get_supabase ()->Optional ["_SupabaseClient"]:
     """คืน Supabase client ถ้าตั้งค่าไว้ครบ; รองรับทั้ง [supabase] และ top-level secrets/env."""
     global _supabase_client ,_supabase_checked 
@@ -2426,7 +2412,7 @@ def _get_supabase ()->Optional ["_SupabaseClient"]:
         return None 
     try :
         # รองรับรูปแบบเดิม: [supabase] url/key
-        cfg =_safe_secret_get ("supabase",{})
+        cfg =st .secrets .get ("supabase",{})
         if not isinstance (cfg,Mapping ):
             cfg ={}
         url =str (cfg .get ("url","")or "").strip ()
@@ -2434,7 +2420,7 @@ def _get_supabase ()->Optional ["_SupabaseClient"]:
         # It is required here because sim_state may be protected by RLS.
         key =str (
             cfg .get ("service_role_key","")
-            or _safe_secret_get ("SUPABASE_SERVICE_ROLE_KEY","")
+            or st .secrets .get ("SUPABASE_SERVICE_ROLE_KEY","")
             or os .environ .get ("SUPABASE_SERVICE_ROLE_KEY","")
             or cfg .get ("key","")
             or ""
@@ -2442,9 +2428,9 @@ def _get_supabase ()->Optional ["_SupabaseClient"]:
 
         # รองรับรูปแบบ Streamlit secrets/env ที่ใช้กันอีกแบบ
         if not url :
-            url =str (_safe_secret_get ("SUPABASE_URL","")or os .environ .get ("SUPABASE_URL","")or "").strip ()
+            url =str (st .secrets .get ("SUPABASE_URL","")or os .environ .get ("SUPABASE_URL","")or "").strip ()
         if not key :
-            key =str (_safe_secret_get ("SUPABASE_KEY","")or os .environ .get ("SUPABASE_KEY","")or "").strip ()
+            key =str (st .secrets .get ("SUPABASE_KEY","")or os .environ .get ("SUPABASE_KEY","")or "").strip ()
 
         if not (url and key ):
             return None 
@@ -2954,9 +2940,56 @@ def _cloud_has_state (actor :str )->Optional [bool]:
         return None
 
 
+def _preserve_order_history(sim: dict[str, Any]) -> None:
+    """Maintain an append-only Order History archive separate from operational state.
+
+    Resetting/rebuilding the simulator may replace `orders`, but the customer
+    transaction history must remain durable.  The archive is merged by canonical
+    Order ID and is never shortened by a reset.
+    """
+    if not isinstance(sim, dict):
+        return
+
+    archive = sim.get("order_history")
+    if not isinstance(archive, list):
+        archive = []
+
+    current = sim.get("orders")
+    if not isinstance(current, list):
+        current = []
+
+    by_id: dict[str, dict[str, Any]] = {}
+    no_id: list[dict[str, Any]] = []
+
+    for item in archive:
+        if not isinstance(item, dict):
+            continue
+        oid = str(item.get("Order ID") or item.get("order_id") or item.get("id") or "").strip()
+        if oid:
+            by_id[oid] = dict(item)
+        else:
+            no_id.append(dict(item))
+
+    for item in current:
+        if not isinstance(item, dict):
+            continue
+        oid = str(item.get("Order ID") or item.get("order_id") or item.get("id") or "").strip()
+        if oid:
+            # Current ledger is the latest representation of an existing order.
+            by_id[oid] = dict(item)
+        else:
+            no_id.append(dict(item))
+
+    sim["order_history"] = list(by_id.values()) + no_id
+
+
 def save_sim_state (sim :Any ,path :Optional [Path ]=None )->None :
     if is_guest_mode ()or not isinstance (sim ,dict ):
         return
+
+    # Persist history before any operational-state save. This archive is
+    # intentionally not cleared by simulator resets.
+    _preserve_order_history(sim)
 
     sb =_get_supabase ()
     if sb is not None :
@@ -3020,15 +3053,15 @@ def _sim_state_from_rest (actor :str )->Optional[dict [str ,Any ]]:
     arbitrary user's state.
     """
     try:
-        cfg =_safe_secret_get ("supabase",{})
+        cfg =st .secrets .get ("supabase",{})
         if not isinstance (cfg ,Mapping ):
             cfg ={}
-        url =str (cfg .get ("url","")or _safe_secret_get ("SUPABASE_URL","")or os .environ .get ("SUPABASE_URL","")).strip ()
+        url =str (cfg .get ("url","")or st .secrets .get ("SUPABASE_URL","")or os .environ .get ("SUPABASE_URL","")).strip ()
         key =str (
             cfg .get ("service_role_key","")
-            or _safe_secret_get ("SUPABASE_SERVICE_ROLE_KEY","")
+            or st .secrets .get ("SUPABASE_SERVICE_ROLE_KEY","")
             or cfg .get ("key","")
-            or _safe_secret_get ("SUPABASE_KEY","")
+            or st .secrets .get ("SUPABASE_KEY","")
             or os .environ .get ("SUPABASE_SERVICE_ROLE_KEY","")
             or os .environ .get ("SUPABASE_KEY","")
             or ""
@@ -3133,15 +3166,15 @@ def load_sim_state (path :Optional [Path ]=None )->Optional[dict [str ,Any ]]:
     # actor locally so URL/operator encoding cannot prevent a valid match.
     for actor in candidates:
         try:
-            cfg =_safe_secret_get ("supabase",{})
+            cfg =st .secrets .get ("supabase",{})
             if not isinstance (cfg ,Mapping ):
                 cfg ={}
-            url =str (cfg .get ("url","")or _safe_secret_get ("SUPABASE_URL","")or os .environ .get ("SUPABASE_URL","")).strip ()
+            url =str (cfg .get ("url","")or st .secrets .get ("SUPABASE_URL","")or os .environ .get ("SUPABASE_URL","")).strip ()
             key =str (
                 cfg .get ("service_role_key","")
-                or _safe_secret_get ("SUPABASE_SERVICE_ROLE_KEY","")
+                or st .secrets .get ("SUPABASE_SERVICE_ROLE_KEY","")
                 or cfg .get ("key","")
-                or _safe_secret_get ("SUPABASE_KEY","")
+                or st .secrets .get ("SUPABASE_KEY","")
                 or os .environ .get ("SUPABASE_SERVICE_ROLE_KEY","")
                 or os .environ .get ("SUPABASE_KEY","")
                 or ""
@@ -24680,8 +24713,12 @@ market_df :Optional [pd .DataFrame ]=None )->None :
             _fresh_sim = sim_defaults(
                 asset, first_day, data.loc[first_day, "Global_USD"],
                 data.loc[first_day, "USDTHB"], target_stock_thb)
-            # Reset operational balances, but never erase the audit trail or last routing view.
+            # Reset operational balances, but NEVER erase the permanent Order History.
+            # Keep both the live ledger and the append-only archive.
             _fresh_sim["orders"] = list(_old_sim.get("orders", []))
+            _fresh_sim["order_history"] = list(
+                _old_sim.get("order_history", _old_sim.get("orders", []))
+            )
             _fresh_sim["portfolio_ledger"] = list(_old_sim.get("portfolio_ledger", []))
             _fresh_sim["last_routing_steps"] = list(_old_sim.get("last_routing_steps", []))
             _fresh_sim["last_routing_order_id"] = _old_sim.get("last_routing_order_id")
