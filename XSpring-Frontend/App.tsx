@@ -18,6 +18,9 @@ import {
   ChevronDown,
   TrendingUp,
   TrendingDown,
+  RefreshCw,
+  ArrowUpRight,
+  ArrowDownRight,
 } from "lucide-react"
 
 type Page =
@@ -437,19 +440,19 @@ function App() {
 
           <main className="flex-1 overflow-auto p-6">
 
-            {page === "markets" && (
-              <MarketsPage
-                portfolio={portfolio}
-                onTrade={() => setPage("trade")}
-              />
-            )}
-
             {page === "dashboard" && (
               <Dashboard
                 portfolio={portfolio}
                 loading={portfolioLoading}
                 error={portfolioError}
                 onRefresh={loadPortfolio}
+                onTrade={() => setPage("trade")}
+              />
+            )}
+
+            {page === "markets" && (
+              <MarketsPage
+                portfolio={portfolio}
                 onTrade={() => setPage("trade")}
               />
             )}
@@ -544,7 +547,7 @@ function App() {
 
 
 /* =========================================================
-   MARKETS — LIVE BITKUB MARKET HUB
+   MARKETS HUB — BITKUB LIVE MARKET DATA
 ========================================================= */
 
 type MarketRow = {
@@ -558,7 +561,7 @@ type MarketRow = {
   bid: number
   ask: number
   spread: number
-  source?: string
+  source: string
 }
 
 type MarketTrade = {
@@ -568,21 +571,21 @@ type MarketTrade = {
   amount: number
 }
 
-const MARKETS_ASSETS = ["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "HBAR", "LINK", "XLM"]
-
-function compactTHB(value: number) {
-  const n = Number(value || 0)
-  if (!Number.isFinite(n)) return "—"
-  if (Math.abs(n) >= 1_000_000_000) return `฿${(n / 1_000_000_000).toFixed(2)}B`
-  if (Math.abs(n) >= 1_000_000) return `฿${(n / 1_000_000).toFixed(2)}M`
-  if (Math.abs(n) >= 1_000) return `฿${(n / 1_000).toFixed(2)}K`
-  return `฿${n.toLocaleString("th-TH", { maximumFractionDigits: 2 })}`
-}
+const MARKET_ASSETS = ["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "HBAR", "LINK", "XLM"]
 
 function marketPrice(value: number) {
   const n = Number(value || 0)
   if (!Number.isFinite(n) || n <= 0) return "—"
-  return `฿${n.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 8 })}`
+  return `฿${n.toLocaleString("th-TH", { maximumFractionDigits: 2 })}`
+}
+
+function marketVolume(value: number) {
+  const n = Number(value || 0)
+  if (!Number.isFinite(n)) return "—"
+  if (n >= 1_000_000_000) return `฿${(n / 1_000_000_000).toFixed(2)}B`
+  if (n >= 1_000_000) return `฿${(n / 1_000_000).toFixed(2)}M`
+  if (n >= 1_000) return `฿${(n / 1_000).toFixed(2)}K`
+  return `฿${n.toFixed(2)}`
 }
 
 function MarketsPage({
@@ -600,41 +603,24 @@ function MarketsPage({
   const [error, setError] = useState("")
   const [book, setBook] = useState<OrderBookResponse | null>(null)
   const [trades, setTrades] = useState<MarketTrade[]>([])
-  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailLoading, setDetailLoading] = useState(true)
   const [detailError, setDetailError] = useState("")
   const [lastUpdated, setLastUpdated] = useState("")
 
   const loadMarkets = async (manual = false) => {
     if (manual) setRefreshing(true)
-    else setLoading(true)
     setError("")
-
     try {
-      if (!DEALER_API_KEY) {
-        throw new Error("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
-      }
-
+      if (!DEALER_API_KEY) throw new Error("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
       const response = await fetch(`${API_BASE_URL}/api/markets`, {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-          "X-API-Key": DEALER_API_KEY,
-        },
+        headers: { Accept: "application/json", "X-API-Key": DEALER_API_KEY },
         cache: "no-store",
       })
       const body = await response.json().catch(() => ({}))
-
-      if (!response.ok || body?.status !== "ok") {
-        const detail = body?.detail
-        throw new Error(
-          typeof detail === "string"
-            ? detail
-            : detail?.message || `โหลด Market Data ไม่สำเร็จ (${response.status})`
-        )
+      if (!response.ok || body?.status !== "ok" || !Array.isArray(body?.markets)) {
+        throw new Error(typeof body?.detail === "string" ? body.detail : body?.detail?.message || "โหลด Market Data ไม่สำเร็จ")
       }
-
-      const rows = Array.isArray(body?.markets) ? body.markets : []
-      setMarkets(rows as MarketRow[])
+      setMarkets(body.markets as MarketRow[])
       setLastUpdated(new Date().toLocaleTimeString("th-TH"))
     } catch (err) {
       setError(err instanceof Error ? err.message : "โหลด Market Data ไม่สำเร็จ")
@@ -647,46 +633,23 @@ function MarketsPage({
   const loadDetails = async (selectedAsset: string) => {
     setDetailLoading(true)
     setDetailError("")
-
     try {
-      if (!DEALER_API_KEY) {
-        throw new Error("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
-      }
-
-      const headers = {
-        Accept: "application/json",
-        "X-API-Key": DEALER_API_KEY,
-      }
-
+      if (!DEALER_API_KEY) throw new Error("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
       const [bookResponse, tradesResponse] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/orderbook?asset=${encodeURIComponent(selectedAsset)}&limit=20`, {
-          headers,
-          cache: "no-store",
+        fetch(`${API_BASE_URL}/api/orderbook?asset=${encodeURIComponent(selectedAsset)}&limit=12`, {
+          headers: { Accept: "application/json", "X-API-Key": DEALER_API_KEY }, cache: "no-store",
         }),
         fetch(`${API_BASE_URL}/api/market/trades?asset=${encodeURIComponent(selectedAsset)}&limit=20`, {
-          headers,
-          cache: "no-store",
+          headers: { Accept: "application/json", "X-API-Key": DEALER_API_KEY }, cache: "no-store",
         }),
       ])
-
       const bookBody = await bookResponse.json().catch(() => ({}))
       const tradesBody = await tradesResponse.json().catch(() => ({}))
-
       if (!bookResponse.ok || bookBody?.status !== "ok") {
-        throw new Error(
-          typeof bookBody?.detail === "string"
-            ? bookBody.detail
-            : bookBody?.detail?.message || "โหลด Order Book ไม่สำเร็จ"
-        )
+        throw new Error(typeof bookBody?.detail === "string" ? bookBody.detail : bookBody?.detail?.message || "โหลด Order Book ไม่สำเร็จ")
       }
-
       setBook(bookBody as OrderBookResponse)
-
-      if (tradesResponse.ok && tradesBody?.status === "ok") {
-        setTrades(Array.isArray(tradesBody?.trades) ? tradesBody.trades : [])
-      } else {
-        setTrades([])
-      }
+      setTrades(tradesResponse.ok && tradesBody?.status === "ok" && Array.isArray(tradesBody?.trades) ? tradesBody.trades : [])
     } catch (err) {
       setDetailError(err instanceof Error ? err.message : "โหลดข้อมูลตลาดไม่สำเร็จ")
       setBook(null)
@@ -698,14 +661,12 @@ function MarketsPage({
 
   useEffect(() => {
     loadMarkets()
-    const timer = window.setInterval(() => loadMarkets(true), 10000)
+    const timer = window.setInterval(() => loadMarkets(), 10000)
     return () => window.clearInterval(timer)
   }, [])
 
   useEffect(() => {
-    if (markets.length > 0 && !markets.some((item) => item.asset === asset)) {
-      setAsset(markets[0].asset)
-    }
+    if (markets.length && !markets.some((item) => item.asset === asset)) setAsset(markets[0].asset)
   }, [markets, asset])
 
   useEffect(() => {
@@ -715,325 +676,83 @@ function MarketsPage({
   }, [asset])
 
   const selected = markets.find((item) => item.asset === asset) || null
-  const holding = (portfolio?.holdings || []).find(
-    (item) => item.asset.toUpperCase() === asset
-  )
-
+  const holding = (portfolio?.holdings || []).find((item) => item.asset.toUpperCase() === asset)
   const filtered = markets.filter((item) => {
     const q = search.trim().toLowerCase()
-    if (!q) return true
-    return item.asset.toLowerCase().includes(q) || item.name.toLowerCase().includes(q)
+    return !q || item.asset.toLowerCase().includes(q) || item.name.toLowerCase().includes(q)
   })
-
   const gainers = [...markets].sort((a, b) => b.change24h - a.change24h).slice(0, 3)
   const losers = [...markets].sort((a, b) => a.change24h - b.change24h).slice(0, 3)
-  const bids = Array.isArray(book?.bids) ? book!.bids! : []
-  const asks = Array.isArray(book?.asks) ? book!.asks! : []
+  const bids = book?.bids || []
+  const asks = book?.asks || []
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold">Markets</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Live Market Hub · Bitkub · ราคาและ Market Depth แบบเรียลไทม์
-          </p>
+          <p className="mt-1 text-sm text-muted-foreground">Live Market Hub · Bitkub · ราคาและ Market Depth แบบเรียลไทม์</p>
         </div>
-        <button
-          type="button"
-          onClick={() => loadMarkets(true)}
-          disabled={refreshing}
-          className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
-        >
+        <button type="button" onClick={() => loadMarkets(true)} disabled={refreshing} className="inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50">
+          <RefreshCw className={`size-4 ${refreshing ? "animate-spin" : ""}`} />
           {refreshing ? "กำลังโหลด..." : "Refresh"}
         </button>
       </div>
 
-      {error && (
-        <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
-          {error}
-        </div>
-      )}
+      {error && <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-500">{error}</div>}
 
       <div className="relative">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search coin เช่น BTC, ETH, Solana..."
-          className="w-full rounded-xl border bg-card py-3 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-primary/30"
-        />
+        <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search coin เช่น BTC, ETH, Solana..." className="w-full rounded-xl border bg-card py-3 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-primary/30" />
       </div>
 
       <section className="rounded-xl border bg-card">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4">
-          <div>
-            <h3 className="font-semibold">Market Overview</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {loading ? "กำลังโหลดข้อมูลจาก Bitkub..." : `${filtered.length} markets · อัปเดต ${lastUpdated || "—"}`}
-            </p>
-          </div>
+          <div><h3 className="font-semibold">Market Overview</h3><p className="mt-1 text-xs text-muted-foreground">{loading ? "กำลังโหลดข้อมูลจาก Bitkub..." : `${filtered.length} markets · อัปเดต ${lastUpdated || "—"}`}</p></div>
           <span className="rounded-full bg-muted px-3 py-1 text-[11px]">BITKUB / THB</span>
         </div>
-
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[760px] text-sm">
-            <thead>
-              <tr className="border-b text-xs text-muted-foreground">
-                <th className="px-5 py-3 text-left font-medium">Market</th>
-                <th className="px-5 py-3 text-right font-medium">Price</th>
-                <th className="px-5 py-3 text-right font-medium">24h</th>
-                <th className="px-5 py-3 text-right font-medium">24h High</th>
-                <th className="px-5 py-3 text-right font-medium">24h Low</th>
-                <th className="px-5 py-3 text-right font-medium">Volume</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((item) => {
-                const positive = item.change24h >= 0
-                return (
-                  <tr
-                    key={item.asset}
-                    onClick={() => setAsset(item.asset)}
-                    className={`cursor-pointer border-b last:border-0 hover:bg-accent/50 ${asset === item.asset ? "bg-accent/30" : ""}`}
-                  >
-                    <td className="px-5 py-4">
-                      <div className="font-semibold">{item.asset}/THB</div>
-                      <div className="text-xs text-muted-foreground">{item.name}</div>
-                    </td>
-                    <td className="px-5 py-4 text-right font-semibold">{marketPrice(item.price)}</td>
-                    <td className={`px-5 py-4 text-right font-medium ${positive ? "text-emerald-500" : "text-red-500"}`}>
-                      {positive ? "+" : ""}{Number(item.change24h || 0).toFixed(2)}%
-                    </td>
-                    <td className="px-5 py-4 text-right">{marketPrice(item.high24h)}</td>
-                    <td className="px-5 py-4 text-right">{marketPrice(item.low24h)}</td>
-                    <td className="px-5 py-4 text-right">{compactTHB(item.volume24h)}</td>
-                  </tr>
-                )
-              })}
-            </tbody>
+          <table className="w-full min-w-[780px] text-sm">
+            <thead><tr className="border-b text-xs text-muted-foreground"><th className="px-5 py-3 text-left font-medium">Market</th><th className="px-5 py-3 text-right font-medium">Price</th><th className="px-5 py-3 text-right font-medium">24h</th><th className="px-5 py-3 text-right font-medium">24h High</th><th className="px-5 py-3 text-right font-medium">24h Low</th><th className="px-5 py-3 text-right font-medium">Volume</th></tr></thead>
+            <tbody>{filtered.map((item) => { const positive = item.change24h >= 0; return <tr key={item.asset} onClick={() => setAsset(item.asset)} className={`cursor-pointer border-b last:border-0 hover:bg-accent/50 ${asset === item.asset ? "bg-accent/30" : ""}`}><td className="px-5 py-4"><div className="font-semibold">{item.asset}/THB</div><div className="text-xs text-muted-foreground">{item.name}</div></td><td className="px-5 py-4 text-right font-semibold">{marketPrice(item.price)}</td><td className={`px-5 py-4 text-right font-medium ${positive ? "text-emerald-500" : "text-red-500"}`}>{positive ? "+" : ""}{Number(item.change24h || 0).toFixed(2)}%</td><td className="px-5 py-4 text-right">{marketPrice(item.high24h)}</td><td className="px-5 py-4 text-right">{marketPrice(item.low24h)}</td><td className="px-5 py-4 text-right">{marketVolume(item.volume24h)}</td></tr> })}</tbody>
           </table>
+          {!loading && filtered.length === 0 && <div className="px-5 py-12 text-center text-sm text-muted-foreground">ไม่พบเหรียญที่ค้นหา</div>}
         </div>
       </section>
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        <div className="rounded-xl border bg-card p-5">
-          <div className="mb-4 flex items-center gap-2">
-            <TrendingUp className="h-4 w-4 text-emerald-500" />
-            <div>
-              <h3 className="font-semibold">Top Movers · Gainers</h3>
-              <p className="text-xs text-muted-foreground">เหรียญที่ขึ้นแรงสุด 24H</p>
-            </div>
-          </div>
-          <div className="space-y-2">
-            {gainers.map((item) => (
-              <button key={item.asset} type="button" onClick={() => setAsset(item.asset)} className="flex w-full items-center justify-between rounded-lg px-3 py-3 text-left hover:bg-accent">
-                <span className="font-medium">{item.asset}/THB</span>
-                <span className="font-semibold text-emerald-500">+{Number(item.change24h || 0).toFixed(2)}%</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="rounded-xl border bg-card p-5">
-          <div className="mb-4 flex items-center gap-2">
-            <TrendingDown className="h-4 w-4 text-red-500" />
-            <div>
-              <h3 className="font-semibold">Top Movers · Losers</h3>
-              <p className="text-xs text-muted-foreground">เหรียญที่ลงแรงสุด 24H</p>
-            </div>
-          </div>
-          <div className="space-y-2">
-            {losers.map((item) => (
-              <button key={item.asset} type="button" onClick={() => setAsset(item.asset)} className="flex w-full items-center justify-between rounded-lg px-3 py-3 text-left hover:bg-accent">
-                <span className="font-medium">{item.asset}/THB</span>
-                <span className="font-semibold text-red-500">{Number(item.change24h || 0).toFixed(2)}%</span>
-              </button>
-            ))}
-          </div>
-        </div>
+      <div className="grid gap-6 lg:grid-cols-2">
+        {[{title:"Top Gainers",items:gainers,up:true},{title:"Top Losers",items:losers,up:false}].map((group) => <section key={group.title} className="rounded-xl border bg-card"><div className="border-b px-5 py-4"><h3 className="font-semibold">{group.title}</h3></div><div className="divide-y">{group.items.map((item) => <button key={item.asset} type="button" onClick={() => setAsset(item.asset)} className="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-accent/50"><div><p className="font-semibold">{item.asset}/THB</p><p className="text-xs text-muted-foreground">{item.name}</p></div><div className={`text-sm font-semibold ${group.up ? "text-emerald-500" : "text-red-500"}`}>{group.up ? "+" : ""}{Number(item.change24h || 0).toFixed(2)}%</div></button>)}</div></section>)}
       </div>
 
-      <div className="rounded-xl border bg-card p-5">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="font-semibold">Market Watch</h3>
-            <p className="text-xs text-muted-foreground">เลือกเหรียญเพื่อดูกราฟและ Market Depth</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {MARKETS_ASSETS.map((item) => (
-              <button
-                key={item}
-                type="button"
-                onClick={() => setAsset(item)}
-                className={`rounded-full border px-3 py-1.5 text-xs font-medium ${asset === item ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}
-              >
-                {item}/THB
-              </button>
-            ))}
-          </div>
+      <section className="rounded-xl border bg-card p-5">
+        <div className="mb-4"><h3 className="font-semibold">Market Watch</h3><p className="mt-1 text-xs text-muted-foreground">เลือกตลาดเพื่อดูกราฟและ Market Depth</p></div>
+        <div className="flex flex-wrap gap-2">{markets.map((item) => <button key={item.asset} type="button" onClick={() => setAsset(item.asset)} className={`rounded-full border px-4 py-2 text-xs font-medium transition ${asset === item.asset ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}>{item.asset}/THB</button>)}</div>
+      </section>
+
+      {selected && <section className="space-y-5 rounded-xl border bg-card p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div><p className="text-sm text-muted-foreground">Selected Market</p><h3 className="mt-1 text-2xl font-bold">{selected.asset}/THB</h3><p className="text-sm text-muted-foreground">{selected.name} · {selected.source}</p></div>
+          <button type="button" onClick={onTrade} className="rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90">Trade {selected.asset}</button>
         </div>
-      </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><MarketStat label="Price" value={marketPrice(selected.price)} /><MarketStat label="24h Change" value={`${selected.change24h >= 0 ? "+" : ""}${selected.change24h.toFixed(2)}%`} positive={selected.change24h >= 0} sub={selected.change24h >= 0 ? "Bullish" : "Bearish"} /><MarketStat label="24h High" value={marketPrice(selected.high24h)} /><MarketStat label="24h Low" value={marketPrice(selected.low24h)} /><MarketStat label="24h Volume" value={marketVolume(selected.volume24h)} /></div>
 
-      {selected && (
-        <section className="space-y-5">
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <div className="text-xs text-muted-foreground">Selected Market · Bitkub</div>
-              <h3 className="mt-1 text-2xl font-bold">{selected.asset}/THB</h3>
-              <div className="mt-1 flex items-center gap-3">
-                <span className="text-xl font-semibold">{marketPrice(selected.price)}</span>
-                <span className={`text-sm font-semibold ${selected.change24h >= 0 ? "text-emerald-500" : "text-red-500"}`}>
-                  {selected.change24h >= 0 ? "+" : ""}{Number(selected.change24h || 0).toFixed(2)}%
-                </span>
-              </div>
-            </div>
-            <button type="button" onClick={onTrade} className="rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90">
-              Trade {selected.asset}
-            </button>
-          </div>
+        <div className="overflow-hidden rounded-xl border"><TradingViewChart symbol={`BITKUB:${selected.asset}THB`} interval="60" height={480} /></div>
 
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-            {[
-              ["Price", marketPrice(selected.price)],
-              ["24h High", marketPrice(selected.high24h)],
-              ["24h Low", marketPrice(selected.low24h)],
-              ["24h Volume", compactTHB(selected.volume24h)],
-              ["Spread", marketPrice(selected.spread)],
-            ].map(([label, value]) => (
-              <div key={label} className="rounded-xl border bg-card p-4">
-                <div className="text-xs text-muted-foreground">{label}</div>
-                <div className="mt-2 truncate text-sm font-semibold">{value}</div>
-              </div>
-            ))}
-          </div>
+        <div className="grid gap-4 lg:grid-cols-3">
+          <div className="rounded-xl border p-4"><p className="mb-3 font-semibold">Market Quote</p><div className="grid grid-cols-2 gap-3"><MiniStat label="Best Bid" value={marketPrice(selected.bid)} /><MiniStat label="Best Ask" value={marketPrice(selected.ask)} /><MiniStat label="Spread" value={marketPrice(selected.spread)} /><MiniStat label="Mid" value={marketPrice(book?.mid_price_thb || selected.price)} /></div></div>
+          <div className="rounded-xl border p-4"><p className="mb-3 font-semibold">Portfolio Exposure</p><MiniStat label="Quantity" value={holding ? formatQty(holding.qty) : "0"} /><MiniStat label="Market Value" value={holding ? formatTHB(holding.market_value) : "฿0.00"} /><MiniStat label="Allocation" value={holding ? `${Number(holding.allocation_pct || 0).toFixed(2)}%` : "0.00%"} /><MiniStat label="Unrealized P/L" value={holding ? `${holding.unrealized_pnl >= 0 ? "+" : ""}${formatTHB(holding.unrealized_pnl)}` : "฿0.00"} /></div>
+          <div className="rounded-xl border p-4"><p className="mb-3 font-semibold">Market Intelligence</p><MiniStat label="Momentum" value={`${selected.change24h >= 0 ? "Positive" : "Negative"} · ${Math.abs(selected.change24h).toFixed(2)}%`} /><MiniStat label="Volatility Range" value={selected.low24h > 0 ? `${(((selected.high24h - selected.low24h) / selected.low24h) * 100).toFixed(2)}%` : "—"} /><MiniStat label="Spread" value={selected.price > 0 ? `${((selected.spread / selected.price) * 100).toFixed(3)}%` : "—"} /><MiniStat label="Source" value="Bitkub" /></div>
+        </div>
 
-          <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <div className="rounded-xl border bg-card p-4">
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <h3 className="font-semibold">TradingView</h3>
-                  <p className="text-xs text-muted-foreground">BITKUB:{selected.asset}THB · 1H</p>
-                </div>
-                <span className="rounded-full bg-muted px-2.5 py-1 text-[10px]">LIVE</span>
-              </div>
-              <div className="overflow-hidden rounded-lg">
-                <TradingViewChart symbol={`BITKUB:${selected.asset}THB`} interval="60" height={480} />
-              </div>
-            </div>
+        <div className="grid gap-6 xl:grid-cols-2">
+          <div className="rounded-xl border"><div className="border-b px-5 py-4"><h4 className="font-semibold">Orderbook</h4><p className="mt-1 text-xs text-muted-foreground">Bitkub Market Depth · อัปเดตทุก 5 วินาที</p></div>{detailLoading ? <div className="p-8 text-center text-sm text-muted-foreground">กำลังโหลด Orderbook...</div> : detailError ? <div className="p-8 text-center text-sm text-red-500">{detailError}</div> : <div className="grid grid-cols-2 gap-4 p-4"><div><div className="mb-2 flex justify-between text-[11px] text-muted-foreground"><span>Bid</span><span>Qty</span></div>{bids.slice(0,10).map((row,i)=><div key={`b${i}`} className="flex justify-between border-b py-1.5 text-xs"><span className="text-emerald-500">{marketPrice(row.price_thb)}</span><span>{formatOrderBookQty(row.quantity)}</span></div>)}</div><div><div className="mb-2 flex justify-between text-[11px] text-muted-foreground"><span>Ask</span><span>Qty</span></div>{asks.slice(0,10).map((row,i)=><div key={`a${i}`} className="flex justify-between border-b py-1.5 text-xs"><span className="text-red-500">{marketPrice(row.price_thb)}</span><span>{formatOrderBookQty(row.quantity)}</span></div>)}</div></div>}</div>
 
-            <div className="rounded-xl border bg-card p-5">
-              <h3 className="font-semibold">Market Intelligence</h3>
-              <p className="mt-1 text-xs text-muted-foreground">เชื่อม Market → Portfolio</p>
-              <div className="mt-5 space-y-4">
-                <div className="flex items-center justify-between border-b pb-3">
-                  <span className="text-sm text-muted-foreground">Momentum 24H</span>
-                  <span className={`font-semibold ${selected.change24h >= 0 ? "text-emerald-500" : "text-red-500"}`}>{selected.change24h >= 0 ? "+" : ""}{selected.change24h.toFixed(2)}%</span>
-                </div>
-                <div className="flex items-center justify-between border-b pb-3">
-                  <span className="text-sm text-muted-foreground">Portfolio Exposure</span>
-                  <span className="font-semibold">{holding ? `${Number(holding.allocation_pct || 0).toFixed(2)}%` : "0.00%"}</span>
-                </div>
-                <div className="flex items-center justify-between border-b pb-3">
-                  <span className="text-sm text-muted-foreground">Unrealized P&L</span>
-                  <span className={`font-semibold ${Number(holding?.unrealized_pnl || 0) >= 0 ? "text-emerald-500" : "text-red-500"}`}>
-                    {holding ? `${Number(holding.unrealized_pnl || 0) >= 0 ? "+" : ""}${formatTHB(Number(holding.unrealized_pnl || 0))}` : "฿0.00"}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">Holding Qty</span>
-                  <span className="font-semibold">{holding ? formatQty(holding.qty) : "0"} {selected.asset}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {detailError && (
-            <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">{detailError}</div>
-          )}
-
-          <div className="grid gap-5 xl:grid-cols-2">
-            <div className="rounded-xl border bg-card p-5">
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <h3 className="font-semibold">Orderbook</h3>
-                  <p className="text-xs text-muted-foreground">Live depth · {selected.asset}/THB</p>
-                </div>
-                {detailLoading && <span className="text-xs text-muted-foreground">Updating...</span>}
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <div className="mb-2 flex justify-between text-[11px] text-muted-foreground"><span>Bid</span><span>Qty</span></div>
-                  <div className="space-y-1">
-                    {bids.slice(0, 10).map((row, index) => (
-                      <div key={`bid-${index}`} className="flex justify-between rounded px-2 py-1.5 text-xs hover:bg-accent">
-                        <span className="text-emerald-500">{formatOrderBookPrice(row.price_thb)}</span>
-                        <span>{formatOrderBookQty(row.quantity)}</span>
-                      </div>
-                    ))}
-                    {bids.length === 0 && <div className="py-8 text-center text-xs text-muted-foreground">ไม่มี Bid</div>}
-                  </div>
-                </div>
-                <div>
-                  <div className="mb-2 flex justify-between text-[11px] text-muted-foreground"><span>Ask</span><span>Qty</span></div>
-                  <div className="space-y-1">
-                    {asks.slice(0, 10).map((row, index) => (
-                      <div key={`ask-${index}`} className="flex justify-between rounded px-2 py-1.5 text-xs hover:bg-accent">
-                        <span className="text-red-500">{formatOrderBookPrice(row.price_thb)}</span>
-                        <span>{formatOrderBookQty(row.quantity)}</span>
-                      </div>
-                    ))}
-                    {asks.length === 0 && <div className="py-8 text-center text-xs text-muted-foreground">ไม่มี Ask</div>}
-                  </div>
-                </div>
-              </div>
-              <div className="mt-4 grid grid-cols-3 gap-2 border-t pt-4 text-center">
-                <div><div className="text-[10px] text-muted-foreground">Best Bid</div><div className="mt-1 text-xs font-semibold">{marketPrice(Number(book?.best_bid_thb || 0))}</div></div>
-                <div><div className="text-[10px] text-muted-foreground">Mid</div><div className="mt-1 text-xs font-semibold">{marketPrice(Number(book?.mid_price_thb || selected.price))}</div></div>
-                <div><div className="text-[10px] text-muted-foreground">Best Ask</div><div className="mt-1 text-xs font-semibold">{marketPrice(Number(book?.best_ask_thb || 0))}</div></div>
-              </div>
-            </div>
-
-            <div className="rounded-xl border bg-card p-5">
-              <div className="mb-4">
-                <h3 className="font-semibold">Recent Trades</h3>
-                <p className="mt-1 text-xs text-muted-foreground">รายการซื้อขายล่าสุดจาก Bitkub</p>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b text-muted-foreground">
-                      <th className="px-2 py-2 text-left font-medium">Side</th>
-                      <th className="px-2 py-2 text-right font-medium">Price</th>
-                      <th className="px-2 py-2 text-right font-medium">Amount</th>
-                      <th className="px-2 py-2 text-right font-medium">Time</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {trades.map((trade, index) => {
-                      const isBuy = String(trade.side).toLowerCase() === "buy"
-                      const ms = Number(trade.timestamp || 0) * (Number(trade.timestamp || 0) < 100000000000 ? 1000 : 1)
-                      return (
-                        <tr key={`${trade.timestamp}-${index}`} className="border-b last:border-0">
-                          <td className={`px-2 py-2 font-semibold ${isBuy ? "text-emerald-500" : "text-red-500"}`}>{isBuy ? "BUY" : "SELL"}</td>
-                          <td className="px-2 py-2 text-right">{marketPrice(trade.price)}</td>
-                          <td className="px-2 py-2 text-right">{formatQty(trade.amount)}</td>
-                          <td className="px-2 py-2 text-right text-muted-foreground">{Number.isFinite(ms) && ms > 0 ? new Date(ms).toLocaleTimeString("th-TH") : "—"}</td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-                {trades.length === 0 && <div className="py-10 text-center text-xs text-muted-foreground">ยังไม่มี Recent Trades</div>}
-              </div>
-            </div>
-          </div>
-        </section>
-      )}
+          <div className="rounded-xl border"><div className="border-b px-5 py-4"><h4 className="font-semibold">Recent Trades</h4><p className="mt-1 text-xs text-muted-foreground">Bitkub Public Trades</p></div>{trades.length === 0 ? <div className="p-8 text-center text-sm text-muted-foreground">ยังไม่มีข้อมูล Trades</div> : <div className="divide-y">{trades.slice(0,12).map((trade,i) => { const buy = trade.side.toLowerCase().includes("buy"); return <div key={`${trade.timestamp}-${i}`} className="flex items-center justify-between px-5 py-3 text-xs"><span className={buy ? "text-emerald-500" : "text-red-500"}>{buy ? "BUY" : "SELL"}</span><span className="font-medium">{marketPrice(trade.price)}</span><span className="text-muted-foreground">{formatQty(trade.amount)}</span><span className="text-muted-foreground">{new Date(trade.timestamp * 1000).toLocaleTimeString("th-TH")}</span></div> })}</div>}</div>
+        </div>
+      </section>}
     </div>
   )
 }
-
 
 /* =========================================================
    WALLET
@@ -4266,7 +3985,7 @@ function PlaceholderPage({
           </p>
 
           <p className="mt-1 text-sm text-muted-foreground">
-            กำลังเชื่อมระบบจาก gu.py
+            หน้านี้กำลังอยู่ระหว่างการพัฒนา
           </p>
 
         </div>
