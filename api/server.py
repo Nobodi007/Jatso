@@ -524,72 +524,61 @@ def _portfolio_response(gu, sim, px_row):
 
 
 # =========================================================
-# ORDERBOOK
+# ORDERBOOK — BITKUB PUBLIC MARKET DATA
 # =========================================================
 
-BINANCE_SYMBOL_MAP = {
-    "BTC": "BTCUSDT",
-    "ETH": "ETHUSDT",
-    "SOL": "SOLUSDT",
-    "DOGE": "DOGEUSDT",
-    "ADA": "ADAUSDT",
-    "HBAR": "HBARUSDT",
-    "LINK": "LINKUSDT",
-    "XLM": "XLMUSDT",
-    "XRP": "XRPUSDT",
+BITKUB_SYMBOL_MAP = {
+    "BTC": "BTC_THB",
+    "ETH": "ETH_THB",
+    "SOL": "SOL_THB",
+    "DOGE": "DOGE_THB",
+    "ADA": "ADA_THB",
+    "HBAR": "HBAR_THB",
+    "LINK": "LINK_THB",
+    "XLM": "XLM_THB",
+    "XRP": "XRP_THB",
 }
 
 
-def _fetch_binance_orderbook(symbol: str, limit: int = 20):
+def _fetch_bitkub_orderbook(symbol: str, limit: int = 20):
+    """Fetch a THB orderbook snapshot from Bitkub's public V3 API."""
+    safe_limit = max(1, min(int(limit), 100))
     params = urllib.parse.urlencode({
-        "symbol": symbol,
-        "limit": max(5, min(int(limit), 100)),
+        "sym": symbol,
+        "lmt": safe_limit,
     })
 
-    urls = [
-        f"https://data-api.binance.vision/api/v3/depth?{params}",
-        f"https://api.binance.com/api/v3/depth?{params}",
-        f"https://api1.binance.com/api/v3/depth?{params}",
-        f"https://api2.binance.com/api/v3/depth?{params}",
-        f"https://api3.binance.com/api/v3/depth?{params}",
-        f"https://api4.binance.com/api/v3/depth?{params}",
-        f"https://api-gcp.binance.com/api/v3/depth?{params}",
-    ]
+    url = f"https://api.bitkub.com/api/v3/market/depth?{params}"
 
-    last_error = None
-
-    for url in urls:
-        try:
-            request = urllib.request.Request(
-                url,
-                headers={
-                    "User-Agent": "XSpring-Dealer-Suite/1.0",
-                    "Accept": "application/json",
-                },
-            )
-
-            with urllib.request.urlopen(request, timeout=8) as response:
-                raw = response.read().decode("utf-8")
-
-            payload = json.loads(raw)
-
-            if not isinstance(payload, dict):
-                raise ValueError("Binance orderbook response ไม่ถูกต้อง")
-
-            bids = payload.get("bids") or []
-            asks = payload.get("asks") or []
-
-            if not bids and not asks:
-                raise ValueError("Binance ไม่มีข้อมูล bids/asks")
-
-            return bids, asks
-
-        except Exception as exc:
-            last_error = exc
-
-    raise RuntimeError(
-        f"โหลด Binance orderbook ไม่สำเร็จ: {last_error}"
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Dealer-Suite/1.0",
+            "Accept": "application/json",
+        },
     )
+
+    with urllib.request.urlopen(request, timeout=8) as response:
+        raw = response.read().decode("utf-8")
+
+    payload = json.loads(raw)
+
+    if not isinstance(payload, dict):
+        raise ValueError("Bitkub orderbook response ไม่ถูกต้อง")
+
+    if _safe_float(payload.get("error"), 0.0) != 0.0:
+        raise ValueError(
+            f"Bitkub orderbook error={payload.get('error')}"
+        )
+
+    result = payload.get("result") or {}
+    bids = result.get("bids") or []
+    asks = result.get("asks") or []
+
+    if not bids and not asks:
+        raise ValueError("Bitkub ไม่มีข้อมูล bids/asks")
+
+    return bids, asks
 
 
 @app.get("/api/orderbook", dependencies=[Depends(require_api_key)])
@@ -600,118 +589,78 @@ def orderbook(
     try:
         asset = str(asset or "BTC").strip().upper()
 
-        # Order Book is public market-depth data. It must NOT depend on
-        # XSPRING_USER / XSPRING_REPORT_ACTOR or a customer portfolio.
-        if asset not in BINANCE_SYMBOL_MAP:
+        if asset not in BITKUB_SYMBOL_MAP:
             raise HTTPException(
                 status_code=400,
                 detail=f"ไม่รองรับ Orderbook สำหรับ {asset}",
             )
 
-        symbol = BINANCE_SYMBOL_MAP.get(asset)
-
-        if not symbol:
-            raise HTTPException(
-                status_code=503,
-                detail=f"ยังไม่มี Orderbook market สำหรับ {asset}",
-            )
+        symbol = BITKUB_SYMBOL_MAP[asset]
 
         try:
-            safe_limit = max(5, min(int(limit), 100))
+            safe_limit = max(1, min(int(limit), 100))
         except (TypeError, ValueError):
             safe_limit = 20
 
-        bids_raw, asks_raw = _fetch_binance_orderbook(
+        bids_raw, asks_raw = _fetch_bitkub_orderbook(
             symbol,
             safe_limit,
         )
 
-        # -------------------------------------------------
-        # USDTHB
-        # -------------------------------------------------
-
-        usdthb = 0.0
-
-        try:
-            gu = load_gu()
-            usdthb, _ = gu.get_reference_usdthb()
-            usdthb = _safe_float(usdthb)
-        except Exception:
-            usdthb = 0.0
-
-        # ไม่สร้าง FX ปลอมจาก market orderbook
-        # ถ้า backend ไม่มี FX ให้ส่ง USD อย่างเดียว
-        # และใช้ 0 เพื่อบอก frontend ว่าไม่มี FX
-        if usdthb < 0:
-            usdthb = 0.0
-
-        # -------------------------------------------------
-        # NORMALIZE
-        # -------------------------------------------------
-
+        # Bitkub depth already returns THB prices, so there is no
+        # Binance/USDT/USDTHB conversion in the Orderbook path.
         def normalize_level(row):
             if not isinstance(row, (list, tuple)) or len(row) < 2:
                 return None
 
-            price_usd = _safe_float(row[0])
+            price_thb = _safe_float(row[0])
             quantity = _safe_float(row[1])
 
-            if price_usd <= 0 or quantity <= 0:
+            if price_thb <= 0 or quantity <= 0:
                 return None
 
-            total_usd = price_usd * quantity
-
-            price_thb = (
-                price_usd * usdthb
-                if usdthb > 0
-                else 0.0
-            )
-
-            total_thb = (
-                total_usd * usdthb
-                if usdthb > 0
-                else 0.0
-            )
-
             return {
-                "price_usd": price_usd,
                 "price_thb": price_thb,
                 "quantity": quantity,
-                "total_usd": total_usd,
-                "total_thb": total_thb,
+                "total_thb": price_thb * quantity,
             }
 
         bids = [
             level
             for row in bids_raw
             if (level := normalize_level(row)) is not None
-        ]
+        ][:safe_limit]
 
         asks = [
             level
             for row in asks_raw
             if (level := normalize_level(row)) is not None
-        ]
+        ][:safe_limit]
 
-        bids = bids[:safe_limit]
-        asks = asks[:safe_limit]
+        # Bitkub's API returns bids/asks as price + size. Keep the
+        # exchange ordering, but calculate the best levels explicitly.
+        best_bid = max(
+            (level["price_thb"] for level in bids),
+            default=0.0,
+        )
+        best_ask = min(
+            (level["price_thb"] for level in asks),
+            default=0.0,
+        )
 
-        best_bid = bids[0]["price_usd"] if bids else 0.0
-        best_ask = asks[0]["price_usd"] if asks else 0.0
-
-        spread_usd = (
+        spread_thb = (
             best_ask - best_bid
             if best_bid > 0 and best_ask > 0
             else 0.0
         )
 
         spread_pct = (
-            spread_usd / best_bid * 100
+            spread_thb / best_bid * 100
             if best_bid > 0
             else 0.0
         )
 
-        mid_price_usd = (
+        mid_price_thb = (
             (best_bid + best_ask) / 2
             if best_bid > 0 and best_ask > 0
             else 0.0
@@ -721,15 +670,15 @@ def orderbook(
             "status": "ok",
             "asset": asset,
             "symbol": symbol,
-            "quote": "USDT",
-            "usdthb": usdthb,
+            "quote": "THB",
+            "source": "Bitkub",
             "timestamp": pd.Timestamp.now(
                 tz="Asia/Bangkok"
             ).isoformat(),
-            "best_bid_usd": best_bid,
-            "best_ask_usd": best_ask,
-            "mid_price_usd": mid_price_usd,
-            "spread_usd": spread_usd,
+            "best_bid_thb": best_bid,
+            "best_ask_thb": best_ask,
+            "mid_price_thb": mid_price_thb,
+            "spread_thb": spread_thb,
             "spread_pct": spread_pct,
             "bids": bids,
             "asks": asks,
@@ -742,7 +691,7 @@ def orderbook(
         raise HTTPException(
             status_code=503,
             detail={
-                "message": "โหลด Orderbook ไม่สำเร็จ",
+                "message": "โหลด Bitkub Orderbook ไม่สำเร็จ",
                 "error_type": type(e).__name__,
                 "error": str(e),
             },
