@@ -229,9 +229,17 @@ function App() {
     setPortfolioError("")
 
     try {
+      if (!DEALER_API_KEY) {
+        throw new Error("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
+      }
+
       const response = await fetch(`${API_BASE_URL}/api/portfolio`, {
         method: "GET",
-        headers: { Accept: "application/json" },
+        headers: {
+          Accept: "application/json",
+          "X-API-Key": DEALER_API_KEY,
+        },
+        cache: "no-store",
       })
 
       const body = await response.json()
