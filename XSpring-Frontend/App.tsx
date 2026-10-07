@@ -446,7 +446,7 @@ function App() {
           <main className="flex-1 overflow-auto p-6">
 
             {page === "dashboard" && (
-              <Dashboard
+              <DashboardPage
                 portfolio={portfolio}
                 loading={portfolioLoading}
                 error={portfolioError}
@@ -1356,7 +1356,7 @@ function MarketsPage({
    DASHBOARD
 ========================================================= */
 
-function Dashboard({
+function DashboardPage({
   portfolio,
   loading,
   error,
@@ -3839,13 +3839,13 @@ const NEWS_FEEDS = [
 
 function NewsPage() {
   const [items, setItems] = useState<NewsItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState("")
+  const [newsLoading, setNewsLoading] = useState(true)
+  const [newsError, setNewsError] = useState("")
   const [activeSource, setActiveSource] = useState("All")
 
   const loadNews = async () => {
-    setLoading(true)
-    setError("")
+    setNewsLoading(true)
+    setNewsError("")
 
     try {
       const responses = await Promise.all(
@@ -3881,11 +3881,11 @@ function NewsPage() {
         })
 
       setItems(merged)
-      if (merged.length === 0) setError("ยังไม่มีข่าวที่โหลดได้จากแหล่งข่าว")
+      if (merged.length === 0) setNewsError("ยังไม่มีข่าวที่โหลดได้จากแหล่งข่าว")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "ไม่สามารถโหลดข่าวได้")
+      setNewsError(err instanceof Error ? err.message : "ไม่สามารถโหลดข่าวได้")
     } finally {
-      setLoading(false)
+      setNewsLoading(false)
     }
   }
 
@@ -3922,17 +3922,17 @@ function NewsPage() {
         </div>
         <button
           onClick={loadNews}
-          disabled={loading}
+          disabled={newsLoading}
           className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {loading ? "กำลังโหลด..." : "Refresh"}
+          {newsLoading ? "กำลังโหลด..." : "Refresh"}
         </button>
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">
         <StatCard
           title="News"
-          value={loading ? "Loading..." : String(items.length)}
+          value={newsLoading ? "Loading..." : String(items.length)}
           change="ข่าวที่โหลดได้"
         />
         <StatCard
@@ -3968,9 +3968,9 @@ function NewsPage() {
         ))}
       </div>
 
-      {error && (
+      {newsError && (
         <div className="rounded-xl border border-yellow-500/30 bg-yellow-500/5 px-4 py-3 text-sm">
-          {error}
+          {newsError}
         </div>
       )}
 
@@ -4013,7 +4013,7 @@ function NewsPage() {
         ))}
       </div>
 
-      {!loading && visibleItems.length === 0 && !error && (
+      {!newsLoading && visibleItems.length === 0 && !newsError && (
         <div className="flex min-h-[260px] items-center justify-center rounded-xl border bg-card text-sm text-muted-foreground">
           ยังไม่มีข่าวในหมวดนี้
         </div>
