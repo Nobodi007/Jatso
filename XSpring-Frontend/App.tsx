@@ -1896,7 +1896,7 @@ function TradePage({
 
     if (cleanAmount > availableThb + 1e-9) {
       setOrderMessage(
-        `${side === "BUY" ? "???????" : "??????"}เกินยอดที่ทำรายการได้`
+        `${side === "BUY" ? "ยอดเงินที่ใช้ซื้อ" : "จำนวนที่ขาย"}เกินยอดที่ทำรายการได้`
       )
       return
     }
@@ -1914,7 +1914,7 @@ function TradePage({
     }
 
     const confirmed = window.confirm(
-      `${side === "BUY" ? "????" : "???"} ${asset} ?????? ${formatTHB(cleanAmount)} ?\n\nราคาจะถูกตรวจและกำหนดโดย Backend / Engine`
+      `${side === "BUY" ? "ยืนยันการซื้อ" : "ยืนยันการขาย"} ${asset} มูลค่า ${formatTHB(cleanAmount)} ?\n\nราคาจะถูกตรวจและกำหนดโดย Backend / Engine`
     )
 
     if (!confirmed) return
@@ -2708,7 +2708,7 @@ function PortfolioPage({
         <StatCard
           title="Total Portfolio"
           value={portfolio ? formatTHB(portfolio.total_value_thb) : "—"}
-          change={portfolio ? "??????????????????" : "กำลังโหลด"}
+          change={portfolio ? "มูลค่ารวมของพอร์ต" : "กำลังโหลด"}
         />
 
         <StatCard
@@ -3707,7 +3707,7 @@ function StatCard({
 
 
 /* =========================================================
-   PLACEHOLDER PAGE
+   RISK CENTER
 ========================================================= */
 
 function RiskCenterPage({
