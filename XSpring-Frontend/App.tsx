@@ -229,17 +229,9 @@ function App() {
     setPortfolioError("")
 
     try {
-      if (!DEALER_API_KEY) {
-        throw new Error("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
-      }
-
       const response = await fetch(`${API_BASE_URL}/api/portfolio`, {
         method: "GET",
-        headers: {
-          Accept: "application/json",
-          "X-API-Key": DEALER_API_KEY,
-        },
-        cache: "no-store",
+        headers: { Accept: "application/json" },
       })
 
       const body = await response.json()
@@ -455,17 +447,6 @@ function App() {
               />
             )}
 
-            {page === "markets" && (
-              <MarketsPage
-                portfolio={portfolio}
-                onTrade={(asset) => {
-                  void asset
-                  setPage("trade")
-                }}
-                onOrderBook={() => setPage("orderbook")}
-              />
-            )}
-
             {page === "trade" && (
               <TradePage
                 portfolio={portfolio}
@@ -530,7 +511,6 @@ function App() {
             {page === "news" && <NewsPage />}
 
             {page !== "dashboard" &&
-              page !== "markets" &&
               page !== "trade" &&
               page !== "orderbook" &&
               page !== "portfolio" &&
@@ -920,437 +900,6 @@ function OrderBookPage() {
   )
 }
 
-
-/* =========================================================
-   MARKETS — MARKET HUB
-========================================================= */
-
-type MarketTicker = {
-  asset: string
-  name: string
-  price: number
-  change: number
-  high: number
-  low: number
-  volume: number
-  bid: number
-  ask: number
-}
-
-const MARKET_HUB_ASSETS = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "HBAR", "LINK", "XLM"]
-
-const MARKET_HUB_NAMES: Record<string, string> = {
-  BTC: "Bitcoin",
-  ETH: "Ethereum",
-  SOL: "Solana",
-  XRP: "XRP",
-  ADA: "Cardano",
-  DOGE: "Dogecoin",
-  HBAR: "Hedera",
-  LINK: "Chainlink",
-  XLM: "Stellar",
-}
-
-function signedPct(value: number) {
-  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`
-}
-
-// ดึงราคาตลาดครั้งเดียวทุกเหรียญ:
-// 1) ผ่าน Backend /api/markets (ไม่ติด CORS)
-// 2) ถ้า Backend ยังไม่มี endpoint นี้ ลองเรียก Bitkub ตรง 1 request
-async function fetchMarketTickers(): Promise<MarketTicker[]> {
-  try {
-    if (DEALER_API_KEY) {
-      const response = await fetch(`${API_BASE_URL}/api/markets`, {
-        headers: { Accept: "application/json", "X-API-Key": DEALER_API_KEY },
-        cache: "no-store",
-      })
-      const body = await response.json().catch(() => null)
-
-      if (response.ok && body?.status === "ok" && Array.isArray(body.markets)) {
-        const rows: MarketTicker[] = body.markets
-          .filter((row: any) => MARKET_HUB_ASSETS.includes(String(row?.asset)))
-          .map((row: any): MarketTicker => ({
-            asset: String(row.asset),
-            name: MARKET_HUB_NAMES[String(row.asset)] || String(row.asset),
-            price: Number(row.last_thb || 0),
-            change: Number(row.change_pct || 0),
-            high: Number(row.high_24h_thb || 0),
-            low: Number(row.low_24h_thb || 0),
-            volume: Number(row.volume_base || 0),
-            bid: Number(row.bid_thb || 0),
-            ask: Number(row.ask_thb || 0),
-          }))
-          .filter((row: MarketTicker) => row.price > 0)
-
-        if (rows.length > 0) return rows
-      }
-    }
-  } catch {
-    // ไปลองเรียก Bitkub ตรงด้านล่าง
-  }
-
-  try {
-    const response = await fetch("https://api.bitkub.com/api/market/ticker", {
-      headers: { Accept: "application/json" },
-      cache: "no-store",
-    })
-    if (!response.ok) throw new Error(`Bitkub ticker HTTP ${response.status}`)
-
-    const body = await response.json()
-
-    const rows = MARKET_HUB_ASSETS.flatMap((asset): MarketTicker[] => {
-      const t = body?.[`THB_${asset}`] || body?.[`${asset}_THB`]
-      const price = Number(t?.last || 0)
-      if (!t || price <= 0) return []
-
-      return [
-        {
-          asset,
-          name: MARKET_HUB_NAMES[asset] || asset,
-          price,
-          change: Number(t.percentChange || 0),
-          high: Number(t.high24hr || 0),
-          low: Number(t.low24hr || 0),
-          volume: Number(t.baseVolume || 0),
-          bid: Number(t.highestBid || 0),
-          ask: Number(t.lowestAsk || 0),
-        },
-      ]
-    })
-
-    if (rows.length === 0) throw new Error("ไม่พบข้อมูลตลาดจาก Bitkub")
-    return rows
-  } catch (err) {
-    throw new Error(
-      `โหลดข้อมูลตลาดไม่สำเร็จ — Backend ยังไม่มี /api/markets และเรียก Bitkub ตรงไม่ได้ (${
-        err instanceof Error ? err.message : "unknown"
-      })`
-    )
-  }
-}
-
-function MarketsPage({
-  portfolio,
-  onTrade,
-  onOrderBook,
-}: {
-  portfolio: PortfolioData | null
-  onTrade: (asset: string) => void
-  onOrderBook: () => void
-}) {
-  const [tickers, setTickers] = useState<MarketTicker[]>([])
-  const [selectedAsset, setSelectedAsset] = useState("BTC")
-  const [search, setSearch] = useState("")
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState("")
-  const [lastUpdated, setLastUpdated] = useState("")
-
-  useEffect(() => {
-    let cancelled = false
-
-    const run = async () => {
-      try {
-        const rows = await fetchMarketTickers()
-        if (cancelled) return
-        setTickers(rows)
-        setLastUpdated(new Date().toLocaleTimeString("th-TH"))
-        setError("")
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "โหลด Market Data ไม่สำเร็จ")
-        }
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-
-    void run()
-    const timer = window.setInterval(run, 10000)
-
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [])
-
-  const visible = tickers.filter((item) => {
-    const q = search.trim().toLowerCase()
-    return !q || item.asset.toLowerCase().includes(q) || item.name.toLowerCase().includes(q)
-  })
-  const gainers = tickers
-    .filter((item) => item.change > 0)
-    .sort((a, b) => b.change - a.change)
-    .slice(0, 3)
-  const losers = tickers
-    .filter((item) => item.change < 0)
-    .sort((a, b) => a.change - b.change)
-    .slice(0, 3)
-  const selected = tickers.find((item) => item.asset === selectedAsset) || null
-  const holding = portfolio?.holdings.find(
-    (item) => item.asset.toUpperCase() === selectedAsset
-  )
-
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold">Markets</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Real-time market overview, movers and market intelligence.
-          </p>
-        </div>
-        <div className="text-xs text-muted-foreground">
-          {loading
-            ? "Updating..."
-            : error
-              ? "Market data unavailable"
-              : `Live · Updated ${lastUpdated}`}
-        </div>
-      </div>
-
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-3 top-3 size-4 text-muted-foreground" />
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search coin"
-          className="w-full rounded-xl border bg-card py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-primary"
-        />
-      </div>
-
-      {error && (
-        <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-500">
-          {error}
-        </div>
-      )}
-
-      <section>
-        <div className="mb-3">
-          <h3 className="font-semibold">Market Overview</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Live ticker data from Bitkub Public Market API
-          </p>
-        </div>
-        <div className="overflow-x-auto rounded-xl border bg-card">
-          <div className="min-w-[640px]">
-            <div className="grid grid-cols-[1.4fr_1fr_110px_120px] gap-4 border-b px-4 py-3 text-xs font-medium text-muted-foreground">
-              <div>Market</div>
-              <div>Price</div>
-              <div>24h</div>
-              <div className="text-right">Volume</div>
-            </div>
-            {loading && tickers.length === 0 ? (
-              <div className="py-12 text-center text-sm text-muted-foreground">
-                Loading markets...
-              </div>
-            ) : visible.length === 0 ? (
-              <div className="py-12 text-center text-sm text-muted-foreground">
-                No markets found
-              </div>
-            ) : (
-              visible.map((item) => {
-                const positive = item.change >= 0
-                return (
-                  <button
-                    key={item.asset}
-                    type="button"
-                    onClick={() => setSelectedAsset(item.asset)}
-                    className={`grid w-full grid-cols-[1.4fr_1fr_110px_120px] gap-4 border-b px-4 py-3 text-left transition last:border-b-0 hover:bg-accent ${
-                      selectedAsset === item.asset ? "bg-accent/60" : ""
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="flex size-9 items-center justify-center rounded-full bg-muted text-xs font-bold">
-                        {item.asset.slice(0, 3)}
-                      </div>
-                      <div>
-                        <div className="font-semibold">{item.asset}/THB</div>
-                        <div className="text-xs text-muted-foreground">{item.name}</div>
-                      </div>
-                    </div>
-                    <div className="font-medium">{formatTHB(item.price)}</div>
-                    <div className={positive ? "text-emerald-500" : "text-red-500"}>
-                      {signedPct(item.change)}
-                    </div>
-                    <div className="text-right text-sm text-muted-foreground">
-                      {item.volume.toLocaleString("en-US", { maximumFractionDigits: 2 })}
-                    </div>
-                  </button>
-                )
-              })
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <div className="mb-3">
-          <h3 className="font-semibold">Top Movers</h3>
-        </div>
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="rounded-xl border bg-card p-5">
-            <div className="mb-3 flex items-center gap-2 font-semibold text-emerald-500">
-              <TrendingUp className="size-4" /> Gainers
-            </div>
-            {gainers.length === 0 ? (
-              <p className="text-sm text-muted-foreground">ไม่มีเหรียญที่ขึ้นใน 24 ชม.</p>
-            ) : (
-              <div className="space-y-2">
-                {gainers.map((item) => (
-                  <button
-                    key={item.asset}
-                    type="button"
-                    onClick={() => setSelectedAsset(item.asset)}
-                    className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left hover:bg-accent"
-                  >
-                    <span className="font-medium">{item.asset}</span>
-                    <span className="text-emerald-500">{signedPct(item.change)}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="rounded-xl border bg-card p-5">
-            <div className="mb-3 flex items-center gap-2 font-semibold text-red-500">
-              <TrendingDown className="size-4" /> Losers
-            </div>
-            {losers.length === 0 ? (
-              <p className="text-sm text-muted-foreground">ไม่มีเหรียญที่ลงใน 24 ชม.</p>
-            ) : (
-              <div className="space-y-2">
-                {losers.map((item) => (
-                  <button
-                    key={item.asset}
-                    type="button"
-                    onClick={() => setSelectedAsset(item.asset)}
-                    className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left hover:bg-accent"
-                  >
-                    <span className="font-medium">{item.asset}</span>
-                    <span className="text-red-500">{signedPct(item.change)}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <div className="mb-3">
-          <h3 className="font-semibold">Market Watch</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Select a market to inspect its live chart and portfolio exposure.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {MARKET_HUB_ASSETS.map((asset) => (
-            <button
-              key={asset}
-              type="button"
-              onClick={() => setSelectedAsset(asset)}
-              className={`rounded-lg border px-3 py-2 text-sm font-medium ${
-                selectedAsset === asset
-                  ? "bg-primary text-primary-foreground"
-                  : "hover:bg-accent"
-              }`}
-            >
-              {asset}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="rounded-xl border bg-card p-5">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h3 className="font-semibold">{selectedAsset} / THB</h3>
-            <p className="mt-1 text-xs text-muted-foreground">Coin Intelligence</p>
-          </div>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => onOrderBook()}
-              className="rounded-lg border px-3 py-2 text-sm hover:bg-accent"
-            >
-              Orderbook
-            </button>
-            <button
-              type="button"
-              onClick={() => onTrade(selectedAsset)}
-              className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground"
-            >
-              Trade
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-4 grid gap-3 md:grid-cols-5">
-          <MarketStat
-            label="Price"
-            value={selected ? formatTHB(selected.price) : "—"}
-            sub={selected ? signedPct(selected.change) : "—"}
-            positive={selected ? selected.change >= 0 : undefined}
-          />
-          <MarketStat label="24h High" value={selected?.high ? formatTHB(selected.high) : "—"} />
-          <MarketStat label="24h Low" value={selected?.low ? formatTHB(selected.low) : "—"} />
-          <MarketStat
-            label="24h Volume"
-            value={
-              selected
-                ? selected.volume.toLocaleString("en-US", { maximumFractionDigits: 2 })
-                : "—"
-            }
-          />
-          <MarketStat
-            label="Spread"
-            value={
-              selected && selected.bid > 0 && selected.ask > 0
-                ? formatTHB(selected.ask - selected.bid)
-                : "—"
-            }
-          />
-        </div>
-
-        <div className="mt-5 overflow-hidden rounded-lg bg-muted/20">
-          <TradingViewChart symbol={`BITKUB:${selectedAsset}THB`} interval="60" height={420} />
-        </div>
-
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
-          <div className="rounded-lg border p-4">
-            <div className="text-xs text-muted-foreground">Portfolio holding</div>
-            <div className="mt-1 font-semibold">
-              {holding && Number(holding.qty || 0) > 0
-                ? `${formatQty(holding.qty)} ${selectedAsset}`
-                : `No ${selectedAsset} position`}
-            </div>
-          </div>
-          <div className="rounded-lg border p-4">
-            <div className="text-xs text-muted-foreground">Unrealized P&L</div>
-            <div
-              className={`mt-1 font-semibold ${
-                Number(holding?.unrealized_pnl || 0) >= 0 ? "text-emerald-500" : "text-red-500"
-              }`}
-            >
-              {holding && Number(holding.qty || 0) > 0
-                ? formatTHB(Number(holding.unrealized_pnl || 0))
-                : "—"}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-xl border bg-card p-5">
-        <h3 className="font-semibold">Market Intelligence</h3>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Market signals will connect here to Portfolio and AI intelligence. Current page uses live
-          price, movers and your existing portfolio exposure.
-        </p>
-      </section>
-    </div>
-  )
-}
 
 /* =========================================================
    DASHBOARD
@@ -1904,7 +1453,7 @@ function TradePage({
 
     if (cleanAmount > availableThb + 1e-9) {
       setOrderMessage(
-        `${side === "BUY" ? "ยอดเงินที่ใช้ซื้อ" : "จำนวนที่ขาย"}เกินยอดที่ทำรายการได้`
+        `${side === "BUY" ? "???????" : "??????"}เกินยอดที่ทำรายการได้`
       )
       return
     }
@@ -1922,7 +1471,7 @@ function TradePage({
     }
 
     const confirmed = window.confirm(
-      `${side === "BUY" ? "ยืนยันการซื้อ" : "ยืนยันการขาย"} ${asset} มูลค่า ${formatTHB(cleanAmount)} ?\n\nราคาจะถูกตรวจและกำหนดโดย Backend / Engine`
+      `${side === "BUY" ? "????" : "???"} ${asset} ?????? ${formatTHB(cleanAmount)} ?\n\nราคาจะถูกตรวจและกำหนดโดย Backend / Engine`
     )
 
     if (!confirmed) return
@@ -2716,7 +2265,7 @@ function PortfolioPage({
         <StatCard
           title="Total Portfolio"
           value={portfolio ? formatTHB(portfolio.total_value_thb) : "—"}
-          change={portfolio ? "มูลค่ารวมของพอร์ต" : "กำลังโหลด"}
+          change={portfolio ? "??????????????????" : "กำลังโหลด"}
         />
 
         <StatCard
@@ -3715,7 +3264,7 @@ function StatCard({
 
 
 /* =========================================================
-   RISK CENTER
+   PLACEHOLDER PAGE
 ========================================================= */
 
 function RiskCenterPage({
