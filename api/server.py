@@ -981,7 +981,80 @@ def orderbook(
             e,
             status_code=503,
         )
+# =========================================================
+# MARKETS (Market Hub) — proxy Bitkub ticker ให้ Frontend ไม่ติด CORS
+# =========================================================
 
+MARKET_HUB_ASSETS = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "HBAR", "LINK", "XLM"]
+
+_MARKETS_CACHE_LOCK = RLock()
+_MARKETS_CACHE = {"ts": 0.0, "rows": []}
+_MARKETS_CACHE_TTL_SECONDS = 5
+
+
+def _fetch_bitkub_markets() -> list[dict]:
+    request = urllib.request.Request(
+        "https://api.bitkub.com/api/market/ticker",
+        headers={
+            "User-Agent": "Dealer-Suite/1.0",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=8) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+
+    if not isinstance(payload, dict):
+        raise ValueError("Bitkub ticker response ไม่ถูกต้อง")
+
+    rows = []
+    for asset in MARKET_HUB_ASSETS:
+        row = payload.get(f"THB_{asset}") or payload.get(f"{asset}_THB")
+        if not isinstance(row, dict):
+            continue
+
+        last = _safe_float(row.get("last"))
+        if last <= 0:
+            continue
+
+        rows.append({
+            "asset": asset,
+            "last_thb": last,
+            "change_pct": _safe_float(row.get("percentChange")),
+            "high_24h_thb": _safe_float(row.get("high24hr")),
+            "low_24h_thb": _safe_float(row.get("low24hr")),
+            "volume_base": _safe_float(row.get("baseVolume")),
+            "bid_thb": _safe_float(row.get("highestBid")),
+            "ask_thb": _safe_float(row.get("lowestAsk")),
+        })
+
+    if not rows:
+        raise ValueError("ไม่พบข้อมูลตลาดจาก Bitkub")
+
+    return rows
+
+
+@app.get("/api/markets", dependencies=[Depends(require_api_key)])
+def markets():
+    now = time.monotonic()
+
+    with _MARKETS_CACHE_LOCK:
+        if _MARKETS_CACHE["rows"] and now - _MARKETS_CACHE["ts"] < _MARKETS_CACHE_TTL_SECONDS:
+            return {"status": "ok", "markets": _MARKETS_CACHE["rows"]}
+
+    try:
+        rows = _fetch_bitkub_markets()
+    except Exception as exc:
+        # ถ้า Bitkub ล่มชั่วคราว ให้ใช้ข้อมูลล่าสุดที่แคชไว้ (ถ้ามี)
+        with _MARKETS_CACHE_LOCK:
+            if _MARKETS_CACHE["rows"]:
+                return {"status": "ok", "markets": _MARKETS_CACHE["rows"]}
+        raise _internal_server_error("โหลดข้อมูลตลาดไม่สำเร็จ", exc, 502)
+
+    with _MARKETS_CACHE_LOCK:
+        _MARKETS_CACHE["ts"] = now
+        _MARKETS_CACHE["rows"] = rows
+
+    return {"status": "ok", "markets": rows}
 # =========================================================
 # ROOT / HEALTH
 # =========================================================
