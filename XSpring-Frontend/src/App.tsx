@@ -15,6 +15,8 @@ import {
   Menu,
   Search,
   Bell,
+  Moon,
+  Sun,
   ChevronDown,
   TrendingUp,
   TrendingDown,
@@ -219,6 +221,25 @@ function App() {
   const [portfolioLoading, setPortfolioLoading] = useState(false)
   const [portfolioError, setPortfolioError] = useState("")
   const [orderRefreshKey, setOrderRefreshKey] = useState(0)
+
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    try {
+      const saved = localStorage.getItem("theme")
+      if (saved === "light" || saved === "dark") return saved
+    } catch {
+      // ใช้ค่าตามเครื่องแทน
+    }
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+  })
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", theme === "dark")
+    try {
+      localStorage.setItem("theme", theme)
+    } catch {
+      // ไม่เป็นไรถ้าบันทึกไม่ได้
+    }
+  }, [theme])
 
   const notifyOrderCreated = () => {
     setOrderRefreshKey((value) => value + 1)
@@ -427,6 +448,17 @@ function App() {
               aria-label="Notifications"
             >
               <Bell className="size-5" />
+            </button>
+
+
+            {/* THEME TOGGLE */}
+
+            <button
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              className="rounded-lg p-2 text-muted-foreground hover:bg-accent"
+              aria-label="Toggle theme"
+            >
+              {theme === "dark" ? <Sun className="size-5" /> : <Moon className="size-5" />}
             </button>
 
 
