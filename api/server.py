@@ -1616,6 +1616,11 @@ def run_backtest_api(request: BacktestRequest):
             "savings_curve": curve(result["savings"]["curve"]),
             "trades": trades,
         }
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _internal_server_error("รัน Backtest ไม่สำเร็จ", exc)
 
 
 # =========================================================
