@@ -2962,6 +2962,28 @@ def save_sim_state (sim :Any ,path :Optional [Path ]=None )->None :
                     "ข้ามการ save: ยังโหลด portfolio จาก cloud ไม่สำเร็จ (กันเขียนทับของเดิม)"
                 )
                 return
+        # LOST-UPDATE GUARD: sim_state is ONE json blob shared by the API, the
+        # LINE bot and this Streamlit app. A stale copy (e.g. an open browser
+        # tab) must never overwrite orders written by someone else meanwhile.
+        if not st .session_state .pop ("sim_allow_order_removal",False ):
+            try :
+                _rr =sb .table ("sim_state").select ("data").eq ("actor",actor ).order ("updated_at",desc =True ).limit (1 ).execute ()
+                _rows =_rr .data or []
+                if _rows :
+                    _remote =_normalize_loaded_sim_state (_rows [0 ].get ("data"))or {}
+                    def _oid_set (_s ):
+                        _o =_s .get ("orders",[])if isinstance (_s ,dict )else []
+                        return {str (x .get ("Order ID")or x .get ("order_id")or x .get ("id")or "")
+                                for x in _o if isinstance (x ,dict )}-{""}
+                    _missing =_oid_set (_remote )-_oid_set (sim )
+                    if _missing :
+                        st .session_state ["sim_state_save_error"] =(
+                            f"ไม่บันทึก: ข้อมูลในหน้านี้เก่ากว่าใน cloud (ขาด {len (_missing )} ออเดอร์) "
+                            "กันออเดอร์ถูกเขียนทับ — รีเฟรชหน้าเว็บเพื่อโหลดข้อมูลล่าสุด"
+                        )
+                        return
+            except Exception :
+                pass
         last_exc =None
         for _ in range (2 ):
             try :
@@ -3747,6 +3769,7 @@ def undo_last_order ()->Optional [dict [str ,Any ]]:
 
     st .session_state ["sim"]=prev_sim 
     st .session_state ["sim_steps"]=[]
+    st .session_state ["sim_allow_order_removal"]=True 
     return cancelled_order 
 
 
