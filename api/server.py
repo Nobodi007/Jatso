@@ -642,6 +642,35 @@ def _fetch_bitkub_ticker_prices(assets: set[str]) -> dict[str, float]:
     return prices
 
 
+
+def _order_raw_time(order: dict):
+    """Pick the best timestamp source of an order record.
+
+    Priority: ISO `timestamp` (has timezone) -> `time` -> `วันที่`+`เวลา`
+    (date AND clock together) -> `เวลา` -> `วันที่`.
+    A clock-only `เวลา` (HH:MM:SS) must never be parsed alone: pandas would
+    attach *today's* date, which shifts old orders to the wrong day.
+    """
+    ts = order.get("timestamp") or order.get("time")
+    if ts:
+        return ts
+    d = str(order.get("วันที่") or "").strip()
+    t = str(order.get("เวลา") or "").strip()
+    if d and t:
+        if "T" in t or len(t) > 8:  # already a full datetime
+            return t
+        return f"{d} {t}"
+    return t or d or ""
+
+
+SIDE_TH_TO_EN = {"ซื้อ": "BUY", "ขาย": "SELL"}
+
+
+def _normalize_side(value) -> str:
+    raw = str(value or "").strip()
+    return SIDE_TH_TO_EN.get(raw, raw.upper())
+
+
 def _recompute_realized_pnl_from_orders(sim: dict) -> float:
     """Recompute realized P&L from the immutable filled-order history.
 
@@ -703,13 +732,7 @@ def _recompute_realized_pnl_from_orders(sim: dict) -> float:
         if not asset or qty <= 0 or gross <= 0 or price <= 0:
             continue
 
-        timestamp = (
-            order.get("เวลา")
-            or order.get("timestamp")
-            or order.get("time")
-            or order.get("วันที่")
-            or ""
-        )
+        timestamp = _order_raw_time(order)
         try:
             ts = pd.to_datetime(timestamp, errors="coerce", utc=True)
             if pd.isna(ts):
@@ -1221,11 +1244,11 @@ def order_history(limit: int = 100, asset: str = ""):
                 if asset_filter and row_asset != asset_filter:
                     continue
 
-                side = str(
+                side = _normalize_side(
                     order.get("ฝั่ง")
                     or order.get("side")
                     or ""
-                ).strip().upper()
+                )
 
                 status = str(
                     order.get("สถานะ")
@@ -1240,14 +1263,7 @@ def order_history(limit: int = 100, asset: str = ""):
                     or f"ORDER-{idx + 1:06d}"
                 )
 
-                timestamp = (
-                    order.get("เวลา")
-                    or order.get("timestamp")
-                    or order.get("time")
-                    or order.get("วันที่")
-                    or ""
-                )
-                timestamp = _display_order_timestamp(timestamp)
+                timestamp = _display_order_timestamp(_order_raw_time(order))
 
                 amount = _safe_float(
                     order.get("มูลค่า (บาท)")
