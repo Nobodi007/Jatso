@@ -957,6 +957,52 @@ function OrderBookPage() {
    MARKETS — MARKET HUB
 ========================================================= */
 
+// โลโก้เหรียญ: ลองโหลดจากหลายแหล่งตามลำดับ ถ้าไม่มีเลยแสดงตัวอักษรแทน
+function coinIconSources(asset: string) {
+  const key = asset.toLowerCase()
+  return [
+    `https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/svg/color/${key}.svg`,
+    `https://assets.coincap.io/assets/icons/${key}@2x.png`,
+  ]
+}
+
+function CoinIcon({ asset, size = 36 }: { asset: string; size?: number }) {
+  const symbol = String(asset || "").trim().toUpperCase()
+  const [sourceIndex, setSourceIndex] = useState(0)
+
+  useEffect(() => {
+    setSourceIndex(0)
+  }, [symbol])
+
+  const sources = coinIconSources(symbol)
+
+  if (!symbol || sourceIndex >= sources.length) {
+    return (
+      <div
+        className={`flex shrink-0 items-center justify-center rounded-full bg-muted font-bold ${
+          size >= 40 ? "text-lg" : "text-xs"
+        }`}
+        style={{ width: size, height: size }}
+      >
+        {size >= 40 ? symbol.slice(0, 1) : symbol.slice(0, 3)}
+      </div>
+    )
+  }
+
+  return (
+    <img
+      src={sources[sourceIndex]}
+      alt={symbol}
+      width={size}
+      height={size}
+      loading="lazy"
+      onError={() => setSourceIndex((index) => index + 1)}
+      className="shrink-0 rounded-full bg-muted object-cover"
+      style={{ width: size, height: size }}
+    />
+  )
+}
+
 type MarketTicker = {
   asset: string
   name: string
@@ -1193,9 +1239,7 @@ function MarketsPage({
                     }`}
                   >
                     <div className="flex items-center gap-3">
-                      <div className="flex size-9 items-center justify-center rounded-full bg-muted text-xs font-bold">
-                        {item.asset.slice(0, 3)}
-                      </div>
+                      <CoinIcon asset={item.asset} />
                       <div>
                         <div className="font-semibold">{item.asset}/THB</div>
                         <div className="text-xs text-muted-foreground">{item.name}</div>
@@ -1708,9 +1752,7 @@ function DashboardPage({
                     className="flex w-full items-center justify-between rounded-lg px-3 py-3 text-left hover:bg-accent"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="flex size-9 items-center justify-center rounded-full bg-muted text-xs font-bold">
-                        {holding.asset.slice(0, 3)}
-                      </div>
+                      <CoinIcon asset={holding.asset} />
 
                       <div>
                         <div className="font-medium">{holding.asset}/THB</div>
@@ -2072,9 +2114,7 @@ function TradePage({
 
           {/* ASSET ICON */}
 
-          <div className="flex size-11 items-center justify-center rounded-full bg-muted text-lg font-bold">
-            {asset[0]}
-          </div>
+          <CoinIcon asset={asset} size={44} />
 
 
           {/* ASSET NAME */}
