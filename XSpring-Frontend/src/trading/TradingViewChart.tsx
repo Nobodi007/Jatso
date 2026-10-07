@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type RefObject } from "react"
 
 interface TradingViewChartProps {
   symbol: string
@@ -6,20 +6,76 @@ interface TradingViewChartProps {
   height?: number
 }
 
-// อ่านโหมดจาก class "dark" บน <html> (ตั้งโดยปุ่มสลับธีมใน App.tsx)
-function useIsDark() {
-  const [isDark, setIsDark] = useState(() =>
-    document.documentElement.classList.contains("dark")
+// แปลงสี CSS (rgb/oklch/hsl ฯลฯ) เป็นค่าจริง แล้วดูว่า "มืด" หรือไม่
+// คืน null ถ้าสีโปร่งใสหรืออ่านไม่ได้
+function colorIsDark(css: string): boolean | null {
+  const canvas = document.createElement("canvas")
+  canvas.width = 1
+  canvas.height = 1
+  const ctx = canvas.getContext("2d", { willReadFrequently: true })
+  if (!ctx) return null
+
+  const sentinel = "#123456"
+  ctx.fillStyle = sentinel
+  ctx.fillStyle = css
+  if (ctx.fillStyle === sentinel && css.trim().toLowerCase() !== sentinel) {
+    return null
+  }
+
+  ctx.clearRect(0, 0, 1, 1)
+  ctx.fillRect(0, 0, 1, 1)
+  const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data
+  if (a < 10) return null
+
+  return 0.299 * r + 0.587 * g + 0.114 * b < 128
+}
+
+// ดูสีพื้นหลังจริงของหน้าเว็บ ณ ตำแหน่งกราฟ (เดินขึ้นไปหา element ที่มีสีพื้น)
+function detectDark(el: HTMLElement | null): boolean {
+  let node: HTMLElement | null = el
+  while (node) {
+    const result = colorIsDark(getComputedStyle(node).backgroundColor)
+    if (result !== null) return result
+    node = node.parentElement
+  }
+
+  return (
+    document.documentElement.classList.contains("dark") ||
+    window.matchMedia("(prefers-color-scheme: dark)").matches
+  )
+}
+
+function useIsDark(ref: RefObject<HTMLElement | null>) {
+  const [isDark, setIsDark] = useState(
+    () =>
+      document.documentElement.classList.contains("dark") ||
+      window.matchMedia("(prefers-color-scheme: dark)").matches
   )
 
   useEffect(() => {
-    const root = document.documentElement
-    const observer = new MutationObserver(() => {
-      setIsDark(root.classList.contains("dark"))
-    })
-    observer.observe(root, { attributes: true, attributeFilter: ["class"] })
-    return () => observer.disconnect()
-  }, [])
+    const update = () => setIsDark(detectDark(ref.current))
+
+    // เช็คหลังสีเปลี่ยนเสร็จ เผื่อมี transition
+    const updateSoon = () => {
+      update()
+      window.setTimeout(update, 350)
+    }
+
+    update()
+
+    const observer = new MutationObserver(updateSoon)
+    const watch = { attributes: true, attributeFilter: ["class", "style", "data-theme"] }
+    observer.observe(document.documentElement, watch)
+    observer.observe(document.body, watch)
+
+    const media = window.matchMedia("(prefers-color-scheme: dark)")
+    media.addEventListener("change", updateSoon)
+
+    return () => {
+      observer.disconnect()
+      media.removeEventListener("change", updateSoon)
+    }
+  }, [ref])
 
   return isDark
 }
@@ -30,7 +86,7 @@ export default function TradingViewChart({
   height = 480,
 }: TradingViewChartProps) {
   const container = useRef<HTMLDivElement>(null)
-  const isDark = useIsDark()
+  const isDark = useIsDark(container)
 
   useEffect(() => {
     if (!container.current) return
