@@ -447,6 +447,17 @@ function App() {
               />
             )}
 
+            {page === "markets" && (
+              <MarketsPage
+                portfolio={portfolio}
+                onTrade={(asset) => {
+                  void asset
+                  setPage("trade")
+                }}
+                onOrderBook={() => setPage("orderbook")}
+              />
+            )}
+
             {page === "trade" && (
               <TradePage
                 portfolio={portfolio}
@@ -900,6 +911,221 @@ function OrderBookPage() {
   )
 }
 
+
+/* =========================================================
+   MARKETS — MARKET HUB
+========================================================= */
+
+type MarketTicker = {
+  asset: string
+  name: string
+  price: number
+  change: number
+  high: number
+  low: number
+  volume: number
+  bid: number
+  ask: number
+}
+
+const MARKET_HUB_ASSETS = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "HBAR", "LINK", "XLM"]
+
+const MARKET_HUB_NAMES: Record<string, string> = {
+  BTC: "Bitcoin",
+  ETH: "Ethereum",
+  SOL: "Solana",
+  XRP: "XRP",
+  ADA: "Cardano",
+  DOGE: "Dogecoin",
+  HBAR: "Hedera",
+  LINK: "Chainlink",
+  XLM: "Stellar",
+}
+
+function MarketsPage({
+  portfolio,
+  onTrade,
+  onOrderBook,
+}: {
+  portfolio: PortfolioData | null
+  onTrade: (asset: string) => void
+  onOrderBook: () => void
+}) {
+  const [tickers, setTickers] = useState<MarketTicker[]>([])
+  const [selectedAsset, setSelectedAsset] = useState("BTC")
+  const [search, setSearch] = useState("")
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [lastUpdated, setLastUpdated] = useState("")
+
+  const loadMarkets = async () => {
+    try {
+      setError("")
+      const rows = await Promise.all(
+        MARKET_HUB_ASSETS.map(async (asset) => {
+          const response = await fetch(
+            `https://api.bitkub.com/api/market/ticker?sym=THB_${asset}`,
+            { headers: { Accept: "application/json" }, cache: "no-store" }
+          )
+          if (!response.ok) throw new Error(`HTTP ${response.status}`)
+          const body = await response.json()
+          const ticker = body?.[asset] || body?.[`THB_${asset}`] || body?.result?.[asset]
+          if (!ticker) throw new Error(`No ticker for ${asset}`)
+          return {
+            asset,
+            name: MARKET_HUB_NAMES[asset] || asset,
+            price: Number(ticker.last || 0),
+            change: Number(ticker.percentChange || 0),
+            high: Number(ticker.high24hr || 0),
+            low: Number(ticker.low24hr || 0),
+            volume: Number(ticker.baseVolume || 0),
+            bid: Number(ticker.highestBid || 0),
+            ask: Number(ticker.lowestAsk || 0),
+          } satisfies MarketTicker
+        })
+      )
+      setTickers(rows.filter((row) => row.price > 0))
+      setLastUpdated(new Date().toLocaleTimeString("th-TH"))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "โหลด Market Data ไม่สำเร็จ")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    const run = async () => {
+      if (cancelled) return
+      await loadMarkets()
+    }
+    void run()
+    const timer = window.setInterval(run, 10000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  const visible = tickers.filter((item) => {
+    const q = search.trim().toLowerCase()
+    return !q || item.asset.toLowerCase().includes(q) || item.name.toLowerCase().includes(q)
+  })
+  const gainers = [...tickers].sort((a, b) => b.change - a.change).slice(0, 3)
+  const losers = [...tickers].sort((a, b) => a.change - b.change).slice(0, 3)
+  const selected = tickers.find((item) => item.asset === selectedAsset) || null
+  const holding = portfolio?.holdings.find((item) => item.asset.toUpperCase() === selectedAsset)
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold">Markets</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Real-time market overview, movers and market intelligence.</p>
+        </div>
+        <div className="text-xs text-muted-foreground">
+          {loading ? "Updating..." : error ? "Market data unavailable" : `Live · Updated ${lastUpdated}`}
+        </div>
+      </div>
+
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-3 size-4 text-muted-foreground" />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search coin"
+          className="w-full rounded-xl border bg-card py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-primary"
+        />
+      </div>
+
+      {error && (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-500">
+          Market data error: {error}
+        </div>
+      )}
+
+      <section>
+        <div className="mb-3">
+          <h3 className="font-semibold">Market Overview</h3>
+          <p className="mt-1 text-xs text-muted-foreground">Live ticker data from Bitkub Public Market API</p>
+        </div>
+        <div className="overflow-hidden rounded-xl border bg-card">
+          <div className="grid grid-cols-[1.4fr_1fr_110px_120px] gap-4 border-b px-4 py-3 text-xs font-medium text-muted-foreground">
+            <div>Market</div><div>Price</div><div>24h</div><div className="text-right">Volume</div>
+          </div>
+          {loading && tickers.length === 0 ? (
+            <div className="py-12 text-center text-sm text-muted-foreground">Loading markets...</div>
+          ) : visible.length === 0 ? (
+            <div className="py-12 text-center text-sm text-muted-foreground">No markets found</div>
+          ) : visible.map((item) => {
+            const positive = item.change >= 0
+            return (
+              <button
+                key={item.asset}
+                type="button"
+                onClick={() => setSelectedAsset(item.asset)}
+                className="grid w-full grid-cols-[1.4fr_1fr_110px_120px] gap-4 border-b px-4 py-3 text-left transition hover:bg-accent last:border-b-0"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="flex size-9 items-center justify-center rounded-full bg-muted text-xs font-bold">{item.asset.slice(0, 3)}</div>
+                  <div><div className="font-semibold">{item.asset}/THB</div><div className="text-xs text-muted-foreground">{item.name}</div></div>
+                </div>
+                <div className="font-medium">{formatTHB(item.price)}</div>
+                <div className={positive ? "text-emerald-500" : "text-red-500"}>{positive ? "+" : ""}{item.change.toFixed(2)}%</div>
+                <div className="text-right text-sm text-muted-foreground">{item.volume.toLocaleString("en-US", { maximumFractionDigits: 2 })}</div>
+              </button>
+            )
+          })}
+        </div>
+      </section>
+
+      <section>
+        <div className="mb-3"><h3 className="font-semibold">Top Movers</h3></div>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="rounded-xl border bg-card p-5">
+            <div className="mb-3 flex items-center gap-2 font-semibold text-emerald-500"><TrendingUp className="size-4" /> Gainers</div>
+            <div className="space-y-2">{gainers.map((item) => <button key={item.asset} onClick={() => setSelectedAsset(item.asset)} className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left hover:bg-accent"><span className="font-medium">{item.asset}</span><span className="text-emerald-500">+{item.change.toFixed(2)}%</span></button>)}</div>
+          </div>
+          <div className="rounded-xl border bg-card p-5">
+            <div className="mb-3 flex items-center gap-2 font-semibold text-red-500"><TrendingDown className="size-4" /> Losers</div>
+            <div className="space-y-2">{losers.map((item) => <button key={item.asset} onClick={() => setSelectedAsset(item.asset)} className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left hover:bg-accent"><span className="font-medium">{item.asset}</span><span className="text-red-500">{item.change.toFixed(2)}%</span></button>)}</div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div className="mb-3"><h3 className="font-semibold">Market Watch</h3><p className="mt-1 text-xs text-muted-foreground">Select a market to inspect its live chart and portfolio exposure.</p></div>
+        <div className="flex flex-wrap gap-2">{MARKET_HUB_ASSETS.map((asset) => <button key={asset} onClick={() => setSelectedAsset(asset)} className={`rounded-lg border px-3 py-2 text-sm font-medium ${selectedAsset === asset ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}>{asset}</button>)}</div>
+      </section>
+
+      <section className="rounded-xl border bg-card p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div><h3 className="font-semibold">{selectedAsset} / THB</h3><p className="mt-1 text-xs text-muted-foreground">Coin Intelligence</p></div>
+          <div className="flex gap-2"><button onClick={() => onOrderBook()} className="rounded-lg border px-3 py-2 text-sm hover:bg-accent">Orderbook</button><button onClick={() => onTrade(selectedAsset)} className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground">Trade</button></div>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-5">
+          <MarketStat label="Price" value={selected ? formatTHB(selected.price) : "—"} sub={selected ? `${selected.change >= 0 ? "+" : ""}${selected.change.toFixed(2)}%` : "—"} positive={selected ? selected.change >= 0 : undefined} />
+          <MarketStat label="24h High" value={selected?.high ? formatTHB(selected.high) : "—"} />
+          <MarketStat label="24h Low" value={selected?.low ? formatTHB(selected.low) : "—"} />
+          <MarketStat label="24h Volume" value={selected ? selected.volume.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—"} />
+          <MarketStat label="Spread" value={selected && selected.bid > 0 && selected.ask > 0 ? formatTHB(selected.ask - selected.bid) : "—"} />
+        </div>
+        <div className="mt-5 overflow-hidden rounded-lg bg-muted/20">
+          <TradingViewChart symbol={`BITKUB:${selectedAsset}THB`} interval="60" height={420} />
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <div className="rounded-lg border p-4"><div className="text-xs text-muted-foreground">Portfolio holding</div><div className="mt-1 font-semibold">{holding ? `${formatQty(holding.qty)} ${selectedAsset}` : `No ${selectedAsset} position`}</div></div>
+          <div className="rounded-lg border p-4"><div className="text-xs text-muted-foreground">Unrealized P&L</div><div className={`mt-1 font-semibold ${Number(holding?.unrealized_pnl || 0) >= 0 ? "text-emerald-500" : "text-red-500"}`}>{holding ? formatTHB(Number(holding.unrealized_pnl || 0)) : "—"}</div></div>
+        </div>
+      </section>
+
+      <section className="rounded-xl border bg-card p-5">
+        <h3 className="font-semibold">Market Intelligence</h3>
+        <p className="mt-1 text-sm text-muted-foreground">Market signals will connect here to Portfolio and AI intelligence. Current page uses live price, movers and your existing portfolio exposure.</p>
+      </section>
+    </div>
+  )
+}
 
 /* =========================================================
    DASHBOARD
