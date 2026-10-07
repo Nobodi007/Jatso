@@ -4,7 +4,7 @@ import uuid
 import time
 import urllib.request
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from flask import Flask, request, abort
 
@@ -53,10 +53,12 @@ XSPRING_ACTOR = (
     or ""
 ).strip().lower()
 
+# เวลาไทย (UTC+7) — ใช้บันทึกวันที่/เวลาของออเดอร์ให้ตรงกับที่หน้าเว็บอ่าน
+# (หน้าเว็บถือว่าเวลาที่ไม่มีโซนคือเวลาไทย)
+BKK = timezone(timedelta(hours=7))
 
-configuration = Configuration(
-    access_token=CHANNEL_ACCESS_TOKEN
-)
+
+configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
 
 handler = WebhookHandler(CHANNEL_SECRET)
 
@@ -118,10 +120,7 @@ def supabase_request(method, path, payload=None, query=None):
     data = None
 
     if payload is not None:
-        data = json.dumps(
-            payload,
-            ensure_ascii=False
-        ).encode("utf-8")
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
     req = urllib.request.Request(
         url,
@@ -130,19 +129,14 @@ def supabase_request(method, path, payload=None, query=None):
         method=method,
     )
 
-    with urllib.request.urlopen(
-        req,
-        timeout=10
-    ) as response:
+    with urllib.request.urlopen(req, timeout=10) as response:
 
         raw = response.read()
 
         if not raw:
             return None
 
-        return json.loads(
-            raw.decode("utf-8")
-        )
+        return json.loads(raw.decode("utf-8"))
 
 
 # ============================================================
@@ -152,9 +146,7 @@ def supabase_request(method, path, payload=None, query=None):
 def load_sim_state():
 
     if not XSPRING_ACTOR:
-        raise RuntimeError(
-            "ยังไม่ได้ตั้ง XSPRING_LINE_ACTOR_EMAIL"
-        )
+        raise RuntimeError("ยังไม่ได้ตั้ง XSPRING_LINE_ACTOR_EMAIL")
 
     rows = supabase_request(
         "GET",
@@ -167,21 +159,15 @@ def load_sim_state():
     )
 
     if not rows:
-        raise RuntimeError(
-            "ไม่พบ XSpring Portfolio ของ actor นี้"
-        )
+        raise RuntimeError("ไม่พบ XSpring Portfolio ของ actor นี้")
 
     data = rows[0].get("data")
 
     if isinstance(data, str):
-
         data = json.loads(data)
 
     if not isinstance(data, dict):
-
-        raise RuntimeError(
-            "sim_state ใน Supabase ไม่ใช่ JSON object"
-        )
+        raise RuntimeError("sim_state ใน Supabase ไม่ใช่ JSON object")
 
     return data
 
@@ -193,13 +179,9 @@ def save_sim_state(sim):
         "/rest/v1/sim_state",
         payload={
             "data": sim,
-            "updated_at": datetime.now(
-                timezone.utc
-            ).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         },
-        query={
-            "actor": f"eq.{XSPRING_ACTOR}"
-        },
+        query={"actor": f"eq.{XSPRING_ACTOR}"},
     )
 
 
@@ -221,23 +203,15 @@ def _get_json(url, timeout=8):
         },
     )
 
-    with urllib.request.urlopen(
-        req,
-        timeout=timeout
-    ) as response:
-        return json.loads(
-            response.read().decode("utf-8")
-        )
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
 
 
 def get_price_usd(asset):
 
     asset = str(asset).upper().strip()
 
-    stablecoins = {
-        "USDT",
-        "USDC",
-    }
+    stablecoins = {"USDT", "USDC"}
 
     if asset in stablecoins:
         return 1.0
@@ -249,41 +223,27 @@ def get_price_usd(asset):
             return cached_price
 
     if asset not in SUPPORTED_ASSETS:
-        raise ValueError(
-            f"ไม่รองรับเหรียญ {asset}"
-        )
+        raise ValueError(f"ไม่รองรับเหรียญ {asset}")
 
     errors = []
 
-    # --------------------------------------------------------
-    # 1) Coinbase public spot API
-    #    ไม่ต้องใช้ API key
-    # --------------------------------------------------------
+    # 1) Coinbase public spot API (ไม่ต้องใช้ API key)
     try:
         data = _get_json(
             f"https://api.coinbase.com/v2/prices/{asset}-USD/spot",
             timeout=8,
         )
 
-        price = float(
-            data["data"]["amount"]
-        )
+        price = float(data["data"]["amount"])
 
-        _PRICE_CACHE[asset] = (
-            time.time(),
-            price,
-        )
+        _PRICE_CACHE[asset] = (time.time(), price)
 
         return price
 
     except Exception as exc:
-        errors.append(
-            f"Coinbase: {str(exc)[:80]}"
-        )
+        errors.append(f"Coinbase: {str(exc)[:80]}")
 
-    # --------------------------------------------------------
     # 2) CoinPaprika fallback
-    # --------------------------------------------------------
     paprika_ids = {
         "BTC": "btc-bitcoin",
         "ETH": "eth-ethereum",
@@ -307,54 +267,34 @@ def get_price_usd(asset):
                 timeout=8,
             )
 
-            price = float(
-                data["quotes"]["USD"]["price"]
-            )
+            price = float(data["quotes"]["USD"]["price"])
 
-            _PRICE_CACHE[asset] = (
-                time.time(),
-                price,
-            )
+            _PRICE_CACHE[asset] = (time.time(), price)
 
             return price
 
         except Exception as exc:
-            errors.append(
-                f"CoinPaprika: {str(exc)[:80]}"
-            )
+            errors.append(f"CoinPaprika: {str(exc)[:80]}")
 
     raise RuntimeError(
-        f"ไม่สามารถดึงราคา {asset} ได้ | "
-        + " | ".join(errors)
+        f"ไม่สามารถดึงราคา {asset} ได้ | " + " | ".join(errors)
     )
 
 
 def get_usdthb():
 
     # ใช้ exchangerate API แบบ public สำหรับ simulator
-    url = (
-        "https://open.er-api.com/v6/latest/USD"
-    )
+    url = "https://open.er-api.com/v6/latest/USD"
 
     req = urllib.request.Request(
         url,
-        headers={
-            "User-Agent": "JATSO-LINE-Bot"
-        },
+        headers={"User-Agent": "JATSO-LINE-Bot"},
     )
 
-    with urllib.request.urlopen(
-        req,
-        timeout=8
-    ) as response:
+    with urllib.request.urlopen(req, timeout=8) as response:
+        data = json.loads(response.read().decode("utf-8"))
 
-        data = json.loads(
-            response.read().decode("utf-8")
-        )
-
-    return float(
-        data["rates"]["THB"]
-    )
+    return float(data["rates"]["THB"])
 
 
 def get_price_thb(asset):
@@ -372,30 +312,27 @@ def get_price_thb(asset):
 line_sessions = {}
 
 
-def get_session(user_id):
-
-    if user_id not in line_sessions:
-
-        line_sessions[user_id] = {
-            "action": None,
-            "asset": None,
-            "amount": None,
-            "quote": None,
-            "order_id": None,
-        }
-
-    return line_sessions[user_id]
-
-
-def clear_session(user_id):
-
-    line_sessions[user_id] = {
+def _empty_session():
+    return {
         "action": None,
         "asset": None,
         "amount": None,
         "quote": None,
         "order_id": None,
     }
+
+
+def get_session(user_id):
+
+    if user_id not in line_sessions:
+        line_sessions[user_id] = _empty_session()
+
+    return line_sessions[user_id]
+
+
+def clear_session(user_id):
+
+    line_sessions[user_id] = _empty_session()
 
 
 # ============================================================
@@ -437,42 +374,11 @@ def quick_menu():
 
     return QuickReply(
         items=[
-
-            QuickReplyItem(
-                action=PostbackAction(
-                    label="📊 ราคา",
-                    data="price",
-                )
-            ),
-
-            QuickReplyItem(
-                action=PostbackAction(
-                    label="💰 ซื้อ",
-                    data="buy",
-                )
-            ),
-
-            QuickReplyItem(
-                action=PostbackAction(
-                    label="🔴 ขาย",
-                    data="sell",
-                )
-            ),
-
-            QuickReplyItem(
-                action=PostbackAction(
-                    label="💼 พอร์ต",
-                    data="portfolio",
-                )
-            ),
-
-            QuickReplyItem(
-                action=PostbackAction(
-                    label="📜 ประวัติ",
-                    data="history",
-                )
-            ),
-
+            QuickReplyItem(action=PostbackAction(label="📊 ราคา", data="price")),
+            QuickReplyItem(action=PostbackAction(label="💰 ซื้อ", data="buy")),
+            QuickReplyItem(action=PostbackAction(label="🔴 ขาย", data="sell")),
+            QuickReplyItem(action=PostbackAction(label="💼 พอร์ต", data="portfolio")),
+            QuickReplyItem(action=PostbackAction(label="📜 ประวัติ", data="history")),
         ]
     )
 
@@ -486,7 +392,6 @@ def show_price(asset="BTC"):
     asset = asset.upper()
 
     if asset not in SUPPORTED_ASSETS:
-
         return "❌ ไม่รองรับเหรียญนี้"
 
     try:
@@ -516,20 +421,11 @@ def show_portfolio():
 
     sim = load_sim_state()
 
-    cash = float(
-        sim.get(
-            "customer_thb",
-            0
-        ) or 0
-    )
+    cash = float(sim.get("customer_thb", 0) or 0)
 
-    coins = sim.get(
-        "customer_coins",
-        {}
-    )
+    coins = sim.get("customer_coins", {})
 
     if not isinstance(coins, dict):
-
         coins = {}
 
     text = (
@@ -542,11 +438,8 @@ def show_portfolio():
     for asset, qty in coins.items():
 
         try:
-
             qty = float(qty)
-
         except Exception:
-
             continue
 
         if qty <= 0:
@@ -581,33 +474,20 @@ def show_history():
 
     sim = load_sim_state()
 
-    orders = sim.get(
-        "orders",
-        []
-    )
+    orders = sim.get("orders", [])
 
     if not orders:
-
-        return (
-            "📜 ประวัติ\n\n"
-            "ยังไม่มีรายการ"
-        )
+        return "📜 ประวัติ\n\nยังไม่มีรายการ"
 
     rows = [
         x
         for x in orders
         if isinstance(x, dict)
-        and str(
-            x.get("Source", "")
-        ).lower() == "line"
+        and str(x.get("Source", "")).lower() == "line"
     ]
 
     if not rows:
-
-        return (
-            "📜 ประวัติ LINE\n\n"
-            "ยังไม่มีรายการซื้อขายผ่าน LINE"
-        )
+        return "📜 ประวัติ LINE\n\nยังไม่มีรายการซื้อขายผ่าน LINE"
 
     text = "📜 ประวัติ LINE\n\n"
 
@@ -722,24 +602,11 @@ def create_order_preview(user_id, amount):
 
     sim = load_sim_state()
 
-    cash = float(
-        sim.get(
-            "customer_thb",
-            0
-        ) or 0
-    )
+    cash = float(sim.get("customer_thb", 0) or 0)
 
-    coins = sim.setdefault(
-        "customer_coins",
-        {}
-    )
+    coins = sim.setdefault("customer_coins", {})
 
-    owned = float(
-        coins.get(
-            asset,
-            0
-        ) or 0
-    )
+    owned = float(coins.get(asset, 0) or 0)
 
     try:
 
@@ -757,7 +624,6 @@ def create_order_preview(user_id, amount):
         amount_thb = amount
 
         if amount_thb < MIN_TRADE_THB:
-
             return "❌ มูลค่าซื้อต่ำเกินไป"
 
         if amount_thb > cash:
@@ -776,10 +642,7 @@ def create_order_preview(user_id, amount):
         # from the gross THB amount, so the delivered coin quantity is net.
         qty = (amount_thb - fee) / quote
 
-        order_id = (
-            "LINE-"
-            + uuid.uuid4().hex[:10].upper()
-        )
+        order_id = "LINE-" + uuid.uuid4().hex[:10].upper()
 
         s["amount"] = amount_thb
         s["quote"] = quote
@@ -805,7 +668,6 @@ def create_order_preview(user_id, amount):
     qty = amount
 
     if qty <= 0:
-
         return "❌ จำนวนต้องมากกว่า 0"
 
     if qty > owned:
@@ -824,10 +686,7 @@ def create_order_preview(user_id, amount):
 
     receive = gross - fee
 
-    order_id = (
-        "LINE-"
-        + uuid.uuid4().hex[:10].upper()
-    )
+    order_id = "LINE-" + uuid.uuid4().hex[:10].upper()
 
     s["amount"] = qty
     s["quote"] = quote
@@ -869,17 +728,9 @@ def confirm_order(user_id):
 
     sim = load_sim_state()
 
-    cash = float(
-        sim.get(
-            "customer_thb",
-            0
-        ) or 0
-    )
+    cash = float(sim.get("customer_thb", 0) or 0)
 
-    coins = sim.setdefault(
-        "customer_coins",
-        {}
-    )
+    coins = sim.setdefault("customer_coins", {})
 
     asset = s["asset"]
     action = s["action"]
@@ -887,16 +738,10 @@ def confirm_order(user_id):
     quote = float(s["quote"])
     order_id = s["order_id"]
 
-    owned = float(
-        coins.get(
-            asset,
-            0
-        ) or 0
-    )
+    owned = float(coins.get(asset, 0) or 0)
 
-    now = datetime.now(
-        timezone.utc
-    )
+    # เวลาไทย (UTC+7) — แก้ปัญหาวันที่/เวลาเลื่อนผิด 7 ชม. บนหน้าเว็บ
+    now = datetime.now(BKK)
 
     # ========================================================
     # BUY
@@ -914,13 +759,9 @@ def confirm_order(user_id):
         fee = amount * TRADING_FEE_PCT
         qty = (amount - fee) / quote
 
-        coins[asset] = (
-            owned + qty
-        )
+        coins[asset] = owned + qty
 
-        sim["customer_thb"] = (
-            cash - amount
-        )
+        sim["customer_thb"] = cash - amount
 
         side_th = "ซื้อ"
 
@@ -947,14 +788,9 @@ def confirm_order(user_id):
 
         receive = gross - fee
 
-        coins[asset] = max(
-            0.0,
-            owned - qty
-        )
+        coins[asset] = max(0.0, owned - qty)
 
-        sim["customer_thb"] = (
-            cash + receive
-        )
+        sim["customer_thb"] = cash + receive
 
         side_th = "ขาย"
 
@@ -968,13 +804,12 @@ def confirm_order(user_id):
 
     order = {
 
-        "วันที่": now.strftime(
-            "%Y-%m-%d"
-        ),
+        "วันที่": now.strftime("%Y-%m-%d"),
 
-        "เวลา": now.strftime(
-            "%H:%M:%S"
-        ),
+        "เวลา": now.strftime("%H:%M:%S"),
+
+        # ISO พร้อมโซนเวลา (+07:00) กันการตีความเวลาผิด
+        "timestamp": now.isoformat(timespec="seconds"),
 
         "ฝั่ง": side_th,
 
@@ -1004,10 +839,7 @@ def confirm_order(user_id):
 
     }
 
-    sim.setdefault(
-        "orders",
-        []
-    ).append(order)
+    sim.setdefault("orders", []).append(order)
 
     # ========================================================
     # SAVE
@@ -1040,31 +872,21 @@ def confirm_order(user_id):
 # REPLY
 # ============================================================
 
-def reply_message(
-    reply_token,
-    text
-):
+def reply_message(reply_token, text):
 
-    with ApiClient(
-        configuration
-    ) as api_client:
+    with ApiClient(configuration) as api_client:
 
-        api = MessagingApi(
-            api_client
-        )
+        api = MessagingApi(api_client)
 
         api.reply_message(
-
             ReplyMessageRequest(
-
                 reply_token=reply_token,
-
                 messages=[
                     TextMessage(
                         text=text,
-                        quick_reply=quick_menu()
+                        quick_reply=quick_menu(),
                     )
-                ]
+                ],
             )
         )
 
@@ -1073,32 +895,19 @@ def reply_message(
 # WEBHOOK
 # ============================================================
 
-@app.route(
-    "/webhook",
-    methods=["POST"]
-)
+@app.route("/webhook", methods=["POST"])
 def webhook():
 
-    signature = request.headers.get(
-        "X-Line-Signature"
-    )
+    signature = request.headers.get("X-Line-Signature")
 
     if not signature:
         abort(400)
 
-    body = request.get_data(
-        as_text=True
-    )
+    body = request.get_data(as_text=True)
 
     try:
-
-        handler.handle(
-            body,
-            signature
-        )
-
+        handler.handle(body, signature)
     except InvalidSignatureError:
-
         abort(400)
 
     return "OK"
@@ -1108,175 +917,75 @@ def webhook():
 # MESSAGE
 # ============================================================
 
-@handler.add(
-    MessageEvent,
-    message=TextMessageContent
-)
+@handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
 
     user_id = event.source.user_id
 
-    text = (
-        event.message.text
-        .strip()
-    )
+    text = event.message.text.strip()
 
     lower = text.lower()
 
     try:
 
-        # ----------------------------------------------------
-        # CANCEL
-        # ----------------------------------------------------
+        if lower in ["/cancel", "cancel", "ยกเลิก"]:
 
-        if lower in [
-            "/cancel",
-            "cancel",
-            "ยกเลิก",
-        ]:
+            clear_session(user_id)
 
-            clear_session(
-                user_id
-            )
+            response = "❌ ยกเลิกคำสั่งแล้ว\n\n" + menu_text()
 
-            response = (
-                "❌ ยกเลิกคำสั่งแล้ว\n\n"
-                + menu_text()
-            )
+        elif lower in ["/confirm", "confirm"]:
 
-        # ----------------------------------------------------
-        # CONFIRM
-        # ----------------------------------------------------
+            response = confirm_order(user_id)
 
-        elif lower in [
-            "/confirm",
-            "confirm",
-        ]:
-
-            response = confirm_order(
-                user_id
-            )
-
-        # ----------------------------------------------------
-        # MENU
-        # ----------------------------------------------------
-
-        elif lower in [
-            "เมนู",
-            "menu",
-            "/start",
-            "start",
-        ]:
+        elif lower in ["เมนู", "menu", "/start", "start"]:
 
             response = menu_text()
 
-        # ----------------------------------------------------
-        # PRICE
-        # ----------------------------------------------------
-
-        elif lower in [
-            "ราคา",
-            "price",
-            "ราคา btc",
-        ]:
+        elif lower in ["ราคา", "price", "ราคา btc"]:
 
             response = show_price("BTC")
 
-        # ----------------------------------------------------
-        # BUY
-        # ----------------------------------------------------
+        elif lower in ["ซื้อ", "buy"]:
 
-        elif lower in [
-            "ซื้อ",
-            "buy",
-        ]:
+            response = start_buy(user_id)
 
-            response = start_buy(
-                user_id
-            )
+        elif lower in ["ขาย", "sell"]:
 
-        # ----------------------------------------------------
-        # SELL
-        # ----------------------------------------------------
+            response = start_sell(user_id)
 
-        elif lower in [
-            "ขาย",
-            "sell",
-        ]:
-
-            response = start_sell(
-                user_id
-            )
-
-        # ----------------------------------------------------
-        # PORTFOLIO
-        # ----------------------------------------------------
-
-        elif lower in [
-            "พอร์ต",
-            "portfolio",
-            "wallet",
-        ]:
+        elif lower in ["พอร์ต", "portfolio", "wallet"]:
 
             response = show_portfolio()
 
-        # ----------------------------------------------------
-        # HISTORY
-        # ----------------------------------------------------
-
-        elif lower in [
-            "ประวัติ",
-            "history",
-        ]:
+        elif lower in ["ประวัติ", "history"]:
 
             response = show_history()
 
-        # ----------------------------------------------------
-        # BUY / SELL FLOW
-        # ----------------------------------------------------
-
         else:
 
-            session = get_session(
-                user_id
-            )
+            session = get_session(user_id)
 
             if session["action"]:
 
                 # ขั้นเลือกเหรียญ
                 if session["asset"] is None:
 
-                    response = select_coin(
-                        user_id,
-                        text
-                    )
+                    response = select_coin(user_id, text)
 
                 # ขั้นกรอกจำนวน
                 else:
 
                     try:
-
-                        value = float(
-                            text.replace(
-                                ",",
-                                ""
-                            )
-                        )
-
+                        value = float(text.replace(",", ""))
                     except ValueError:
-
                         response = (
                             "❌ กรุณาใส่ตัวเลข\n\n"
                             "ตัวอย่าง:\n"
                             "500000"
                         )
-
                     else:
-
-                        response = create_order_preview(
-                            user_id,
-                            value
-                        )
+                        response = create_order_preview(user_id, value)
 
             else:
 
@@ -1287,19 +996,14 @@ def handle_message(event):
 
     except Exception as exc:
 
-        print(
-            f"[LINE ERROR] {type(exc).__name__}: {exc}"
-        )
+        print(f"[LINE ERROR] {type(exc).__name__}: {exc}")
 
         response = (
             "❌ ระบบเกิดข้อผิดพลาด\n\n"
             "ลองใหม่อีกครั้งครับ"
         )
 
-    reply_message(
-        event.reply_token,
-        response
-    )
+    reply_message(event.reply_token, response)
 
 
 # ============================================================
@@ -1316,47 +1020,30 @@ def handle_postback(event):
     try:
 
         if data == "price":
-
             response = show_price("BTC")
 
         elif data == "buy":
-
-            response = start_buy(
-                user_id
-            )
+            response = start_buy(user_id)
 
         elif data == "sell":
-
-            response = start_sell(
-                user_id
-            )
+            response = start_sell(user_id)
 
         elif data == "portfolio":
-
             response = show_portfolio()
 
         elif data == "history":
-
             response = show_history()
 
         else:
-
             response = menu_text()
 
     except Exception as exc:
 
-        print(
-            f"[LINE POSTBACK ERROR] {exc}"
-        )
+        print(f"[LINE POSTBACK ERROR] {exc}")
 
-        response = (
-            "❌ ระบบเกิดข้อผิดพลาด"
-        )
+        response = "❌ ระบบเกิดข้อผิดพลาด"
 
-    reply_message(
-        event.reply_token,
-        response
-    )
+    reply_message(event.reply_token, response)
 
 
 # ============================================================
@@ -1366,9 +1053,7 @@ def handle_postback(event):
 @app.route("/")
 def home():
 
-    return (
-        "JATSO LINE Trading Bot is running."
-    )
+    return "JATSO LINE Trading Bot is running."
 
 
 # ============================================================
@@ -1379,10 +1064,5 @@ if __name__ == "__main__":
 
     app.run(
         host="0.0.0.0",
-        port=int(
-            os.environ.get(
-                "PORT",
-                5000
-            )
-        )
+        port=int(os.environ.get("PORT", 5000)),
     )
