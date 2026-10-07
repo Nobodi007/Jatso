@@ -1,5 +1,6 @@
 import TradingViewChart from "./components/trading/TradingViewChart"
 import { useEffect, useState } from "react"
+import type { ReactNode } from "react"
 import {
   LayoutDashboard,
   CandlestickChart,
@@ -17,7 +18,6 @@ import {
   Bell,
   Moon,
   Sun,
-  ChevronDown,
   TrendingUp,
   TrendingDown,
 } from "lucide-react"
@@ -89,67 +89,18 @@ type NavigationItem = {
 }
 
 const navigation: NavigationItem[] = [
-  {
-    id: "dashboard",
-    label: "Dashboard",
-    icon: LayoutDashboard,
-  },
-  {
-    id: "markets",
-    label: "Markets",
-    icon: CandlestickChart,
-  },
-  {
-    id: "trade",
-    label: "Trade",
-    icon: ArrowLeftRight,
-  },
-  {
-    id: "orderbook",
-    label: "Order Book",
-    icon: BookOpen,
-  },
-  {
-    id: "portfolio",
-    label: "Portfolio",
-    icon: Wallet,
-  },
-  {
-    id: "wallet",
-    label: "Wallet",
-    icon: Wallet,
-  },
-  {
-    id: "orders",
-    label: "Orders",
-    icon: ClipboardList,
-    count: 3,
-  },
-  {
-    id: "positions",
-    label: "Positions",
-    icon: BarChart3,
-  },
-  {
-    id: "risk",
-    label: "Risk Center",
-    icon: ShieldAlert,
-  },
-  {
-    id: "quant",
-    label: "Quant Lab",
-    icon: FlaskConical,
-  },
-  {
-    id: "news",
-    label: "News",
-    icon: Newspaper,
-  },
-  {
-    id: "settings",
-    label: "Settings",
-    icon: Settings,
-  },
+  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { id: "markets", label: "Markets", icon: CandlestickChart },
+  { id: "trade", label: "Trade", icon: ArrowLeftRight },
+  { id: "orderbook", label: "Order Book", icon: BookOpen },
+  { id: "portfolio", label: "Portfolio", icon: Wallet },
+  { id: "wallet", label: "Wallet", icon: Wallet },
+  { id: "orders", label: "Orders", icon: ClipboardList, count: 3 },
+  { id: "positions", label: "Positions", icon: BarChart3 },
+  { id: "risk", label: "Risk Center", icon: ShieldAlert },
+  { id: "quant", label: "Quant Lab", icon: FlaskConical },
+  { id: "news", label: "News", icon: Newspaper },
+  { id: "settings", label: "Settings", icon: Settings },
 ]
 
 const marketData: Record<
@@ -175,7 +126,6 @@ const marketData: Record<
     low: 3598000,
     volume: 124.52,
   },
-
   ETH: {
     name: "Ethereum",
     price: 128450,
@@ -186,7 +136,6 @@ const marketData: Record<
     low: 125800,
     volume: 2840.31,
   },
-
   SOL: {
     name: "Solana",
     price: 6240,
@@ -197,7 +146,6 @@ const marketData: Record<
     low: 6120,
     volume: 18420.5,
   },
-
   XRP: {
     name: "XRP",
     price: 82.45,
@@ -304,54 +252,33 @@ function App() {
     loadPortfolio()
   }, [])
 
-  const currentPage = navigation.find(
-    (item) => item.id === page
-  )
+  const currentPage = navigation.find((item) => item.id === page)
 
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="flex min-h-screen">
 
-        {/* =================================================
-            SIDEBAR
-        ================================================= */}
-
+        {/* SIDEBAR */}
         <aside
           className={`border-r bg-card transition-all duration-200 ${
             sidebarOpen ? "w-64" : "w-16"
           }`}
         >
-          {/* LOGO */}
-
           <div className="flex h-16 items-center border-b px-4">
-
             <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary font-bold text-primary-foreground">
               X
             </div>
 
             {sidebarOpen && (
               <div className="ml-3 min-w-0">
-
-                <div className="truncate text-sm font-semibold">
-                  XSpring
-                </div>
-
-                <div className="truncate text-xs text-muted-foreground">
-                  Dealer Suite
-                </div>
-
+                <div className="truncate text-sm font-semibold">XSpring</div>
+                <div className="truncate text-xs text-muted-foreground">Dealer Suite</div>
               </div>
             )}
-
           </div>
 
-
-          {/* NAVIGATION */}
-
           <nav className="space-y-1 p-2">
-
             {navigation.map((item) => {
-
               const Icon = item.icon
               const active = page === item.id
 
@@ -365,21 +292,16 @@ function App() {
                       : "text-muted-foreground hover:bg-accent hover:text-foreground"
                   }`}
                 >
-
                   <Icon className="size-4 shrink-0" />
 
                   {sidebarOpen && (
                     <>
-                      <span className="flex-1 truncate">
-                        {item.label}
-                      </span>
+                      <span className="flex-1 truncate">{item.label}</span>
 
                       {item.count !== undefined && (
                         <span
                           className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                            active
-                              ? "bg-primary-foreground/20"
-                              : "bg-muted"
+                            active ? "bg-primary-foreground/20" : "bg-muted"
                           }`}
                         >
                           {item.count}
@@ -387,71 +309,35 @@ function App() {
                       )}
                     </>
                   )}
-
                 </button>
               )
             })}
-
           </nav>
         </aside>
 
-
-        {/* =================================================
-            MAIN
-        ================================================= */}
-
+        {/* MAIN */}
         <div className="flex min-w-0 flex-1 flex-col">
 
-          {/* =================================================
-              TOPBAR
-          ================================================= */}
-
+          {/* TOPBAR */}
           <header className="flex h-16 items-center gap-3 border-b bg-background px-4">
-
-            {/* SIDEBAR TOGGLE */}
-
             <button
-              onClick={() =>
-                setSidebarOpen(!sidebarOpen)
-              }
+              onClick={() => setSidebarOpen(!sidebarOpen)}
               className="rounded-lg p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <Menu className="size-5" />
             </button>
 
-
-            {/* PAGE TITLE */}
-
             <div className="flex-1">
-
-              <h1 className="text-sm font-semibold">
-                {currentPage?.label}
-              </h1>
-
+              <h1 className="text-sm font-semibold">{currentPage?.label}</h1>
             </div>
 
-
-            {/* SEARCH */}
-
-            <button
-              className="rounded-lg p-2 text-muted-foreground hover:bg-accent"
-              aria-label="Search"
-            >
+            <button className="rounded-lg p-2 text-muted-foreground hover:bg-accent" aria-label="Search">
               <Search className="size-5" />
             </button>
 
-
-            {/* NOTIFICATION */}
-
-            <button
-              className="rounded-lg p-2 text-muted-foreground hover:bg-accent"
-              aria-label="Notifications"
-            >
+            <button className="rounded-lg p-2 text-muted-foreground hover:bg-accent" aria-label="Notifications">
               <Bell className="size-5" />
             </button>
-
-
-            {/* THEME TOGGLE */}
 
             <button
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -461,20 +347,12 @@ function App() {
               {theme === "dark" ? <Sun className="size-5" /> : <Moon className="size-5" />}
             </button>
 
-
-            {/* USER */}
-
             <div className="ml-2 flex size-8 items-center justify-center rounded-full bg-muted text-xs font-semibold">
               N
             </div>
-
           </header>
 
-
-          {/* =================================================
-              CONTENT
-          ================================================= */}
-
+          {/* CONTENT */}
           <main className="flex-1 overflow-auto p-6">
 
             {page === "dashboard" && (
@@ -528,9 +406,7 @@ function App() {
               />
             )}
 
-            {page === "orders" && (
-              <OrdersPage refreshKey={orderRefreshKey} />
-            )}
+            {page === "orders" && <OrdersPage refreshKey={orderRefreshKey} />}
 
             {page === "positions" && (
               <PositionsPage
@@ -571,16 +447,10 @@ function App() {
               page !== "positions" &&
               page !== "risk" &&
               page !== "quant" &&
-              page !== "news" && (
-                <PlaceholderPage
-                  title={currentPage?.label ?? ""}
-                />
-              )}
+              page !== "news" && <PlaceholderPage title={currentPage?.label ?? ""} />}
 
           </main>
-
         </div>
-
       </div>
     </div>
   )
@@ -666,9 +536,12 @@ function WalletPage({
                 const positive = pnl >= 0
                 return (
                   <div key={item.asset} className="flex flex-wrap items-center justify-between gap-4 py-4">
-                    <div className="min-w-[120px]">
-                      <div className="font-semibold">{item.asset}/THB</div>
-                      <div className="mt-1 text-xs text-muted-foreground">{formatQty(Number(item.qty || 0))} units</div>
+                    <div className="flex min-w-[120px] items-center gap-3">
+                      <CoinIcon asset={item.asset} />
+                      <div>
+                        <div className="font-semibold">{item.asset}/THB</div>
+                        <div className="mt-1 text-xs text-muted-foreground">{formatQty(Number(item.qty || 0))} units</div>
+                      </div>
                     </div>
                     <div className="text-right">
                       <div className="font-medium">{formatTHB(Number(item.market_value || 0))}</div>
@@ -833,10 +706,11 @@ function OrderBookPage() {
               key={item}
               type="button"
               onClick={() => setAsset(item)}
-              className={`rounded-lg border px-3 py-2 text-sm font-medium ${
+              className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium ${
                 asset === item ? "bg-primary text-primary-foreground" : "hover:bg-accent"
               }`}
             >
+              <CoinIcon asset={item} size={18} />
               {item}/THB
             </button>
           ))}
@@ -852,33 +726,25 @@ function OrderBookPage() {
       <div className="grid gap-4 md:grid-cols-4">
         <div className="rounded-xl border bg-card p-5">
           <div className="text-sm text-muted-foreground">Best Bid</div>
-          <div className="mt-2 text-xl font-semibold">
-            {formatOrderBookPrice(book?.best_bid_thb || 0)}
-          </div>
+          <div className="mt-2 text-xl font-semibold">{formatOrderBookPrice(book?.best_bid_thb || 0)}</div>
           <div className="mt-1 text-xs text-muted-foreground">{asset}/THB</div>
         </div>
 
         <div className="rounded-xl border bg-card p-5">
           <div className="text-sm text-muted-foreground">Best Ask</div>
-          <div className="mt-2 text-xl font-semibold">
-            {formatOrderBookPrice(book?.best_ask_thb || 0)}
-          </div>
+          <div className="mt-2 text-xl font-semibold">{formatOrderBookPrice(book?.best_ask_thb || 0)}</div>
           <div className="mt-1 text-xs text-muted-foreground">{asset}/THB</div>
         </div>
 
         <div className="rounded-xl border bg-card p-5">
           <div className="text-sm text-muted-foreground">Mid Price</div>
-          <div className="mt-2 text-xl font-semibold">
-            {formatOrderBookPrice(book?.mid_price_thb || 0)}
-          </div>
+          <div className="mt-2 text-xl font-semibold">{formatOrderBookPrice(book?.mid_price_thb || 0)}</div>
           <div className="mt-1 text-xs text-muted-foreground">THB</div>
         </div>
 
         <div className="rounded-xl border bg-card p-5">
           <div className="text-sm text-muted-foreground">Spread</div>
-          <div className="mt-2 text-xl font-semibold">
-            {formatOrderBookPrice(book?.spread_thb || 0)}
-          </div>
+          <div className="mt-2 text-xl font-semibold">{formatOrderBookPrice(book?.spread_thb || 0)}</div>
           <div className="mt-1 text-xs text-muted-foreground">
             {Number(book?.spread_pct || 0).toFixed(4)}%
           </div>
@@ -887,11 +753,14 @@ function OrderBookPage() {
 
       <div className="rounded-xl border bg-card p-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h3 className="font-semibold">{asset}/THB Market Depth</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Real-time bids / asks · Auto refresh 3s
-            </p>
+          <div className="flex items-center gap-3">
+            <CoinIcon asset={asset} size={32} />
+            <div>
+              <h3 className="font-semibold">{asset}/THB Market Depth</h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Real-time bids / asks · Auto refresh 3s
+              </p>
+            </div>
           </div>
           <div className="text-right text-xs text-muted-foreground">
             <div>{loading ? "Connecting..." : error ? "Disconnected" : "Connected"}</div>
@@ -980,11 +849,11 @@ function CoinIcon({ asset, size = 36 }: { asset: string; size?: number }) {
     return (
       <div
         className={`flex shrink-0 items-center justify-center rounded-full bg-muted font-bold ${
-          size >= 40 ? "text-lg" : "text-xs"
+          size >= 40 ? "text-lg" : size >= 24 ? "text-xs" : "text-[8px]"
         }`}
         style={{ width: size, height: size }}
       >
-        {size >= 40 ? symbol.slice(0, 1) : symbol.slice(0, 3)}
+        {size >= 40 ? symbol.slice(0, 1) : size >= 24 ? symbol.slice(0, 3) : symbol.slice(0, 1)}
       </div>
     )
   }
@@ -1280,7 +1149,10 @@ function MarketsPage({
                     onClick={() => setSelectedAsset(item.asset)}
                     className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left hover:bg-accent"
                   >
-                    <span className="font-medium">{item.asset}</span>
+                    <span className="flex items-center gap-2 font-medium">
+                      <CoinIcon asset={item.asset} size={22} />
+                      {item.asset}
+                    </span>
                     <span className="text-emerald-500">{signedPct(item.change)}</span>
                   </button>
                 ))}
@@ -1303,7 +1175,10 @@ function MarketsPage({
                     onClick={() => setSelectedAsset(item.asset)}
                     className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left hover:bg-accent"
                   >
-                    <span className="font-medium">{item.asset}</span>
+                    <span className="flex items-center gap-2 font-medium">
+                      <CoinIcon asset={item.asset} size={22} />
+                      {item.asset}
+                    </span>
                     <span className="text-red-500">{signedPct(item.change)}</span>
                   </button>
                 ))}
@@ -1326,12 +1201,13 @@ function MarketsPage({
               key={asset}
               type="button"
               onClick={() => setSelectedAsset(asset)}
-              className={`rounded-lg border px-3 py-2 text-sm font-medium ${
+              className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium ${
                 selectedAsset === asset
                   ? "bg-primary text-primary-foreground"
                   : "hover:bg-accent"
               }`}
             >
+              <CoinIcon asset={asset} size={18} />
               {asset}
             </button>
           ))}
@@ -1340,9 +1216,12 @@ function MarketsPage({
 
       <section className="rounded-xl border bg-card p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h3 className="font-semibold">{selectedAsset} / THB</h3>
-            <p className="mt-1 text-xs text-muted-foreground">Coin Intelligence</p>
+          <div className="flex items-center gap-3">
+            <CoinIcon asset={selectedAsset} size={40} />
+            <div>
+              <h3 className="font-semibold">{selectedAsset} / THB</h3>
+              <p className="mt-1 text-xs text-muted-foreground">Coin Intelligence</p>
+            </div>
           </div>
           <div className="flex gap-2">
             <button
@@ -1477,16 +1356,13 @@ function DashboardPage({
           return
         }
 
-        const response = await fetch(
-          `${API_BASE_URL}/api/orders?limit=5`,
-          {
-            headers: {
-              Accept: "application/json",
-              "X-API-Key": DEALER_API_KEY,
-            },
-            cache: "no-store",
-          }
-        )
+        const response = await fetch(`${API_BASE_URL}/api/orders?limit=5`, {
+          headers: {
+            Accept: "application/json",
+            "X-API-Key": DEALER_API_KEY,
+          },
+          cache: "no-store",
+        })
 
         const body = await response.json()
 
@@ -1591,11 +1467,7 @@ function DashboardPage({
         <StatCard
           title="Total P&L"
           value={loading ? "Loading..." : formatTHB(totalPnl)}
-          change={
-            loading
-              ? "—"
-              : `${pnlPositive ? "+" : ""}${pnlPct.toFixed(2)}%`
-          }
+          change={loading ? "—" : `${pnlPositive ? "+" : ""}${pnlPct.toFixed(2)}%`}
         />
       </div>
 
@@ -1617,12 +1489,13 @@ function DashboardPage({
                   key={symbol}
                   type="button"
                   onClick={() => setSelectedAsset(symbol)}
-                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                     selectedAsset === symbol
                       ? "bg-primary text-primary-foreground"
                       : "border hover:bg-accent"
                   }`}
                 >
+                  <CoinIcon asset={symbol} size={16} />
                   {symbol}
                 </button>
               ))}
@@ -1668,12 +1541,15 @@ function DashboardPage({
                   onClick={() => setSelectedAsset(symbol)}
                   className="flex w-full items-center justify-between rounded-lg border px-3 py-3 text-left hover:bg-accent"
                 >
-                  <div>
-                    <div className="font-medium">{symbol}/THB</div>
-                    <div className="text-xs text-muted-foreground">
-                      {holding
-                        ? `${formatQty(holding.qty)} ${symbol}`
-                        : "No position"}
+                  <div className="flex items-center gap-3">
+                    <CoinIcon asset={symbol} size={32} />
+                    <div>
+                      <div className="font-medium">{symbol}/THB</div>
+                      <div className="text-xs text-muted-foreground">
+                        {holding
+                          ? `${formatQty(holding.qty)} ${symbol}`
+                          : "No position"}
+                      </div>
                     </div>
                   </div>
 
@@ -1836,8 +1712,10 @@ function DashboardPage({
                       </div>
 
                       <div>
-                        <div className="text-sm font-medium">
-                          {side || "ORDER"} {order.asset || "—"}
+                        <div className="flex items-center gap-1.5 text-sm font-medium">
+                          {side || "ORDER"}
+                          {order.asset && <CoinIcon asset={order.asset} size={16} />}
+                          {order.asset || "—"}
                         </div>
                         <div className="text-xs text-muted-foreground">
                           {formatOrderDate(order.timestamp || order.date)}
@@ -1905,21 +1783,11 @@ function TradePage({
   onRefresh: () => void
   onOrderCreated: () => void
 }) {
-
-  const [asset, setAsset] =
-    useState<Asset>("BTC")
-
-  const [side, setSide] =
-    useState<OrderSide>("BUY")
-
-  const [amount, setAmount] =
-    useState("")
-
-  const [submitting, setSubmitting] =
-    useState(false)
-
-  const [orderMessage, setOrderMessage] =
-    useState("")
+  const [asset, setAsset] = useState<Asset>("BTC")
+  const [side, setSide] = useState<OrderSide>("BUY")
+  const [amount, setAmount] = useState("")
+  const [submitting, setSubmitting] = useState(false)
+  const [orderMessage, setOrderMessage] = useState("")
 
   const holding = portfolio?.holdings.find(
     (item) => item.asset.toUpperCase() === asset
@@ -1933,9 +1801,7 @@ function TradePage({
 
   const amountThb = Number(amount || 0)
   const estimatedQty =
-    currentPrice > 0 && amountThb > 0
-      ? amountThb / currentPrice
-      : 0
+    currentPrice > 0 && amountThb > 0 ? amountThb / currentPrice : 0
 
   const tradeReady =
     !loading &&
@@ -1953,9 +1819,7 @@ function TradePage({
     if (submitting) return
 
     if (!portfolio || loading || error) {
-      setOrderMessage(
-        "ยังส่งคำสั่งไม่ได้: Portfolio ต้องโหลดสำเร็จก่อน"
-      )
+      setOrderMessage("ยังส่งคำสั่งไม่ได้: Portfolio ต้องโหลดสำเร็จก่อน")
       return
     }
 
@@ -1989,9 +1853,7 @@ function TradePage({
     }
 
     if (!DEALER_API_KEY) {
-      setOrderMessage(
-        "ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)"
-      )
+      setOrderMessage("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
       return
     }
 
@@ -2052,8 +1914,7 @@ function TradePage({
 
       if (body?.status !== "filled") {
         throw new Error(
-          body?.detail?.message ||
-            "Backend ไม่ได้ยืนยันคำสั่งเป็น filled"
+          body?.detail?.message || "Backend ไม่ได้ยืนยันคำสั่งเป็น filled"
         )
       }
 
@@ -2071,16 +1932,11 @@ function TradePage({
       await onRefresh()
       onOrderCreated()
     } catch (err) {
-      setOrderMessage(
-        err instanceof Error
-          ? err.message
-          : "ส่งคำสั่งไม่สำเร็จ"
-      )
+      setOrderMessage(err instanceof Error ? err.message : "ส่งคำสั่งไม่สำเร็จ")
     } finally {
       setSubmitting(false)
     }
   }
-
 
   const market = marketData[asset] || {
     name: asset,
@@ -2104,160 +1960,75 @@ function TradePage({
   return (
     <div className="space-y-5">
 
-      {/* =================================================
-          MARKET SELECTOR
-      ================================================= */}
-
+      {/* MARKET SELECTOR */}
       <div className="flex flex-wrap items-center justify-between gap-4">
-
         <div className="flex items-center gap-3">
-
-          {/* ASSET ICON */}
-
           <CoinIcon asset={asset} size={44} />
 
-
-          {/* ASSET NAME */}
-
           <div>
-
             <div className="flex items-center gap-2">
-
-              <h2 className="text-xl font-bold">
-                {asset}/THB
-              </h2>
-
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px]">
-                Bitkub
-              </span>
-
+              <h2 className="text-xl font-bold">{asset}/THB</h2>
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px]">Bitkub</span>
             </div>
-
-            <p className="text-xs text-muted-foreground">
-              {market.name}
-            </p>
-
+            <p className="text-xs text-muted-foreground">{market.name}</p>
           </div>
-
         </div>
-
 
         {/* ASSET SELECT */}
-
-        <div className="relative">
-
-          <select
-            value={asset}
-            onChange={(e) =>
-              setAsset(
-                e.target.value as Asset
-              )
-            }
-            className="appearance-none rounded-lg border bg-card px-4 py-2 pr-9 text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
-          >
-            {tradeAssets.map((symbol) => (
-              <option key={symbol} value={symbol}>
-                {symbol}/THB
-              </option>
-            ))}
-
-          </select>
-
-          <ChevronDown className="pointer-events-none absolute right-2 top-2.5 size-4 text-muted-foreground" />
-
+        <div className="flex flex-wrap gap-2">
+          {tradeAssets.map((symbol) => (
+            <button
+              key={symbol}
+              type="button"
+              onClick={() => setAsset(symbol)}
+              className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium ${
+                asset === symbol
+                  ? "bg-primary text-primary-foreground"
+                  : "hover:bg-accent"
+              }`}
+            >
+              <CoinIcon asset={symbol} size={18} />
+              {symbol}
+            </button>
+          ))}
         </div>
-
       </div>
 
-
-      {/* =================================================
-          MARKET DATA
-      ================================================= */}
-
+      {/* MARKET DATA */}
       <div className="grid gap-3 md:grid-cols-4">
-
         <MarketStat
           label="ราคาปัจจุบัน"
-          value={
-            currentPrice > 0
-              ? formatTHB(currentPrice)
-              : "—"
-          }
+          value={currentPrice > 0 ? formatTHB(currentPrice) : "—"}
           sub="Portfolio Backend"
         />
-
         <MarketStat
           label="ถืออยู่"
-          value={
-            holding
-              ? formatQty(holding.qty)
-              : "0"
-          }
+          value={holding ? formatQty(holding.qty) : "0"}
           sub={asset}
         />
-
         <MarketStat
           label="มูลค่าที่ถือ"
-          value={
-            holding
-              ? formatTHB(holding.market_value)
-              : "฿0.00"
-          }
+          value={holding ? formatTHB(holding.market_value) : "฿0.00"}
         />
-
         <MarketStat
           label="ต้นทุนเฉลี่ย"
-          value={
-            holding
-              ? formatTHB(holding.avg_cost)
-              : "—"
-          }
+          value={holding ? formatTHB(holding.avg_cost) : "—"}
         />
-
       </div>
 
-
-      {/* =================================================
-          MAIN TRADE GRID
-      ================================================= */}
-
+      {/* MAIN TRADE GRID */}
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
 
-        {/* =================================================
-            CHART
-        ================================================= */}
-
+        {/* CHART */}
         <div className="rounded-xl border bg-card p-5">
-
-          {/* CHART HEADER */}
-
           <div className="mb-4 flex items-center justify-between">
-
             <div>
-
-              <h3 className="font-semibold">
-                กราฟตลาด · Bitkub
-              </h3>
-
-              <p className="text-xs text-muted-foreground">
-                {asset}/THB · 1H
-              </p>
-
+              <h3 className="font-semibold">กราฟตลาด · Bitkub</h3>
+              <p className="text-xs text-muted-foreground">{asset}/THB · 1H</p>
             </div>
 
-
-            {/* TIMEFRAME */}
-
             <div className="flex gap-1">
-
-              {[
-                "1m",
-                "5m",
-                "1H",
-                "4H",
-                "1D",
-              ].map((timeframe) => (
-
+              {["1m", "5m", "1H", "4H", "1D"].map((timeframe) => (
                 <button
                   key={timeframe}
                   className={`rounded-md px-2 py-1 text-[11px] ${
@@ -2268,94 +2039,39 @@ function TradePage({
                 >
                   {timeframe}
                 </button>
-
               ))}
-
             </div>
-
           </div>
 
-
-          {/* =================================================
-              TRADINGVIEW
-          ================================================= */}
-
           <div className="relative overflow-hidden rounded-lg">
-
             <TradingViewChart
               symbol={`BITKUB:${asset}THB`}
               interval="60"
               height={480}
             />
-
           </div>
-
-
-          {/* =================================================
-              MARKET RANGE
-          ================================================= */}
 
           <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4">
-
-            <MiniStat
-              label="สูงสุด 24H"
-              value={`฿${market.high.toLocaleString()}`}
-            />
-
-            <MiniStat
-              label="ต่ำสุด 24H"
-              value={`฿${market.low.toLocaleString()}`}
-            />
-
-            <MiniStat
-              label={`Volume (${asset})`}
-              value={market.volume.toLocaleString()}
-            />
-
-            <MiniStat
-              label="Spread"
-              value={`฿${(
-                market.ask -
-                market.bid
-              ).toLocaleString()}`}
-            />
-
+            <MiniStat label="สูงสุด 24H" value={`฿${market.high.toLocaleString()}`} />
+            <MiniStat label="ต่ำสุด 24H" value={`฿${market.low.toLocaleString()}`} />
+            <MiniStat label={`Volume (${asset})`} value={market.volume.toLocaleString()} />
+            <MiniStat label="Spread" value={`฿${(market.ask - market.bid).toLocaleString()}`} />
           </div>
-
         </div>
 
-
-        {/* =================================================
-            ORDER TICKET
-        ================================================= */}
-
+        {/* ORDER TICKET */}
         <div className="rounded-xl border bg-card p-5">
-
           <div className="mb-5">
-
-            <h3 className="font-semibold">
-              Order
-            </h3>
-
-            <p className="text-xs text-muted-foreground">
-              Spot Trading · {asset}/THB
-            </p>
-
+            <h3 className="font-semibold">Order</h3>
+            <p className="text-xs text-muted-foreground">Spot Trading · {asset}/THB</p>
           </div>
 
-
-          {/* =================================================
-              BUY / SELL
-          ================================================= */}
-
+          {/* BUY / SELL */}
           <div className="grid grid-cols-2 rounded-lg bg-muted p-1">
-
             <button
               type="button"
               disabled={submitting}
-              onClick={() =>
-                setSide("BUY")
-              }
+              onClick={() => setSide("BUY")}
               className={`rounded-md py-2 text-sm font-semibold transition ${
                 side === "BUY"
                   ? "bg-emerald-500 text-white shadow"
@@ -2365,13 +2081,10 @@ function TradePage({
               ซื้อ
             </button>
 
-
             <button
               type="button"
               disabled={submitting}
-              onClick={() =>
-                setSide("SELL")
-              }
+              onClick={() => setSide("SELL")}
               className={`rounded-md py-2 text-sm font-semibold transition ${
                 side === "SELL"
                   ? "bg-red-500 text-white shadow"
@@ -2380,103 +2093,52 @@ function TradePage({
             >
               ขาย
             </button>
-
           </div>
 
-
-          {/* =================================================
-              BALANCE
-          ================================================= */}
-
+          {/* BALANCE */}
           <div className="mt-5 flex items-center justify-between text-xs">
-
-            <span className="text-muted-foreground">
-              Available
-            </span>
-
-            <span className="font-medium">
-              {formatTHB(availableThb)}
-            </span>
-
+            <span className="text-muted-foreground">Available</span>
+            <span className="font-medium">{formatTHB(availableThb)}</span>
           </div>
 
-
-          {/* =================================================
-              PRICE
-          ================================================= */}
-
+          {/* PRICE */}
           <div className="mt-4">
-
-            <label className="mb-2 block text-xs text-muted-foreground">
-              ราคา
-            </label>
-
+            <label className="mb-2 block text-xs text-muted-foreground">ราคา</label>
             <div className="flex items-center rounded-lg border bg-background">
-
               <input
                 value={currentPrice > 0 ? currentPrice : ""}
                 readOnly
                 className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm outline-none"
               />
-
-              <span className="px-3 text-xs text-muted-foreground">
-                THB
-              </span>
-
+              <span className="px-3 text-xs text-muted-foreground">THB</span>
             </div>
-
           </div>
 
-
-          {/* =================================================
-              AMOUNT
-          ================================================= */}
-
+          {/* AMOUNT */}
           <div className="mt-4">
-
             <label className="mb-2 block text-xs text-muted-foreground">
               มูลค่าคำสั่ง (THB)
             </label>
-
             <div className="flex items-center rounded-lg border bg-background">
-
               <input
                 value={amount}
-                onChange={(e) =>
-                  setAmount(
-                    e.target.value
-                  )
-                }
+                onChange={(e) => setAmount(e.target.value)}
                 placeholder="0.00"
                 className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm outline-none"
               />
-
-              <span className="px-3 text-xs text-muted-foreground">
-                THB
-              </span>
-
+              <span className="px-3 text-xs text-muted-foreground">THB</span>
             </div>
-
           </div>
 
-
-          {/* =================================================
-              QUICK AMOUNT
-          ================================================= */}
-
+          {/* QUICK AMOUNT */}
           <div className="mt-3 grid grid-cols-4 gap-2">
-
             {[0.25, 0.5, 0.75, 1].map((ratio) => {
               const percent = `${ratio * 100}%`
               return (
                 <button
                   key={percent}
                   type="button"
-                  onClick={() =>
-                    setAmount(
-                      (availableThb * ratio).toFixed(2)
-                    )
-                  }
+                  onClick={() => setAmount((availableThb * ratio).toFixed(2))}
                   disabled={availableThb <= 0 || submitting}
                   className="rounded-md border py-1.5 text-[11px] text-muted-foreground hover:bg-accent disabled:opacity-50"
                 >
@@ -2484,73 +2146,35 @@ function TradePage({
                 </button>
               )
             })}
-
           </div>
 
-
-          {/* =================================================
-              TOTAL
-          ================================================= */}
-
+          {/* TOTAL */}
           <div className="mt-5 space-y-2 rounded-lg bg-muted/50 p-3">
-
             <div className="flex justify-between text-xs">
-
-              <span className="text-muted-foreground">
-                Estimated Total
-              </span>
-
-              <span>
-                {amountThb > 0
-                  ? formatTHB(amountThb)
-                  : "฿0.00"}
-              </span>
-
+              <span className="text-muted-foreground">Estimated Total</span>
+              <span>{amountThb > 0 ? formatTHB(amountThb) : "฿0.00"}</span>
             </div>
 
-
             <div className="flex justify-between text-xs">
-
-              <span className="text-muted-foreground">
-                Estimated Quantity
-              </span>
-
+              <span className="text-muted-foreground">Estimated Quantity</span>
               <span>
-                {estimatedQty > 0
-                  ? `${formatQty(estimatedQty)} ${asset}`
-                  : "—"}
+                {estimatedQty > 0 ? `${formatQty(estimatedQty)} ${asset}` : "—"}
               </span>
-
             </div>
 
-
             <div className="flex justify-between text-xs">
-
-              <span className="text-muted-foreground">
-                Fee
-              </span>
-
-              <span>
-                คำนวณโดย Engine
-              </span>
-
+              <span className="text-muted-foreground">Fee</span>
+              <span>คำนวณโดย Engine</span>
             </div>
-
           </div>
 
-
-          {/* =================================================
-              SUBMIT
-          ================================================= */}
-
+          {/* SUBMIT */}
           <button
             type="button"
             onClick={submitOrder}
             disabled={!tradeReady}
             className={`mt-5 w-full rounded-lg py-3 text-sm font-semibold text-white ${
-              side === "BUY"
-                ? "bg-emerald-500"
-                : "bg-red-500"
+              side === "BUY" ? "bg-emerald-500" : "bg-red-500"
             } disabled:cursor-not-allowed disabled:opacity-40`}
           >
             {submitting
@@ -2569,170 +2193,69 @@ function TradePage({
           <p className="mt-3 text-center text-[10px] text-muted-foreground">
             Safety Check: Portfolio + ราคา + Balance + Engine
           </p>
-
         </div>
-
       </div>
 
-
-      {/* =================================================
-          ORDER BOOK
-      ================================================= */}
-
+      {/* ORDER BOOK */}
       <div className="rounded-xl border bg-card p-5">
-
-        {/* ORDER BOOK HEADER */}
-
         <div className="mb-4 flex items-center justify-between">
-
           <div>
-
-            <h3 className="font-semibold">
-              Order Book
-            </h3>
-
-            <p className="text-xs text-muted-foreground">
-              {asset}/THB
-            </p>
-
+            <h3 className="font-semibold">Order Book</h3>
+            <p className="text-xs text-muted-foreground">{asset}/THB</p>
           </div>
 
-          <span className="rounded-full bg-muted px-2 py-1 text-[10px]">
-            Live
-          </span>
-
+          <span className="rounded-full bg-muted px-2 py-1 text-[10px]">Live</span>
         </div>
-
-
-        {/* ORDER BOOK COLUMNS */}
 
         <div className="grid grid-cols-2 gap-6">
 
-          {/* =================================================
-              ASK
-          ================================================= */}
-
+          {/* ASK */}
           <div>
-
             <div className="mb-2 grid grid-cols-3 text-[10px] text-muted-foreground">
-
-              <span>
-                Price
-              </span>
-
-              <span className="text-right">
-                Amount
-              </span>
-
-              <span className="text-right">
-                Total
-              </span>
-
+              <span>Price</span>
+              <span className="text-right">Amount</span>
+              <span className="text-right">Total</span>
             </div>
-
 
             {[
               [market.ask + 1000, 0.42],
               [market.ask + 500, 0.31],
               [market.ask, 0.18],
-            ].map(
-              ([price, amount], index) => (
-
-                <div
-                  key={index}
-                  className="grid grid-cols-3 py-1.5 text-xs"
-                >
-
-                  <span className="text-red-500">
-                    ฿
-                    {Number(
-                      price
-                    ).toLocaleString()}
-                  </span>
-
-                  <span className="text-right">
-                    {amount}
-                  </span>
-
-                  <span className="text-right text-muted-foreground">
-                    {(
-                      Number(price) *
-                      Number(amount)
-                    ).toLocaleString()}
-                  </span>
-
-                </div>
-
-              )
-            )}
-
+            ].map(([price, amount], index) => (
+              <div key={index} className="grid grid-cols-3 py-1.5 text-xs">
+                <span className="text-red-500">฿{Number(price).toLocaleString()}</span>
+                <span className="text-right">{amount}</span>
+                <span className="text-right text-muted-foreground">
+                  {(Number(price) * Number(amount)).toLocaleString()}
+                </span>
+              </div>
+            ))}
           </div>
 
-
-          {/* =================================================
-              BID
-          ================================================= */}
-
+          {/* BID */}
           <div>
-
             <div className="mb-2 grid grid-cols-3 text-[10px] text-muted-foreground">
-
-              <span>
-                Price
-              </span>
-
-              <span className="text-right">
-                Amount
-              </span>
-
-              <span className="text-right">
-                Total
-              </span>
-
+              <span>Price</span>
+              <span className="text-right">Amount</span>
+              <span className="text-right">Total</span>
             </div>
-
 
             {[
               [market.bid, 0.22],
               [market.bid - 500, 0.37],
               [market.bid - 1000, 0.54],
-            ].map(
-              ([price, amount], index) => (
-
-                <div
-                  key={index}
-                  className="grid grid-cols-3 py-1.5 text-xs"
-                >
-
-                  <span className="text-emerald-500">
-                    ฿
-                    {Number(
-                      price
-                    ).toLocaleString()}
-                  </span>
-
-                  <span className="text-right">
-                    {amount}
-                  </span>
-
-                  <span className="text-right text-muted-foreground">
-                    {(
-                      Number(price) *
-                      Number(amount)
-                    ).toLocaleString()}
-                  </span>
-
-                </div>
-
-              )
-            )}
-
+            ].map(([price, amount], index) => (
+              <div key={index} className="grid grid-cols-3 py-1.5 text-xs">
+                <span className="text-emerald-500">฿{Number(price).toLocaleString()}</span>
+                <span className="text-right">{amount}</span>
+                <span className="text-right text-muted-foreground">
+                  {(Number(price) * Number(amount)).toLocaleString()}
+                </span>
+              </div>
+            ))}
           </div>
-
         </div>
-
       </div>
-
     </div>
   )
 }
@@ -2777,9 +2300,7 @@ function PortfolioPage({
 
       {error && (
         <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4">
-          <p className="text-sm font-medium text-red-500">
-            โหลด Portfolio ไม่สำเร็จ
-          </p>
+          <p className="text-sm font-medium text-red-500">โหลด Portfolio ไม่สำเร็จ</p>
           <p className="mt-1 text-xs text-muted-foreground">{error}</p>
         </div>
       )}
@@ -2790,19 +2311,16 @@ function PortfolioPage({
           value={portfolio ? formatTHB(portfolio.total_value_thb) : "—"}
           change={portfolio ? "มูลค่ารวมของพอร์ต" : "กำลังโหลด"}
         />
-
         <StatCard
           title="Cash Balance"
           value={portfolio ? formatTHB(portfolio.cash_thb) : "—"}
           change="THB Available"
         />
-
         <StatCard
           title="Market Value"
           value={portfolio ? formatTHB(portfolio.market_value_thb) : "—"}
           change="มูลค่าสินทรัพย์"
         />
-
         <StatCard
           title="Total P&L"
           value={portfolio ? formatTHB(portfolio.total_pnl_thb) : "—"}
@@ -2862,29 +2380,22 @@ function PortfolioPage({
                       className="border-b last:border-0 hover:bg-accent/40"
                     >
                       <td className="px-3 py-4">
-                        <span className="font-semibold">
-                          {holding.asset}
-                        </span>
-                        <span className="ml-2 text-xs text-muted-foreground">
-                          /THB
-                        </span>
+                        <div className="flex items-center gap-3">
+                          <CoinIcon asset={holding.asset} size={28} />
+                          <div>
+                            <span className="font-semibold">{holding.asset}</span>
+                            <span className="ml-2 text-xs text-muted-foreground">/THB</span>
+                          </div>
+                        </div>
                       </td>
 
-                      <td className="px-3 py-4 text-right">
-                        {formatQty(holding.qty)}
-                      </td>
+                      <td className="px-3 py-4 text-right">{formatQty(holding.qty)}</td>
 
-                      <td className="px-3 py-4 text-right">
-                        {formatTHB(holding.avg_cost)}
-                      </td>
+                      <td className="px-3 py-4 text-right">{formatTHB(holding.avg_cost)}</td>
 
-                      <td className="px-3 py-4 text-right font-medium">
-                        {formatTHB(holding.price)}
-                      </td>
+                      <td className="px-3 py-4 text-right font-medium">{formatTHB(holding.price)}</td>
 
-                      <td className="px-3 py-4 text-right font-medium">
-                        {formatTHB(holding.market_value)}
-                      </td>
+                      <td className="px-3 py-4 text-right font-medium">{formatTHB(holding.market_value)}</td>
 
                       <td
                         className={`px-3 py-4 text-right font-medium ${
@@ -2915,27 +2426,16 @@ function PortfolioPage({
           </div>
         ) : (
           <div className="flex min-h-[220px] items-center justify-center">
-            <p className="text-sm text-muted-foreground">
-              ยังไม่มีข้อมูล Holdings
-            </p>
+            <p className="text-sm text-muted-foreground">ยังไม่มีข้อมูล Holdings</p>
           </div>
         )}
       </div>
 
       {portfolio && (
         <div className="grid gap-4 md:grid-cols-3">
-          <MiniStat
-            label="Realized P&L"
-            value={formatTHB(portfolio.realized_pnl_thb)}
-          />
-          <MiniStat
-            label="Unrealized P&L"
-            value={formatTHB(portfolio.unrealized_pnl_thb)}
-          />
-          <MiniStat
-            label="Fees"
-            value={formatTHB(portfolio.fees_thb)}
-          />
+          <MiniStat label="Realized P&L" value={formatTHB(portfolio.realized_pnl_thb)} />
+          <MiniStat label="Unrealized P&L" value={formatTHB(portfolio.unrealized_pnl_thb)} />
+          <MiniStat label="Fees" value={formatTHB(portfolio.fees_thb)} />
         </div>
       )}
     </div>
@@ -3049,21 +2549,15 @@ function PositionsPage({
 
           {portfolio && (
             <div className="text-right">
-              <p className="text-[10px] text-muted-foreground">
-                Portfolio Value
-              </p>
-              <p className="text-sm font-semibold">
-                {formatTHB(portfolio.total_value_thb)}
-              </p>
+              <p className="text-[10px] text-muted-foreground">Portfolio Value</p>
+              <p className="text-sm font-semibold">{formatTHB(portfolio.total_value_thb)}</p>
             </div>
           )}
         </div>
 
         {loading ? (
           <div className="flex min-h-[220px] items-center justify-center">
-            <p className="text-sm text-muted-foreground">
-              กำลังโหลด Positions...
-            </p>
+            <p className="text-sm text-muted-foreground">กำลังโหลด Positions...</p>
           </div>
         ) : positions.length > 0 ? (
           <div className="overflow-x-auto">
@@ -3092,29 +2586,22 @@ function PositionsPage({
                       className="border-b last:border-0 hover:bg-accent/40"
                     >
                       <td className="px-4 py-4">
-                        <div className="font-semibold">
-                          {holding.asset}
+                        <div className="flex items-center gap-3">
+                          <CoinIcon asset={holding.asset} size={32} />
+                          <div>
+                            <div className="font-semibold">{holding.asset}</div>
+                            <div className="text-xs text-muted-foreground">{holding.asset}/THB</div>
+                          </div>
                         </div>
-                        <div className="text-xs text-muted-foreground">
-                          {holding.asset}/THB
-                        </div>
                       </td>
 
-                      <td className="px-4 py-4 text-right font-medium">
-                        {formatQty(holding.qty)}
-                      </td>
+                      <td className="px-4 py-4 text-right font-medium">{formatQty(holding.qty)}</td>
 
-                      <td className="px-4 py-4 text-right">
-                        {formatTHB(holding.avg_cost)}
-                      </td>
+                      <td className="px-4 py-4 text-right">{formatTHB(holding.avg_cost)}</td>
 
-                      <td className="px-4 py-4 text-right font-medium">
-                        {formatTHB(holding.price)}
-                      </td>
+                      <td className="px-4 py-4 text-right font-medium">{formatTHB(holding.price)}</td>
 
-                      <td className="px-4 py-4 text-right font-medium">
-                        {formatTHB(holding.market_value)}
-                      </td>
+                      <td className="px-4 py-4 text-right font-medium">{formatTHB(holding.market_value)}</td>
 
                       <td
                         className={`px-4 py-4 text-right font-medium ${
@@ -3251,22 +2738,17 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
 
     try {
       if (!DEALER_API_KEY) {
-        throw new Error(
-          "ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)"
-        )
+        throw new Error("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
       }
 
-      const response = await fetch(
-        `${API_BASE_URL}/api/orders?limit=100`,
-        {
-          method: "GET",
-          headers: {
-            Accept: "application/json",
-            "X-API-Key": DEALER_API_KEY,
-          },
-          cache: "no-store",
-        }
-      )
+      const response = await fetch(`${API_BASE_URL}/api/orders?limit=100`, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          "X-API-Key": DEALER_API_KEY,
+        },
+        cache: "no-store",
+      })
 
       const rawText = await response.text()
       let body: any = null
@@ -3291,9 +2773,7 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
       }
 
       if (body?.status !== "ok") {
-        throw new Error(
-          body?.detail || "Backend ไม่ได้ตอบ status=ok"
-        )
+        throw new Error(body?.detail || "Backend ไม่ได้ตอบ status=ok")
       }
 
       const rows = Array.isArray(body?.orders)
@@ -3317,17 +2797,17 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
       })
 
       setOrders(sortedOrders)
-      setLastLoaded(new Date().toLocaleTimeString("th-TH", {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      }))
+      setLastLoaded(
+        new Date().toLocaleTimeString("th-TH", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        })
+      )
     } catch (err) {
       setOrders([])
       setError(
-        err instanceof Error
-          ? err.message
-          : "ไม่สามารถโหลด Order History ได้"
+        err instanceof Error ? err.message : "ไม่สามารถโหลด Order History ได้"
       )
     } finally {
       setLoading(false)
@@ -3484,7 +2964,10 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
                       </td>
 
                       <td className="px-3 py-4 font-semibold">
-                        {order.asset || "—"}
+                        <div className="flex items-center gap-2">
+                          {order.asset && <CoinIcon asset={order.asset} size={22} />}
+                          {order.asset || "—"}
+                        </div>
                       </td>
 
                       <td className="px-3 py-4 text-right font-medium">
@@ -3510,13 +2993,15 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
                       </td>
 
                       <td className="px-3 py-4">
-                        <span className={`text-xs font-medium ${
-                          status === "filled" || status === "success"
-                            ? "text-emerald-500"
-                            : status === "rejected" || status === "failed"
-                              ? "text-red-500"
-                              : "text-muted-foreground"
-                        }`}>
+                        <span
+                          className={`text-xs font-medium ${
+                            status === "filled" || status === "success"
+                              ? "text-emerald-500"
+                              : status === "rejected" || status === "failed"
+                                ? "text-red-500"
+                                : "text-muted-foreground"
+                          }`}
+                        >
                           {order.status || "—"}
                         </span>
                       </td>
@@ -3546,6 +3031,7 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
           </div>
         )}
       </div>
+
       {selectedOrder && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
@@ -3560,7 +3046,10 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
                 <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   Order Detail
                 </p>
-                <h3 className="mt-1 text-xl font-bold">
+                <h3 className="mt-1 flex items-center gap-2 text-xl font-bold">
+                  {selectedOrder.asset && (
+                    <CoinIcon asset={selectedOrder.asset} size={28} />
+                  )}
                   {String(selectedOrder.side || "ORDER").toUpperCase()}{" "}
                   {selectedOrder.asset || "—"}
                 </h3>
@@ -3581,17 +3070,19 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
               <div className="rounded-xl border bg-muted/20 p-4">
                 <p className="text-xs text-muted-foreground">Status</p>
-                <p className={`mt-1 text-lg font-semibold ${
-                  ["filled", "success"].includes(
-                    String(selectedOrder.status || "").toLowerCase()
-                  )
-                    ? "text-emerald-500"
-                    : ["rejected", "failed"].includes(
-                        String(selectedOrder.status || "").toLowerCase()
-                      )
-                      ? "text-red-500"
-                      : ""
-                }`}>
+                <p
+                  className={`mt-1 text-lg font-semibold ${
+                    ["filled", "success"].includes(
+                      String(selectedOrder.status || "").toLowerCase()
+                    )
+                      ? "text-emerald-500"
+                      : ["rejected", "failed"].includes(
+                            String(selectedOrder.status || "").toLowerCase()
+                          )
+                        ? "text-red-500"
+                        : ""
+                  }`}
+                >
                   {selectedOrder.status || "—"}
                 </p>
               </div>
@@ -3641,9 +3132,7 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <div className="rounded-xl border px-4 py-3">
                 <p className="text-xs text-muted-foreground">Order Type</p>
-                <p className="mt-1 text-sm font-medium">
-                  {selectedOrder.type || "—"}
-                </p>
+                <p className="mt-1 text-sm font-medium">{selectedOrder.type || "—"}</p>
               </div>
 
               <div className="rounded-xl border px-4 py-3">
@@ -3687,16 +3176,9 @@ function MarketStat({
 }) {
   return (
     <div className="rounded-xl border bg-card p-4">
+      <p className="text-xs text-muted-foreground">{label}</p>
 
-      <p className="text-xs text-muted-foreground">
-        {label}
-      </p>
-
-
-      <div className="mt-2 text-lg font-bold">
-        {value}
-      </div>
-
+      <div className="mt-2 text-lg font-bold">{value}</div>
 
       {sub && (
         <div
@@ -3708,7 +3190,6 @@ function MarketStat({
                 : "text-red-500"
           }`}
         >
-
           {positive !== undefined &&
             (positive ? (
               <TrendingUp className="size-3" />
@@ -3717,10 +3198,8 @@ function MarketStat({
             ))}
 
           {sub}
-
         </div>
       )}
-
     </div>
   )
 }
@@ -3739,15 +3218,8 @@ function MiniStat({
 }) {
   return (
     <div>
-
-      <p className="text-[10px] text-muted-foreground">
-        {label}
-      </p>
-
-      <p className="mt-1 text-xs font-medium">
-        {value}
-      </p>
-
+      <p className="text-[10px] text-muted-foreground">{label}</p>
+      <p className="mt-1 text-xs font-medium">{value}</p>
     </div>
   )
 }
@@ -3761,26 +3233,23 @@ function StatCard({
   title,
   value,
   change,
+  icon,
 }: {
   title: string
   value: string
   change: string
+  icon?: ReactNode
 }) {
   return (
     <div className="rounded-xl border bg-card p-5">
+      <p className="text-sm text-muted-foreground">{title}</p>
 
-      <p className="text-sm text-muted-foreground">
-        {title}
-      </p>
-
-      <div className="mt-3 text-2xl font-bold">
+      <div className="mt-3 flex items-center gap-2 text-2xl font-bold">
+        {icon}
         {value}
       </div>
 
-      <p className="mt-1 text-xs text-muted-foreground">
-        {change}
-      </p>
-
+      <p className="mt-1 text-xs text-muted-foreground">{change}</p>
     </div>
   )
 }
@@ -3858,7 +3327,12 @@ function RiskCenterPage({
       )}
 
       <div className="grid gap-4 md:grid-cols-3">
-        <StatCard title="Largest Allocation" value={loading ? "Loading..." : `${largest?.asset || "—"} ${concentration.toFixed(2)}%`} change="สัดส่วนสูงสุดในพอร์ต" />
+        <StatCard
+          title="Largest Allocation"
+          value={loading ? "Loading..." : `${largest?.asset || "—"} ${concentration.toFixed(2)}%`}
+          change="สัดส่วนสูงสุดในพอร์ต"
+          icon={!loading && largest ? <CoinIcon asset={largest.asset} size={28} /> : undefined}
+        />
         <StatCard title="Cash Ratio" value={loading ? "Loading..." : `${cashRatio.toFixed(2)}%`} change="เงินสดเทียบมูลค่าพอร์ต" />
         <StatCard title="Portfolio P/L" value={loading ? "Loading..." : `${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%`} change="P/L รวมจาก Backend" />
       </div>
@@ -4201,7 +3675,8 @@ function QuantLabPage({
             </div>
             <div className="flex justify-between px-5 py-4 text-sm">
               <span className="text-muted-foreground">Largest Allocation</span>
-              <span className="font-medium">
+              <span className="flex items-center gap-2 font-medium">
+                {holdings[0] && <CoinIcon asset={holdings[0].asset} size={20} />}
                 {holdings[0]?.asset || "—"} {largestAllocation.toFixed(2)}%
               </span>
             </div>
@@ -4236,7 +3711,12 @@ function QuantLabPage({
                     const positive = pnl >= 0
                     return (
                       <tr key={holding.asset} className="border-b last:border-0">
-                        <td className="px-5 py-3 font-medium">{holding.asset}</td>
+                        <td className="px-5 py-3 font-medium">
+                          <div className="flex items-center gap-2">
+                            <CoinIcon asset={holding.asset} size={24} />
+                            {holding.asset}
+                          </div>
+                        </td>
                         <td className="px-5 py-3 text-right">
                           {Number(holding.allocation_pct || 0).toFixed(2)}%
                         </td>
@@ -4274,28 +3754,16 @@ function PlaceholderPage({
 }) {
   return (
     <div>
-
-      <h2 className="text-2xl font-bold">
-        {title}
-      </h2>
-
+      <h2 className="text-2xl font-bold">{title}</h2>
 
       <div className="mt-6 flex min-h-[400px] items-center justify-center rounded-xl border bg-card">
-
         <div className="text-center">
-
-          <p className="font-medium">
-            {title}
-          </p>
-
+          <p className="font-medium">{title}</p>
           <p className="mt-1 text-sm text-muted-foreground">
             กำลังเชื่อมระบบจาก gu.py
           </p>
-
         </div>
-
       </div>
-
     </div>
   )
 }
