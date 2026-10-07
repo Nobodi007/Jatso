@@ -2975,6 +2975,21 @@ def save_sim_state (sim :Any ,path :Optional [Path ]=None )->None :
                         _o =_s .get ("orders",[])if isinstance (_s ,dict )else []
                         return {str (x .get ("Order ID")or x .get ("order_id")or x .get ("id")or "")
                                 for x in _o if isinstance (x ,dict )}-{""}
+                    # คงเวลาที่ migrate แล้ว: ถ้า cloud มี timestamp ของออเดอร์ใบนี้แต่ก้อนในมือไม่มี
+                    # ให้ใช้ค่าจาก cloud (กันก้อนเก่าเขียนเวลาที่แก้แล้วกลับเป็นของเดิม)
+                    try :
+                        _rmap ={str (x .get ("Order ID")or x .get ("order_id")or x .get ("id")or ""):x
+                                for x in _remote .get ("orders",[])if isinstance (x ,dict )}
+                        for _lo in sim .get ("orders",[]):
+                            if not isinstance (_lo ,dict )or _lo .get ("timestamp"):
+                                continue 
+                            _ro =_rmap .get (str (_lo .get ("Order ID")or _lo .get ("order_id")or _lo .get ("id")or ""))
+                            if _ro and _ro .get ("timestamp"):
+                                for _k in ("วันที่","เวลา","timestamp"):
+                                    if _k in _ro :
+                                        _lo [_k ]=_ro [_k ]
+                    except Exception :
+                        pass 
                     _missing =_oid_set (_remote )-_oid_set (sim )
                     if _missing :
                         st .session_state ["sim_state_save_error"] =(
