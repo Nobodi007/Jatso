@@ -3721,17 +3721,7 @@ function NewsPage() {
    QUANT LAB
 ========================================================= */
 
-function QuantLabPage({
-  portfolio,
-  loading,
-  error,
-  onRefresh,
-}: {
-  portfolio: PortfolioData | null
-  loading: boolean
-  error: string
-  onRefresh: () => void
-}) {
+function QuantLabPage() {
   type BacktestResult = {
     asset: string
     strategy: string
@@ -3857,11 +3847,6 @@ function QuantLabPage({
     dip: "Buy the Dip",
     trend: "Trend / MA",
   }
-
-  const chartPoints = (result?.curve || []).filter((_, i) => {
-    const step = Math.max(1, Math.floor((result?.curve.length || 1) / 140))
-    return i % step === 0 || i === (result?.curve.length || 1) - 1
-  })
 
   const allChartValues = [
     ...(result?.curve || []).map((x) => x.value),
