@@ -3732,27 +3732,161 @@ function QuantLabPage({
   error: string
   onRefresh: () => void
 }) {
-  const holdings = (portfolio?.holdings || [])
-    .filter((holding) => Number(holding.qty || 0) > 0)
-    .sort((a, b) => Number(b.market_value || 0) - Number(a.market_value || 0))
+  type BacktestResult = {
+    asset: string
+    strategy: string
+    start: string
+    end: string
+    warmup_short: boolean
+    stats: {
+      invested: number
+      final: number
+      profit: number
+      return_pct: number
+      xirr_pct: number | null
+      max_dd_pct: number
+      worst_loss_pct: number
+      underwater_days: number
+      cost_thb: number
+      n_buys: number
+      n_sells: number
+      days: number
+    }
+    hold: { final: number; return_pct: number }
+    savings: { final: number; return_pct: number }
+    curve: { date: string; value: number }[]
+    hold_curve: { date: string; value: number }[]
+    savings_curve: { date: string; value: number }[]
+    trades: { date: string; side: string; amount_thb: number; price_thb: number }[]
+  }
 
-  const totalValue = Number(portfolio?.total_value_thb || 0)
-  const investedValue = holdings.reduce(
-    (sum, holding) => sum + Number(holding.cost_basis || 0),
-    0
-  )
-  const marketValue = holdings.reduce(
-    (sum, holding) => sum + Number(holding.market_value || 0),
-    0
-  )
-  const unrealized = holdings.reduce(
-    (sum, holding) => sum + Number(holding.unrealized_pnl || 0),
-    0
-  )
-  const largestAllocation = Number(holdings[0]?.allocation_pct || 0)
-  const diversificationScore = holdings.length === 0
-    ? 0
-    : Math.max(0, Math.min(100, 100 - largestAllocation * 0.7))
+  const today = new Date()
+  const endDefault = today.toISOString().slice(0, 10)
+  const startDate = new Date(today)
+  startDate.setDate(startDate.getDate() - 365)
+
+  const [asset, setAsset] = useState<Asset>("BTC")
+  const [strategy, setStrategy] = useState("lump")
+  const [start, setStart] = useState(startDate.toISOString().slice(0, 10))
+  const [end, setEnd] = useState(endDefault)
+  const [amount, setAmount] = useState("100000")
+  const [freq, setFreq] = useState("M")
+  const [dropPct, setDropPct] = useState("20")
+  const [lookback, setLookback] = useState("90")
+  const [chunkPct, setChunkPct] = useState("25")
+  const [cooldown, setCooldown] = useState("7")
+  const [maWindow, setMaWindow] = useState("200")
+  const [feePct, setFeePct] = useState("0.25")
+  const [spreadPct, setSpreadPct] = useState("0")
+  const [savingsApy, setSavingsApy] = useState("1.5")
+  const [cashEarnsSavings, setCashEarnsSavings] = useState(false)
+  const [result, setResult] = useState<BacktestResult | null>(null)
+  const [running, setRunning] = useState(false)
+  const [runError, setRunError] = useState("")
+
+  const run = async () => {
+    if (!DEALER_API_KEY) {
+      setRunError("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
+      return
+    }
+
+    setRunning(true)
+    setRunError("")
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/backtest`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "X-API-Key": DEALER_API_KEY,
+        },
+        body: JSON.stringify({
+          asset,
+          strategy,
+          start,
+          end,
+          amount: Number(amount),
+          freq,
+          drop_pct: Number(dropPct),
+          lookback: Number(lookback),
+          chunk_pct: Number(chunkPct),
+          cooldown: Number(cooldown),
+          ma_window: Number(maWindow),
+          fee_pct: Number(feePct),
+          spread_pct: Number(spreadPct),
+          savings_apy: Number(savingsApy),
+          cash_earns_savings: cashEarnsSavings,
+        }),
+      })
+
+      const rawText = await response.text()
+      let body: any = null
+      try {
+        body = rawText ? JSON.parse(rawText) : null
+      } catch {
+        body = null
+      }
+
+      if (!response.ok || body?.status !== "ok") {
+        throw new Error(
+          formatApiError(response, body, "รัน Backtest ไม่สำเร็จ", rawText)
+        )
+      }
+
+      setResult(body as BacktestResult)
+    } catch (err) {
+      setResult(null)
+      setRunError(formatNetworkError(err, "รัน Backtest ไม่สำเร็จ"))
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const setRange = (days: number) => {
+    const e = new Date()
+    const s = new Date(e)
+    s.setDate(s.getDate() - days)
+    setEnd(e.toISOString().slice(0, 10))
+    setStart(s.toISOString().slice(0, 10))
+  }
+
+  const strategyLabels: Record<string, string> = {
+    lump: "ซื้อทีเดียวแล้วถือ",
+    dca: "DCA",
+    dip: "Buy the Dip",
+    trend: "Trend / MA",
+  }
+
+  const chartPoints = (result?.curve || []).filter((_, i) => {
+    const step = Math.max(1, Math.floor((result?.curve.length || 1) / 140))
+    return i % step === 0 || i === (result?.curve.length || 1) - 1
+  })
+
+  const allChartValues = [
+    ...(result?.curve || []).map((x) => x.value),
+    ...(result?.hold_curve || []).map((x) => x.value),
+    ...(result?.savings_curve || []).map((x) => x.value),
+  ]
+  const chartMin = allChartValues.length ? Math.min(...allChartValues) : 0
+  const chartMax = allChartValues.length ? Math.max(...allChartValues) : 1
+  const chartRange = Math.max(1, chartMax - chartMin)
+
+  const line = (values: { date: string; value: number }[]) => {
+    const points = values.filter((_, i) => {
+      const step = Math.max(1, Math.floor(values.length / 140))
+      return i % step === 0 || i === values.length - 1
+    })
+    return points
+      .map((item, index) => {
+        const x = points.length <= 1 ? 0 : (index / (points.length - 1)) * 100
+        const y = 100 - ((item.value - chartMin) / chartRange) * 100
+        return `${x.toFixed(2)},${Math.max(0, Math.min(100, y)).toFixed(2)}`
+      })
+      .join(" ")
+  }
+
+  const positive = Number(result?.stats.profit || 0) >= 0
 
   return (
     <div className="space-y-6">
@@ -3760,131 +3894,298 @@ function QuantLabPage({
         <div>
           <h2 className="text-2xl font-bold">Quant Lab</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            วิเคราะห์โครงสร้างพอร์ตจากข้อมูล Portfolio จริง
+            Backtest กลยุทธ์ด้วยข้อมูลราคาย้อนหลังจาก Engine จริง
           </p>
         </div>
         <button
+          type="button"
           onClick={onRefresh}
           disabled={loading}
-          className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
         >
-          {loading ? "กำลังโหลด..." : "Refresh"}
+          {loading ? "กำลังโหลด..." : "Refresh Portfolio"}
         </button>
       </div>
 
-      {error && (
+      <div className="rounded-xl border bg-card p-5">
+        <div className="mb-5">
+          <h3 className="font-semibold">Backtest & Strategy</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            ใช้ข้อมูลย้อนหลังจริง ไม่แก้ Portfolio จริง และไม่ส่งคำสั่งซื้อขาย
+          </p>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <label className="space-y-2 text-sm">
+            <span className="text-muted-foreground">Asset</span>
+            <select
+              value={asset}
+              onChange={(e) => setAsset(e.target.value as Asset)}
+              className="w-full rounded-lg border bg-background px-3 py-2"
+            >
+              {["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "LINK", "XLM", "HBAR"].map((item) => (
+                <option key={item} value={item}>{item}/THB</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="space-y-2 text-sm">
+            <span className="text-muted-foreground">Strategy</span>
+            <select
+              value={strategy}
+              onChange={(e) => setStrategy(e.target.value)}
+              className="w-full rounded-lg border bg-background px-3 py-2"
+            >
+              {Object.entries(strategyLabels).map(([key, label]) => (
+                <option key={key} value={key}>{label}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="space-y-2 text-sm">
+            <span className="text-muted-foreground">เงินลงทุน / รอบ (THB)</span>
+            <input
+              type="number"
+              min="1"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              className="w-full rounded-lg border bg-background px-3 py-2"
+            />
+          </label>
+
+          <div className="space-y-2 text-sm">
+            <span className="text-muted-foreground">ช่วงเวลา</span>
+            <div className="flex flex-wrap gap-2">
+              {[90, 180, 365].map((days) => (
+                <button
+                  key={days}
+                  type="button"
+                  onClick={() => setRange(days)}
+                  className="rounded-lg border px-3 py-2 text-xs hover:bg-accent"
+                >
+                  {days}D
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <label className="space-y-2 text-sm">
+            <span className="text-muted-foreground">Start</span>
+            <input
+              type="date"
+              value={start}
+              onChange={(e) => setStart(e.target.value)}
+              className="w-full rounded-lg border bg-background px-3 py-2"
+            />
+          </label>
+          <label className="space-y-2 text-sm">
+            <span className="text-muted-foreground">End</span>
+            <input
+              type="date"
+              value={end}
+              onChange={(e) => setEnd(e.target.value)}
+              className="w-full rounded-lg border bg-background px-3 py-2"
+            />
+          </label>
+        </div>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {strategy === "dca" && (
+            <label className="space-y-2 text-sm">
+              <span className="text-muted-foreground">ความถี่ DCA</span>
+              <select value={freq} onChange={(e) => setFreq(e.target.value)} className="w-full rounded-lg border bg-background px-3 py-2">
+                <option value="D">รายวัน</option>
+                <option value="W">รายสัปดาห์</option>
+                <option value="M">รายเดือน</option>
+              </select>
+            </label>
+          )}
+
+          {strategy === "dip" && (
+            <>
+              <label className="space-y-2 text-sm">
+                <span className="text-muted-foreground">ราคาตกจาก High (%)</span>
+                <input type="number" min="1" max="95" value={dropPct} onChange={(e) => setDropPct(e.target.value)} className="w-full rounded-lg border bg-background px-3 py-2" />
+              </label>
+              <label className="space-y-2 text-sm">
+                <span className="text-muted-foreground">Lookback (วัน)</span>
+                <input type="number" min="2" max="2000" value={lookback} onChange={(e) => setLookback(e.target.value)} className="w-full rounded-lg border bg-background px-3 py-2" />
+              </label>
+              <label className="space-y-2 text-sm">
+                <span className="text-muted-foreground">ซื้อครั้งละ (%)</span>
+                <input type="number" min="1" max="100" value={chunkPct} onChange={(e) => setChunkPct(e.target.value)} className="w-full rounded-lg border bg-background px-3 py-2" />
+              </label>
+              <label className="space-y-2 text-sm">
+                <span className="text-muted-foreground">Cooldown (วัน)</span>
+                <input type="number" min="0" max="365" value={cooldown} onChange={(e) => setCooldown(e.target.value)} className="w-full rounded-lg border bg-background px-3 py-2" />
+              </label>
+            </>
+          )}
+
+          {strategy === "trend" && (
+            <label className="space-y-2 text-sm">
+              <span className="text-muted-foreground">Moving Average (วัน)</span>
+              <input type="number" min="2" max="2000" value={maWindow} onChange={(e) => setMaWindow(e.target.value)} className="w-full rounded-lg border bg-background px-3 py-2" />
+            </label>
+          )}
+        </div>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-3">
+          <label className="space-y-2 text-sm">
+            <span className="text-muted-foreground">Trading Fee (%)</span>
+            <input type="number" min="0" max="10" step="0.01" value={feePct} onChange={(e) => setFeePct(e.target.value)} className="w-full rounded-lg border bg-background px-3 py-2" />
+          </label>
+          <label className="space-y-2 text-sm">
+            <span className="text-muted-foreground">Spread (%)</span>
+            <input type="number" min="0" max="10" step="0.01" value={spreadPct} onChange={(e) => setSpreadPct(e.target.value)} className="w-full rounded-lg border bg-background px-3 py-2" />
+          </label>
+          <label className="space-y-2 text-sm">
+            <span className="text-muted-foreground">Savings APY (%)</span>
+            <input type="number" min="0" max="50" step="0.1" value={savingsApy} onChange={(e) => setSavingsApy(e.target.value)} className="w-full rounded-lg border bg-background px-3 py-2" />
+          </label>
+        </div>
+
+        <label className="mt-4 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={cashEarnsSavings}
+            onChange={(e) => setCashEarnsSavings(e.target.checked)}
+          />
+          ให้เงินสดที่รอเข้าซื้อได้รับผลตอบแทน Savings APY
+        </label>
+
+        <button
+          type="button"
+          onClick={run}
+          disabled={running}
+          className="mt-5 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {running ? "กำลังรัน Backtest..." : "Run Backtest"}
+        </button>
+      </div>
+
+      {runError && (
         <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-500">
-          {error}
+          {runError}
         </div>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Assets"
-          value={loading ? "Loading..." : String(holdings.length)}
-          change="สินทรัพย์ที่มี Quantity > 0"
-        />
-        <StatCard
-          title="Market Value"
-          value={loading ? "Loading..." : formatTHB(marketValue)}
-          change="มูลค่าตลาดจาก Holdings"
-        />
-        <StatCard
-          title="Unrealized P/L"
-          value={loading ? "Loading..." : formatTHB(unrealized)}
-          change="คำนวณจาก Portfolio"
-        />
-        <StatCard
-          title="Diversification"
-          value={loading ? "Loading..." : `${diversificationScore.toFixed(0)}/100`}
-          change="คะแนนเชิงโครงสร้าง ไม่ใช่คำแนะนำลงทุน"
-        />
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-2">
-        <div className="rounded-xl border bg-card">
-          <div className="border-b px-5 py-4">
-            <h3 className="font-semibold">Portfolio Metrics</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              ตัวเลขทั้งหมดอ่านจาก Backend ล่าสุด
-            </p>
-          </div>
-          <div className="divide-y">
-            <div className="flex justify-between px-5 py-4 text-sm">
-              <span className="text-muted-foreground">Total Value</span>
-              <span className="font-medium">{formatTHB(totalValue)}</span>
-            </div>
-            <div className="flex justify-between px-5 py-4 text-sm">
-              <span className="text-muted-foreground">Cost Basis</span>
-              <span className="font-medium">{formatTHB(investedValue)}</span>
-            </div>
-            <div className="flex justify-between px-5 py-4 text-sm">
-              <span className="text-muted-foreground">Largest Allocation</span>
-              <span className="font-medium">
-                {holdings[0]?.asset || "—"} {largestAllocation.toFixed(2)}%
-              </span>
-            </div>
-            <div className="flex justify-between px-5 py-4 text-sm">
-              <span className="text-muted-foreground">Cash</span>
-              <span className="font-medium">{formatTHB(portfolio?.cash_thb || 0)}</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-xl border bg-card">
-          <div className="border-b px-5 py-4">
-            <h3 className="font-semibold">Holdings Analysis</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              เรียงตาม Market Value สูงสุด
-            </p>
-          </div>
-          {holdings.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-xs text-muted-foreground">
-                    <th className="px-5 py-3 text-left font-medium">Asset</th>
-                    <th className="px-5 py-3 text-right font-medium">Weight</th>
-                    <th className="px-5 py-3 text-right font-medium">P/L</th>
-                    <th className="px-5 py-3 text-right font-medium">P/L %</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {holdings.map((holding) => {
-                    const pnl = Number(holding.unrealized_pnl || 0)
-                    const positive = pnl >= 0
-                    return (
-                      <tr key={holding.asset} className="border-b last:border-0">
-                        <td className="px-5 py-3 font-medium">{holding.asset}</td>
-                        <td className="px-5 py-3 text-right">
-                          {Number(holding.allocation_pct || 0).toFixed(2)}%
-                        </td>
-                        <td className={`px-5 py-3 text-right ${positive ? "text-emerald-500" : "text-red-500"}`}>
-                          {positive ? "+" : ""}{formatTHB(pnl)}
-                        </td>
-                        <td className={`px-5 py-3 text-right ${positive ? "text-emerald-500" : "text-red-500"}`}>
-                          {positive ? "+" : ""}{Number(holding.pnl_pct || 0).toFixed(2)}%
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="flex min-h-[220px] items-center justify-center text-sm text-muted-foreground">
-              ยังไม่มีข้อมูล Holdings
+      {result && (
+        <>
+          {result.warmup_short && (
+            <div className="rounded-xl border border-yellow-500/30 bg-yellow-500/5 px-4 py-3 text-sm">
+              Strategy ต้องใช้ข้อมูล Warm-up จึงเริ่มคำนวณจากวันที่หลัง Start ที่เลือกเล็กน้อย
             </div>
           )}
-        </div>
-      </div>
+
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <StatCard
+              title="Final Value"
+              value={formatTHB(result.stats.final)}
+              change={`${result.stats.return_pct >= 0 ? "+" : ""}${result.stats.return_pct.toFixed(2)}%`}
+            />
+            <StatCard
+              title="Profit / Loss"
+              value={formatTHB(result.stats.profit)}
+              change={positive ? "กำไร" : "ขาดทุน"}
+            />
+            <StatCard
+              title="Max Drawdown"
+              value={`${result.stats.max_dd_pct.toFixed(2)}%`}
+              change={`${result.stats.underwater_days} วันต่ำกว่าเงินลงทุน`}
+            />
+            <StatCard
+              title="Fees / Trades"
+              value={formatTHB(result.stats.cost_thb)}
+              change={`${result.stats.n_buys} ซื้อ · ${result.stats.n_sells} ขาย`}
+            />
+          </div>
+
+          <div className="rounded-xl border bg-card p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="font-semibold">{asset}/THB · {strategyLabels[strategy]}</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {result.start} → {result.end} · เงินลงทุนสะสม {formatTHB(result.stats.invested)}
+                </p>
+              </div>
+              <div className="text-right text-xs text-muted-foreground">
+                XIRR {result.stats.xirr_pct == null ? "—" : `${result.stats.xirr_pct.toFixed(2)}%`}
+              </div>
+            </div>
+
+            <div className="mt-5 h-72 overflow-hidden rounded-lg border bg-background p-3">
+              <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full">
+                <polyline points={line(result.curve)} fill="none" stroke="currentColor" strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
+                <polyline points={line(result.hold_curve)} fill="none" stroke="currentColor" strokeWidth="1" strokeDasharray="4 3" opacity="0.45" vectorEffect="non-scaling-stroke" />
+                <polyline points={line(result.savings_curve)} fill="none" stroke="currentColor" strokeWidth="1" strokeDasharray="2 3" opacity="0.35" vectorEffect="non-scaling-stroke" />
+              </svg>
+            </div>
+
+            <div className="mt-3 flex flex-wrap gap-4 text-xs text-muted-foreground">
+              <span>━━ Strategy</span>
+              <span>┄┄ Buy & Hold</span>
+              <span>··· Savings</span>
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="rounded-xl border bg-card p-5">
+              <div className="text-sm text-muted-foreground">Strategy</div>
+              <div className="mt-2 text-xl font-semibold">{formatTHB(result.stats.final)}</div>
+              <div className="mt-1 text-xs text-muted-foreground">{result.stats.return_pct >= 0 ? "ชนะ" : "ขาดทุน"} จากเงินลงทุน</div>
+            </div>
+            <div className="rounded-xl border bg-card p-5">
+              <div className="text-sm text-muted-foreground">Buy & Hold</div>
+              <div className="mt-2 text-xl font-semibold">{formatTHB(result.hold.final)}</div>
+              <div className="mt-1 text-xs text-muted-foreground">{result.hold.return_pct >= 0 ? "+" : ""}{result.hold.return_pct.toFixed(2)}%</div>
+            </div>
+            <div className="rounded-xl border bg-card p-5">
+              <div className="text-sm text-muted-foreground">Savings</div>
+              <div className="mt-2 text-xl font-semibold">{formatTHB(result.savings.final)}</div>
+              <div className="mt-1 text-xs text-muted-foreground">{result.savings.return_pct >= 0 ? "+" : ""}{result.savings.return_pct.toFixed(2)}%</div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border bg-card">
+            <div className="border-b px-5 py-4">
+              <h3 className="font-semibold">Strategy Trades</h3>
+              <p className="mt-1 text-xs text-muted-foreground">แสดงสูงสุด 200 รายการล่าสุดของ Backtest</p>
+            </div>
+            {result.trades.length === 0 ? (
+              <div className="p-8 text-center text-sm text-muted-foreground">กลยุทธ์นี้ไม่มีรายการซื้อขายในช่วงที่เลือก</div>
+            ) : (
+              <div className="max-h-[420px] overflow-auto">
+                <table className="w-full min-w-[620px] text-sm">
+                  <thead className="sticky top-0 border-b bg-card">
+                    <tr className="text-left text-xs text-muted-foreground">
+                      <th className="px-5 py-3">Date</th>
+                      <th className="px-5 py-3">Side</th>
+                      <th className="px-5 py-3 text-right">Amount</th>
+                      <th className="px-5 py-3 text-right">Price</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...result.trades].reverse().map((trade, index) => (
+                      <tr key={`${trade.date}-${index}`} className="border-b last:border-0">
+                        <td className="px-5 py-3">{trade.date}</td>
+                        <td className="px-5 py-3">{trade.side}</td>
+                        <td className="px-5 py-3 text-right">{formatTHB(trade.amount_thb)}</td>
+                        <td className="px-5 py-3 text-right">{formatTHB(trade.price_thb)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   )
 }
-
-/* =========================================================
-   PLACEHOLDER
-========================================================= */
 
 function PlaceholderPage({
   title,
