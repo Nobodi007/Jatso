@@ -45,7 +45,21 @@ function detectDark(el: HTMLElement | null): boolean {
   )
 }
 
-function useIsDark(ref: RefObject<HTMLElement | null>) {
+function debugInfo(el: HTMLElement | null): string {
+  const parts: string[] = []
+  let node: HTMLElement | null = el
+  let hops = 0
+  while (node && hops < 12) {
+    const bg = getComputedStyle(node).backgroundColor
+    parts.push(`${node.tagName.toLowerCase()}:${bg}->${String(colorIsDark(bg))}`)
+    if (colorIsDark(bg) !== null) break
+    node = node.parentElement
+    hops++
+  }
+  return `htmlClass="${document.documentElement.className}" | ${parts.join(" > ")}`
+}
+
+function useIsDark(ref: RefObject<HTMLElement | null>, onDebug: (v: string) => void) {
   const [isDark, setIsDark] = useState(
     () =>
       document.documentElement.classList.contains("dark") ||
@@ -53,7 +67,10 @@ function useIsDark(ref: RefObject<HTMLElement | null>) {
   )
 
   useEffect(() => {
-    const update = () => setIsDark(detectDark(ref.current))
+    const update = () => {
+      setIsDark(detectDark(ref.current))
+      onDebug(debugInfo(ref.current))
+    }
 
     // เช็คหลังสีเปลี่ยนเสร็จ เผื่อมี transition
     const updateSoon = () => {
@@ -75,7 +92,7 @@ function useIsDark(ref: RefObject<HTMLElement | null>) {
       observer.disconnect()
       media.removeEventListener("change", updateSoon)
     }
-  }, [ref])
+  }, [ref, onDebug])
 
   return isDark
 }
@@ -86,7 +103,8 @@ export default function TradingViewChart({
   height = 480,
 }: TradingViewChartProps) {
   const container = useRef<HTMLDivElement>(null)
-  const isDark = useIsDark(container)
+  const [debug, setDebug] = useState("")
+  const isDark = useIsDark(container, setDebug)
 
   useEffect(() => {
     if (!container.current) return
@@ -142,10 +160,15 @@ export default function TradingViewChart({
   }, [symbol, interval, isDark])
 
   return (
-    <div
-      ref={container}
-      className="w-full overflow-hidden rounded-lg"
-      style={{ height }}
-    />
+    <>
+      <div
+        ref={container}
+        className="w-full overflow-hidden rounded-lg"
+        style={{ height }}
+      />
+      <div className="mt-1 break-all text-[10px] text-muted-foreground">
+        DEBUG chartTheme={isDark ? "dark" : "light"} | {debug}
+      </div>
+    </>
   )
 }
