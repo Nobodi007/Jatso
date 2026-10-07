@@ -1,75 +1,80 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 
-interface TradingViewChartProps {
+type TradingViewChartProps = {
   symbol: string
   interval?: string
   height?: number
 }
 
+// อ่านโหมดจาก class "dark" บน <html> (ตั้งโดยปุ่มสลับธีมใน App.tsx)
+function useIsDark() {
+  const [isDark, setIsDark] = useState(() =>
+    document.documentElement.classList.contains("dark")
+  )
+
+  useEffect(() => {
+    const root = document.documentElement
+    const observer = new MutationObserver(() => {
+      setIsDark(root.classList.contains("dark"))
+    })
+    observer.observe(root, { attributes: true, attributeFilter: ["class"] })
+    return () => observer.disconnect()
+  }, [])
+
+  return isDark
+}
+
 export default function TradingViewChart({
   symbol,
   interval = "60",
-  height = 480,
+  height = 420,
 }: TradingViewChartProps) {
-  const container = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const isDark = useIsDark()
 
   useEffect(() => {
-    if (!container.current) return
+    const container = containerRef.current
+    if (!container) return
 
-    container.current.innerHTML = ""
-
-    const wrapper = document.createElement("div")
-    wrapper.className = "tradingview-widget-container"
-    wrapper.style.width = "100%"
-    wrapper.style.height = "100%"
+    container.innerHTML = ""
 
     const widget = document.createElement("div")
     widget.className = "tradingview-widget-container__widget"
-    widget.style.width = "100%"
     widget.style.height = "100%"
+    widget.style.width = "100%"
 
     const script = document.createElement("script")
-
     script.src =
       "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js"
-
     script.type = "text/javascript"
     script.async = true
-
     script.innerHTML = JSON.stringify({
       autosize: true,
       symbol,
       interval,
       timezone: "Asia/Bangkok",
-      theme: "dark",
+      theme: isDark ? "dark" : "light",
+      backgroundColor: isDark ? "#000000" : "#ffffff",
       style: "1",
       locale: "en",
       allow_symbol_change: false,
-      calendar: false,
       hide_side_toolbar: false,
-      hide_top_toolbar: false,
-      hide_legend: false,
-      hide_volume: false,
       support_host: "https://www.tradingview.com",
     })
 
-    wrapper.appendChild(widget)
-    wrapper.appendChild(script)
-
-    container.current.appendChild(wrapper)
+    container.appendChild(widget)
+    container.appendChild(script)
 
     return () => {
-      if (container.current) {
-        container.current.innerHTML = ""
-      }
+      container.innerHTML = ""
     }
-  }, [symbol, interval])
+  }, [symbol, interval, isDark])
 
   return (
     <div
-      ref={container}
-      className="w-full overflow-hidden rounded-lg"
-      style={{ height }}
+      ref={containerRef}
+      className="tradingview-widget-container"
+      style={{ height, width: "100%" }}
     />
   )
 }
