@@ -18,6 +18,8 @@ import urllib.request
 
 import pandas as pd
 
+from simple_backtest import run_backtest, load_thb_prices, DEFAULT_FEE_PCT, DEFAULT_SAVINGS_APY
+
 
 # =========================================================
 # APP
@@ -194,6 +196,24 @@ def require_api_key(
 # =========================================================
 # REQUEST MODEL
 # =========================================================
+
+class BacktestRequest(BaseModel):
+    asset: str = Field(..., min_length=2, max_length=20)
+    strategy: str = Field(..., min_length=4, max_length=12)
+    start: str = Field(..., min_length=10, max_length=30)
+    end: str = Field(..., min_length=10, max_length=30)
+    amount: float = Field(default=100_000.0, gt=0, le=1_000_000_000_000)
+    freq: str = Field(default="M", min_length=1, max_length=1)
+    drop_pct: float = Field(default=20.0, gt=0, le=95)
+    lookback: int = Field(default=90, ge=2, le=2000)
+    chunk_pct: float = Field(default=25.0, gt=0, le=100)
+    cooldown: int = Field(default=7, ge=0, le=365)
+    ma_window: int = Field(default=200, ge=2, le=2000)
+    fee_pct: float = Field(default=DEFAULT_FEE_PCT * 100, ge=0, le=10)
+    spread_pct: float = Field(default=0.0, ge=0, le=10)
+    savings_apy: float = Field(default=DEFAULT_SAVINGS_APY * 100, ge=0, le=50)
+    cash_earns_savings: bool = False
+
 
 class OrderRequest(BaseModel):
     # Validate at the API boundary before the trading engine is touched.
@@ -1485,6 +1505,117 @@ def order_history(limit: int = 100, asset: str = ""):
                 "เกิดข้อผิดพลาดภายใน API",
                 e,
             )
+
+
+# =========================================================
+# BACKTEST
+# =========================================================
+
+@app.post("/api/backtest", dependencies=[Depends(require_api_key)])
+def run_backtest_api(request: BacktestRequest):
+    try:
+        gu = load_gu()
+        asset = request.asset.upper().strip()
+        strategy = request.strategy.lower().strip()
+
+        if asset not in getattr(gu, "SUPPORTED_ASSETS", set()):
+            raise HTTPException(status_code=400, detail=f"ไม่รองรับเหรียญ {asset}")
+
+        if strategy not in {"lump", "dca", "dip", "trend"}:
+            raise HTTPException(status_code=400, detail="ไม่รองรับกลยุทธ์นี้")
+
+        start = pd.Timestamp(request.start)
+        end = pd.Timestamp(request.end)
+        if pd.isna(start) or pd.isna(end) or end <= start:
+            raise HTTPException(status_code=400, detail="ช่วงวันที่ไม่ถูกต้อง")
+
+        prices, err = load_thb_prices(
+            asset,
+            start - pd.Timedelta(days=400),
+            end,
+            fetch_fn=gu.fetch_price_data,
+        )
+        if prices is None or prices.empty:
+            raise HTTPException(
+                status_code=503,
+                detail=err or f"ไม่พบข้อมูลราคาย้อนหลังของ {asset}",
+            )
+
+        params = {"amount": float(request.amount)}
+        if strategy == "dca":
+            params["freq"] = request.freq
+        elif strategy == "dip":
+            params.update(
+                drop_pct=float(request.drop_pct),
+                lookback=int(request.lookback),
+                chunk_pct=float(request.chunk_pct),
+                cooldown=int(request.cooldown),
+            )
+        elif strategy == "trend":
+            params["ma_window"] = int(request.ma_window)
+
+        result = run_backtest(
+            prices,
+            start,
+            end,
+            strategy,
+            params,
+            fee=float(request.fee_pct) / 100.0,
+            spread=float(request.spread_pct) / 100.0,
+            savings_apy=float(request.savings_apy) / 100.0,
+            cash_earns_savings=bool(request.cash_earns_savings),
+        )
+
+        sim = result["sim"]
+        stats = result["stats"]
+
+        def curve(values):
+            return [
+                {"date": pd.Timestamp(d).strftime("%Y-%m-%d"), "value": float(v)}
+                for d, v in zip(sim["dates"], values)
+            ]
+
+        trades = []
+        trade_df = sim.get("trades")
+        if trade_df is not None and not trade_df.empty:
+            for _, row in trade_df.tail(200).iterrows():
+                trades.append({
+                    "date": pd.Timestamp(row["วันที่"]).strftime("%Y-%m-%d"),
+                    "side": str(row["ฝั่ง"]),
+                    "amount_thb": float(row["จำนวนเงิน (THB)"]),
+                    "price_thb": float(row["ราคา (THB)"]),
+                })
+
+        return {
+            "status": "ok",
+            "asset": asset,
+            "strategy": strategy,
+            "start": pd.Timestamp(result["start_used"]).strftime("%Y-%m-%d"),
+            "end": pd.Timestamp(result["end_used"]).strftime("%Y-%m-%d"),
+            "warmup_short": bool(result["warmup_short"]),
+            "stats": {
+                k: (
+                    None
+                    if v is None
+                    else float(v)
+                    if isinstance(v, (int, float))
+                    else v
+                )
+                for k, v in stats.items()
+            },
+            "hold": {
+                "final": float(result["hold"]["final"]),
+                "return_pct": float(result["hold"]["return_pct"]),
+            },
+            "savings": {
+                "final": float(result["savings"]["final"]),
+                "return_pct": float(result["savings"]["return_pct"]),
+            },
+            "curve": curve(sim["value"]),
+            "hold_curve": curve(result["hold"]["curve"]),
+            "savings_curve": curve(result["savings"]["curve"]),
+            "trades": trades,
+        }
 
 
 # =========================================================
