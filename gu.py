@@ -8193,7 +8193,7 @@ def _render_perp_venue_table_live (base :str ="BTC")->None :
     payload =json .dumps (
     dict (base =base ,ts =ts ,rows =rows ),
     ensure_ascii =False ,
-    ).replace ("</","<\/")
+    ).replace ("</","<\\/")
 
     # Render server-side so the comparison table cannot disappear when the
     # embedded components iframe/JS is suppressed by a deployed browser.
