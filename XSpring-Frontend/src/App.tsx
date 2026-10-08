@@ -1,4 +1,5 @@
 import TradingViewChart from "./components/trading/TradingViewChart"
+import { AuthGate, AuthProvider, authFetch, authHeaders, useAuth } from "./auth"
 import { useEffect, useState } from "react"
 import type { ReactNode } from "react"
 import {
@@ -20,6 +21,7 @@ import {
   Sun,
   TrendingUp,
   TrendingDown,
+  LogOut,
 } from "lucide-react"
 
 type Page =
@@ -162,7 +164,9 @@ const marketData: Record<
    APP
 ========================================================= */
 
-function App() {
+function AppInner() {
+  const { user, logout } = useAuth()
+  const [profileOpen, setProfileOpen] = useState(false)
   const [page, setPage] = useState<Page>("dashboard")
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null)
@@ -202,11 +206,10 @@ function App() {
         throw new Error("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
       }
 
-      const response = await fetch(`${API_BASE_URL}/api/portfolio`, {
+      const response = await authFetch(`${API_BASE_URL}/api/portfolio`, {
         method: "GET",
         headers: {
           Accept: "application/json",
-          "X-API-Key": DEALER_API_KEY,
         },
         cache: "no-store",
       })
@@ -347,8 +350,45 @@ function App() {
               {theme === "dark" ? <Sun className="size-5" /> : <Moon className="size-5" />}
             </button>
 
-            <div className="ml-2 flex size-8 items-center justify-center rounded-full bg-muted text-xs font-semibold">
-              N
+            <div className="relative ml-2">
+              <button
+                onClick={() => setProfileOpen((v) => !v)}
+                className="flex size-8 items-center justify-center overflow-hidden rounded-full bg-muted text-xs font-semibold"
+                aria-label="Profile"
+              >
+                {user.picture ? (
+                  <img
+                    src={user.picture}
+                    alt=""
+                    referrerPolicy="no-referrer"
+                    className="size-full object-cover"
+                  />
+                ) : (
+                  (user.name || user.email).charAt(0).toUpperCase()
+                )}
+              </button>
+
+              {profileOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setProfileOpen(false)} />
+                  <div className="absolute right-0 z-50 mt-2 w-64 rounded-xl border bg-card p-3 shadow-lg">
+                    <div className="truncate text-sm font-semibold">{user.name || user.email}</div>
+                    <div className="truncate text-xs text-muted-foreground">{user.email}</div>
+                    {user.role && (
+                      <div className="mt-2 inline-block rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase">
+                        {user.role}
+                      </div>
+                    )}
+                    <button
+                      onClick={logout}
+                      className="mt-3 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+                    >
+                      <LogOut className="size-4" />
+                      ออกจากระบบ
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </header>
 
@@ -648,7 +688,7 @@ function OrderBookPage() {
             method: "GET",
             headers: {
               Accept: "application/json",
-              "X-API-Key": DEALER_API_KEY,
+              ...authHeaders(),
             },
             cache: "no-store",
           }
@@ -909,7 +949,7 @@ async function fetchMarketTickers(): Promise<MarketTicker[]> {
   try {
     if (DEALER_API_KEY) {
       const response = await fetch(`${API_BASE_URL}/api/markets`, {
-        headers: { Accept: "application/json", "X-API-Key": DEALER_API_KEY },
+        headers: { Accept: "application/json", ...authHeaders() },
         cache: "no-store",
       })
       const body = await response.json().catch(() => null)
@@ -1356,10 +1396,9 @@ function DashboardPage({
           return
         }
 
-        const response = await fetch(`${API_BASE_URL}/api/orders?limit=5`, {
+        const response = await authFetch(`${API_BASE_URL}/api/orders?limit=5`, {
           headers: {
             Accept: "application/json",
-            "X-API-Key": DEALER_API_KEY,
           },
           cache: "no-store",
         })
@@ -1866,12 +1905,11 @@ function TradePage({
     setSubmitting(true)
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/order`, {
+      const response = await authFetch(`${API_BASE_URL}/api/order`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Accept: "application/json",
-          "X-API-Key": DEALER_API_KEY,
         },
         body: JSON.stringify({
           asset: asset.toUpperCase(),
@@ -2741,11 +2779,10 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
         throw new Error("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
       }
 
-      const response = await fetch(`${API_BASE_URL}/api/orders?limit=100`, {
+      const response = await authFetch(`${API_BASE_URL}/api/orders?limit=100`, {
         method: "GET",
         headers: {
           Accept: "application/json",
-          "X-API-Key": DEALER_API_KEY,
         },
         cache: "no-store",
       })
@@ -3772,5 +3809,15 @@ function PlaceholderPage({
 /* =========================================================
    EXPORT
 ========================================================= */
+
+function App() {
+  return (
+    <AuthProvider>
+      <AuthGate>
+        <AppInner />
+      </AuthGate>
+    </AuthProvider>
+  )
+}
 
 export default App
