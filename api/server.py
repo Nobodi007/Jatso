@@ -1317,6 +1317,95 @@ def portfolio(user: str = Depends(require_user)):
                 e,
             )
 
+# =========================================================
+# CHAT (AI ASSISTANT) — read-only, never places orders
+# =========================================================
+
+CHAT_SYSTEM = (
+    "คุณคือผู้ช่วยของ XSpring Dealer Suite ตอบเป็นภาษาไทย "
+    "ตอบสั้นมาก ไม่เกิน 2 ประโยค ไม่เกิน 40 คำ ห้ามใช้ markdown หรือ bullet "
+    "ใช้เฉพาะตัวเลขใน portfolio_context ห้ามเดาหรือสร้างตัวเลขเอง "
+    "ถ้าไม่มีข้อมูลให้บอกว่าไม่มีข้อมูล "
+    "ห้ามแนะนำให้ซื้อหรือขาย และคุณไม่สามารถสั่งซื้อขายแทนผู้ใช้ได้"
+)
+
+
+class ChatTurn(BaseModel):
+    role: str = Field(..., max_length=12)
+    content: str = Field(..., min_length=1, max_length=1000)
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=500)
+    history: list[ChatTurn] = Field(default_factory=list)
+
+
+def _chat_context() -> dict:
+    """Compact portfolio snapshot. Any failure -> empty context, chat still works."""
+    try:
+        with ORDER_LOCK:
+            gu = load_gu()
+            actor = _actor()
+            _sync_gu_actor(gu, actor)
+            sim = _load_existing_sim(gu)
+            pf = _portfolio_response(gu, sim)
+
+        return {
+            "cash_thb": pf.get("cash_thb"),
+            "total_value_thb": pf.get("total_value_thb"),
+            "total_pnl_thb": pf.get("total_pnl_thb"),
+            "pnl_pct": pf.get("pnl_pct"),
+            "holdings": [
+                {
+                    "asset": h.get("asset"),
+                    "qty": h.get("qty"),
+                    "avg_cost": h.get("avg_cost"),
+                    "price": h.get("price"),
+                    "unrealized_pnl": h.get("unrealized_pnl"),
+                    "allocation_pct": h.get("allocation_pct"),
+                }
+                for h in (pf.get("holdings") or [])
+            ],
+        }
+    except Exception:
+        return {}
+
+
+@app.post("/api/chat", dependencies=[Depends(require_api_key)])
+def chat(req: ChatRequest):
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="ยังไม่ได้ตั้ง GEMINI_API_KEY บน Backend",
+        )
+
+    # สร้าง context ก่อน (ใช้ lock สั้น ๆ) แล้วค่อยเรียก Gemini นอก lock
+    # เพื่อไม่ให้การรอ AI ไปบล็อกการส่งคำสั่งซื้อขาย
+    context = _chat_context()
+
+    messages = []
+    for turn in req.history[-6:]:
+        role = "assistant" if turn.role == "assistant" else "user"
+        messages.append({"role": role, "content": turn.content})
+    messages.append({"role": "user", "content": req.message.strip()})
+
+    system = (
+        CHAT_SYSTEM
+        + "\n\nportfolio_context:\n"
+        + json.dumps(context, ensure_ascii=False)
+    )
+
+    try:
+        gu = load_gu()
+        answer = str(gu.ask_ai(messages, api_key, system_override=system) or "").strip()
+    except Exception as e:
+        raise _internal_server_error("เรียก AI ไม่สำเร็จ", e)
+
+    if len(answer) > 240:
+        answer = answer[:237].rstrip() + "…"
+
+    return {"status": "ok", "answer": answer or "ไม่ได้รับคำตอบจาก AI"}
 
 # =========================================================
 # ORDER TIMESTAMP NORMALIZATION
