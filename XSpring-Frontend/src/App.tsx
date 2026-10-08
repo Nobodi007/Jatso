@@ -1827,12 +1827,34 @@ function TradePage({
   const [amount, setAmount] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [orderMessage, setOrderMessage] = useState("")
+  const [tickers, setTickers] = useState<MarketTicker[]>([])
 
+  useEffect(() => {
+    let alive = true
+    const loadTickers = async () => {
+      try {
+        const rows = await fetchMarketTickers()
+        if (alive) setTickers(rows)
+      } catch {
+        // ถ้าโหลดราคาไม่ได้ ปุ่มจะยังถูก disable ตามเดิม
+      }
+    }
+    loadTickers()
+    const timer = setInterval(loadTickers, 15000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [])
+  
   const holding = portfolio?.holdings.find(
     (item) => item.asset.toUpperCase() === asset
   )
 
-  const currentPrice = Number(holding?.price || 0)
+    const liveTicker = tickers.find(
+    (t) => t.asset.toUpperCase() === asset.toUpperCase()
+  )
+  const currentPrice = Number(holding?.price || liveTicker?.price || 0)
   const availableThb =
     side === "BUY"
       ? Number(portfolio?.cash_thb || 0)
