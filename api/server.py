@@ -16,6 +16,10 @@ import json
 import urllib.parse
 import urllib.request
 
+import jwt
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
+
 import pandas as pd
 
 
@@ -192,6 +196,163 @@ def require_api_key(
 
 
 # =========================================================
+# GOOGLE LOGIN / SESSION
+# =========================================================
+# Flow: Frontend ส่ง Google ID token มาที่ POST /api/auth/google
+#       -> verify กับ Google -> เช็ค email ใน user_profiles (allowlist)
+#       -> ออก session JWT ของระบบเอง (HS256)
+# endpoint ที่แตะข้อมูลบัญชี (portfolio/orders/order) บังคับ Bearer token
+# และใช้ email ใน token เป็น actor เท่านั้น
+# =========================================================
+
+AUTH_JWT_TTL_SECONDS = 12 * 3600
+
+
+class GoogleLoginRequest(BaseModel):
+    credential: str = Field(..., min_length=10, max_length=4096)
+
+
+def _jwt_secret() -> str:
+    secret = os.environ.get("AUTH_JWT_SECRET", "").strip()
+
+    if len(secret) < 32:
+        raise HTTPException(
+            status_code=503,
+            detail="ยังไม่ได้ตั้ง AUTH_JWT_SECRET (อย่างน้อย 32 ตัวอักษร)",
+        )
+
+    return secret
+
+
+def require_user(authorization: str = Header(default="")) -> str:
+    """Strict: ต้องมี Bearer token ที่ถูกต้อง คืนค่า email ของผู้ใช้"""
+    if not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="กรุณาเข้าสู่ระบบ",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = authorization[7:].strip()
+
+    try:
+        payload = jwt.decode(token, _jwt_secret(), algorithms=["HS256"])
+    except jwt.PyJWTError:
+        raise HTTPException(
+            status_code=401,
+            detail="Session หมดอายุหรือไม่ถูกต้อง",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    email = str(payload.get("sub") or "").strip()
+
+    if not email:
+        raise HTTPException(status_code=401, detail="Session ไม่ถูกต้อง")
+
+    return email
+
+
+@app.post("/api/auth/google")
+def auth_google(body: GoogleLoginRequest, request: Request):
+    client_id = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+
+    if not client_id:
+        raise HTTPException(status_code=503, detail="ยังไม่ได้ตั้ง GOOGLE_CLIENT_ID")
+
+    # กัน brute-force / spam ที่ endpoint นี้ (ไม่มี API key ให้ใช้เป็น key)
+    _check_rate_limit(request, "auth-google")
+
+    try:
+        info = google_id_token.verify_oauth2_token(
+            body.credential,
+            google_requests.Request(),
+            client_id,
+        )
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Google token ไม่ถูกต้อง")
+
+    if not info.get("email_verified"):
+        raise HTTPException(status_code=401, detail="อีเมลยังไม่ได้ยืนยันกับ Google")
+
+    # เก็บ email ตามที่ Google ส่งมา (ตรงกับ st.user.email ที่แอป Streamlit เก่าใช้เป็น actor
+    # ใน sim_state) ส่วนการเทียบสิทธิ์ใช้ตัวพิมพ์เล็ก
+    email = str(info.get("email") or "").strip()
+    email_key = email.lower()
+
+    if not email:
+        raise HTTPException(status_code=401, detail="ไม่พบอีเมลใน Google token")
+
+    # Allowlist: ใช้กติกาเดียวกับ gu.py (require_login)
+    # XSPRING_EMAIL = อีเมลคั่นด้วย comma หรือ "*" ; ไม่ตั้ง = ปิดระบบ
+    allowed_raw = os.environ.get("XSPRING_EMAIL", "").strip().lower()
+
+    if not allowed_raw:
+        raise HTTPException(
+            status_code=503,
+            detail="ยังไม่ได้ตั้ง XSPRING_EMAIL — ระบบจึงปิดไว้ก่อน",
+        )
+
+    allowed_list = {a.strip() for a in allowed_raw.split(",") if a.strip()}
+
+    if allowed_raw != "*" and email_key not in allowed_list:
+        raise HTTPException(
+            status_code=403,
+            detail="อีเมลนี้ยังไม่ได้รับอนุญาตให้ใช้งาน",
+        )
+
+    # Role: ใช้จาก user_profiles ถ้ามี ไม่งั้นเหมือน default_role_for_new_user ใน gu.py
+    # (อยู่ใน XSPRING_ADMIN_EMAILS = admin นอกนั้น viewer)
+    role = None
+
+    try:
+        gu = load_gu()
+        sb = gu._get_supabase()
+
+        if sb is not None:
+            res = (
+                sb.table("user_profiles")
+                .select("email,role")
+                .eq("email", email_key)
+                .limit(1)
+                .execute()
+            )
+
+            if res.data:
+                role = str(res.data[0].get("role") or "").strip().lower()
+    except Exception:
+        role = None  # โหลด role ไม่ได้ -> ตกไปใช้ค่า default (สิทธิ์ต่ำสุด)
+
+    if role not in {"viewer", "trader", "admin"}:
+        admin_emails = {
+            e.strip()
+            for e in os.environ.get("XSPRING_ADMIN_EMAILS", "").lower().split(",")
+            if e.strip()
+        }
+        role = "admin" if email_key in admin_emails else "viewer"
+
+    token = jwt.encode(
+        {
+            "sub": email,
+            "role": role,
+            "iat": int(time.time()),
+            "exp": int(time.time()) + AUTH_JWT_TTL_SECONDS,
+        },
+        _jwt_secret(),
+        algorithm="HS256",
+    )
+
+    return {
+        "token": token,
+        "user": {
+            "email": email,
+            "name": info.get("name"),
+            "picture": info.get("picture"),
+            "role": role,
+        },
+    }
+
+
+# =========================================================
 # REQUEST MODEL
 # =========================================================
 
@@ -225,30 +386,16 @@ def _safe_float(value, default=0.0):
 # ACTOR
 # =========================================================
 
-def _actor():
+def _actor(user_email: str):
     """
-    Resolve the persistent account actor.
+    Actor = email ของผู้ใช้ที่ล็อกอิน (มาจาก session token ที่ verify แล้ว)
 
-    Priority:
-        1. XSPRING_USER
-        2. XSPRING_REPORT_ACTOR
-
-    IMPORTANT: Never invent a new actor.
+    ไม่ fallback ไป XSPRING_USER อีกต่อไป เพื่อไม่ให้มีทางเข้าบัญชีโดยไม่ล็อกอิน
     """
-    user_actor = str(os.environ.get("XSPRING_USER", "") or "").strip()
-    report_actor = str(os.environ.get("XSPRING_REPORT_ACTOR", "") or "").strip()
-
-    actor = user_actor or report_actor
+    actor = str(user_email or "").strip()
 
     if not actor:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "ยังไม่ได้ตั้ง XSPRING_USER หรือ "
-                "XSPRING_REPORT_ACTOR สำหรับบัญชี API "
-                "— หยุดไว้เพื่อป้องกันการอ่าน/เขียนผิดบัญชี"
-            ),
-        )
+        raise HTTPException(status_code=401, detail="กรุณาเข้าสู่ระบบ")
 
     return actor
 
@@ -1125,13 +1272,13 @@ def engine_status():
 # =========================================================
 
 @app.get("/api/portfolio", dependencies=[Depends(require_api_key)])
-def portfolio():
+def portfolio(user: str = Depends(require_user)):
     with ORDER_LOCK:
         try:
             gu = load_gu()
 
-            # Resolve the EXISTING actor, then make gu.py use the same one.
-            actor = _actor()
+            # Resolve the actor from the verified session, then make gu.py use it.
+            actor = _actor(user)
             _sync_gu_actor(gu, actor)
 
             # READ ONLY. ห้ามสร้าง wallet / ตั้งค่าเริ่มต้น / save / เขียนทับ
@@ -1215,11 +1362,15 @@ def _display_order_timestamp(value):
 # =========================================================
 
 @app.get("/api/orders", dependencies=[Depends(require_api_key)])
-def order_history(limit: int = 100, asset: str = ""):
+def order_history(
+    limit: int = 100,
+    asset: str = "",
+    user: str = Depends(require_user),
+):
     with ORDER_LOCK:
         try:
             gu = load_gu()
-            actor = _actor()
+            actor = _actor(user)
             _sync_gu_actor(gu, actor)
             sim = _load_existing_sim(gu)
 
@@ -1374,12 +1525,13 @@ def order_history(limit: int = 100, asset: str = ""):
 def create_order(
     order: OrderRequest,
     idempotency_key: str = Header(default="", alias="Idempotency-Key"),
+    user: str = Depends(require_user),
 ):
     with ORDER_LOCK:
         try:
             gu = load_gu()
 
-            actor = _actor()
+            actor = _actor(user)
             _sync_gu_actor(gu, actor)
 
             idempotency_key = str(idempotency_key or "").strip()
