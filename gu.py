@@ -2585,11 +2585,11 @@ def default_role_for_new_user (email :str ,existing_profiles :Mapping [str ,dict
     return ROLE_TRADER 
 
 def current_role() -> str:
-    # เช็กว่าเป็นอีเมลแอดมินไหม ถ้าใช่ให้เป็น admin, นอกนั้นบังคับเป็น trader ทันที
     email = str(st.session_state.get("user_email", "")).strip().lower()
     if email in _admin_bootstrap_emails():
-    return ROLE_ADMIN
+        return ROLE_ADMIN
     return ROLE_TRADER
+
 
 def can_trade ()->bool :
     return role_at_least (current_role (),ROLE_TRADER )
