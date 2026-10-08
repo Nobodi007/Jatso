@@ -2594,7 +2594,7 @@ def default_role_for_new_user (email :str ,existing_profiles :Mapping [str ,dict
 
 
 def current_role ()->str :
-    return _normalize_role (st .session_state .get ("current_role", ROLE_TRADER ))
+    return _normalize_role (st .session_state .get ("current_role", ROLE_VIEWER ))
 
 
 def can_trade ()->bool :
