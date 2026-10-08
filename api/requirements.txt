@@ -10,3 +10,4 @@ python-dotenv
 plotly
 pillow
 PyYAML
+google-auth>=2.0
