@@ -441,13 +441,14 @@ def _set_api_role(gu, actor: str):
     except Exception:
         role = None
 
-    if role not in {"viewer", "trader", "admin"}:
+        # viewer เก่า / ค่าว่าง / ค่าแปลก ทั้งหมด -> trader
+    if role not in {"trader", "admin"}:
         role = str(
-            os.environ.get("XSPRING_API_ROLE", "viewer") or ""
+            os.environ.get("XSPRING_API_ROLE", "trader") or ""
         ).strip().lower()
 
-    if role not in {"viewer", "trader", "admin"}:
-        role = "viewer"
+    if role not in {"trader", "admin"}:
+        role = "trader"
 
     st.session_state["guest_mode"] = False
     st.session_state["current_role"] = role
