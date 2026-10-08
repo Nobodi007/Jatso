@@ -1,6 +1,6 @@
 import TradingViewChart from "./components/trading/TradingViewChart"
 import { AuthGate, AuthProvider, authFetch, authHeaders, useAuth } from "./auth"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { ReactNode } from "react"
 import {
   LayoutDashboard,
