@@ -2594,19 +2594,10 @@ def default_role_for_new_user (email :str ,existing_profiles :Mapping [str ,dict
 
 
 def current_role ()->str :
-    return _normalize_role (st .session_state .get ("current_role", ROLE_VIEWER ))
-
-
-def can_trade ()->bool :
-    return role_at_least (current_role (),ROLE_TRADER )
-
-
-def can_admin ()->bool :
-    return role_at_least (current_role (),ROLE_ADMIN )
-
-
-def can_edit_config ()->bool :
-    return role_at_least (current_role (),ROLE_TRADER )
+    # บังคับอัปเดตสิทธิ์ถ้ายังเป็น viewer อยู่
+    if st.session_state.get("current_role") == "viewer":
+        st.session_state["current_role"] = ROLE_TRADER
+    return _normalize_role (st .session_state .get ("current_role", ROLE_TRADER ))
 
 
 AUDIT_LOG_ENV_VAR ="XSPRING_AUDIT_LOG"
