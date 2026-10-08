@@ -1340,12 +1340,12 @@ class ChatRequest(BaseModel):
     history: list[ChatTurn] = Field(default_factory=list)
 
 
-def _chat_context() -> dict:
+def _chat_context(user_email: str) -> dict:
     """Compact portfolio snapshot. Any failure -> empty context, chat still works."""
     try:
         with ORDER_LOCK:
             gu = load_gu()
-            actor = _actor()
+            actor = _actor(user_email)()
             _sync_gu_actor(gu, actor)
             sim = _load_existing_sim(gu)
             pf = _portfolio_response(gu, sim)
@@ -1374,7 +1374,7 @@ def _chat_context() -> dict:
 
 
 @app.post("/api/chat", dependencies=[Depends(require_api_key)])
-def chat(req: ChatRequest):
+def chat(req: ChatRequest, user: str = Depends(require_user)):
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
         raise HTTPException(
@@ -1384,7 +1384,7 @@ def chat(req: ChatRequest):
 
     # สร้าง context ก่อน (ใช้ lock สั้น ๆ) แล้วค่อยเรียก Gemini นอก lock
     # เพื่อไม่ให้การรอ AI ไปบล็อกการส่งคำสั่งซื้อขาย
-    context = _chat_context()
+    context = _chat_context(user)
 
     messages = []
     for turn in req.history[-6:]:
