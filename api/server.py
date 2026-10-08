@@ -1345,7 +1345,7 @@ def _chat_context(user_email: str) -> dict:
     try:
         with ORDER_LOCK:
             gu = load_gu()
-            actor = _actor(user_email)()
+            actor = _actor(user_email)
             _sync_gu_actor(gu, actor)
             sim = _load_existing_sim(gu)
             pf = _portfolio_response(gu, sim)
