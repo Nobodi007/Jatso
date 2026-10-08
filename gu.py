@@ -2590,7 +2590,7 @@ def default_role_for_new_user (email :str ,existing_profiles :Mapping [str ,dict
     # Never promote the first/only user to Admin automatically.
     if email in _admin_bootstrap_emails ():
         return ROLE_ADMIN 
-    return ROLE_VIEWER 
+    return ROLE_TRADER 
 
 
 def current_role ()->str :
