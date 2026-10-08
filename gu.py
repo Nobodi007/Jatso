@@ -3157,6 +3157,8 @@ def _normalize_loaded_sim_state (d :Any )->Optional[dict [str ,Any ]]:
             d .pop ("current_date",None )
     return d
 
+SIM_STATE_CODE_VERSION = "2026-10-08-simstate-v3"
+
 def load_sim_state (path :Optional [Path ]=None )->Optional[dict [str ,Any ]]:
     """Load the authenticated user's portfolio without ever creating a fresh wallet on read failure.
 
@@ -22488,68 +22490,42 @@ def render_site_footer ()->None :
 
 
 def _sb_diag ()->dict :
-    """Diagnostic แบบไม่เปิดเผยค่า Supabase key จริง."""
-    out ={}
-    try :
-        cfg =st .secrets .get ("supabase",{})
-        cfg =cfg if isinstance (cfg ,Mapping )else {}
-        url =str (
-            cfg .get ("url","")
-            or st .secrets .get ("SUPABASE_URL","")
-            or os .environ .get ("SUPABASE_URL","")
-            or ""
-        ).strip ()
-        out ["url_host"]=urllib .parse .urlparse (url ).netloc
-
-        picked =None
-        for name ,val in (
-            ("[supabase].service_role_key",cfg .get ("service_role_key")),
-            ("SUPABASE_SERVICE_ROLE_KEY",st .secrets .get ("SUPABASE_SERVICE_ROLE_KEY")),
-            ("env SUPABASE_SERVICE_ROLE_KEY",os .environ .get ("SUPABASE_SERVICE_ROLE_KEY")),
-            ("[supabase].key",cfg .get ("key")),
-            ("SUPABASE_KEY",st .secrets .get ("SUPABASE_KEY")),
-        ):
-            if val and str (val ).strip ():
-                picked =(name ,str (val ).strip ())
-                break
-
-        if picked :
-            out ["key_source"]=picked [0]
-            k =picked [1]
-            if k .startswith ("sb_secret_"):
-                out ["key_role"]="secret (bypass RLS)"
-            elif k .startswith ("sb_publishable_"):
-                out ["key_role"]="publishable (ติด RLS)"
-            elif k .count (".")==2 :
-                try :
-                    seg =k .split (".")[1]
-                    seg +="="*(-len (seg )%4 )
-                    payload =json .loads (base64 .urlsafe_b64decode (seg ).decode ("utf-8"))
-                    out ["key_role"]=payload .get ("role")
-                except Exception :
-                    out ["key_role"]="jwt (อ่าน role ไม่ได้)"
-            else :
-                out ["key_role"]="unknown format"
-        else :
-            out ["key_source"]="ไม่เจอ key เลย"
-
-        try :
-            out ["actor_from_app"]=_current_actor ()
-        except Exception as exc :
-            out ["actor_error"]=str (exc )
-
-        sb =_get_supabase ()
-        out ["client_ready"]=sb is not None
-        if sb is not None :
-            res =sb .table ("sim_state").select ("actor").execute ()
-            rows =res .data or []
-            out ["rows_visible_to_app"]=len (rows )
-            out ["matching_actor_rows"]=sum (
-                1 for row in rows
-                if str (row .get ("actor","")).strip ().lower ()==str (out .get ("actor_from_app","")).strip ().lower ()
-            )
-    except Exception as exc :
-        out ["diag_error"]=f"{type (exc ).__name__}: {exc }"
+    """Detailed Supabase/sim_state diagnostic without exposing secrets."""
+    out = {"sim_state_code_version": SIM_STATE_CODE_VERSION}
+    try:
+        out["gu_file"] = str(Path(__file__).resolve())
+    except Exception:
+        out["gu_file"] = ""
+    try:
+        out["x_spring_user"] = str(os.environ.get("XSPRING_USER", "") or "").strip()
+        out["x_spring_report_actor"] = str(os.environ.get("XSPRING_REPORT_ACTOR", "") or "").strip()
+        out["x_spring_report_actor_alt"] = str(os.environ.get("X_SPRING_REPORT_ACTOR", "") or "").strip()
+        out["actor_candidates"] = _sim_state_actor_candidates()
+    except Exception as exc:
+        out["actor_candidates_error"] = f"{type(exc).__name__}: {exc}"
+    out["supabase_url_configured"] = bool(str(os.environ.get("SUPABASE_URL", "") or "").strip())
+    out["supabase_service_role_configured"] = bool(str(os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "") or "").strip() or str(os.environ.get("SUPABASE_KEY", "") or "").strip())
+    for key in ("sim_state_load_error", "sim_state_rest_error", "sim_state_source", "sim_state_actor", "sim_state_new_user"):
+        out[key] = st.session_state.get(key, "")
+    try:
+        sb = _get_supabase()
+        out["client_ready"] = sb is not None
+        if sb is not None:
+            results = []
+            for actor in _sim_state_actor_candidates():
+                item = {"actor": actor}
+                try:
+                    res = (sb.table("sim_state").select("actor,updated_at").eq("actor", actor).order("updated_at", desc=True).limit(1).execute())
+                    rows = res.data or []
+                    item["exact_rows"] = len(rows)
+                    item["matched_actor"] = rows[0].get("actor") if rows else ""
+                    item["updated_at"] = rows[0].get("updated_at") if rows else ""
+                except Exception as exc:
+                    item["query_error"] = f"{type(exc).__name__}: {exc}"
+                results.append(item)
+            out["sim_state_queries"] = results
+    except Exception as exc:
+        out["diag_error"] = f"{type(exc).__name__}: {exc}"
     return out
 
 
