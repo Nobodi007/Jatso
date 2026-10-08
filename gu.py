@@ -2571,9 +2571,12 @@ def _admin_bootstrap_emails ()->set [str ]:
     v =str (v or os .environ .get (ADMIN_EMAILS_ENV_VAR ,"")).strip ().lower ()
     return {e .strip ()for e in v .split (",")if e .strip ()}
 
-def _normalize_role (role :Any )->str :
-    r =str (role or "").strip ().lower ()
-    return r if r in ROLE_ORDER else ROLE_TRADER 
+def _normalize_role(role: Any) -> str:
+    r = str(role or "").strip().lower()
+    # viewer เก่าที่ค้างในฐานข้อมูล -> ให้เป็น trader ทั้งหมด
+    if r == ROLE_VIEWER:
+        return ROLE_TRADER
+    return r if r in ROLE_ORDER else ROLE_TRADER
  
 
 def role_at_least (role :str ,min_role :str )->bool :
@@ -2586,10 +2589,11 @@ def default_role_for_new_user (email :str ,existing_profiles :Mapping [str ,dict
     return ROLE_TRADER 
 
 def current_role() -> str:
+    role = _normalize_role(st.session_state.get("current_role", ROLE_TRADER))
     email = str(st.session_state.get("user_email", "")).strip().lower()
-    if email in _admin_bootstrap_emails():
+    if email and email in _admin_bootstrap_emails():
         return ROLE_ADMIN
-    return ROLE_TRADER
+    return role
 
 
 def can_trade ()->bool :
