@@ -2568,7 +2568,7 @@ ADMIN_EMAILS_ENV_VAR ="XSPRING_ADMIN_EMAILS"
 
 def _admin_bootstrap_emails ()->set [str ]:
     try :
-        v =st .secrets .get ("admin_emails","")ewer
+        v =st .secrets .get ("admin_emails","")
     except Exception :
         v =""
     v =str (v or os .environ .get (ADMIN_EMAILS_ENV_VAR ,"")).strip ().lower ()
