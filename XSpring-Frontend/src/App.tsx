@@ -76,6 +76,54 @@ function formatTHB(value: number) {
   })}`
 }
 
+function AiAssistantOverlay({ onClose }: { onClose: () => void }) {
+  const historyRef = useRef<{ role: "user" | "assistant"; content: string }[]>([])
+
+  const handleSubmit = async (text: string): Promise<string> => {
+    if (!DEALER_API_KEY) return "ยังไม่ได้ตั้ง VITE_DEALER_API_KEY"
+    try {
+      const response = await authFetch(`${API_BASE_URL}/api/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "X-API-Key": DEALER_API_KEY,
+        },
+        body: JSON.stringify({ message: text, history: historyRef.current }),
+      })
+      const body = await response.json().catch(() => null)
+
+      if (!response.ok) {
+        const detail =
+          typeof body?.detail === "string" ? body.detail : `HTTP ${response.status}`
+        return `ถามไม่สำเร็จ: ${detail}`
+      }
+
+      const answer = String(body?.answer || "").trim() || "ไม่ได้รับคำตอบจาก AI"
+      historyRef.current = [
+        ...historyRef.current,
+        { role: "user" as const, content: text },
+        { role: "assistant" as const, content: answer },
+      ].slice(-6)
+      return answer
+    } catch {
+      return "เชื่อมต่อ Backend ไม่ได้"
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-background">
+      <button
+        onClick={onClose}
+        className="absolute right-4 top-4 z-[60] rounded-lg border px-3 py-1.5 text-sm hover:bg-accent"
+      >
+        ปิด
+      </button>
+      <MorphOrb onSubmit={handleSubmit} minThinkMs={2000} />
+    </div>
+  )
+}
+
 
 function formatQty(value: number) {
   return Number(value || 0).toLocaleString("en-US", {
