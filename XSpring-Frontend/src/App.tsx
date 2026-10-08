@@ -22,6 +22,7 @@ import {
   TrendingUp,
   TrendingDown,
   LogOut,
+import MorphOrb from "./components/ui/ai-thiking-orb-and-input"
 } from "lucide-react"
 
 type Page =
