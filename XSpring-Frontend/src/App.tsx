@@ -76,6 +76,7 @@ function formatTHB(value: number) {
   })}`
 }
 
+
 function formatQty(value: number) {
   return Number(value || 0).toLocaleString("en-US", {
     minimumFractionDigits: 0,
@@ -167,6 +168,7 @@ const marketData: Record<
 
 function AppInner() {
   const { user, logout } = useAuth()
+  const [aiOpen, setAiOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const [page, setPage] = useState<Page>("dashboard")
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -494,6 +496,13 @@ function AppInner() {
         </div>
       </div>
     </div>
+    <button
+        onClick={() => setAiOpen(true)}
+        className="fixed bottom-6 right-6 z-40 rounded-full border bg-background px-4 py-3 text-sm font-medium shadow-lg hover:bg-accent"
+    >
+      ✨ ถาม AI
+    </button>
+      {aiOpen && <AiAssistantOverlay onClose={() => setAiOpen(false)} />}
   )
 }
 
