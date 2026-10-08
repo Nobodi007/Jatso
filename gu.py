@@ -2573,7 +2573,8 @@ def _admin_bootstrap_emails ()->set [str ]:
 
 def _normalize_role (role :Any )->str :
     r =str (role or "").strip ().lower ()
-    return r if r in ROLE_ORDER else ROLE_VIEWER 
+    return r if r in ROLE_ORDER else ROLE_TRADER 
+ 
 
 def role_at_least (role :str ,min_role :str )->bool :
     return ROLE_ORDER .index (_normalize_role (role ))>=ROLE_ORDER .index (min_role )
