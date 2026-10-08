@@ -2531,73 +2531,72 @@ def set_user_role (email :str ,role :str )->None :
     # LAYER 4b — ROLE-BASED PERMISSIONS
     # =========================================================================
 
-ROLE_VIEWER ="viewer"
-ROLE_TRADER ="trader"
-ROLE_ADMIN ="admin"
-ROLE_ORDER =[ROLE_VIEWER ,ROLE_TRADER ,ROLE_ADMIN ]
-ROLE_LABEL_TH ={
-ROLE_VIEWER :"👁️ Viewer (ดูอย่างเดียว)",
-ROLE_TRADER :"💼 Trader (ซื้อขายได้)",
-ROLE_ADMIN :"🛡️ Admin (จัดการระบบ)",
-}
+   ROLE_VIEWER ="viewer"
+   ROLE_TRADER ="trader"
+   ROLE_ADMIN ="admin"
+   ROLE_ORDER =[ROLE_VIEWER ,ROLE_TRADER ,ROLE_ADMIN ]
+   ROLE_LABEL_TH ={
+   ROLE_VIEWER :"👁️ Viewer (ดูอย่างเดียว)",
+   ROLE_TRADER :"💼 Trader (ซื้อขายได้)",
+   ROLE_ADMIN :"🛡️ Admin (จัดการระบบ)",
+   }
 
-# Guest / Demo mode: ใช้ session_state เท่านั้นและห้ามแตะ persistence backend
-GUEST_ROLE =ROLE_TRADER 
+   GUEST_ROLE =ROLE_TRADER 
 
-def is_guest_mode ()->bool :
-    return bool (st .session_state .get ("guest_mode",False ))
+   def is_guest_mode ()->bool :
+       return bool (st .session_state .get ("guest_mode",False ))
 
-def _guest_email ()->str :
-    st .session_state .setdefault ("guest_id",uuid .uuid4 ().hex [:8 ])
-    return f"guest-{st .session_state ['guest_id']}@guest.local"
+   def _guest_email ()->str :
+       st .session_state .setdefault ("guest_id",uuid .uuid4 ().hex [:8 ])
+       return f"guest-{st .session_state ['guest_id']}@guest.local"
 
-def _start_guest_session ()->None :
-    st .session_state .clear ()
-    st .session_state ["guest_mode"]=True 
-    st .session_state ["guest_id"]=uuid .uuid4 ().hex [:8 ]
-    st .session_state ["current_role"]=GUEST_ROLE 
-    st .rerun ()
+   def _start_guest_session ()->None :
+       st .session_state .clear ()
+       st .session_state ["guest_mode"]=True 
+       st .session_state ["guest_id"]=uuid .uuid4 ().hex [:8 ]
+       st .session_state ["current_role"]=GUEST_ROLE 
+       st .rerun ()
 
-def _end_guest_session ()->None :
-# ล้าง session ทั้งหมดทันที — ข้อมูล Guest ไม่เคยถูกเขียนลง Supabase/ไฟล์
-    st .session_state .clear ()
-    st .rerun ()
+   def _end_guest_session ()->None :
+       st .session_state .clear ()
+       st .rerun ()
 
-ADMIN_EMAILS_ENV_VAR ="XSPRING_ADMIN_EMAILS"
+   ADMIN_EMAILS_ENV_VAR ="XSPRING_ADMIN_EMAILS"
 
+   def _admin_bootstrap_emails ()->set [str ]:
+       try :
+           v =st .secrets .get ("admin_emails","")
+       except Exception :
+           v =""
+       v =str (v or os .environ .get (ADMIN_EMAILS_ENV_VAR ,"")).strip ().lower ()
+       return {e .strip ()for e in v .split (",")if e .strip ()}
 
-def _admin_bootstrap_emails ()->set [str ]:
-    try :
-        v =st .secrets .get ("admin_emails","")
-    except Exception :
-        v =""
-    v =str (v or os .environ .get (ADMIN_EMAILS_ENV_VAR ,"")).strip ().lower ()
-    return {e .strip ()for e in v .split (",")if e .strip ()}
+   def _normalize_role (role :Any )->str :
+       r =str (role or "").strip ().lower ()
+       return r if r in ROLE_ORDER else ROLE_VIEWER 
 
+   def role_at_least (role :str ,min_role :str )->bool :
+       return ROLE_ORDER .index (_normalize_role (role ))>=ROLE_ORDER .index (min_role )
 
-def _normalize_role (role :Any )->str :
-    r =str (role or "").strip ().lower ()
-    return r if r in ROLE_ORDER else ROLE_VIEWER 
+   def default_role_for_new_user (email :str ,existing_profiles :Mapping [str ,dict ])->str :
+       email =str (email or "").strip ().lower ()
+       if email in _admin_bootstrap_emails ():
+           return ROLE_ADMIN 
+       return ROLE_TRADER 
 
+   def current_role ()->str :
+       if st.session_state.get("current_role") == "viewer":
+           st.session_state["current_role"] = ROLE_TRADER
+       return _normalize_role (st .session_state .get ("current_role", ROLE_TRADER ))
 
-def role_at_least (role :str ,min_role :str )->bool :
-    return ROLE_ORDER .index (_normalize_role (role ))>=ROLE_ORDER .index (min_role )
+   def can_trade ()->bool :
+       return role_at_least (current_role (),ROLE_TRADER )
 
+   def can_admin ()->bool :
+       return role_at_least (current_role (),ROLE_ADMIN )
 
-def default_role_for_new_user (email :str ,existing_profiles :Mapping [str ,dict ])->str :
-    email =str (email or "").strip ().lower ()
-    # Public Google login: only explicitly configured admin_emails get Admin.
-    # Never promote the first/only user to Admin automatically.
-    if email in _admin_bootstrap_emails ():
-        return ROLE_ADMIN 
-    return ROLE_TRADER 
-
-
-def current_role ()->str :
-    # บังคับอัปเดตสิทธิ์ถ้ายังเป็น viewer อยู่
-    if st.session_state.get("current_role") == "viewer":
-        st.session_state["current_role"] = ROLE_TRADER
-    return _normalize_role (st .session_state .get ("current_role", ROLE_TRADER ))
+   def can_edit_config ()->bool :
+       return role_at_least (current_role (),ROLE_TRADER )
 
 
 AUDIT_LOG_ENV_VAR ="XSPRING_AUDIT_LOG"
