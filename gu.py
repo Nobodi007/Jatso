@@ -3027,22 +3027,47 @@ def save_sim_state (sim :Any ,path :Optional [Path ]=None )->None :
     os .replace (tmp ,p )
 
 def _sim_state_actor_candidates ()->list [str]:
-    """Return only identity candidates that belong to the current signed-in user."""
+    """Return trusted identity candidates for the currently signed-in user.
+
+    Some Render/SSO deployments expose the authenticated identity through
+    XSPRING_USER while the reverse proxy also exposes XSPRING_REPORT_ACTOR.
+    Prefer Streamlit's authenticated email, then trusted server-side identity
+    variables. Never use a browser-supplied arbitrary actor as a fallback.
+    """
     out :list [str]=[]
+
+    # 1) Streamlit authenticated identity — highest priority.
     try:
         email =str (getattr (st .user ,"email","")or "").strip ()
         if email:
             out .append (email )
     except Exception :
         pass
-    env_actor =str (os .environ .get (AUDIT_ACTOR_ENV_VAR ,"")or "").strip ()
-    if env_actor:
-        out .append (env_actor )
+
+    # 2) Server-side identity variables used by Render/SSO.
+    for env_name in (
+        AUDIT_ACTOR_ENV_VAR,
+        "XSPRING_REPORT_ACTOR",
+        "X_SPRING_REPORT_ACTOR",
+    ):
+        value =str (os .environ .get (env_name ,"")or "").strip ()
+        if value:
+            out .append (value )
+
+    # 3) Explicit single-user allowlist, if configured.
     allowed =_allowed_email ()
     if allowed and allowed !="*" and "," not in allowed:
         out .append (allowed )
+
     seen=set ()
-    return [x for x in out if x and x.lower ()!="unknown" and not (x.lower () in seen or seen.add (x.lower ())) ]
+    result=[]
+    for value in out:
+        key=value.lower ()
+        if not value or key=="unknown" or key in seen:
+            continue
+        seen.add (key)
+        result.append (value)
+    return result
 
 def _sim_state_from_rest (actor :str )->Optional[dict [str ,Any ]]:
     """Read the signed-in user's sim_state through Supabase REST.
@@ -3133,43 +3158,55 @@ def _normalize_loaded_sim_state (d :Any )->Optional[dict [str ,Any ]]:
     return d
 
 def load_sim_state (path :Optional [Path ]=None )->Optional[dict [str ,Any ]]:
+    """Load the authenticated user's portfolio without ever creating a fresh wallet on read failure.
+
+    Supabase is authoritative for signed-in users. The lookup deliberately uses
+    the exact actor first, then a REST exact-actor query. This avoids the old
+    ``limit=50`` broad scan, which could miss an existing user's row when the
+    table contains many accounts.
+    """
     if is_guest_mode ():
         return None
-        
+
     candidates =_sim_state_actor_candidates ()
     sb =_get_supabase ()
     last_error =None
     last_reason =None
 
+    # Clear stale diagnostics from a previous Streamlit rerun.
+    for _k in (
+        "sim_state_load_error",
+        "sim_state_rest_error",
+        "sim_state_source",
+        "sim_state_actor",
+    ):
+        st .session_state .pop (_k,None )
 
-
-    # Cloud state is authoritative for signed-in users.
-    # First try the normal actor-filtered query, then a broader read and
-    # filter locally by the signed-in actor. The latter handles Supabase/RLS
-    # setups where ilike/equality filters behave differently.
-    if sb is not None and candidates:
-        for actor in candidates:
-            actor_key =str (actor ).strip ().lower ()
-            for mode in ("exact","ilike","broad"):
+    if not candidates:
+        st .session_state ["sim_state_load_error"] =(
+            "ไม่พบ authenticated actor — st.user.email และ XSPRING_USER/XSPRING_REPORT_ACTOR ว่าง"
+        )
+    else:
+        # ------------------------------------------------------------------
+        # 1) Supabase Python client: exact actor lookup.
+        # ------------------------------------------------------------------
+        if sb is not None:
+            for actor in candidates:
+                actor_key =str (actor ).strip ().lower ()
                 try:
-                    q =sb .table ("sim_state").select ("data,actor,updated_at")
-                    if mode == "exact":
-                        q =q .eq ("actor",actor )
-                    elif mode == "ilike":
-                        q =q .ilike ("actor",actor )
-                    res =q .order ("updated_at",desc=True ).limit (20 ).execute ()
+                    res =(
+                        sb .table ("sim_state")
+                        .select ("data,actor,updated_at")
+                        .eq ("actor",actor )
+                        .order ("updated_at",desc=True )
+                        .limit (20 )
+                        .execute ()
+                    )
                     rows =res .data or []
-                    if mode == "broad":
-                        rows =[
-                            r for r in rows
-                            if str (r .get ("actor","")).strip ().lower () == actor_key
-                        ]
-                    else:
-                        # Still verify identity before accepting a row.
-                        rows =[
-                            r for r in rows
-                            if str (r .get ("actor",actor )).strip ().lower () == actor_key
-                        ]
+                    rows =[
+                        r for r in rows
+                        if str (r .get ("actor","")).strip ().lower ()==actor_key
+                    ]
                     if rows:
                         for row in rows:
                             d =_normalize_loaded_sim_state (row .get ("data"))
@@ -3177,92 +3214,117 @@ def load_sim_state (path :Optional [Path ]=None )->Optional[dict [str ,Any ]]:
                                 st .session_state ["sim_state_source"]="supabase"
                                 st .session_state ["sim_state_actor"]=str (row .get ("actor")or actor )
                                 st .session_state ["sim_state_loaded_ok"]=True
-                                st .session_state .pop ("sim_state_load_error",None )
+                                st .session_state ["sim_state_new_user"]=False
                                 return d
-                        last_reason=f"row found for {actor}, but data is not valid JSON/object"
+                        last_reason=f"row found for actor {actor}, but data is not valid JSON/object"
                     else:
                         last_reason=f"no sim_state row for actor {actor}"
                 except Exception as exc:
                     last_error=exc
 
-    # REST fallback. Query a small set of rows, then filter by the signed-in
-    # actor locally so URL/operator encoding cannot prevent a valid match.
-    for actor in candidates:
-        try:
-            # Render production credentials come from environment variables.
-            # Do not require .streamlit/secrets.toml on Render.
-            url = str(os.environ.get("SUPABASE_URL", "") or "").strip()
-            key = str(
-                os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-                or os.environ.get("SUPABASE_KEY", "")
-                or ""
-            ).strip()
+        # ------------------------------------------------------------------
+        # 2) REST exact-actor fallback.
+        #    Use URL-encoded query parameters; do NOT scan only 50 newest rows.
+        # ------------------------------------------------------------------
+        for actor in candidates:
+            try:
+                url =str (os .environ .get ("SUPABASE_URL","")or "").strip ()
+                key =str (
+                    os .environ .get ("SUPABASE_SERVICE_ROLE_KEY","")
+                    or os .environ .get ("SUPABASE_KEY","")
+                    or ""
+                ).strip ()
 
-            if not (url and key):
-                try:
-                    secrets = st.secrets
-                    cfg = secrets.get("supabase", {})
-                    if not isinstance(cfg, Mapping):
-                        cfg = {}
-                    url = str(cfg.get("url", "") or secrets.get("SUPABASE_URL", "") or url).strip()
-                    key = str(
-                        cfg.get("service_role_key", "")
-                        or secrets.get("SUPABASE_SERVICE_ROLE_KEY", "")
-                        or cfg.get("key", "")
-                        or secrets.get("SUPABASE_KEY", "")
-                        or key
-                        or ""
-                    ).strip()
-                except Exception:
-                    pass
-            req =urllib .request .Request (
-                url.rstrip ("/")+"/rest/v1/sim_state?select=data,actor,updated_at&order=updated_at.desc&limit=50",
-                headers ={"apikey":key ,"Authorization":f"Bearer {key }","Accept":"application/json"},
-                method ="GET",
-            )
-            with urllib .request .urlopen (req ,timeout =8 )as resp:
-                rows =json .loads (resp .read ().decode ("utf-8"))
-            actor_key =str (actor ).strip ().lower ()
-            for row in rows if isinstance (rows ,list )else []:
-                if str (row .get ("actor","")).strip ().lower () !=actor_key:
-                    continue
-                d =_normalize_loaded_sim_state (row .get ("data"))
-                if d is not None:
-                    st .session_state ["sim_state_source"]="supabase_rest"
-                    st .session_state ["sim_state_actor"]=str (row .get ("actor")or actor )
-                    st .session_state ["sim_state_loaded_ok"]=True
-                    st .session_state .pop ("sim_state_load_error",None )
-                    return d
-                last_reason=f"row found for {actor}, but data is not valid JSON/object"
-        except Exception as exc:
-            last_error=exc
-            st .session_state ["sim_state_rest_error"]=str (exc )
+                if not (url and key):
+                    try:
+                        secrets =st .secrets
+                        cfg =secrets .get ("supabase",{})
+                        if not isinstance (cfg,Mapping ):
+                            cfg={}
+                        url =str (
+                            cfg .get ("url","")
+                            or secrets .get ("SUPABASE_URL","")
+                            or url
+                        ).strip ()
+                        key =str (
+                            cfg .get ("service_role_key","")
+                            or secrets .get ("SUPABASE_SERVICE_ROLE_KEY","")
+                            or cfg .get ("key","")
+                            or secrets .get ("SUPABASE_KEY","")
+                            or key
+                            or ""
+                        ).strip ()
+                    except Exception:
+                        pass
 
+                if not (url and key):
+                    raise RuntimeError(
+                        "Supabase REST credentials missing: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY"
+                    )
+
+                query =urllib .parse .urlencode ({
+                    "select":"data,actor,updated_at",
+                    "actor":f"ilike.{str (actor ).strip ()}",
+                    "order":"updated_at.desc",
+                    "limit":"20",
+                })
+                req =urllib .request .Request (
+                    url .rstrip ("/")+"/rest/v1/sim_state?"+query,
+                    headers ={
+                        "apikey":key,
+                        "Authorization":f"Bearer {key}",
+                        "Accept":"application/json",
+                    },
+                    method ="GET",
+                )
+                with urllib .request .urlopen (req,timeout=8)as resp:
+                    rows=json .loads (resp .read ().decode ("utf-8"))
+
+                actor_key=str (actor ).strip ().lower ()
+                for row in rows if isinstance (rows,list )else []:
+                    if str (row .get ("actor","")).strip ().lower ()!=actor_key:
+                        continue
+                    d=_normalize_loaded_sim_state (row .get ("data"))
+                    if d is not None:
+                        st .session_state ["sim_state_source"]="supabase_rest"
+                        st .session_state ["sim_state_actor"]=str (row .get ("actor")or actor )
+                        st .session_state ["sim_state_loaded_ok"]=True
+                        st .session_state ["sim_state_new_user"]=False
+                        st .session_state .pop ("sim_state_load_error",None )
+                        st .session_state .pop ("sim_state_rest_error",None )
+                        return d
+                    last_reason=f"row found for actor {actor}, but data is not valid JSON/object"
+
+            except Exception as exc:
+                last_error=exc
+                st .session_state ["sim_state_rest_error"]=str (exc )
+
+    # A real read error is NOT the same thing as a new user.
     if last_error is not None:
         st .session_state ["sim_state_load_error"]=str (last_error)
-    elif last_reason and str (last_reason).startswith ("no sim_state row for actor"):
-        # query สำเร็จและยืนยันว่ายังไม่มี row = ผู้ใช้ใหม่ ให้สร้างพอร์ตใหม่ได้
+    elif last_reason and str(last_reason).startswith ("no sim_state row for actor"):
+        # Only declare a new user after a successful exact-actor query.
         st .session_state .pop ("sim_state_load_error",None )
         st .session_state ["sim_state_new_user"]=True
     elif last_reason:
-        # Keep the real actor and a safe diagnostic, but never expose keys.
         st .session_state ["sim_state_load_error"]=last_reason
-    elif sb is None:
-        st .session_state ["sim_state_load_error"]="Supabase client unavailable or credentials not configured"
+    elif sb is None and candidates:
+        st .session_state ["sim_state_load_error"]=(
+            "Supabase client unavailable; REST fallback also did not return a portfolio"
+        )
 
-    # IMPORTANT: Never fall back to a shared local sim_state.json for a
-    # signed-in account. A stale/default local file can make the web show
-    # ฿1,000,000 even though the real cloud portfolio still exists.
-    # Local fallback remains available only when the caller explicitly passes
-    # a path AND there is no signed-in actor candidate.
+    # IMPORTANT: Never fall back to a shared/default local sim_state.json for
+    # a signed-in account. That can recreate the default ฿1,000,000 wallet and
+    # overwrite the real cloud portfolio.
     if not candidates:
-        p =Path (path )if path else sim_state_path ()
+        p=Path (path )if path else sim_state_path ()
         if p .is_file ():
             try:
-                d =json .loads (p .read_text (encoding ="utf-8"))
+                d=json .loads (p .read_text (encoding="utf-8"))
                 return _normalize_loaded_sim_state (d)
-            except (OSError ,json .JSONDecodeError ):
+            except (OSError,json .JSONDecodeError ):
                 pass
+
     return None
 
 FAV_STATE_ENV_VAR ="XSPRING_FAV_STATE"
