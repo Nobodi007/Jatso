@@ -3136,10 +3136,17 @@ def load_sim_state (path :Optional [Path ]=None )->Optional[dict [str ,Any ]]:
     if is_guest_mode ():
         return None
 
-    candidates =_sim_state_actor_candidates ()
-    sb =_get_supabase ()
-    last_error =None
-    last_reason =None
+        if last_error is not None:
+        st .session_state ["sim_state_load_error"]=str (last_error)
+    elif last_reason and str (last_reason).startswith ("no sim_state row for actor"):
+        # query สำเร็จและยืนยันว่ายังไม่มี row = ผู้ใช้ใหม่ ให้สร้างพอร์ตใหม่ได้
+        st .session_state .pop ("sim_state_load_error",None )
+        st .session_state ["sim_state_new_user"]=True
+    elif last_reason:
+        # Keep the real actor and a safe diagnostic, but never expose keys.
+        st .session_state ["sim_state_load_error"]=last_reason
+    elif sb is None:
+        st .session_state ["sim_state_load_error"]="Supabase client unavailable or credentials not configured"
 
     # Cloud state is authoritative for signed-in users.
     # First try the normal actor-filtered query, then a broader read and
