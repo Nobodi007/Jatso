@@ -1368,6 +1368,8 @@ def _chat_context() -> dict:
             ],
         }
     except Exception:
+        import traceback
+        traceback.print_exc()
         return {}
 
 
