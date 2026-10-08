@@ -22,8 +22,8 @@ import {
   TrendingUp,
   TrendingDown,
   LogOut,
-import MorphOrb from "./components/ui/ai-thiking-orb-and-input"
 } from "lucide-react"
+import MorphOrb from "./components/ui/ai-thiking-orb-and-input"
 
 type Page =
   | "dashboard"
@@ -542,15 +542,15 @@ function AppInner() {
 
           </main>
         </div>
-      </div>
-    </div>
-    <button
+      </div>        
+      <button
         onClick={() => setAiOpen(true)}
         className="fixed bottom-6 right-6 z-40 rounded-full border bg-background px-4 py-3 text-sm font-medium shadow-lg hover:bg-accent"
-    >
-      ✨ ถาม AI
-    </button>
+      >
+        ✨ ถาม AI
+      </button>
       {aiOpen && <AiAssistantOverlay onClose={() => setAiOpen(false)} />}
+    </div>            
   )
 }
 
