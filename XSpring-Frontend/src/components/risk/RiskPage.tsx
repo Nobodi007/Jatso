@@ -1,5 +1,6 @@
 import { Component, useEffect, useState, type ReactNode } from "react"
 import { authFetch } from "../../auth"
+import { CoinIcon } from "../../App"
 
 const API_BASE_URL = "https://xspring-api.onrender.com"
 
@@ -129,12 +130,19 @@ function RiskPageInner() {
             <div className="mt-4 space-y-3">
               {allocation.map((a) => (
                 <div key={a.asset} className="flex items-center gap-3">
-                  <div className="w-24 shrink-0 text-sm font-semibold">
-                    {a.asset}
-                    {a.name && <span className="ml-1 text-xs font-normal text-muted-foreground">{a.name}</span>}
+                  <div className="flex w-40 shrink-0 items-center gap-2 text-sm font-semibold">
+                    {a.asset === "THB" ? (
+                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-600 text-[11px] font-bold text-white">฿</span>
+                    ) : (
+                      <CoinIcon asset={a.asset} size={24} />
+                    )}
+                    <span>
+                      {a.asset}
+                      {a.name && <span className="ml-1 text-xs font-normal text-muted-foreground">{a.name}</span>}
+                    </span>
                   </div>
                   <div className="h-2 flex-1 rounded-full bg-muted">
-                    <div className="h-2 rounded-full bg-zinc-400" style={{ width: `${Math.min(Number(a.pct) || 0, 100)}%` }} />
+                    <div className="h-2 rounded-full bg-emerald-500" style={{ width: `${Math.min(Number(a.pct) || 0, 100)}%` }} />
                   </div>
                   <div className="w-36 shrink-0 text-right text-sm">{thb(a.value_thb)}</div>
                   <div className="w-14 shrink-0 text-right text-sm text-muted-foreground">{f(a.pct, 2)}%</div>
