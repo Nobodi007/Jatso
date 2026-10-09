@@ -1562,27 +1562,6 @@ function DashboardPage({
     change={loading ? "—" : `${pnlPositive ? "+" : ""}${pnlPct.toFixed(2)}%`}
   />
 
-        <StatCard
-          title="Available Cash"
-          value={loading ? "Loading..." : formatTHB(cash)}
-          change={
-            totalValue > 0
-              ? `${((cash / totalValue) * 100).toFixed(1)}% of equity`
-              : "THB"
-          }
-        />
-
-        <StatCard
-          title="Crypto Value"
-          value={loading ? "Loading..." : formatTHB(marketValue)}
-          change={`${openPositions} open positions`}
-        />
-
-        <StatCard
-          title="Total P&L"
-          value={loading ? "Loading..." : formatTHB(totalPnl)}
-          change={loading ? "—" : `${pnlPositive ? "+" : ""}${pnlPct.toFixed(2)}%`}
-        />
       </div>
 
       {/* MARKET + QUICK TRADE */}
