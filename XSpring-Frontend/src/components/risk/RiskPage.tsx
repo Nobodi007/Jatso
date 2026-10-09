@@ -2,6 +2,10 @@ import { useEffect, useState } from "react"
 import { authFetch } from "../../auth"
 
 const API_BASE_URL = "https://xspring-api.onrender.com"
+const f = (v: unknown, d = 1) => {
+  const n = Number(v)
+  return Number.isFinite(n) ? n.toFixed(d) : "—"
+}
 
 type Status = "ok" | "watch" | "high" | "na"
 type Metric = { key: string; value_pct: number | null; watch: number; high: number; below: boolean; status: Status }
