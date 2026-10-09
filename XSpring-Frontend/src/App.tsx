@@ -927,7 +927,7 @@ function coinIconSources(asset: string) {
   ]
 }
 
-function CoinIcon({ asset, size = 36 }: { asset: string; size?: number }) {
+export function CoinIcon(({ asset, size = 36 }: { asset: string; size?: number }) {
   const symbol = String(asset || "").trim().toUpperCase()
   const [sourceIndex, setSourceIndex] = useState(0)
 
