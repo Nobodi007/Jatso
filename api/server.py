@@ -15,12 +15,6 @@ import math
 import json
 import urllib.parse
 import urllib.request
-import asyncio
-import requests
-
-import jwt
-from google.auth.transport import requests as google_requests
-from google.oauth2 import id_token as google_id_token
 
 import pandas as pd
 
@@ -198,163 +192,6 @@ def require_api_key(
 
 
 # =========================================================
-# GOOGLE LOGIN / SESSION
-# =========================================================
-# Flow: Frontend ส่ง Google ID token มาที่ POST /api/auth/google
-#       -> verify กับ Google -> เช็ค email ใน user_profiles (allowlist)
-#       -> ออก session JWT ของระบบเอง (HS256)
-# endpoint ที่แตะข้อมูลบัญชี (portfolio/orders/order) บังคับ Bearer token
-# และใช้ email ใน token เป็น actor เท่านั้น
-# =========================================================
-
-AUTH_JWT_TTL_SECONDS = 12 * 3600
-
-
-class GoogleLoginRequest(BaseModel):
-    credential: str = Field(..., min_length=10, max_length=4096)
-
-
-def _jwt_secret() -> str:
-    secret = os.environ.get("AUTH_JWT_SECRET", "").strip()
-
-    if len(secret) < 32:
-        raise HTTPException(
-            status_code=503,
-            detail="ยังไม่ได้ตั้ง AUTH_JWT_SECRET (อย่างน้อย 32 ตัวอักษร)",
-        )
-
-    return secret
-
-
-def require_user(authorization: str = Header(default="")) -> str:
-    """Strict: ต้องมี Bearer token ที่ถูกต้อง คืนค่า email ของผู้ใช้"""
-    if not authorization.lower().startswith("bearer "):
-        raise HTTPException(
-            status_code=401,
-            detail="กรุณาเข้าสู่ระบบ",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    token = authorization[7:].strip()
-
-    try:
-        payload = jwt.decode(token, _jwt_secret(), algorithms=["HS256"])
-    except jwt.PyJWTError:
-        raise HTTPException(
-            status_code=401,
-            detail="Session หมดอายุหรือไม่ถูกต้อง",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    email = str(payload.get("sub") or "").strip()
-
-    if not email:
-        raise HTTPException(status_code=401, detail="Session ไม่ถูกต้อง")
-
-    return email
-
-
-@app.post("/api/auth/google")
-def auth_google(body: GoogleLoginRequest, request: Request):
-    client_id = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
-
-    if not client_id:
-        raise HTTPException(status_code=503, detail="ยังไม่ได้ตั้ง GOOGLE_CLIENT_ID")
-
-    # กัน brute-force / spam ที่ endpoint นี้ (ไม่มี API key ให้ใช้เป็น key)
-    _check_rate_limit(request, "auth-google")
-
-    try:
-        info = google_id_token.verify_oauth2_token(
-            body.credential,
-            google_requests.Request(),
-            client_id,
-        )
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Google token ไม่ถูกต้อง")
-
-    if not info.get("email_verified"):
-        raise HTTPException(status_code=401, detail="อีเมลยังไม่ได้ยืนยันกับ Google")
-
-    # เก็บ email ตามที่ Google ส่งมา (ตรงกับ st.user.email ที่แอป Streamlit เก่าใช้เป็น actor
-    # ใน sim_state) ส่วนการเทียบสิทธิ์ใช้ตัวพิมพ์เล็ก
-    email = str(info.get("email") or "").strip()
-    email_key = email.lower()
-
-    if not email:
-        raise HTTPException(status_code=401, detail="ไม่พบอีเมลใน Google token")
-
-    # Allowlist: ใช้กติกาเดียวกับ gu.py (require_login)
-    # XSPRING_EMAIL = อีเมลคั่นด้วย comma หรือ "*" ; ไม่ตั้ง = ปิดระบบ
-    allowed_raw = os.environ.get("XSPRING_EMAIL", "").strip().lower()
-
-    if not allowed_raw:
-        raise HTTPException(
-            status_code=503,
-            detail="ยังไม่ได้ตั้ง XSPRING_EMAIL — ระบบจึงปิดไว้ก่อน",
-        )
-
-    allowed_list = {a.strip() for a in allowed_raw.split(",") if a.strip()}
-
-    if allowed_raw != "*" and email_key not in allowed_list:
-        raise HTTPException(
-            status_code=403,
-            detail="อีเมลนี้ยังไม่ได้รับอนุญาตให้ใช้งาน",
-        )
-
-    # Role: ใช้จาก user_profiles ถ้ามี ไม่งั้นเหมือน default_role_for_new_user ใน gu.py
-    # (อยู่ใน XSPRING_ADMIN_EMAILS = admin นอกนั้น viewer)
-    role = None
-
-    try:
-        gu = load_gu()
-        sb = gu._get_supabase()
-
-        if sb is not None:
-            res = (
-                sb.table("user_profiles")
-                .select("email,role")
-                .eq("email", email_key)
-                .limit(1)
-                .execute()
-            )
-
-            if res.data:
-                role = str(res.data[0].get("role") or "").strip().lower()
-    except Exception:
-        role = None  # โหลด role ไม่ได้ -> ตกไปใช้ค่า default (สิทธิ์ต่ำสุด)
-
-    if role not in {"viewer", "trader", "admin"}:
-        admin_emails = {
-            e.strip()
-            for e in os.environ.get("XSPRING_ADMIN_EMAILS", "").lower().split(",")
-            if e.strip()
-        }
-        role = "admin" if email_key in admin_emails else "viewer"
-
-    token = jwt.encode(
-        {
-            "sub": email,
-            "role": role,
-            "iat": int(time.time()),
-            "exp": int(time.time()) + AUTH_JWT_TTL_SECONDS,
-        },
-        _jwt_secret(),
-        algorithm="HS256",
-    )
-
-    return {
-        "token": token,
-        "user": {
-            "email": email,
-            "name": info.get("name"),
-            "picture": info.get("picture"),
-            "role": role,
-        },
-    }
-
-
-# =========================================================
 # REQUEST MODEL
 # =========================================================
 
@@ -388,16 +225,30 @@ def _safe_float(value, default=0.0):
 # ACTOR
 # =========================================================
 
-def _actor(user_email: str):
+def _actor():
     """
-    Actor = email ของผู้ใช้ที่ล็อกอิน (มาจาก session token ที่ verify แล้ว)
+    Resolve the persistent account actor.
 
-    ไม่ fallback ไป XSPRING_USER อีกต่อไป เพื่อไม่ให้มีทางเข้าบัญชีโดยไม่ล็อกอิน
+    Priority:
+        1. XSPRING_USER
+        2. XSPRING_REPORT_ACTOR
+
+    IMPORTANT: Never invent a new actor.
     """
-    actor = str(user_email or "").strip()
+    user_actor = str(os.environ.get("XSPRING_USER", "") or "").strip()
+    report_actor = str(os.environ.get("XSPRING_REPORT_ACTOR", "") or "").strip()
+
+    actor = user_actor or report_actor
 
     if not actor:
-        raise HTTPException(status_code=401, detail="กรุณาเข้าสู่ระบบ")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ยังไม่ได้ตั้ง XSPRING_USER หรือ "
+                "XSPRING_REPORT_ACTOR สำหรับบัญชี API "
+                "— หยุดไว้เพื่อป้องกันการอ่าน/เขียนผิดบัญชี"
+            ),
+        )
 
     return actor
 
@@ -443,14 +294,13 @@ def _set_api_role(gu, actor: str):
     except Exception:
         role = None
 
-        # viewer เก่า / ค่าว่าง / ค่าแปลก ทั้งหมด -> trader
-    if role not in {"trader", "admin"}:
+    if role not in {"viewer", "trader", "admin"}:
         role = str(
-            os.environ.get("XSPRING_API_ROLE", "trader") or ""
+            os.environ.get("XSPRING_API_ROLE", "viewer") or ""
         ).strip().lower()
 
-    if role not in {"trader", "admin"}:
-        role = "trader"
+    if role not in {"viewer", "trader", "admin"}:
+        role = "viewer"
 
     st.session_state["guest_mode"] = False
     st.session_state["current_role"] = role
@@ -792,35 +642,6 @@ def _fetch_bitkub_ticker_prices(assets: set[str]) -> dict[str, float]:
     return prices
 
 
-
-def _order_raw_time(order: dict):
-    """Pick the best timestamp source of an order record.
-
-    Priority: ISO `timestamp` (has timezone) -> `time` -> `วันที่`+`เวลา`
-    (date AND clock together) -> `เวลา` -> `วันที่`.
-    A clock-only `เวลา` (HH:MM:SS) must never be parsed alone: pandas would
-    attach *today's* date, which shifts old orders to the wrong day.
-    """
-    ts = order.get("timestamp") or order.get("time")
-    if ts:
-        return ts
-    d = str(order.get("วันที่") or "").strip()
-    t = str(order.get("เวลา") or "").strip()
-    if d and t:
-        if "T" in t or len(t) > 8:  # already a full datetime
-            return t
-        return f"{d} {t}"
-    return t or d or ""
-
-
-SIDE_TH_TO_EN = {"ซื้อ": "BUY", "ขาย": "SELL"}
-
-
-def _normalize_side(value) -> str:
-    raw = str(value or "").strip()
-    return SIDE_TH_TO_EN.get(raw, raw.upper())
-
-
 def _recompute_realized_pnl_from_orders(sim: dict) -> float:
     """Recompute realized P&L from the immutable filled-order history.
 
@@ -882,7 +703,13 @@ def _recompute_realized_pnl_from_orders(sim: dict) -> float:
         if not asset or qty <= 0 or gross <= 0 or price <= 0:
             continue
 
-        timestamp = _order_raw_time(order)
+        timestamp = (
+            order.get("เวลา")
+            or order.get("timestamp")
+            or order.get("time")
+            or order.get("วันที่")
+            or ""
+        )
         try:
             ts = pd.to_datetime(timestamp, errors="coerce", utc=True)
             if pd.isna(ts):
@@ -1275,13 +1102,13 @@ def engine_status():
 # =========================================================
 
 @app.get("/api/portfolio", dependencies=[Depends(require_api_key)])
-def portfolio(user: str = Depends(require_user)):
+def portfolio():
     with ORDER_LOCK:
         try:
             gu = load_gu()
 
-            # Resolve the actor from the verified session, then make gu.py use it.
-            actor = _actor(user)
+            # Resolve the EXISTING actor, then make gu.py use the same one.
+            actor = _actor()
             _sync_gu_actor(gu, actor)
 
             # READ ONLY. ห้ามสร้าง wallet / ตั้งค่าเริ่มต้น / save / เขียนทับ
@@ -1318,219 +1145,6 @@ def portfolio(user: str = Depends(require_user)):
                 "เกิดข้อผิดพลาดภายใน API",
                 e,
             )
-
-# =========================================================
-# CHAT (AI ASSISTANT) — read-only, never places orders
-# =========================================================
-
-CHAT_SYSTEM = (
-    "คุณคือผู้ช่วยของ XSpring Dealer Suite ตอบเป็นภาษาไทย "
-    "ตอบสั้นมาก ไม่เกิน 2 ประโยค ไม่เกิน 40 คำ ห้ามใช้ markdown หรือ bullet "
-    "ใช้เฉพาะตัวเลขใน portfolio_context ห้ามเดาหรือสร้างตัวเลขเอง "
-    "ถ้าไม่มีข้อมูลให้บอกว่าไม่มีข้อมูล "
-    "ห้ามแนะนำให้ซื้อหรือขาย และคุณไม่สามารถสั่งซื้อขายแทนผู้ใช้ได้"
-)
-
-
-class ChatTurn(BaseModel):
-    role: str = Field(..., max_length=12)
-    content: str = Field(..., min_length=1, max_length=1000)
-
-
-class ChatRequest(BaseModel):
-    message: str = Field(..., min_length=1, max_length=500)
-    history: list[ChatTurn] = Field(default_factory=list)
-
-
-def _chat_context(user_email: str) -> dict:
-    """Compact portfolio snapshot. Any failure -> empty context, chat still works."""
-    try:
-        with ORDER_LOCK:
-            gu = load_gu()
-            actor = _actor(user_email)
-            _sync_gu_actor(gu, actor)
-            sim = _load_existing_sim(gu)
-            pf = _portfolio_response(gu, sim)
-
-        return {
-            "cash_thb": pf.get("cash_thb"),
-            "total_value_thb": pf.get("total_value_thb"),
-            "total_pnl_thb": pf.get("total_pnl_thb"),
-            "pnl_pct": pf.get("pnl_pct"),
-            "holdings": [
-                {
-                    "asset": h.get("asset"),
-                    "qty": h.get("qty"),
-                    "avg_cost": h.get("avg_cost"),
-                    "price": h.get("price"),
-                    "unrealized_pnl": h.get("unrealized_pnl"),
-                    "allocation_pct": h.get("allocation_pct"),
-                }
-                for h in (pf.get("holdings") or [])
-            ],
-        }
-    except Exception:
-        import traceback
-        traceback.print_exc()
-        return {}
-
-
-@app.post("/api/chat", dependencies=[Depends(require_api_key)])
-def chat(req: ChatRequest, user: str = Depends(require_user)):
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="ยังไม่ได้ตั้ง GEMINI_API_KEY บน Backend",
-        )
-
-    # สร้าง context ก่อน (ใช้ lock สั้น ๆ) แล้วค่อยเรียก Gemini นอก lock
-    # เพื่อไม่ให้การรอ AI ไปบล็อกการส่งคำสั่งซื้อขาย
-    context = _chat_context(user)
-
-    messages = []
-    for turn in req.history[-6:]:
-        role = "assistant" if turn.role == "assistant" else "user"
-        messages.append({"role": role, "content": turn.content})
-    messages.append({"role": "user", "content": req.message.strip()})
-
-    system = (
-        CHAT_SYSTEM
-        + "\n\nportfolio_context:\n"
-        + json.dumps(context, ensure_ascii=False)
-    )
-
-    try:
-        gu = load_gu()
-        answer = str(gu.ask_ai(messages, api_key, system_override=system) or "").strip()
-    except Exception as e:
-        raise _internal_server_error("เรียก AI ไม่สำเร็จ", e)
-
-    if len(answer) > 240:
-        answer = answer[:237].rstrip() + "…"
-
-    return {"status": "ok", "answer": answer or "ไม่ได้รับคำตอบจาก AI"}
-def _num(x, default=0.0) -> float:
-    try:
-        return float(x)
-    except (TypeError, ValueError):
-        return default
-
-RISK_THRESHOLDS = {
-    "volatility": (30, 60, False),
-    "max_drawdown": (10, 20, False),
-    "concentration": (50, 70, False),
-    "btc_exposure": (50, 70, False),
-    "cash": (20, 10, True),
-}
-
-
-def _risk_status(value, watch, high, below=False) -> str:
-    if value is None:
-        return "na"
-    if below:
-        return "high" if value < high else "watch" if value < watch else "ok"
-    return "high" if value > high else "watch" if value > watch else "ok"
-
-import time as _time
-
-_RISK_HIST_CACHE: dict = {}
-_RISK_HIST_TTL = 600  # วินาที: ราคาย้อนหลังรายวัน ไม่ต้องดึงใหม่ทุกครั้งที่กด Refresh
-
-
-def _risk_history_metrics(gu, user, pf) -> dict:
-    """Volatility / Max Drawdown จาก gu._portfolio_risk_metrics (ตัวเลขเดียวกับ Streamlit)"""
-    now = _time.time()
-    hit = _RISK_HIST_CACHE.get(user)
-    if hit and now - hit[0] < _RISK_HIST_TTL:
-        return hit[1]
-
-    rows = []
-    for h in pf.get("holdings") or []:
-        mv = h.get("market_value")
-        if mv is None:
-            mv = _num(h.get("qty")) * _num(h.get("price"))
-        rows.append({**h, "market_value": mv})
-
-    snap = {
-        "total_value_thb": _num(pf.get("total_value_thb")),
-        "cash_thb": _num(pf.get("cash_thb")),
-        "rows": rows,
-    }
-
-    try:
-        import pandas as pd
-        m = gu._portfolio_risk_metrics(snap, pd.Timestamp.now().normalize())
-    except Exception:
-        import traceback
-        traceback.print_exc()
-        return {"vol": None, "dd": None}
-
-    ok = bool(m.get("history_available")) and int(m.get("history_days") or 0) > 0
-    out = {
-        "vol": round(_num(m.get("volatility_pct")), 2) if ok else None,
-        "dd": round(abs(_num(m.get("max_drawdown_pct"))), 2) if ok else None,
-    }
-    if ok:
-        _RISK_HIST_CACHE[user] = (now, out)
-    return out
-
-@app.get("/api/risk", dependencies=[Depends(require_api_key)])
-def risk(user: str = Depends(require_user)):
-    with ORDER_LOCK:
-        try:
-            gu = load_gu()
-            actor = _actor(user)
-            _sync_gu_actor(gu, actor)
-            sim = _load_existing_sim(gu)
-            pf = _portfolio_response(gu, sim)
-        except Exception as e:
-            raise _internal_server_error("โหลดข้อมูลความเสี่ยงไม่สำเร็จ", e)
-
-    equity = _num(pf.get("total_value_thb"))
-    cash = _num(pf.get("cash_thb"))
-
-    def pct(v):
-        return round(v / equity * 100, 2) if equity else 0.0
-
-    holdings = []
-    for h in pf.get("holdings") or []:
-        value = _num(h.get("qty")) * _num(h.get("price"))
-        holdings.append({"asset": str(h.get("asset") or ""), "value_thb": round(value, 2), "pct": pct(value)})
-    holdings.sort(key=lambda x: x["value_thb"], reverse=True)
-
-    allocation = [{"asset": "THB", "name": "Thai Baht", "value_thb": round(cash, 2), "pct": pct(cash)}] + holdings
-
-    btc = next((h["pct"] for h in holdings if h["asset"].upper() == "BTC"), 0.0)
-    hist = _risk_history_metrics(gu, user, pf)
-    values = {
-        "volatility": hist["vol"],
-        "max_drawdown": hist["dd"],
-        "concentration": max((h["pct"] for h in holdings), default=0.0),
-        "btc_exposure": btc,
-        "cash": pct(cash),
-    }
-
-    metrics = []
-    for key, v in values.items():
-        watch, high, below = RISK_THRESHOLDS[key]
-        metrics.append({
-            "key": key,
-            "value_pct": v,
-            "watch": watch,
-            "high": high,
-            "below": below,
-            "status": _risk_status(v, watch, high, below),
-        })
-
-    return {
-        "status": "ok",
-        "metrics": metrics,
-        "active": sum(1 for m in metrics if m["status"] in ("watch", "high")),
-        "high_count": sum(1 for m in metrics if m["status"] == "high"),
-        "watch_count": sum(1 for m in metrics if m["status"] == "watch"),
-        "allocation": allocation,
-    }
 
 
 # =========================================================
@@ -1578,15 +1192,11 @@ def _display_order_timestamp(value):
 # =========================================================
 
 @app.get("/api/orders", dependencies=[Depends(require_api_key)])
-def order_history(
-    limit: int = 100,
-    asset: str = "",
-    user: str = Depends(require_user),
-):
+def order_history(limit: int = 100, asset: str = ""):
     with ORDER_LOCK:
         try:
             gu = load_gu()
-            actor = _actor(user)
+            actor = _actor()
             _sync_gu_actor(gu, actor)
             sim = _load_existing_sim(gu)
 
@@ -1611,11 +1221,11 @@ def order_history(
                 if asset_filter and row_asset != asset_filter:
                     continue
 
-                side = _normalize_side(
+                side = str(
                     order.get("ฝั่ง")
                     or order.get("side")
                     or ""
-                )
+                ).strip().upper()
 
                 status = str(
                     order.get("สถานะ")
@@ -1630,7 +1240,14 @@ def order_history(
                     or f"ORDER-{idx + 1:06d}"
                 )
 
-                timestamp = _display_order_timestamp(_order_raw_time(order))
+                timestamp = (
+                    order.get("เวลา")
+                    or order.get("timestamp")
+                    or order.get("time")
+                    or order.get("วันที่")
+                    or ""
+                )
+                timestamp = _display_order_timestamp(timestamp)
 
                 amount = _safe_float(
                     order.get("มูลค่า (บาท)")
@@ -1732,177 +1349,6 @@ def order_history(
                 e,
             )
 
-# =========================================================
-# AUTO DCA
-# =========================================================
-
-DCA_LOOP_SECONDS = 60
-DCA_FREQS_API = ("รายวัน", "รายสัปดาห์", "รายเดือน")
-
-
-class DcaCreateRequest(BaseModel):
-    asset: str
-    amount_thb: float
-    freq: str
-    hour: int = 9
-    minute: int = 0
-
-
-def _dca_public(plan: dict) -> dict:
-    keys = (
-        "id", "asset", "amount_thb", "freq", "hour", "minute",
-        "next_run_at", "last_status", "last_order_id",
-        "last_price_thb", "last_qty",
-    )
-    return {k: plan.get(k) for k in keys}
-
-
-def _dca_open_session(user: str):
-    """โหลด gu + ตั้ง actor/role ให้เหมือน create_order (เรียกใน ORDER_LOCK เท่านั้น)"""
-    gu = load_gu()
-    actor = _actor(user)
-    _sync_gu_actor(gu, actor)
-    role = _set_api_role(gu, actor)
-    return gu, actor, role
-
-
-@app.post("/api/dca", dependencies=[Depends(require_api_key)])
-def create_dca(req: DcaCreateRequest, user: str = Depends(require_user)):
-    with ORDER_LOCK:
-        try:
-            gu, actor, role = _dca_open_session(user)
-
-            asset = req.asset.upper().strip()
-            freq = req.freq.strip()
-            amount_thb = _safe_float(req.amount_thb, -1.0)
-
-            if asset not in gu.SUPPORTED_ASSETS:
-                raise HTTPException(status_code=400, detail=f"ไม่รองรับเหรียญ {asset}")
-            if freq not in DCA_FREQS_API:
-                raise HTTPException(status_code=400, detail="ความถี่ไม่ถูกต้อง")
-            if not (0 <= int(req.hour) <= 23 and 0 <= int(req.minute) <= 59):
-                raise HTTPException(status_code=400, detail="เวลาไม่ถูกต้อง")
-            min_trade = float(getattr(gu, "MIN_TRADE_THB", 50))
-            if not math.isfinite(amount_thb) or amount_thb < min_trade:
-                raise HTTPException(status_code=400, detail=f"ยอดขั้นต่ำคือ {min_trade:g} บาท")
-            if not gu.can_trade():
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"บัญชี {actor} ไม่มีสิทธิ์ Trader (role={role})",
-                )
-
-            sim = _load_existing_sim(gu)
-            plan = gu._dca_create_plan(
-                sim, asset, amount_thb, freq, int(req.hour), int(req.minute)
-            )
-            gu.save_sim_state(sim)
-            return {"status": "ok", "plan": _dca_public(plan)}
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"สร้างแผน DCA ไม่สำเร็จ: {e}")
-
-
-@app.get("/api/dca", dependencies=[Depends(require_api_key)])
-def list_dca(user: str = Depends(require_user)):
-    with ORDER_LOCK:
-        try:
-            gu, actor, role = _dca_open_session(user)
-            sim = _load_existing_sim(gu)
-            plans = [
-                _dca_public(p)
-                for p in sim.get("dca_plans", [])
-                if isinstance(p, dict) and p.get("enabled")
-            ]
-            return {"status": "ok", "plans": plans}
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"โหลดแผน DCA ไม่สำเร็จ: {e}")
-
-
-@app.delete("/api/dca/{plan_id}", dependencies=[Depends(require_api_key)])
-def cancel_dca(plan_id: str, user: str = Depends(require_user)):
-    with ORDER_LOCK:
-        try:
-            gu, actor, role = _dca_open_session(user)
-            if not gu.can_trade():
-                raise HTTPException(status_code=403, detail="ไม่มีสิทธิ์ Trader")
-            sim = _load_existing_sim(gu)
-            if not gu._dca_cancel_plan(sim, plan_id):
-                raise HTTPException(status_code=404, detail="ไม่พบแผนนี้")
-            gu.save_sim_state(sim)
-            return {"status": "ok"}
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"ยกเลิกแผน DCA ไม่สำเร็จ: {e}")
-
-
-# ---------- background runner ----------
-
-def _dca_list_actors() -> list:
-    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    key = (
-        os.environ.get("SUPABASE_SERVICE_KEY")
-        or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-        or os.environ.get("SUPABASE_KEY")
-        or ""
-    )
-    if not url or not key:
-        return []
-    r = requests.get(
-        f"{url}/rest/v1/sim_state?select=actor",
-        headers={"apikey": key, "Authorization": f"Bearer {key}"},
-        timeout=10,
-    )
-    r.raise_for_status()
-    return [row["actor"] for row in r.json() if row.get("actor")]
-
-
-def _dca_tick():
-    with ORDER_LOCK:
-        gu = load_gu()
-        for actor in _dca_list_actors():
-            try:
-                _sync_gu_actor(gu, actor)
-                _set_api_role(gu, actor)
-                if not gu.can_trade():
-                    continue
-                sim = _load_existing_sim(gu)
-                now = gu._dca_now()
-                due = []
-                for p in sim.get("dca_plans", []):
-                    if not isinstance(p, dict) or not p.get("enabled"):
-                        continue
-                    nxt = gu._dca_parse_ts(p.get("next_run_at"))
-                    if nxt is None or now >= nxt:
-                        due.append(p)
-                if not due:
-                    continue
-                asset = str(due[0].get("asset", "BTC")).upper()
-                cfg = _api_cfg(gu, asset, actor)
-                data = _load_market_frame(gu, asset)
-                n = gu._dca_execute_due_plans(sim, cfg, data)  # บันทึกเองถ้ามีรายการสำเร็จ
-                if n:
-                    print(f"[DCA] {actor}: executed {n} plan(s)")
-            except Exception as e:
-                print(f"[DCA] {actor} error: {e}")
-
-
-async def _dca_loop():
-    while True:
-        await asyncio.sleep(DCA_LOOP_SECONDS)
-        try:
-            await asyncio.to_thread(_dca_tick)
-        except Exception as e:
-            print(f"[DCA] loop error: {e}")
-
-
-@app.on_event("startup")
-async def _start_dca_loop():
-    asyncio.create_task(_dca_loop())
-
 
 # =========================================================
 # CREATE ORDER
@@ -1912,13 +1358,12 @@ async def _start_dca_loop():
 def create_order(
     order: OrderRequest,
     idempotency_key: str = Header(default="", alias="Idempotency-Key"),
-    user: str = Depends(require_user),
 ):
     with ORDER_LOCK:
         try:
             gu = load_gu()
 
-            actor = _actor(user)
+            actor = _actor()
             _sync_gu_actor(gu, actor)
 
             idempotency_key = str(idempotency_key or "").strip()
@@ -2287,3 +1732,393 @@ def create_order(
                 "เกิดข้อผิดพลาดภายใน API",
                 e,
             )
+
+
+# =========================================================
+# AUTO DCA
+# =========================================================
+# แผน DCA เก็บใน sim["dca_plans"] (Supabase sim_state) เหมือนที่ gu.py ใช้
+# - /api/dca            ดู / สร้าง / ยกเลิก แผน
+# - ตัวรันเบื้องหลัง    เช็กแผนที่ถึงเวลาทุก DCA_RUN_EVERY_SEC วินาที แล้วซื้อเข้า
+#                       Customer Wallet จำลอง (ไม่ส่งคำสั่งจริงไป Exchange)
+#
+# ข้อควรระวัง:
+# - ต้องรัน uvicorn แบบ 1 worker (ORDER_LOCK ล็อกได้เฉพาะใน process เดียว)
+# - ถ้า Streamlit ยังเปิดตัวรัน DCA ของ gu.py อยู่ด้วย จะซื้อซ้ำกันได้
+#   ให้ปิดตัวรันฝั่ง Streamlit (ดูคำแนะนำท้ายไฟล์ patch)
+# =========================================================
+
+import copy
+import logging
+import threading
+
+_dca_log = logging.getLogger("xspring.dca")
+
+DCA_ASSETS_ALLOWED = ("BTC", "ETH", "SOL", "DOGE", "ADA", "XRP", "HBAR", "LINK", "XLM")
+DCA_MAX_ACTIVE_PLANS = 20
+DCA_RUN_EVERY_SEC = 30
+DCA_SCHEDULER_ENABLED = os.environ.get("DCA_SCHEDULER_ENABLED", "1").strip().lower() not in (
+    "0", "false", "no", "off",
+)
+
+_DCA_STATE_LOCK = RLock()
+_DCA_STATE = {
+    "scheduler_enabled": DCA_SCHEDULER_ENABLED,
+    "thread_alive": False,
+    "last_tick_at": None,
+    "last_executed": 0,
+    "total_executed": 0,
+    "last_error": "",
+}
+_DCA_THREAD = None
+
+
+class DcaPlanRequest(BaseModel):
+    asset: str = Field(..., min_length=1, max_length=20)
+    amount_thb: float = Field(..., gt=0, le=1_000_000_000)
+    freq: str = Field(..., min_length=1, max_length=20)
+    hour: int = Field(..., ge=0, le=23)
+    minute: int = Field(..., ge=0, le=59)
+
+
+_DCA_PUBLIC_KEYS = (
+    "id", "asset", "amount_thb", "freq", "hour", "minute",
+    "created_at", "next_run_at", "last_attempt_at",
+    "last_status", "last_order_id", "last_price_thb", "last_qty",
+)
+
+
+def _dca_public_plan(plan: dict) -> dict:
+    return {key: plan.get(key) for key in _DCA_PUBLIC_KEYS}
+
+
+def _dca_prepare(gu):
+    """Resolve the existing actor/role exactly like the other endpoints."""
+    actor = _actor()
+    _sync_gu_actor(gu, actor)
+    role = _set_api_role(gu, actor)
+    return actor, role
+
+
+def _dca_save_checked(gu, sim) -> None:
+    """Save sim_state and fail loudly if the persistent save did not work."""
+    gu.st.session_state.pop("sim_state_save_error", None)
+    gu.save_sim_state(sim)
+    save_error = getattr(gu.st, "session_state", {}).get("sim_state_save_error")
+    if save_error:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "บันทึกแผน Auto DCA ลงฐานข้อมูลไม่สำเร็จ",
+                "retryable": True,
+            },
+        )
+
+
+def _dca_find_plan(sim: dict, plan_id: str):
+    for plan in sim.get("dca_plans", []) or []:
+        if isinstance(plan, dict) and str(plan.get("id")) == str(plan_id):
+            return plan
+    return None
+
+
+def _dca_stamp_order(sim: dict, rec: dict, plan: dict, now) -> None:
+    """Write the REAL execution time + Auto DCA source onto the order records."""
+    execution_iso = now.isoformat()
+    day = now.strftime("%Y-%m-%d")
+    plan_id = str(plan.get("id", ""))
+
+    def stamp(order):
+        order["เวลา"] = execution_iso
+        order["timestamp"] = execution_iso
+        order["วันที่"] = day
+        order["Source"] = "Auto DCA"
+        order["Order Source"] = "Auto DCA"
+        order["DCA Plan ID"] = plan_id
+
+    stamp(rec)
+
+    ledger = sim.get("orders")
+    if isinstance(ledger, list) and ledger:
+        rec_id = str(rec.get("Order ID") or rec.get("order_id") or rec.get("id") or "")
+        target = None
+        if rec_id:
+            for item in reversed(ledger):
+                if isinstance(item, dict) and str(
+                    item.get("Order ID") or item.get("order_id") or item.get("id") or ""
+                ) == rec_id:
+                    target = item
+                    break
+        if target is None and isinstance(ledger[-1], dict):
+            target = ledger[-1]
+        if target is not None and target is not rec:
+            stamp(target)
+
+
+def _dca_restore(sim: dict, snapshot: dict) -> None:
+    sim.clear()
+    sim.update(snapshot)
+
+
+def _dca_run_due_plans() -> int:
+    """Execute every due, enabled plan once. Returns the number of filled orders."""
+    with ORDER_LOCK:
+        gu = load_gu()
+        actor, _role = _dca_prepare(gu)
+
+        if not gu.can_trade():
+            return 0
+
+        # อ่านของเดิมเท่านั้น ห้ามสร้างพอร์ตใหม่
+        sim = gu.load_sim_state()
+        if not isinstance(sim, dict):
+            raise RuntimeError("โหลด sim_state ไม่สำเร็จ ข้าม DCA รอบนี้")
+
+        plans = sim.get("dca_plans")
+        if not isinstance(plans, list) or not plans:
+            return 0
+
+        now = gu._dca_now()
+        min_trade = float(getattr(gu, "MIN_TRADE_THB", 50))
+        due_ids = []
+
+        for plan in plans:
+            if not isinstance(plan, dict) or not plan.get("enabled", False):
+                continue
+            next_run = gu._dca_parse_ts(plan.get("next_run_at"))
+            if next_run is None:
+                next_run = gu._dca_next_run(plan, now - pd.Timedelta(seconds=1))
+                plan["next_run_at"] = gu._dca_iso(next_run)
+            if now >= next_run:
+                due_ids.append(str(plan.get("id")))
+
+        if not due_ids:
+            return 0
+
+        executed = 0
+
+        for plan_id in due_ids:
+            plan = _dca_find_plan(sim, plan_id)
+            if plan is None:
+                continue
+
+            def finish(status: str, plan=plan) -> None:
+                plan["last_status"] = status
+                plan["last_attempt_at"] = gu._dca_iso(now)
+                plan["next_run_at"] = gu._dca_iso(gu._dca_next_run(plan, now))
+
+            asset = str(plan.get("asset", "")).upper().strip()
+            amount = _safe_float(plan.get("amount_thb"), 0.0)
+
+            if not asset or asset not in gu.SUPPORTED_ASSETS or amount < min_trade:
+                finish(f"INVALID: เหรียญหรือยอดไม่ถูกต้อง (ขั้นต่ำ {min_trade:g} THB)")
+                continue
+
+            cash = _safe_float(sim.get("customer_thb"), 0.0)
+            if amount > cash + 1e-9:
+                finish(f"SKIPPED — เงินสดไม่พอ ({cash:,.2f} THB)")
+                continue
+
+            live_row = gu._dca_live_market_row(asset)
+            if live_row is None:
+                finish("SKIPPED — ดึงราคาตลาดไม่ได้")
+                continue
+
+            try:
+                cfg = _api_cfg(gu, asset, actor)
+            except Exception as exc:
+                _dca_log.warning("DCA cfg failed %s: %s", asset, exc)
+                finish("SKIPPED — โหลด config ไม่ได้")
+                continue
+
+            built = gu._dca_build_context(asset, cfg, live_row)
+            if built is None:
+                finish("SKIPPED — สร้าง execution context ไม่ได้")
+                continue
+            ctx, target = built
+
+            snapshot = copy.deepcopy(sim)
+            saved_asset = sim.get("asset")
+            saved_target = sim.get("target_thb")
+            try:
+                sim["asset"] = asset
+                sim["target_thb"] = float(target)
+                gu.ensure_portfolio_ledger(sim)
+                steps, rec = gu.execute_order(
+                    sim, "buy", amount, now, live_row, ctx, affect_wallet=True,
+                )
+            except Exception as exc:
+                _dca_restore(sim, snapshot)
+                plan = _dca_find_plan(sim, plan_id)
+                _dca_log.exception("DCA execute failed %s", plan_id)
+                finish(f"FAILED — {type(exc).__name__}", plan)
+                continue
+            finally:
+                if saved_asset is not None:
+                    sim["asset"] = saved_asset
+                else:
+                    sim.pop("asset", None)
+                if saved_target is not None:
+                    sim["target_thb"] = saved_target
+                else:
+                    sim.pop("target_thb", None)
+
+            result = str(rec.get("ผลด่าน", "")) if isinstance(rec, dict) else ""
+            if rec is None or result.lower().startswith("reject"):
+                # คืนพอร์ตกลับก่อนออเดอร์ แล้วข้ามรอบนี้ (ไม่ซื้อซ้ำทุก 30 วินาที)
+                _dca_restore(sim, snapshot)
+                plan = _dca_find_plan(sim, plan_id)
+                finish(
+                    "REJECTED — " + result[:80] if rec is not None
+                    else "FAILED — คำสั่งไม่ถูก execute",
+                    plan,
+                )
+                continue
+
+            _dca_stamp_order(sim, rec, plan, now)
+            plan["last_attempt_at"] = gu._dca_iso(now)
+            plan["next_run_at"] = gu._dca_iso(gu._dca_next_run(plan, now))
+            plan["last_order_id"] = str(rec.get("Order ID", ""))
+            plan["last_status"] = "EXECUTED"
+            plan["last_price_thb"] = _safe_float(rec.get("ราคาที่ลูกค้าได้"), 0.0)
+            plan["last_qty"] = _safe_float(rec.get("เหรียญที่ส่งมอบ"), 0.0)
+            executed += 1
+
+        # บันทึกครั้งเดียวหลังจบรอบ ถ้าบันทึกไม่ได้ ถือว่าไม่มีอะไรเกิดขึ้น
+        # รอบหน้าจะโหลดจากฐานข้อมูลใหม่ แผนยังถึงเวลาอยู่ และไม่ซื้อซ้ำ
+        _dca_save_checked(gu, sim)
+        return executed
+
+
+def _dca_scheduler_loop() -> None:
+    while True:
+        executed = 0
+        error = ""
+        try:
+            executed = _dca_run_due_plans()
+        except HTTPException as exc:
+            error = f"HTTP {exc.status_code}: {exc.detail}"
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            _dca_log.exception("DCA scheduler tick failed")
+
+        with _DCA_STATE_LOCK:
+            _DCA_STATE["last_tick_at"] = pd.Timestamp.now(tz=BANGKOK_TZ).isoformat()
+            _DCA_STATE["last_executed"] = executed
+            _DCA_STATE["total_executed"] += executed
+            _DCA_STATE["last_error"] = error[:500]
+
+        time.sleep(DCA_RUN_EVERY_SEC)
+
+
+@app.on_event("startup")
+def _start_dca_scheduler() -> None:
+    global _DCA_THREAD
+    if not DCA_SCHEDULER_ENABLED:
+        _dca_log.info("DCA scheduler disabled (DCA_SCHEDULER_ENABLED=0)")
+        return
+    with _DCA_STATE_LOCK:
+        if _DCA_THREAD is not None and _DCA_THREAD.is_alive():
+            return
+        _DCA_THREAD = threading.Thread(
+            target=_dca_scheduler_loop, name="dca-scheduler", daemon=True,
+        )
+        _DCA_THREAD.start()
+        _DCA_STATE["thread_alive"] = True
+
+
+@app.get("/api/dca/status", dependencies=[Depends(require_api_key)])
+def dca_status():
+    with _DCA_STATE_LOCK:
+        state = dict(_DCA_STATE)
+        state["thread_alive"] = bool(_DCA_THREAD is not None and _DCA_THREAD.is_alive())
+    state["run_every_sec"] = DCA_RUN_EVERY_SEC
+    return {"status": "ok", **state}
+
+
+@app.get("/api/dca", dependencies=[Depends(require_api_key)])
+def dca_list():
+    with ORDER_LOCK:
+        try:
+            gu = load_gu()
+            actor, _role = _dca_prepare(gu)
+            sim = _load_existing_sim(gu)
+            plans = [
+                _dca_public_plan(p)
+                for p in (sim.get("dca_plans") or [])
+                if isinstance(p, dict) and p.get("enabled")
+            ]
+            return {"status": "ok", "actor": actor, "plans": plans}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise _internal_server_error("เกิดข้อผิดพลาดภายใน API", e)
+
+
+@app.post("/api/dca", dependencies=[Depends(require_api_key)])
+def dca_create(plan_req: DcaPlanRequest):
+    with ORDER_LOCK:
+        try:
+            gu = load_gu()
+            actor, role = _dca_prepare(gu)
+
+            asset = plan_req.asset.upper().strip()
+            freq = plan_req.freq.strip()
+            amount = _safe_float(plan_req.amount_thb, -1.0)
+            min_trade = float(getattr(gu, "MIN_TRADE_THB", 50))
+
+            if asset not in DCA_ASSETS_ALLOWED or asset not in gu.SUPPORTED_ASSETS:
+                raise HTTPException(status_code=400, detail=f"ไม่รองรับ Auto DCA สำหรับ {asset}")
+            if freq not in gu.DCA_FREQS:
+                raise HTTPException(status_code=400, detail="ความถี่ไม่ถูกต้อง")
+            if not math.isfinite(amount) or amount < min_trade:
+                raise HTTPException(status_code=400, detail=f"ยอดขั้นต่ำคือ {min_trade:g} บาท")
+            if not gu.can_trade():
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"บัญชี {actor} ไม่มีสิทธิ์ Trader (role={role})",
+                )
+
+            sim = _load_existing_sim(gu)
+            active = [
+                p for p in (sim.get("dca_plans") or [])
+                if isinstance(p, dict) and p.get("enabled")
+            ]
+            if len(active) >= DCA_MAX_ACTIVE_PLANS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"มีแผน Auto DCA ครบ {DCA_MAX_ACTIVE_PLANS} แผนแล้ว กรุณายกเลิกบางแผนก่อน",
+                )
+
+            plan = gu._dca_create_plan(sim, asset, amount, freq, plan_req.hour, plan_req.minute)
+            _dca_save_checked(gu, sim)
+            return {"status": "ok", "plan": _dca_public_plan(plan)}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise _internal_server_error("เกิดข้อผิดพลาดภายใน API", e)
+
+
+@app.delete("/api/dca/{plan_id}", dependencies=[Depends(require_api_key)])
+def dca_cancel(plan_id: str):
+    with ORDER_LOCK:
+        try:
+            gu = load_gu()
+            actor, role = _dca_prepare(gu)
+
+            if not gu.can_trade():
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"บัญชี {actor} ไม่มีสิทธิ์ Trader (role={role})",
+                )
+
+            sim = _load_existing_sim(gu)
+            if not gu._dca_cancel_plan(sim, plan_id):
+                raise HTTPException(status_code=404, detail="ไม่พบแผนนี้ หรือถูกยกเลิกไปแล้ว")
+
+            _dca_save_checked(gu, sim)
+            return {"status": "ok", "id": plan_id}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise _internal_server_error("เกิดข้อผิดพลาดภายใน API", e)
