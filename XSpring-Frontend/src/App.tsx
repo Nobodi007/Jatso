@@ -2308,66 +2308,142 @@ function TradePage({
         </div>
       </div>
 
-      {/* ORDER BOOK */}
-      <div className="rounded-xl border bg-card p-5">
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <h3 className="font-semibold">Order Book</h3>
-            <p className="text-xs text-muted-foreground">{asset}/THB</p>
-          </div>
+      {/* MarketOverviewCard */}
+      type MarketTab = "fav" | "volume" | "up" | "down"
 
-          <span className="rounded-full bg-muted px-2 py-1 text-[10px]">Live</span>
+const MARKET_TABS: { key: MarketTab; label: string }[] = [
+  { key: "fav", label: "⭐ รายการโปรด" },
+  { key: "volume", label: "ปริมาณ" },
+  { key: "up", label: "▲ เพิ่ม" },
+  { key: "down", label: "▼ ลด" },
+]
+
+const FAV_STORAGE_KEY = "xspring_favorite_assets"
+
+function MarketOverviewCard() {
+  const [tickers, setTickers] = useState<MarketTicker[]>([])
+  const [loading, setLoading] = useState(true)
+  const [tab, setTab] = useState<MarketTab>("volume")
+  const [favs, setFavs] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(FAV_STORAGE_KEY)
+      const parsed = raw ? JSON.parse(raw) : []
+      return Array.isArray(parsed) ? parsed.map(String) : []
+    } catch {
+      return []
+    }
+  })
+
+  useEffect(() => {
+    let alive = true
+    const load = async () => {
+      try {
+        const rows = await fetchMarketTickers()
+        if (alive) setTickers(rows)
+      } catch {
+        // ถ้าโหลดไม่ได้ จะแสดงว่าไม่มีข้อมูล
+      } finally {
+        if (alive) setLoading(false)
+      }
+    }
+    load()
+    const timer = setInterval(load, 15000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [])
+
+  const toggleFav = (asset: string) => {
+    setFavs((prev) => {
+      const next = prev.includes(asset) ? prev.filter((a) => a !== asset) : [...prev, asset]
+      try {
+        localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(next))
+      } catch {
+        // เก็บไม่ได้ก็ใช้ได้ในหน้านี้ต่อ
+      }
+      return next
+    })
+  }
+
+  const rows = (() => {
+    const base = [...tickers]
+    if (tab === "fav") return base.filter((r) => favs.includes(r.asset))
+    if (tab === "up") return base.filter((r) => r.change > 0).sort((a, b) => b.change - a.change)
+    if (tab === "down") return base.filter((r) => r.change < 0).sort((a, b) => a.change - b.change)
+    return base.sort((a, b) => b.volume * b.price - a.volume * a.price)
+  })()
+
+  const emptyText =
+    tab === "fav" ? "ยังไม่มีรายการโปรด กดดาวที่เหรียญเพื่อเพิ่ม" : "ไม่มีข้อมูล"
+
+  return (
+    <div className="rounded-xl border bg-card p-5">
+      <div className="mb-4 flex items-center justify-between">
+        <div>
+          <h3 className="font-semibold">ภาพรวมตลาด</h3>
+          <p className="text-xs text-muted-foreground">THB · อัปเดตทุก 15 วินาที</p>
         </div>
-
-        <div className="grid grid-cols-2 gap-6">
-
-          {/* ASK */}
-          <div>
-            <div className="mb-2 grid grid-cols-3 text-[10px] text-muted-foreground">
-              <span>Price</span>
-              <span className="text-right">Amount</span>
-              <span className="text-right">Total</span>
-            </div>
-
-            {[
-              [market.ask + 1000, 0.42],
-              [market.ask + 500, 0.31],
-              [market.ask, 0.18],
-            ].map(([price, amount], index) => (
-              <div key={index} className="grid grid-cols-3 py-1.5 text-xs">
-                <span className="text-red-500">฿{Number(price).toLocaleString()}</span>
-                <span className="text-right">{amount}</span>
-                <span className="text-right text-muted-foreground">
-                  {(Number(price) * Number(amount)).toLocaleString()}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          {/* BID */}
-          <div>
-            <div className="mb-2 grid grid-cols-3 text-[10px] text-muted-foreground">
-              <span>Price</span>
-              <span className="text-right">Amount</span>
-              <span className="text-right">Total</span>
-            </div>
-
-            {[
-              [market.bid, 0.22],
-              [market.bid - 500, 0.37],
-              [market.bid - 1000, 0.54],
-            ].map(([price, amount], index) => (
-              <div key={index} className="grid grid-cols-3 py-1.5 text-xs">
-                <span className="text-emerald-500">฿{Number(price).toLocaleString()}</span>
-                <span className="text-right">{amount}</span>
-                <span className="text-right text-muted-foreground">
-                  {(Number(price) * Number(amount)).toLocaleString()}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
+        <span className="rounded-full bg-muted px-2 py-1 text-[10px]">Live</span>
       </div>
+
+      <div className="mb-3 flex flex-wrap gap-2">
+        {MARKET_TABS.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`rounded-full px-3 py-1 text-xs ${
+              tab === t.key
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground hover:bg-accent"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <p className="py-6 text-center text-sm text-muted-foreground">Loading...</p>
+      ) : rows.length === 0 ? (
+        <p className="py-6 text-center text-sm text-muted-foreground">{emptyText}</p>
+      ) : (
+        <div className="divide-y">
+          {rows.map((row) => {
+            const isFav = favs.includes(row.asset)
+            return (
+              <div
+                key={row.asset}
+                className="grid grid-cols-[28px_1fr_auto_auto] items-center gap-3 py-2.5"
+              >
+                <button
+                  onClick={() => toggleFav(row.asset)}
+                  aria-label={isFav ? "เอาออกจากรายการโปรด" : "เพิ่มในรายการโปรด"}
+                  className={isFav ? "text-yellow-400" : "text-muted-foreground hover:text-yellow-400"}
+                >
+                  {isFav ? "★" : "☆"}
+                </button>
+                <div className="flex min-w-0 items-center gap-2">
+                  <CoinIcon asset={row.asset} size={24} />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">{row.asset}</p>
+                    <p className="truncate text-xs text-muted-foreground">{row.name}</p>
+                  </div>
+                </div>
+                <span className="text-right text-sm tabular-nums">{formatTHB(row.price)}</span>
+                <span
+                  className={`w-20 text-right text-sm tabular-nums ${
+                    row.change >= 0 ? "text-emerald-500" : "text-red-500"
+                  }`}
+                >
+                  {row.change >= 0 ? "+" : ""}
+                  {row.change.toFixed(2)}%
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
