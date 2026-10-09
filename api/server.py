@@ -1414,7 +1414,21 @@ def _num(x, default=0.0) -> float:
     except (TypeError, ValueError):
         return default
 
+RISK_THRESHOLDS = {
+    "volatility": (30, 60, False),
+    "max_drawdown": (10, 20, False),
+    "concentration": (50, 70, False),
+    "btc_exposure": (50, 70, False),
+    "cash": (20, 10, True),
+}
 
+
+def _risk_status(value, watch, high, below=False) -> str:
+    if value is None:
+        return "na"
+    if below:
+        return "high" if value < high else "watch" if value < watch else "ok"
+    return "high" if value > high else "watch" if value > watch else "ok"
 @app.get("/api/risk", dependencies=[Depends(require_api_key)])
 def risk(user: str = Depends(require_user)):
     with ORDER_LOCK:
@@ -1430,53 +1444,47 @@ def risk(user: str = Depends(require_user)):
     equity = _num(pf.get("total_value_thb"))
     cash = _num(pf.get("cash_thb"))
 
-    positions = []
+    def pct(v):
+        return round(v / equity * 100, 2) if equity else 0.0
+
+    holdings = []
     for h in pf.get("holdings") or []:
-        qty = _num(h.get("qty"))
-        price = _num(h.get("price"))
-        avg_cost = _num(h.get("avg_cost"))
-        value = qty * price
-        cost = qty * avg_cost
-        pnl = _num(h.get("unrealized_pnl"))
-        positions.append({
-            "asset": h.get("asset"),
-            "value_thb": round(value, 2),
-            "weight_pct": round(value / equity * 100, 2) if equity else 0,
-            "pnl_thb": round(pnl, 2),
-            "pnl_pct": round(pnl / cost * 100, 2) if cost else 0,
+        value = _num(h.get("qty")) * _num(h.get("price"))
+        holdings.append({"asset": str(h.get("asset") or ""), "value_thb": round(value, 2), "pct": pct(value)})
+    holdings.sort(key=lambda x: x["value_thb"], reverse=True)
+
+    allocation = [{"asset": "THB", "name": "Thai Baht", "value_thb": round(cash, 2), "pct": pct(cash)}] + holdings
+
+    btc = next((h["pct"] for h in holdings if h["asset"].upper() == "BTC"), 0.0)
+    values = {
+        "volatility": None,
+        "max_drawdown": None,
+        "concentration": max((h["pct"] for h in holdings), default=0.0),
+        "btc_exposure": btc,
+        "cash": pct(cash),
+    }
+
+    metrics = []
+    for key, v in values.items():
+        watch, high, below = RISK_THRESHOLDS[key]
+        metrics.append({
+            "key": key,
+            "value_pct": v,
+            "watch": watch,
+            "high": high,
+            "below": below,
+            "status": _risk_status(v, watch, high, below),
         })
-    positions.sort(key=lambda p: p["weight_pct"], reverse=True)
-
-    crypto_value = sum(p["value_thb"] for p in positions)
-    top_weight = positions[0]["weight_pct"] if positions else 0
-    hhi = round(sum((p["weight_pct"] / 100) ** 2 for p in positions), 3)
-    cash_pct = round(cash / equity * 100, 2) if equity else 0
-    worst = min(positions, key=lambda p: p["pnl_pct"]) if positions else None
-
-    alerts = []
-    if top_weight > 50:
-        alerts.append({"level": "high", "text": f"{positions[0]['asset']} คิดเป็น {top_weight:.1f}% ของพอร์ต กระจุกตัวสูง"})
-    elif top_weight > 30:
-        alerts.append({"level": "medium", "text": f"{positions[0]['asset']} คิดเป็น {top_weight:.1f}% ของพอร์ต"})
-    if worst and worst["pnl_pct"] < -10:
-        alerts.append({"level": "high", "text": f"{worst['asset']} ขาดทุน {worst['pnl_pct']:.1f}%"})
-    if equity and cash_pct < 5:
-        alerts.append({"level": "medium", "text": f"เงินสดเหลือ {cash_pct:.1f}% สภาพคล่องต่ำ"})
 
     return {
         "status": "ok",
-        "equity_thb": round(equity, 2),
-        "cash_thb": round(cash, 2),
-        "cash_pct": cash_pct,
-        "exposure_thb": round(crypto_value, 2),
-        "exposure_pct": round(crypto_value / equity * 100, 2) if equity else 0,
-        "total_pnl_thb": round(_num(pf.get("total_pnl_thb")), 2),
-        "pnl_pct": round(_num(pf.get("pnl_pct")), 2),
-        "top_weight_pct": top_weight,
-        "concentration_hhi": hhi,
-        "positions": positions,
-        "alerts": alerts,
+        "metrics": metrics,
+        "active": sum(1 for m in metrics if m["status"] in ("watch", "high")),
+        "high_count": sum(1 for m in metrics if m["status"] == "high"),
+        "watch_count": sum(1 for m in metrics if m["status"] == "watch"),
+        "allocation": allocation,
     }
+
 
 # =========================================================
 # ORDER TIMESTAMP NORMALIZATION
