@@ -2308,6 +2308,7 @@ function TradePage({
         </div>
       </div>
 
+          <MarketOverviewCard />
           <DcaCard onRefresh={onRefresh} />
       </div>        
     )
@@ -2530,7 +2531,6 @@ function ReturnBadge({ value }: { value: number | null | undefined }) {
   )
 }
 
-const DCA_QUICK_AMOUNTS = [500, 1000, 5000, 10000]
 function DcaCard({ onRefresh }: { onRefresh: () => void }) {
   const [plans, setPlans] = useState<DcaPlan[]>([])
   const [plansLoading, setPlansLoading] = useState(true)
