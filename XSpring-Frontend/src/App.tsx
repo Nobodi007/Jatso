@@ -2381,7 +2381,7 @@ function MarketOverviewCard() {
     tab === "fav" ? "ยังไม่มีรายการโปรด กดดาวที่เหรียญเพื่อเพิ่ม" : "ไม่มีข้อมูล"
 
   return (
-    <div className="rounded-xl border bg-card p-5">
+    <div className="rounded-xl border bg-card p-4">
       <div className="mb-4 flex items-center justify-between">
         <div>
           <h3 className="font-semibold">ภาพรวมตลาด</h3>
@@ -2390,12 +2390,12 @@ function MarketOverviewCard() {
         <span className="rounded-full bg-muted px-2 py-1 text-[10px]">Live</span>
       </div>
 
-      <div className="mb-3 flex flex-wrap gap-2">
+      <div className="mb-3 flex gap-1.5 overflow-x-auto pb-1">
         {MARKET_TABS.map((t) => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`rounded-full px-3 py-1 text-xs ${
+            className={`shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] ${
               tab === t.key
                 ? "bg-primary text-primary-foreground"
                 : "bg-muted text-muted-foreground hover:bg-accent"
@@ -2417,31 +2417,41 @@ function MarketOverviewCard() {
             return (
               <div
                 key={row.asset}
-                className="grid grid-cols-[28px_1fr_auto_auto] items-center gap-3 py-2.5"
+                className="grid grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-2.5 py-2.5"
               >
                 <button
                   onClick={() => toggleFav(row.asset)}
                   aria-label={isFav ? "เอาออกจากรายการโปรด" : "เพิ่มในรายการโปรด"}
-                  className={isFav ? "text-yellow-400" : "text-muted-foreground hover:text-yellow-400"}
+                  className={`text-base leading-none ${
+                    isFav ? "text-yellow-400" : "text-muted-foreground hover:text-yellow-400"
+                  }`}
                 >
                   {isFav ? "★" : "☆"}
                 </button>
-                <div className="flex min-w-0 items-center gap-2">
-                  <CoinIcon asset={row.asset} size={24} />
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <div className="shrink-0">
+                    <CoinIcon asset={row.asset} size={28} />
+                  </div>
                   <div className="min-w-0">
-                    <p className="text-sm font-medium">{row.asset}</p>
-                    <p className="truncate text-xs text-muted-foreground">{row.name}</p>
+                    <p className="text-sm font-semibold leading-tight">{row.asset}</p>
+                    <p className="truncate text-[11px] leading-tight text-muted-foreground">
+                      {row.name}
+                    </p>
                   </div>
                 </div>
-                <span className="text-right text-sm tabular-nums">{formatTHB(row.price)}</span>
-                <span
-                  className={`w-20 text-right text-sm tabular-nums ${
-                    row.change >= 0 ? "text-emerald-500" : "text-red-500"
-                  }`}
-                >
-                  {row.change >= 0 ? "+" : ""}
-                  {row.change.toFixed(2)}%
-                </span>
+                <div className="text-right">
+                  <p className="whitespace-nowrap text-sm font-medium leading-tight tabular-nums">
+                    {formatTHB(row.price)}
+                  </p>
+                  <p
+                    className={`text-xs font-medium leading-tight tabular-nums ${
+                      row.change >= 0 ? "text-emerald-500" : "text-red-500"
+                    }`}
+                  >
+                    {row.change >= 0 ? "+" : ""}
+                    {row.change.toFixed(2)}%
+                  </p>
+                </div>
               </div>
             )
           })}
@@ -2531,7 +2541,7 @@ function ReturnBadge({ value }: { value: number | null | undefined }) {
   )
 }
 
-function DcaCard({ onRefresh }: { onRefresh: () => void }) {
+function DcaCard(_props: { onRefresh: () => void }) {
   const [plans, setPlans] = useState<DcaPlan[]>([])
   const [plansLoading, setPlansLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -2630,26 +2640,6 @@ function DcaCard({ onRefresh }: { onRefresh: () => void }) {
 
   return (
     <div className="space-y-6">
-      {/* HEADER */}
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-xl font-bold">Auto DCA</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            ซื้อสะสมอัตโนมัติตามเวลาที่คุณกำหนด จนกว่าจะยกเลิก
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            loadPlans()
-            onRefresh()
-          }}
-          className="rounded-lg border px-3 py-1.5 text-xs hover:bg-accent"
-        >
-          Refresh
-        </button>
-      </div>
-
       {/* แถวบน: ภาพรวมตลาด 30% / ฟอร์ม + รายละเอียด 70% */}
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[3fr_7fr]">
         <div className="order-2 lg:order-1">
@@ -2657,6 +2647,13 @@ function DcaCard({ onRefresh }: { onRefresh: () => void }) {
         </div>
 
         <div className="order-1 space-y-4 lg:order-2">
+          {/* HEADER */}
+          <div>
+            <h3 className="text-xl font-bold">Auto DCA</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              ซื้อสะสมอัตโนมัติตามเวลาที่คุณกำหนด จนกว่าจะยกเลิก
+            </p>
+          </div>
 
         {/* FORM */}
         <div className="rounded-xl border bg-card p-5">
