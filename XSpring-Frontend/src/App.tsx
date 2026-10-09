@@ -2310,8 +2310,9 @@ function TradePage({
 
         <div className="grid grid-cols-1 lg:grid-cols-[4fr_6fr] gap-4 items-start">
           <MarketOverviewCard />
-          <DcaCard onRefresh={onRefresh} />
-          </div>
+        </div>
+
+        <DcaCard onRefresh={onRefresh} />
       </div>
     )
   }
@@ -2473,8 +2474,14 @@ type DcaPlan = {
   last_qty?: number | null
 }
 
+type CoinReturn = { y1: number | null; m6: number | null }
+
 const DCA_FREQS = ["รายวัน", "รายสัปดาห์", "รายเดือน"]
-const DCA_ASSETS = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "HBAR", "LINK", "XLM"]
+const DCA_ASSETS = ["BTC", "ETH", "SOL", "DOGE", "ADA", "XRP", "HBAR", "LINK", "XLM"]
+const DCA_COIN_NAMES: Record<string, string> = {
+  BTC: "Bitcoin", ETH: "Ethereum", SOL: "Solana", DOGE: "Dogecoin", ADA: "Cardano",
+  XRP: "XRP", HBAR: "Hedera", LINK: "Chainlink", XLM: "Stellar",
+}
 
 async function dcaErrorText(response: Response) {
   const body: any = await response.json().catch(() => null)
@@ -2484,19 +2491,64 @@ async function dcaErrorText(response: Response) {
   return `HTTP ${response.status}`
 }
 
+// ผลตอบแทนราคาย้อนหลังจากกราฟรายวันของ Bitkub (เปลี่ยนของราคา ไม่ใช่ผลของ DCA)
+async function fetchCoinReturn(asset: string): Promise<CoinReturn> {
+  const now = Math.floor(Date.now() / 1000)
+  const from = now - 380 * 86400
+  const response = await fetch(
+    `https://api.bitkub.com/tradingview/history?symbol=${asset}_THB&resolution=1D&from=${from}&to=${now}`,
+    { headers: { Accept: "application/json" }, cache: "no-store" }
+  )
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  const body = await response.json()
+  if (body?.s !== "ok" || !Array.isArray(body.c) || !Array.isArray(body.t) || body.c.length < 2) {
+    throw new Error("no data")
+  }
+  const closes: number[] = body.c.map(Number)
+  const times: number[] = body.t.map(Number)
+  const last = closes[closes.length - 1]
+
+  const returnSince = (days: number): number | null => {
+    const target = now - days * 86400
+    if (times[0] > target + 5 * 86400) return null // เหรียญเพิ่งเข้าตลาด ข้อมูลไม่ถึง
+    const idx = times.findIndex((t) => t >= target)
+    const base = closes[idx >= 0 ? idx : 0]
+    return base > 0 ? ((last - base) / base) * 100 : null
+  }
+  return { y1: returnSince(365), m6: returnSince(182) }
+}
+
+function ReturnBadge({ value }: { value: number | null | undefined }) {
+  if (value === null || value === undefined) {
+    return <span className="rounded bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">—</span>
+  }
+  const positive = value >= 0
+  return (
+    <span
+      className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
+        positive ? "bg-emerald-500/15 text-emerald-500" : "bg-red-500/15 text-red-500"
+      }`}
+    >
+      {positive ? "+" : ""}{value.toFixed(2)}%
+    </span>
+  )
+}
+
 function DcaCard({ onRefresh }: { onRefresh: () => void }) {
   const [plans, setPlans] = useState<DcaPlan[]>([])
-  const [loading, setLoading] = useState(true)
+  const [plansLoading, setPlansLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState("")
   const [asset, setAsset] = useState("BTC")
   const [amount, setAmount] = useState("")
   const [freq, setFreq] = useState("รายวัน")
-  const [hour, setHour] = useState("9")
-  const [minute, setMinute] = useState("0")
+  const [hour, setHour] = useState(9)
+  const [minute, setMinute] = useState(0)
+  const [returns, setReturns] = useState<Record<string, CoinReturn | null>>({})
+  const [returnsLoading, setReturnsLoading] = useState(true)
 
   const loadPlans = async () => {
-    setLoading(true)
+    setPlansLoading(true)
     try {
       const response = await authFetch(`${API_BASE_URL}/api/dca`, {
         headers: { Accept: "application/json" },
@@ -2508,7 +2560,7 @@ function DcaCard({ onRefresh }: { onRefresh: () => void }) {
     } catch (err) {
       setMessage(err instanceof Error ? `โหลดแผนไม่สำเร็จ: ${err.message}` : "โหลดแผนไม่สำเร็จ")
     } finally {
-      setLoading(false)
+      setPlansLoading(false)
     }
   }
 
@@ -2516,17 +2568,30 @@ function DcaCard({ onRefresh }: { onRefresh: () => void }) {
     loadPlans()
   }, [])
 
+  useEffect(() => {
+    let alive = true
+    const run = async () => {
+      const results = await Promise.allSettled(DCA_ASSETS.map((a) => fetchCoinReturn(a)))
+      if (!alive) return
+      const next: Record<string, CoinReturn | null> = {}
+      DCA_ASSETS.forEach((a, i) => {
+        const r = results[i]
+        next[a] = r.status === "fulfilled" ? r.value : null
+      })
+      setReturns(next)
+      setReturnsLoading(false)
+    }
+    run()
+    return () => {
+      alive = false
+    }
+  }, [])
+
   const createPlan = async () => {
     setMessage("")
-    const amountThb = Number(amount)
+    const amountThb = Number(amount.replace(/,/g, ""))
     if (!Number.isFinite(amountThb) || amountThb < 50) {
       setMessage("ยอดขั้นต่ำคือ ฿50")
-      return
-    }
-    const h = Number(hour)
-    const m = Number(minute)
-    if (!(h >= 0 && h <= 23 && m >= 0 && m <= 59)) {
-      setMessage("เวลาไม่ถูกต้อง")
       return
     }
     setSaving(true)
@@ -2534,11 +2599,11 @@ function DcaCard({ onRefresh }: { onRefresh: () => void }) {
       const response = await authFetch(`${API_BASE_URL}/api/dca`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ asset, amount_thb: amountThb, freq, hour: h, minute: m }),
+        body: JSON.stringify({ asset, amount_thb: amountThb, freq, hour, minute }),
       })
       if (!response.ok) throw new Error(await dcaErrorText(response))
       setAmount("")
-      setMessage("ตั้งแผน DCA สำเร็จ")
+      setMessage("เริ่ม Auto DCA สำเร็จ")
       await loadPlans()
     } catch (err) {
       setMessage(err instanceof Error ? `ตั้งแผนไม่สำเร็จ: ${err.message}` : "ตั้งแผนไม่สำเร็จ")
@@ -2564,13 +2629,17 @@ function DcaCard({ onRefresh }: { onRefresh: () => void }) {
   }
 
   const pad = (v: number) => String(v ?? 0).padStart(2, "0")
+  const selectCls = "w-full rounded-lg border bg-background px-3 py-2.5 text-sm outline-none"
 
   return (
-    <div className="rounded-xl border bg-card p-5">
-      <div className="mb-4 flex items-center justify-between">
+    <div className="space-y-6">
+      {/* HEADER */}
+      <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="font-semibold">Auto DCA</h3>
-          <p className="text-xs text-muted-foreground">ซื้อสะสมอัตโนมัติตามเวลาที่ตั้งไว้</p>
+          <h3 className="text-xl font-bold">Auto DCA</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            ซื้อสะสมอัตโนมัติตามเวลาที่คุณกำหนด จนกว่าจะยกเลิก
+          </p>
         </div>
         <button
           type="button"
@@ -2584,107 +2653,148 @@ function DcaCard({ onRefresh }: { onRefresh: () => void }) {
         </button>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div>
-          <label className="mb-1 block text-xs text-muted-foreground">เหรียญ</label>
-          <select
-            value={asset}
-            onChange={(e) => setAsset(e.target.value)}
-            className="w-full rounded-lg border bg-background px-3 py-2 text-sm"
-          >
+      <div className="grid gap-5 lg:grid-cols-2">
+        {/* FORM */}
+        <div className="rounded-xl border bg-card p-5">
+          <h4 className="font-semibold">สร้างคำสั่ง Auto DCA</h4>
+
+          <p className="mt-5 text-sm font-medium">1. เลือกเหรียญและกรอกจำนวนเงิน</p>
+          <label className="mb-1 mt-3 block text-xs text-muted-foreground">เหรียญ</label>
+          <select value={asset} onChange={(e) => setAsset(e.target.value)} className={selectCls}>
             {DCA_ASSETS.map((a) => (
-              <option key={a} value={a}>{a}/THB</option>
+              <option key={a} value={a}>{a}</option>
             ))}
           </select>
-        </div>
 
-        <div>
-          <label className="mb-1 block text-xs text-muted-foreground">จำนวนเงินต่อครั้ง (THB)</label>
+          <label className="mb-1 mt-3 block text-xs text-muted-foreground">จำนวนเงินต่อรอบ (THB)</label>
           <input
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            placeholder="100"
-            className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none"
+            inputMode="decimal"
+            placeholder="1,000"
+            className={selectCls}
           />
-        </div>
 
-        <div>
-          <label className="mb-1 block text-xs text-muted-foreground">ความถี่</label>
-          <select
-            value={freq}
-            onChange={(e) => setFreq(e.target.value)}
-            className="w-full rounded-lg border bg-background px-3 py-2 text-sm"
-          >
+          <p className="mt-6 text-sm font-medium">2. กำหนดรอบการทำรายการ</p>
+          <div className="mt-3 flex flex-wrap gap-2">
             {DCA_FREQS.map((f) => (
-              <option key={f} value={f}>{f}</option>
+              <button
+                key={f}
+                type="button"
+                onClick={() => setFreq(f)}
+                className={`rounded-full border px-4 py-1.5 text-xs font-medium ${
+                  freq === f ? "bg-primary text-primary-foreground" : "hover:bg-accent"
+                }`}
+              >
+                {f}
+              </button>
             ))}
-          </select>
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">เวลา (ชั่วโมง)</label>
+              <select value={hour} onChange={(e) => setHour(Number(e.target.value))} className={selectCls}>
+                {Array.from({ length: 24 }, (_, i) => (
+                  <option key={i} value={i}>{pad(i)}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">เวลา (นาที)</label>
+              <select value={minute} onChange={(e) => setMinute(Number(e.target.value))} className={selectCls}>
+                {Array.from({ length: 60 }, (_, i) => (
+                  <option key={i} value={i}>{pad(i)}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-lg border bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground">
+            เมื่อถึงเวลา ระบบจะใช้ <b className="text-foreground">ราคาตลาดปัจจุบัน</b> หัก THB จาก Wallet
+            แล้วเพิ่มเหรียญเข้า Portfolio ให้อัตโนมัติ
+          </div>
+
+          <button
+            type="button"
+            onClick={createPlan}
+            disabled={saving}
+            className="mt-4 w-full rounded-lg bg-red-500 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+          >
+            {saving ? "กำลังบันทึก..." : "เริ่ม Auto DCA"}
+          </button>
+
+          {message && (
+            <p className="mt-3 rounded-lg border px-3 py-2 text-center text-xs">{message}</p>
+          )}
         </div>
 
-        <div>
-          <label className="mb-1 block text-xs text-muted-foreground">เวลา (ชั่วโมง : นาที)</label>
-          <div className="flex items-center gap-2">
-            <input
-              type="number" min={0} max={23}
-              value={hour}
-              onChange={(e) => setHour(e.target.value)}
-              className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none"
-            />
-            <span>:</span>
-            <input
-              type="number" min={0} max={59}
-              value={minute}
-              onChange={(e) => setMinute(e.target.value)}
-              className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none"
-            />
+        {/* DETAILS */}
+        <div className="h-fit rounded-xl border bg-card p-5">
+          <h4 className="font-semibold">รายละเอียดคำสั่ง Auto DCA</h4>
+          <div className="mt-3 divide-y text-sm">
+            {[
+              ["ประเภทคำสั่ง", "Market Order"],
+              ["ราคา", "ราคาตลาดปัจจุบัน"],
+              ["เงิน", "หักจาก Customer THB Wallet"],
+              ["เหรียญ", "เพิ่มเข้า Customer Portfolio"],
+              ["Ledger", "BUY transaction + Order"],
+            ].map(([k, v]) => (
+              <div key={k} className="flex items-center justify-between gap-3 py-2.5">
+                <span className="text-xs text-muted-foreground">{k}</span>
+                <span className="text-right text-xs font-semibold">{v}</span>
+              </div>
+            ))}
+            <div className="flex items-center justify-between gap-3 py-2.5">
+              <span className="text-xs text-muted-foreground">สถานะ</span>
+              <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-500">
+                ทำงานจนกว่าจะ Cancel
+              </span>
+            </div>
+          </div>
+          <div className="mt-3 rounded-lg border bg-muted/30 p-3 text-xs leading-5 text-muted-foreground">
+            <b className="text-foreground">ระบบจำลอง</b> Auto DCA จะไม่ส่งคำสั่งซื้อเงินจริงไปยัง Exchange
+            ภายนอก แต่จะ Execute ภายในระบบจำลอง และใช้ Portfolio Ledger เดียวกับหน้า Trade
           </div>
         </div>
       </div>
 
-      <button
-        type="button"
-        onClick={createPlan}
-        disabled={saving}
-        className="mt-4 w-full rounded-lg bg-primary py-2.5 text-sm font-semibold text-primary-foreground disabled:opacity-50"
-      >
-        {saving ? "กำลังบันทึก..." : "ตั้งแผน DCA"}
-      </button>
-
-      {message && (
-        <p className="mt-3 rounded-lg border px-3 py-2 text-center text-xs">{message}</p>
-      )}
-
-      <div className="mt-5">
-        <div className="mb-2 text-sm font-semibold">แผนที่ตั้งไว้</div>
-        {loading ? (
-          <p className="py-4 text-center text-sm text-muted-foreground">Loading...</p>
+      {/* MY PLANS */}
+      <div>
+        <h3 className="mb-3 text-xl font-bold">แผน Auto DCA ของฉัน</h3>
+        {plansLoading ? (
+          <p className="rounded-xl border bg-card py-6 text-center text-sm text-muted-foreground">Loading...</p>
         ) : plans.length === 0 ? (
-          <p className="py-4 text-center text-sm text-muted-foreground">ยังไม่มีแผน DCA</p>
+          <p className="rounded-xl border bg-card py-6 text-center text-sm text-muted-foreground">
+            ยังไม่มีแผน Auto DCA
+          </p>
         ) : (
-          <div className="divide-y rounded-lg border">
+          <div className="space-y-3">
             {plans.map((plan) => (
-              <div key={plan.id} className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
-                <div className="flex items-center gap-3">
-                  <CoinIcon asset={plan.asset} size={28} />
-                  <div>
-                    <div className="text-sm font-medium">
-                      {plan.asset} · {formatTHB(plan.amount_thb)}
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      {plan.freq} {pad(plan.hour)}:{pad(plan.minute)} · ครั้งต่อไป {formatOrderDate(plan.next_run_at || "")}
-                    </div>
+              <div
+                key={plan.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card px-4 py-3"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 text-sm font-semibold">
+                    <span className="size-2 rounded-full bg-emerald-500" />
+                    ทำงาน · {plan.asset} · {formatTHB(plan.amount_thb)} THB/{plan.freq}
+                  </div>
+                  <div className="mt-1 break-words text-xs text-muted-foreground">
+                    รอบถัดไป: <span className="font-mono">{formatOrderDate(plan.next_run_at || "")}</span>
                     {plan.last_status && (
-                      <div className="text-xs text-muted-foreground">
-                        ล่าสุด: {plan.last_status}
+                      <>
+                        {" "}· ล่าสุด: <span className="font-mono uppercase">{plan.last_status}</span>
                         {plan.last_qty ? ` · ${formatQty(Number(plan.last_qty))} ${plan.asset}` : ""}
-                      </div>
+                      </>
                     )}
+                    {" "}· ID <span className="font-mono">{plan.id}</span>
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => cancelPlan(plan)}
-                  className="rounded-md border px-2.5 py-1.5 text-xs text-red-500 hover:bg-accent"
+                  className="rounded-lg border px-4 py-1.5 text-xs font-medium hover:bg-accent"
                 >
                   ยกเลิก
                 </button>
@@ -2692,6 +2802,47 @@ function DcaCard({ onRefresh }: { onRefresh: () => void }) {
             ))}
           </div>
         )}
+      </div>
+
+      {/* SUPPORTED COINS */}
+      <div>
+        <div className="mb-3 inline-block rounded-md border border-emerald-500/40 bg-emerald-500/5 px-3 py-1 text-xs font-semibold">
+          เหรียญที่รองรับ Auto DCA
+        </div>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+          {DCA_ASSETS.map((a) => {
+            const r = returns[a]
+            return (
+              <button
+                key={a}
+                type="button"
+                onClick={() => setAsset(a)}
+                className={`rounded-xl border bg-card p-4 text-left transition hover:bg-accent/40 ${
+                  asset === a ? "ring-2 ring-primary" : ""
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <CoinIcon asset={a} size={24} />
+                  <div>
+                    <div className="text-sm font-semibold">{a}</div>
+                    <div className="text-[10px] text-muted-foreground">{DCA_COIN_NAMES[a]}</div>
+                  </div>
+                </div>
+                <div className="mt-3 text-[10px] text-muted-foreground">ผลตอบแทนย้อนหลัง 1 ปี</div>
+                <div className="mt-1">
+                  <ReturnBadge value={returnsLoading ? undefined : r?.y1} />
+                </div>
+                <div className="mt-2 text-[10px] text-muted-foreground">ผลตอบแทนย้อนหลัง 6 เดือน</div>
+                <div className="mt-1">
+                  <ReturnBadge value={returnsLoading ? undefined : r?.m6} />
+                </div>
+              </button>
+            )
+          })}
+        </div>
+        <p className="mt-2 text-[10px] text-muted-foreground">
+          เป็นการเปลี่ยนแปลงของราคาจากกราฟรายวัน Bitkub เพื่อประกอบการตัดสินใจเท่านั้น ไม่รับประกันผลในอนาคต
+        </p>
       </div>
     </div>
   )
