@@ -528,6 +528,7 @@ function AppInner() {
             )}
 
             {page === "news" && <NewsPage />}
+            {page === "risk" && <RiskPage />}
 
             {page !== "dashboard" &&
               page !== "markets" &&
