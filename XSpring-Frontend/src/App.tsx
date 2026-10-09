@@ -2308,12 +2308,8 @@ function TradePage({
         </div>
       </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-[4fr_6fr] gap-4 items-start">
-          <MarketOverviewCard />
-        </div>
-
-        <DcaCard onRefresh={onRefresh} />
-      </div>
+          <DcaCard onRefresh={onRefresh} />
+      </div>        
     )
   }
       type MarketTab = "fav" | "volume" | "up" | "down"
@@ -2534,6 +2530,7 @@ function ReturnBadge({ value }: { value: number | null | undefined }) {
   )
 }
 
+const DCA_QUICK_AMOUNTS = [500, 1000, 5000, 10000]
 function DcaCard({ onRefresh }: { onRefresh: () => void }) {
   const [plans, setPlans] = useState<DcaPlan[]>([])
   const [plansLoading, setPlansLoading] = useState(true)
