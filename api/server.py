@@ -1429,6 +1429,50 @@ def _risk_status(value, watch, high, below=False) -> str:
     if below:
         return "high" if value < high else "watch" if value < watch else "ok"
     return "high" if value > high else "watch" if value > watch else "ok"
+
+import time as _time
+
+_RISK_HIST_CACHE: dict = {}
+_RISK_HIST_TTL = 600  # วินาที: ราคาย้อนหลังรายวัน ไม่ต้องดึงใหม่ทุกครั้งที่กด Refresh
+
+
+def _risk_history_metrics(gu, user, pf) -> dict:
+    """Volatility / Max Drawdown จาก gu._portfolio_risk_metrics (ตัวเลขเดียวกับ Streamlit)"""
+    now = _time.time()
+    hit = _RISK_HIST_CACHE.get(user)
+    if hit and now - hit[0] < _RISK_HIST_TTL:
+        return hit[1]
+
+    rows = []
+    for h in pf.get("holdings") or []:
+        mv = h.get("market_value")
+        if mv is None:
+            mv = _num(h.get("qty")) * _num(h.get("price"))
+        rows.append({**h, "market_value": mv})
+
+    snap = {
+        "total_value_thb": _num(pf.get("total_value_thb")),
+        "cash_thb": _num(pf.get("cash_thb")),
+        "rows": rows,
+    }
+
+    try:
+        import pandas as pd
+        m = gu._portfolio_risk_metrics(snap, pd.Timestamp.now().normalize())
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        return {"vol": None, "dd": None}
+
+    ok = bool(m.get("history_available")) and int(m.get("history_days") or 0) > 0
+    out = {
+        "vol": round(_num(m.get("volatility_pct")), 2) if ok else None,
+        "dd": round(abs(_num(m.get("max_drawdown_pct"))), 2) if ok else None,
+    }
+    if ok:
+        _RISK_HIST_CACHE[user] = (now, out)
+    return out
+
 @app.get("/api/risk", dependencies=[Depends(require_api_key)])
 def risk(user: str = Depends(require_user)):
     with ORDER_LOCK:
@@ -1456,9 +1500,10 @@ def risk(user: str = Depends(require_user)):
     allocation = [{"asset": "THB", "name": "Thai Baht", "value_thb": round(cash, 2), "pct": pct(cash)}] + holdings
 
     btc = next((h["pct"] for h in holdings if h["asset"].upper() == "BTC"), 0.0)
+    hist = _risk_history_metrics(gu, user, pf)
     values = {
-        "volatility": None,
-        "max_drawdown": None,
+        "volatility": hist["vol"],
+        "max_drawdown": hist["dd"],
         "concentration": max((h["pct"] for h in holdings), default=0.0),
         "btc_exposure": btc,
         "cash": pct(cash),
