@@ -25,7 +25,7 @@ import {
 } from "lucide-react"
 import MorphOrb from "./components/ui/ai-thiking-orb-and-input"
 import RiskPage from "./components/risk/RiskPage"
-import { NumberTicker } from "./components/ui/number-ticker"
+import NumberTicker from "./components/ui/number-ticker"
 
 type Page =
   | "dashboard"
