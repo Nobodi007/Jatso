@@ -2308,7 +2308,10 @@ function TradePage({
         </div>
       </div>
 
-      {/* MarketOverviewCard */}
+        <MarketOverviewCard />
+      </div>
+    )
+  }
       type MarketTab = "fav" | "volume" | "up" | "down"
 
 const MARKET_TABS: { key: MarketTab; label: string }[] = [
