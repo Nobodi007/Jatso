@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import NumberFlow from "@number-flow/react"
 
 type Props = {
@@ -15,10 +16,19 @@ export function NumberTicker({
   decimalPlaces = 2,
   className = "",
 }: Props) {
+  // เริ่มที่ 0 ก่อน แล้วค่อยเปลี่ยนเป็นค่าจริง ตัวเลขจะได้เลื่อนตอนเปิดหน้า
+  const [shown, setShown] = useState(0)
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setShown(value), 150)
+    return () => window.clearTimeout(t)
+  }, [value])
+
   return (
     <NumberFlow
-      value={value}
+      value={shown}
       locales="th-TH"
+      respectMotionPreference={false}
       format={{
         style: currency ? "currency" : "decimal",
         currency,
