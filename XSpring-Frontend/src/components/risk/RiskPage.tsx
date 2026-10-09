@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react"
+import { Component, useEffect, useState, type ReactNode } from "react"
 import { authFetch } from "../../auth"
 
 const API_BASE_URL = "https://xspring-api.onrender.com"
+
 const f = (v: unknown, d = 1) => {
   const n = Number(v)
   return Number.isFinite(n) ? n.toFixed(d) : "—"
@@ -30,7 +31,7 @@ const STYLE: Record<Status, { text: string; bar: string; badge: string }> = {
 const thb = (v: number) =>
   `฿${Number(v || 0).toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
-export default function RiskPage() {
+function RiskPageInner() {
   const [data, setData] = useState<RiskData | null>(null)
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
@@ -58,6 +59,9 @@ export default function RiskPage() {
   useEffect(() => {
     load()
   }, [])
+
+  const metrics = data?.metrics ?? []
+  const allocation = data?.allocation ?? []
 
   return (
     <div className="p-6">
@@ -96,9 +100,9 @@ export default function RiskPage() {
           </div>
 
           <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {data.metrics.map((m) => {
-              const s = STYLE[m.status]
-              const width = m.value_pct == null ? 0 : Math.min(Math.max(m.value_pct, 0), 100)
+            {metrics.map((m) => {
+              const s = STYLE[m.status] ?? STYLE.na
+              const width = m.value_pct == null ? 0 : Math.min(Math.max(Number(m.value_pct) || 0, 0), 100)
               return (
                 <div key={m.key} className="rounded-xl border p-4">
                   <div className="flex items-center justify-between">
@@ -106,7 +110,7 @@ export default function RiskPage() {
                     <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${s.badge}`}>{s.text}</span>
                   </div>
                   <div className="mt-2 text-2xl font-semibold">
-                    {m.value_pct == null ? "—" : `${m.value_pct.toFixed(1)}%`}
+                    {m.value_pct == null ? "—" : `${f(m.value_pct, 1)}%`}
                   </div>
                   <div className="mt-2 h-1.5 rounded-full bg-muted">
                     <div className={`h-1.5 rounded-full ${s.bar}`} style={{ width: `${width}%` }} />
@@ -123,17 +127,17 @@ export default function RiskPage() {
             <h2 className="text-lg font-semibold">Allocation &amp; Exposure</h2>
             <p className="text-sm text-muted-foreground">สัดส่วนของแต่ละสินทรัพย์ในพอร์ต</p>
             <div className="mt-4 space-y-3">
-              {data.allocation.map((a) => (
+              {allocation.map((a) => (
                 <div key={a.asset} className="flex items-center gap-3">
                   <div className="w-24 shrink-0 text-sm font-semibold">
                     {a.asset}
                     {a.name && <span className="ml-1 text-xs font-normal text-muted-foreground">{a.name}</span>}
                   </div>
                   <div className="h-2 flex-1 rounded-full bg-muted">
-                    <div className="h-2 rounded-full bg-zinc-400" style={{ width: `${Math.min(a.pct, 100)}%` }} />
+                    <div className="h-2 rounded-full bg-zinc-400" style={{ width: `${Math.min(Number(a.pct) || 0, 100)}%` }} />
                   </div>
                   <div className="w-36 shrink-0 text-right text-sm">{thb(a.value_thb)}</div>
-                  <div className="w-14 shrink-0 text-right text-sm text-muted-foreground">{a.pct.toFixed(2)}%</div>
+                  <div className="w-14 shrink-0 text-right text-sm text-muted-foreground">{f(a.pct, 2)}%</div>
                 </div>
               ))}
             </div>
@@ -141,5 +145,30 @@ export default function RiskPage() {
         </>
       )}
     </div>
+  )
+}
+
+class RiskBoundary extends Component<{ children: ReactNode }, { err: string }> {
+  state = { err: "" }
+  static getDerivedStateFromError(e: Error) {
+    return { err: e.message }
+  }
+  render() {
+    if (this.state.err) {
+      return (
+        <div className="m-6 rounded-xl border border-red-500/50 p-4 text-red-400">
+          Risk page error: {this.state.err}
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
+export default function RiskPage() {
+  return (
+    <RiskBoundary>
+      <RiskPageInner />
+    </RiskBoundary>
   )
 }
