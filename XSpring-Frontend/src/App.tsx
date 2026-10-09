@@ -511,10 +511,10 @@ function AppInner() {
 
             {page === "risk" && (
               <RiskCenterPage
-                portfolio={portfolio}
-                loading={portfolioLoading}
-                error={portfolioError}
-                onRefresh={loadPortfolio}
+                 portfolio={portfolio}
+                 loading={portfolioLoading}
+                 error={portfolioError}
+                 onRefresh={loadPortfolio}
               />
             )}
 
