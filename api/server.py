@@ -1730,6 +1730,177 @@ def order_history(
                 e,
             )
 
+# =========================================================
+# AUTO DCA
+# =========================================================
+
+DCA_LOOP_SECONDS = 60
+DCA_FREQS_API = ("รายวัน", "รายสัปดาห์", "รายเดือน")
+
+
+class DcaCreateRequest(BaseModel):
+    asset: str
+    amount_thb: float
+    freq: str
+    hour: int = 9
+    minute: int = 0
+
+
+def _dca_public(plan: dict) -> dict:
+    keys = (
+        "id", "asset", "amount_thb", "freq", "hour", "minute",
+        "next_run_at", "last_status", "last_order_id",
+        "last_price_thb", "last_qty",
+    )
+    return {k: plan.get(k) for k in keys}
+
+
+def _dca_open_session(user: str):
+    """โหลด gu + ตั้ง actor/role ให้เหมือน create_order (เรียกใน ORDER_LOCK เท่านั้น)"""
+    gu = load_gu()
+    actor = _actor(user)
+    _sync_gu_actor(gu, actor)
+    role = _set_api_role(gu, actor)
+    return gu, actor, role
+
+
+@app.post("/api/dca", dependencies=[Depends(require_api_key)])
+def create_dca(req: DcaCreateRequest, user: str = Depends(require_user)):
+    with ORDER_LOCK:
+        try:
+            gu, actor, role = _dca_open_session(user)
+
+            asset = req.asset.upper().strip()
+            freq = req.freq.strip()
+            amount_thb = _safe_float(req.amount_thb, -1.0)
+
+            if asset not in gu.SUPPORTED_ASSETS:
+                raise HTTPException(status_code=400, detail=f"ไม่รองรับเหรียญ {asset}")
+            if freq not in DCA_FREQS_API:
+                raise HTTPException(status_code=400, detail="ความถี่ไม่ถูกต้อง")
+            if not (0 <= int(req.hour) <= 23 and 0 <= int(req.minute) <= 59):
+                raise HTTPException(status_code=400, detail="เวลาไม่ถูกต้อง")
+            min_trade = float(getattr(gu, "MIN_TRADE_THB", 50))
+            if not math.isfinite(amount_thb) or amount_thb < min_trade:
+                raise HTTPException(status_code=400, detail=f"ยอดขั้นต่ำคือ {min_trade:g} บาท")
+            if not gu.can_trade():
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"บัญชี {actor} ไม่มีสิทธิ์ Trader (role={role})",
+                )
+
+            sim = _load_existing_sim(gu)
+            plan = gu._dca_create_plan(
+                sim, asset, amount_thb, freq, int(req.hour), int(req.minute)
+            )
+            gu.save_sim_state(sim)
+            return {"status": "ok", "plan": _dca_public(plan)}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"สร้างแผน DCA ไม่สำเร็จ: {e}")
+
+
+@app.get("/api/dca", dependencies=[Depends(require_api_key)])
+def list_dca(user: str = Depends(require_user)):
+    with ORDER_LOCK:
+        try:
+            gu, actor, role = _dca_open_session(user)
+            sim = _load_existing_sim(gu)
+            plans = [
+                _dca_public(p)
+                for p in sim.get("dca_plans", [])
+                if isinstance(p, dict) and p.get("enabled")
+            ]
+            return {"status": "ok", "plans": plans}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"โหลดแผน DCA ไม่สำเร็จ: {e}")
+
+
+@app.delete("/api/dca/{plan_id}", dependencies=[Depends(require_api_key)])
+def cancel_dca(plan_id: str, user: str = Depends(require_user)):
+    with ORDER_LOCK:
+        try:
+            gu, actor, role = _dca_open_session(user)
+            if not gu.can_trade():
+                raise HTTPException(status_code=403, detail="ไม่มีสิทธิ์ Trader")
+            sim = _load_existing_sim(gu)
+            if not gu._dca_cancel_plan(sim, plan_id):
+                raise HTTPException(status_code=404, detail="ไม่พบแผนนี้")
+            gu.save_sim_state(sim)
+            return {"status": "ok"}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"ยกเลิกแผน DCA ไม่สำเร็จ: {e}")
+
+
+# ---------- background runner ----------
+
+def _dca_list_actors() -> list:
+    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    key = (
+        os.environ.get("SUPABASE_SERVICE_KEY")
+        or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        or os.environ.get("SUPABASE_KEY")
+        or ""
+    )
+    if not url or not key:
+        return []
+    r = requests.get(
+        f"{url}/rest/v1/sim_state?select=actor",
+        headers={"apikey": key, "Authorization": f"Bearer {key}"},
+        timeout=10,
+    )
+    r.raise_for_status()
+    return [row["actor"] for row in r.json() if row.get("actor")]
+
+
+def _dca_tick():
+    with ORDER_LOCK:
+        gu = load_gu()
+        for actor in _dca_list_actors():
+            try:
+                _sync_gu_actor(gu, actor)
+                _set_api_role(gu, actor)
+                if not gu.can_trade():
+                    continue
+                sim = _load_existing_sim(gu)
+                now = gu._dca_now()
+                due = []
+                for p in sim.get("dca_plans", []):
+                    if not isinstance(p, dict) or not p.get("enabled"):
+                        continue
+                    nxt = gu._dca_parse_ts(p.get("next_run_at"))
+                    if nxt is None or now >= nxt:
+                        due.append(p)
+                if not due:
+                    continue
+                asset = str(due[0].get("asset", "BTC")).upper()
+                cfg = _api_cfg(gu, asset, actor)
+                data = _load_market_frame(gu, asset)
+                n = gu._dca_execute_due_plans(sim, cfg, data)  # บันทึกเองถ้ามีรายการสำเร็จ
+                if n:
+                    print(f"[DCA] {actor}: executed {n} plan(s)")
+            except Exception as e:
+                print(f"[DCA] {actor} error: {e}")
+
+
+async def _dca_loop():
+    while True:
+        await asyncio.sleep(DCA_LOOP_SECONDS)
+        try:
+            await asyncio.to_thread(_dca_tick)
+        except Exception as e:
+            print(f"[DCA] loop error: {e}")
+
+
+@app.on_event("startup")
+async def _start_dca_loop():
+    asyncio.create_task(_dca_loop())
+
 
 # =========================================================
 # CREATE ORDER
