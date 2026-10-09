@@ -2311,6 +2311,7 @@ function TradePage({
       </div>
 
           <DcaCard onRefresh={onRefresh} />
+          <MomentumCard />
       </div>        
     )
   }
@@ -2869,6 +2870,248 @@ function DcaCard(_props: { onRefresh: () => void }) {
           เป็นการเปลี่ยนแปลงของราคาจากกราฟรายวัน Bitkub เพื่อประกอบการตัดสินใจเท่านั้น ไม่รับประกันผลในอนาคต
         </p>
       </div>
+    </div>
+  )
+}
+
+/* =========================================================
+   MOMENTUM BOT (แอดมินเท่านั้น)
+========================================================= */
+
+const MOMENTUM_ADMIN_EMAIL = "teerapat30204@gmail.com"
+
+const MOM_FIELDS: { key: string; label: string }[] = [
+  { key: "bet_thb", label: "ไม้ละ (THB)" },
+  { key: "tp_pct", label: "Take Profit (%)" },
+  { key: "sl_pct", label: "Stop Loss (%)" },
+  { key: "max_weight_pct", label: "เพดานต่อเหรียญ (%)" },
+  { key: "top_n", label: "จำนวนเหรียญ Top N" },
+  { key: "lookback", label: "Lookback (วัน)" },
+  { key: "cooldown_hours", label: "พักหลัง SL/Rebalance (ชม.)" },
+]
+
+const momForm = (c: any): Record<string, string> =>
+  Object.fromEntries(MOM_FIELDS.map((f) => [f.key, String(c?.[f.key] ?? "")]))
+
+function MomentumCard() {
+  const { user } = useAuth()
+  if (String(user?.email || "").toLowerCase() !== MOMENTUM_ADMIN_EMAIL) return null
+  return <MomentumPanel />
+}
+
+function MomentumPanel() {
+  const [s, setS] = useState<any>(null)
+  const [form, setForm] = useState<Record<string, string>>({})
+  const [msg, setMsg] = useState("")
+  const [busy, setBusy] = useState(false)
+
+  const load = async () => {
+    try {
+      const r = await authFetch(`${API_BASE_URL}/api/momentum`, {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      })
+      if (!r.ok) throw new Error(await dcaErrorText(r))
+      const b = await r.json()
+      setS(b)
+      setForm((prev) => (Object.keys(prev).length > 0 ? prev : momForm(b.config)))
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "โหลดไม่สำเร็จ")
+    }
+  }
+
+  useEffect(() => {
+    load()
+    const t = setInterval(load, 15000)
+    return () => clearInterval(t)
+  }, [])
+
+  const send = async (updates: Record<string, unknown>, confirmText?: string) => {
+    if (confirmText && !window.confirm(confirmText)) return
+    setBusy(true)
+    setMsg("")
+    try {
+      const r = await authFetch(`${API_BASE_URL}/api/momentum/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(updates),
+      })
+      if (!r.ok) throw new Error(await dcaErrorText(r))
+      const b = await r.json()
+      setS(b)
+      setForm(momForm(b.config))
+      setMsg("บันทึกแล้ว")
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "บันทึกไม่สำเร็จ")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const saveConfig = () =>
+    send(Object.fromEntries(MOM_FIELDS.map((f) => [f.key, Number(form[f.key])])))
+
+  const cfg = s?.config
+  const mode = !cfg?.enabled ? "ปิด" : cfg.dry_run ? "ทดลอง (ไม่ส่งคำสั่ง)" : "LIVE"
+  const modeCls = !cfg?.enabled
+    ? "bg-muted text-muted-foreground"
+    : cfg.dry_run
+      ? "bg-yellow-500/15 text-yellow-500"
+      : "bg-emerald-500/15 text-emerald-500"
+  const rt = s?.runtime
+
+  return (
+    <div className="rounded-xl border bg-card p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-xl font-bold">Momentum Auto-Trade</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            ซื้อเหรียญ momentum สูง · TP/SL · Rebalance · เฉพาะบัญชีแอดมิน
+          </p>
+        </div>
+        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${modeCls}`}>{mode}</span>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => send({ enabled: true, dry_run: true })}
+          className="rounded-lg border px-4 py-2 text-sm hover:bg-accent disabled:opacity-50"
+        >
+          เปิดแบบทดลอง
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            send(
+              { enabled: true, dry_run: false },
+              "เปิดโหมดจริง? ระบบจะซื้อ/ขายในพอร์ตอัตโนมัติทุกนาทีตามเงื่อนไข"
+            )
+          }
+          className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+        >
+          เปิดจริง
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => send({ enabled: false })}
+          className="rounded-lg bg-red-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+        >
+          หยุดฉุกเฉิน
+        </button>
+      </div>
+
+      <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {MOM_FIELDS.map((f) => (
+          <div key={f.key}>
+            <label className="mb-1 block text-xs text-muted-foreground">{f.label}</label>
+            <input
+              value={form[f.key] ?? ""}
+              onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
+              inputMode="decimal"
+              className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none"
+            />
+          </div>
+        ))}
+        <div className="flex items-end">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={saveConfig}
+            className="w-full rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+          >
+            บันทึกค่า
+          </button>
+        </div>
+      </div>
+
+      {msg && <p className="mt-3 rounded-lg border px-3 py-2 text-center text-xs">{msg}</p>}
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-2">
+        <div className="rounded-lg border p-4">
+          <div className="mb-2 text-sm font-semibold">อันดับ Momentum ({cfg?.lookback ?? "—"} วัน)</div>
+          {s?.ranking?.length ? (
+            <div className="space-y-1">
+              {s.ranking.map((r: any, i: number) => (
+                <div
+                  key={r.asset}
+                  className={`flex items-center justify-between rounded px-2 py-1 text-sm ${
+                    i < (cfg?.top_n ?? 0) && r.momentum_pct > 0 ? "bg-emerald-500/10" : ""
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    <CoinIcon asset={r.asset} size={18} /> {r.asset}
+                  </span>
+                  <span className={r.momentum_pct >= 0 ? "text-emerald-500" : "text-red-500"}>
+                    {r.momentum_pct >= 0 ? "+" : ""}{r.momentum_pct.toFixed(2)}%
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              ยังไม่มีข้อมูล (คำนวณเมื่อเปิดใช้งานรอบแรก)
+            </p>
+          )}
+          {s?.ranking_skipped?.length > 0 && (
+            <p className="mt-2 text-[10px] text-muted-foreground">
+              ข้าม: {s.ranking_skipped.join(" · ")}
+            </p>
+          )}
+        </div>
+
+        <div className="rounded-lg border p-4">
+          <div className="mb-2 text-sm font-semibold">ประวัติการทำงาน</div>
+          {s?.log?.length ? (
+            <div className="space-y-2">
+              {s.log.map((l: any, i: number) => (
+                <div key={i} className="text-xs">
+                  <span className={l.side === "buy" ? "text-emerald-500" : "text-red-500"}>
+                    {l.side === "buy" ? "ซื้อ" : "ขาย"} {l.asset}
+                  </span>{" "}
+                  {formatTHB(Number(l.amount_thb || 0))} · {l.reason}
+                  <div className="text-[10px] text-muted-foreground">{formatOrderDate(l.time)}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">ยังไม่มีรายการ</p>
+          )}
+        </div>
+      </div>
+
+      {(rt?.dry?.length > 0 || rt?.errors?.length > 0) && (
+        <div className="mt-4 grid gap-4 xl:grid-cols-2">
+          <div className="rounded-lg border p-4">
+            <div className="mb-2 text-sm font-semibold">สัญญาณโหมดทดลอง</div>
+            {(rt?.dry || []).map((d: any, i: number) => (
+              <div key={i} className="text-xs">
+                {d.text}
+                <span className="ml-2 text-[10px] text-muted-foreground">{formatOrderDate(d.time)}</span>
+              </div>
+            ))}
+          </div>
+          <div className="rounded-lg border border-red-500/30 p-4">
+            <div className="mb-2 text-sm font-semibold text-red-500">ข้อผิดพลาดล่าสุด</div>
+            {(rt?.errors || []).map((d: any, i: number) => (
+              <div key={i} className="break-words text-xs">
+                {d.text}
+                <span className="ml-2 text-[10px] text-muted-foreground">{formatOrderDate(d.time)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {s && (
+        <p className="mt-3 text-[10px] text-muted-foreground">
+          รอบล่าสุด {s.runtime?.last_tick ? formatOrderDate(s.runtime.last_tick) : "—"} · actor {s.actor}
+          {!s.runtime?.notify_ready && " · Telegram ยังไม่ได้ตั้งบน Render"}
+        </p>
+      )}
     </div>
   )
 }
