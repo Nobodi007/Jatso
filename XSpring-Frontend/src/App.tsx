@@ -2308,7 +2308,10 @@ function TradePage({
         </div>
       </div>
 
-        <MarketOverviewCard />
+        <div className="grid grid-cols-1 lg:grid-cols-[4fr_6fr] gap-4 items-start">
+          <MarketOverviewCard />
+          <div>{/* ที่ว่างสำหรับ Auto DCA */}</div>
+          </div>
       </div>
     )
   }
