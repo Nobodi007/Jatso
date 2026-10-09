@@ -2455,6 +2455,248 @@ function MarketOverviewCard() {
 }
 
 
+/* =========================================================
+   AUTO DCA
+========================================================= */
+
+type DcaPlan = {
+  id: string
+  asset: string
+  amount_thb: number
+  freq: string
+  hour: number
+  minute: number
+  next_run_at?: string | null
+  last_status?: string | null
+  last_order_id?: string | null
+  last_price_thb?: number | null
+  last_qty?: number | null
+}
+
+const DCA_FREQS = ["รายวัน", "รายสัปดาห์", "รายเดือน"]
+const DCA_ASSETS = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "HBAR", "LINK", "XLM"]
+
+async function dcaErrorText(response: Response) {
+  const body: any = await response.json().catch(() => null)
+  const detail = body?.detail
+  if (typeof detail === "string") return detail
+  if (detail?.message) return String(detail.message)
+  return `HTTP ${response.status}`
+}
+
+function DcaCard({ onRefresh }: { onRefresh: () => void }) {
+  const [plans, setPlans] = useState<DcaPlan[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState("")
+  const [asset, setAsset] = useState("BTC")
+  const [amount, setAmount] = useState("")
+  const [freq, setFreq] = useState("รายวัน")
+  const [hour, setHour] = useState("9")
+  const [minute, setMinute] = useState("0")
+
+  const loadPlans = async () => {
+    setLoading(true)
+    try {
+      const response = await authFetch(`${API_BASE_URL}/api/dca`, {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      })
+      if (!response.ok) throw new Error(await dcaErrorText(response))
+      const body = await response.json()
+      setPlans(Array.isArray(body?.plans) ? body.plans : [])
+    } catch (err) {
+      setMessage(err instanceof Error ? `โหลดแผนไม่สำเร็จ: ${err.message}` : "โหลดแผนไม่สำเร็จ")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadPlans()
+  }, [])
+
+  const createPlan = async () => {
+    setMessage("")
+    const amountThb = Number(amount)
+    if (!Number.isFinite(amountThb) || amountThb < 50) {
+      setMessage("ยอดขั้นต่ำคือ ฿50")
+      return
+    }
+    const h = Number(hour)
+    const m = Number(minute)
+    if (!(h >= 0 && h <= 23 && m >= 0 && m <= 59)) {
+      setMessage("เวลาไม่ถูกต้อง")
+      return
+    }
+    setSaving(true)
+    try {
+      const response = await authFetch(`${API_BASE_URL}/api/dca`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ asset, amount_thb: amountThb, freq, hour: h, minute: m }),
+      })
+      if (!response.ok) throw new Error(await dcaErrorText(response))
+      setAmount("")
+      setMessage("ตั้งแผน DCA สำเร็จ")
+      await loadPlans()
+    } catch (err) {
+      setMessage(err instanceof Error ? `ตั้งแผนไม่สำเร็จ: ${err.message}` : "ตั้งแผนไม่สำเร็จ")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const cancelPlan = async (plan: DcaPlan) => {
+    if (!window.confirm(`ยกเลิกแผน DCA ${plan.asset} ${formatTHB(plan.amount_thb)} ${plan.freq} ?`)) return
+    setMessage("")
+    try {
+      const response = await authFetch(`${API_BASE_URL}/api/dca/${encodeURIComponent(plan.id)}`, {
+        method: "DELETE",
+        headers: { Accept: "application/json" },
+      })
+      if (!response.ok) throw new Error(await dcaErrorText(response))
+      setMessage("ยกเลิกแผนแล้ว")
+      await loadPlans()
+    } catch (err) {
+      setMessage(err instanceof Error ? `ยกเลิกไม่สำเร็จ: ${err.message}` : "ยกเลิกไม่สำเร็จ")
+    }
+  }
+
+  const pad = (v: number) => String(v ?? 0).padStart(2, "0")
+
+  return (
+    <div className="rounded-xl border bg-card p-5">
+      <div className="mb-4 flex items-center justify-between">
+        <div>
+          <h3 className="font-semibold">Auto DCA</h3>
+          <p className="text-xs text-muted-foreground">ซื้อสะสมอัตโนมัติตามเวลาที่ตั้งไว้</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            loadPlans()
+            onRefresh()
+          }}
+          className="rounded-lg border px-3 py-1.5 text-xs hover:bg-accent"
+        >
+          Refresh
+        </button>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="mb-1 block text-xs text-muted-foreground">เหรียญ</label>
+          <select
+            value={asset}
+            onChange={(e) => setAsset(e.target.value)}
+            className="w-full rounded-lg border bg-background px-3 py-2 text-sm"
+          >
+            {DCA_ASSETS.map((a) => (
+              <option key={a} value={a}>{a}/THB</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs text-muted-foreground">จำนวนเงินต่อครั้ง (THB)</label>
+          <input
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder="100"
+            className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none"
+          />
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs text-muted-foreground">ความถี่</label>
+          <select
+            value={freq}
+            onChange={(e) => setFreq(e.target.value)}
+            className="w-full rounded-lg border bg-background px-3 py-2 text-sm"
+          >
+            {DCA_FREQS.map((f) => (
+              <option key={f} value={f}>{f}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs text-muted-foreground">เวลา (ชั่วโมง : นาที)</label>
+          <div className="flex items-center gap-2">
+            <input
+              type="number" min={0} max={23}
+              value={hour}
+              onChange={(e) => setHour(e.target.value)}
+              className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none"
+            />
+            <span>:</span>
+            <input
+              type="number" min={0} max={59}
+              value={minute}
+              onChange={(e) => setMinute(e.target.value)}
+              className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none"
+            />
+          </div>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        onClick={createPlan}
+        disabled={saving}
+        className="mt-4 w-full rounded-lg bg-primary py-2.5 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+      >
+        {saving ? "กำลังบันทึก..." : "ตั้งแผน DCA"}
+      </button>
+
+      {message && (
+        <p className="mt-3 rounded-lg border px-3 py-2 text-center text-xs">{message}</p>
+      )}
+
+      <div className="mt-5">
+        <div className="mb-2 text-sm font-semibold">แผนที่ตั้งไว้</div>
+        {loading ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">Loading...</p>
+        ) : plans.length === 0 ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">ยังไม่มีแผน DCA</p>
+        ) : (
+          <div className="divide-y rounded-lg border">
+            {plans.map((plan) => (
+              <div key={plan.id} className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
+                <div className="flex items-center gap-3">
+                  <CoinIcon asset={plan.asset} size={28} />
+                  <div>
+                    <div className="text-sm font-medium">
+                      {plan.asset} · {formatTHB(plan.amount_thb)}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {plan.freq} {pad(plan.hour)}:{pad(plan.minute)} · ครั้งต่อไป {formatOrderDate(plan.next_run_at || "")}
+                    </div>
+                    {plan.last_status && (
+                      <div className="text-xs text-muted-foreground">
+                        ล่าสุด: {plan.last_status}
+                        {plan.last_qty ? ` · ${formatQty(Number(plan.last_qty))} ${plan.asset}` : ""}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => cancelPlan(plan)}
+                  className="rounded-md border px-2.5 py-1.5 text-xs text-red-500 hover:bg-accent"
+                >
+                  ยกเลิก
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 
 /* =========================================================
    PORTFOLIO PAGE
