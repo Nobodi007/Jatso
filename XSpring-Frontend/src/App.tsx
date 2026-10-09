@@ -24,6 +24,7 @@ import {
   LogOut,
 } from "lucide-react"
 import MorphOrb from "./components/ui/ai-thiking-orb-and-input"
+import RiskPage from "./components/risk/RiskPage"
 
 type Page =
   | "dashboard"
