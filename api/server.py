@@ -1740,13 +1740,10 @@ DCA_LOOP_SECONDS = 60
 DCA_FREQS_API = ("รายวัน", "รายสัปดาห์", "รายเดือน")
 
 
-DCA_MAX_ACTIVE_PLANS = 20
-
-
 class DcaCreateRequest(BaseModel):
-    asset: str = Field(..., min_length=1, max_length=20)
+    asset: str
     amount_thb: float
-    freq: str = Field(..., min_length=1, max_length=20)
+    freq: str
     hour: int = 9
     minute: int = 0
 
@@ -1767,21 +1764,6 @@ def _dca_open_session(user: str):
     _sync_gu_actor(gu, actor)
     role = _set_api_role(gu, actor)
     return gu, actor, role
-
-
-def _dca_save_checked(gu, sim) -> None:
-    """บันทึก sim_state แล้วเช็กว่าสำเร็จจริง ไม่งั้นตอบ 503 (กันหน้าเว็บขึ้นว่าสำเร็จทั้งที่ไม่ได้เก็บ)"""
-    gu.st.session_state.pop("sim_state_save_error", None)
-    gu.save_sim_state(sim)
-    save_error = getattr(gu.st, "session_state", {}).get("sim_state_save_error")
-    if save_error:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "message": "บันทึกแผน Auto DCA ลงฐานข้อมูลไม่สำเร็จ",
-                "retryable": True,
-            },
-        )
 
 
 @app.post("/api/dca", dependencies=[Depends(require_api_key)])
@@ -1810,19 +1792,10 @@ def create_dca(req: DcaCreateRequest, user: str = Depends(require_user)):
                 )
 
             sim = _load_existing_sim(gu)
-            active = [
-                p for p in (sim.get("dca_plans") or [])
-                if isinstance(p, dict) and p.get("enabled")
-            ]
-            if len(active) >= DCA_MAX_ACTIVE_PLANS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"มีแผน Auto DCA ครบ {DCA_MAX_ACTIVE_PLANS} แผนแล้ว กรุณายกเลิกบางแผนก่อน",
-                )
             plan = gu._dca_create_plan(
                 sim, asset, amount_thb, freq, int(req.hour), int(req.minute)
             )
-            _dca_save_checked(gu, sim)
+            gu.save_sim_state(sim)
             return {"status": "ok", "plan": _dca_public(plan)}
         except HTTPException:
             raise
@@ -1858,7 +1831,7 @@ def cancel_dca(plan_id: str, user: str = Depends(require_user)):
             sim = _load_existing_sim(gu)
             if not gu._dca_cancel_plan(sim, plan_id):
                 raise HTTPException(status_code=404, detail="ไม่พบแผนนี้")
-            _dca_save_checked(gu, sim)
+            gu.save_sim_state(sim)
             return {"status": "ok"}
         except HTTPException:
             raise
@@ -1887,229 +1860,34 @@ def _dca_list_actors() -> list:
     return [row["actor"] for row in r.json() if row.get("actor")]
 
 
-import copy as _copy
-
-_DCA_STATE = {
-    "loop_started_at": None,
-    "last_tick_at": None,
-    "last_executed": 0,
-    "total_executed": 0,
-    "last_error": "",
-}
-
-
-def _dca_find_plan(sim: dict, plan_id: str):
-    for plan in sim.get("dca_plans", []) or []:
-        if isinstance(plan, dict) and str(plan.get("id")) == str(plan_id):
-            return plan
-    return None
-
-
-def _dca_stamp_order(sim: dict, rec: dict, plan: dict, now) -> None:
-    """execute_order() ใน gu.py ไม่เขียนเวลา จึงใส่เวลา execution จริง + ที่มา Auto DCA ให้เอง"""
-    execution_iso = now.isoformat()
-    day = now.strftime("%Y-%m-%d")
-    plan_id = str(plan.get("id", ""))
-
-    def stamp(order):
-        order["เวลา"] = execution_iso
-        order["timestamp"] = execution_iso
-        order["วันที่"] = day
-        order["Source"] = "Auto DCA"
-        order["Order Source"] = "Auto DCA"
-        order["DCA Plan ID"] = plan_id
-
-    stamp(rec)
-
-    ledger = sim.get("orders")
-    if isinstance(ledger, list) and ledger:
-        rec_id = str(rec.get("Order ID") or rec.get("order_id") or rec.get("id") or "")
-        target = None
-        if rec_id:
-            for item in reversed(ledger):
-                if isinstance(item, dict) and str(
-                    item.get("Order ID") or item.get("order_id") or item.get("id") or ""
-                ) == rec_id:
-                    target = item
-                    break
-        if target is None and isinstance(ledger[-1], dict):
-            target = ledger[-1]
-        if target is not None and target is not rec:
-            stamp(target)
-
-
-def _dca_run_for_actor(gu, actor: str) -> int:
-    """
-    รันแผนที่ถึงเวลาของบัญชีเดียว (เรียกภายใน ORDER_LOCK)
-    คืนจำนวนออเดอร์ที่ซื้อสำเร็จ
-
-    - ทุกแผนที่ถึงเวลาถูกประมวลผลแล้วบันทึกครั้งเดียว ถ้าบันทึกไม่สำเร็จ จะไม่มีอะไรเปลี่ยน
-      รอบหน้าโหลดจากฐานข้อมูลใหม่ จึงไม่ซื้อซ้ำ
-    - ถ้า engine ปฏิเสธ/พัง จะคืนพอร์ตของแผนนั้นกลับ แล้วข้ามไปรอบถัดไป ไม่ retry ทุกรอบ
-    """
-    _sync_gu_actor(gu, actor)
-    _set_api_role(gu, actor)
-    if not gu.can_trade():
-        return 0
-
-    # อ่านของเดิมเท่านั้น ห้ามสร้างพอร์ตใหม่
-    sim = gu.load_sim_state()
-    if not isinstance(sim, dict):
-        raise RuntimeError("โหลด sim_state ไม่สำเร็จ ข้าม DCA รอบนี้")
-
-    # กันอ่านผิดบัญชี: แถวที่โหลดมาต้องเป็นของ actor นี้จริง
-    loaded_actor = str(getattr(gu.st, "session_state", {}).get("sim_state_actor", "") or "")
-    if loaded_actor and loaded_actor.strip().lower() != actor.strip().lower():
-        raise RuntimeError(f"sim_state ไม่ตรงบัญชี ({loaded_actor} != {actor}) ข้ามเพื่อความปลอดภัย")
-
-    plans = sim.get("dca_plans")
-    if not isinstance(plans, list) or not plans:
-        return 0
-
-    now = gu._dca_now()
-    min_trade = float(getattr(gu, "MIN_TRADE_THB", 50))
-    due_ids = []
-
-    for plan in plans:
-        if not isinstance(plan, dict) or not plan.get("enabled", False):
-            continue
-        next_run = gu._dca_parse_ts(plan.get("next_run_at"))
-        if next_run is None:
-            next_run = gu._dca_next_run(plan, now - pd.Timedelta(seconds=1))
-            plan["next_run_at"] = gu._dca_iso(next_run)
-        if now >= next_run:
-            due_ids.append(str(plan.get("id")))
-
-    if not due_ids:
-        return 0
-
-    executed = 0
-
-    for plan_id in due_ids:
-        plan = _dca_find_plan(sim, plan_id)
-        if plan is None:
-            continue
-
-        def finish(status: str, target_plan=None) -> None:
-            p = target_plan if target_plan is not None else plan
-            p["last_status"] = status
-            p["last_attempt_at"] = gu._dca_iso(now)
-            p["next_run_at"] = gu._dca_iso(gu._dca_next_run(p, now))
-
-        asset = str(plan.get("asset", "")).upper().strip()
-        amount = _safe_float(plan.get("amount_thb"), 0.0)
-
-        if not asset or asset not in gu.SUPPORTED_ASSETS or amount < min_trade:
-            finish(f"INVALID: เหรียญหรือยอดไม่ถูกต้อง (ขั้นต่ำ {min_trade:g} THB)")
-            continue
-
-        cash = _safe_float(sim.get("customer_thb"), 0.0)
-        if amount > cash + 1e-9:
-            finish(f"SKIPPED — เงินสดไม่พอ ({cash:,.2f} THB)")
-            continue
-
-        live_row = gu._dca_live_market_row(asset)
-        if live_row is None:
-            finish("SKIPPED — ดึงราคาตลาดไม่ได้")
-            continue
-
-        try:
-            cfg = _api_cfg(gu, asset, actor)
-        except Exception as exc:
-            print(f"[DCA] {actor} cfg failed {asset}: {exc}")
-            finish("SKIPPED — โหลด config ไม่ได้")
-            continue
-
-        built = gu._dca_build_context(asset, cfg, live_row)
-        if built is None:
-            finish("SKIPPED — สร้าง execution context ไม่ได้")
-            continue
-        ctx, target = built
-
-        snapshot = _copy.deepcopy(sim)
-        saved_asset = sim.get("asset")
-        saved_target = sim.get("target_thb")
-        failed = None
-        rec = None
-        try:
-            sim["asset"] = asset
-            sim["target_thb"] = float(target)
-            gu.ensure_portfolio_ledger(sim)
-            _steps, rec = gu.execute_order(
-                sim, "buy", amount, now, live_row, ctx, affect_wallet=True,
-            )
-        except Exception as exc:
-            failed = exc
-        finally:
-            if saved_asset is not None:
-                sim["asset"] = saved_asset
-            else:
-                sim.pop("asset", None)
-            if saved_target is not None:
-                sim["target_thb"] = saved_target
-            else:
-                sim.pop("target_thb", None)
-
-        result = str(rec.get("ผลด่าน", "")) if isinstance(rec, dict) else ""
-
-        if failed is not None or rec is None or result.lower().startswith("reject"):
-            # คืนพอร์ตกลับก่อนออเดอร์ของแผนนี้ แล้วข้ามรอบ
-            sim.clear()
-            sim.update(snapshot)
-            restored = _dca_find_plan(sim, plan_id)
-            if failed is not None:
-                print(f"[DCA] {actor} execute failed {plan_id}: {failed!r}")
-                finish(f"FAILED — {type(failed).__name__}", restored)
-            elif rec is None:
-                finish("FAILED — คำสั่งไม่ถูก execute", restored)
-            else:
-                finish("REJECTED — " + result[:80], restored)
-            continue
-
-        _dca_stamp_order(sim, rec, plan, now)
-        plan["last_attempt_at"] = gu._dca_iso(now)
-        plan["next_run_at"] = gu._dca_iso(gu._dca_next_run(plan, now))
-        plan["last_order_id"] = str(rec.get("Order ID", ""))
-        plan["last_status"] = "EXECUTED"
-        plan["last_price_thb"] = _safe_float(rec.get("ราคาที่ลูกค้าได้"), 0.0)
-        plan["last_qty"] = _safe_float(rec.get("เหรียญที่ส่งมอบ"), 0.0)
-        executed += 1
-
-    _dca_save_checked(gu, sim)
-    return executed
-
-
-def _dca_tick() -> int:
-    total = 0
-    try:
-        actors = _dca_list_actors()
-    except Exception as e:
-        _DCA_STATE["last_error"] = f"list actors: {type(e).__name__}: {e}"[:500]
-        print(f"[DCA] list actors error: {e}")
-        return 0
-
-    errors = []
-    for actor in actors:
-        # ล็อกทีละบัญชี ไม่ถือ ORDER_LOCK ค้างตลอดทั้งรอบ เพื่อไม่ให้ขวางการสั่งซื้อขายปกติ
-        with ORDER_LOCK:
+def _dca_tick():
+    with ORDER_LOCK:
+        gu = load_gu()
+        for actor in _dca_list_actors():
             try:
-                gu = load_gu()
-                n = _dca_run_for_actor(gu, actor)
+                _sync_gu_actor(gu, actor)
+                _set_api_role(gu, actor)
+                if not gu.can_trade():
+                    continue
+                sim = _load_existing_sim(gu)
+                now = gu._dca_now()
+                due = []
+                for p in sim.get("dca_plans", []):
+                    if not isinstance(p, dict) or not p.get("enabled"):
+                        continue
+                    nxt = gu._dca_parse_ts(p.get("next_run_at"))
+                    if nxt is None or now >= nxt:
+                        due.append(p)
+                if not due:
+                    continue
+                asset = str(due[0].get("asset", "BTC")).upper()
+                cfg = _api_cfg(gu, asset, actor)
+                data = _load_market_frame(gu, asset)
+                n = gu._dca_execute_due_plans(sim, cfg, data)  # บันทึกเองถ้ามีรายการสำเร็จ
                 if n:
-                    total += n
                     print(f"[DCA] {actor}: executed {n} plan(s)")
-            except HTTPException as e:
-                errors.append(f"{actor}: HTTP {e.status_code}")
-                print(f"[DCA] {actor} error: HTTP {e.status_code} {e.detail}")
             except Exception as e:
-                errors.append(f"{actor}: {type(e).__name__}: {e}")
                 print(f"[DCA] {actor} error: {e}")
-
-    _DCA_STATE["last_tick_at"] = pd.Timestamp.now(tz=BANGKOK_TZ).isoformat()
-    _DCA_STATE["last_executed"] = total
-    _DCA_STATE["total_executed"] += total
-    _DCA_STATE["last_error"] = "; ".join(errors)[:500]
-    return total
 
 
 async def _dca_loop():
@@ -2118,22 +1896,438 @@ async def _dca_loop():
         try:
             await asyncio.to_thread(_dca_tick)
         except Exception as e:
-            _DCA_STATE["last_error"] = f"loop: {type(e).__name__}: {e}"[:500]
             print(f"[DCA] loop error: {e}")
 
 
 @app.on_event("startup")
 async def _start_dca_loop():
-    if os.environ.get("DCA_SCHEDULER_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
-        print("[DCA] scheduler disabled (DCA_SCHEDULER_ENABLED=0)")
-        return
-    _DCA_STATE["loop_started_at"] = pd.Timestamp.now(tz="Asia/Bangkok").isoformat()
     asyncio.create_task(_dca_loop())
 
+# =========================================================
+# MOMENTUM AUTO-TRADE (เฉพาะบัญชีแอดมิน)
+# =========================================================
 
-@app.get("/api/dca/status", dependencies=[Depends(require_api_key)])
-def dca_status():
-    return {"status": "ok", "run_every_sec": DCA_LOOP_SECONDS, **_DCA_STATE}
+MOMENTUM_ADMIN_EMAIL = "teerapat30204@gmail.com"
+MOMENTUM_LOOP_SECONDS = 60
+MOMENTUM_EXCLUDE = {"USDT", "USDC", "THB"}
+MOMENTUM_MIN_REBALANCE_THB = 10_000.0
+MOMENTUM_RANK_TTL = 1800
+MOMENTUM_BACKOFF_SECONDS = 600
+
+MOMENTUM_DEFAULTS = {
+    "enabled": False,
+    "dry_run": True,
+    "lookback": 126,
+    "top_n": 3,
+    "bet_thb": 1_000_000.0,
+    "tp_pct": 10.0,
+    "sl_pct": 5.0,
+    "max_weight_pct": 40.0,
+    "cooldown_hours": 24.0,
+    "exit_on_signal": True,
+}
+
+_MOM_LIMITS = {
+    "bet_thb": (50.0, 100_000_000.0),
+    "tp_pct": (0.5, 1000.0),
+    "sl_pct": (0.5, 100.0),
+    "max_weight_pct": (5.0, 100.0),
+    "top_n": (1, 10),
+    "lookback": (20, 365),
+    "cooldown_hours": (0.0, 720.0),
+}
+
+_MOM_RANK_CACHE = {"ts": 0.0, "lookback": 0, "rows": [], "skipped": []}
+_MOM_RUNTIME = {"last_tick": "", "errors": [], "dry": [], "backoff": {}, "seen": set()}
+_MOM_TASKS = []
+
+
+class MomentumConfigRequest(BaseModel):
+    enabled: Optional[bool] = None
+    dry_run: Optional[bool] = None
+    exit_on_signal: Optional[bool] = None
+    bet_thb: Optional[float] = None
+    tp_pct: Optional[float] = None
+    sl_pct: Optional[float] = None
+    max_weight_pct: Optional[float] = None
+    top_n: Optional[int] = None
+    lookback: Optional[int] = None
+    cooldown_hours: Optional[float] = None
+
+
+def _mom_admin_only(user: str):
+    if str(user or "").strip().lower() != MOMENTUM_ADMIN_EMAIL:
+        raise HTTPException(status_code=403, detail="ฟังก์ชันนี้ใช้ได้เฉพาะบัญชีแอดมิน")
+
+
+def _mom_now():
+    return pd.Timestamp.now(tz="Asia/Bangkok")
+
+
+def _mom_push(lst: list, text: str, keep: int = 20):
+    lst.append({"time": _mom_now().isoformat(), "text": text})
+    del lst[:-keep]
+
+
+def _mom_notify(text: str):
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not chat:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat, "text": text},
+            timeout=10,
+        )
+    except Exception as e:
+        print(f"[MOMENTUM] telegram error: {e}")
+
+
+def _mom_state(sim: dict) -> dict:
+    st = sim.get("momentum_bot")
+    if not isinstance(st, dict):
+        st = {}
+    cfg = dict(MOMENTUM_DEFAULTS)
+    if isinstance(st.get("config"), dict):
+        cfg.update(st["config"])
+    st["config"] = cfg
+    if not isinstance(st.get("cooldowns"), dict):
+        st["cooldowns"] = {}
+    if not isinstance(st.get("log"), list):
+        st["log"] = []
+    sim["momentum_bot"] = st
+    return st
+
+
+def _mom_cooling(st: dict, asset: str) -> bool:
+    until = (st.get("cooldowns") or {}).get(asset)
+    if not until:
+        return False
+    try:
+        return _mom_now() < pd.Timestamp(until)
+    except Exception:
+        return False
+
+
+def _mom_rank(gu, lookback: int) -> list:
+    """จัดอันดับ momentum = ผลรวมผลตอบแทนรายวันย้อนหลัง lookback วัน (แคช 30 นาที)"""
+    c = _MOM_RANK_CACHE
+    if c["rows"] and c["lookback"] == lookback and time.time() - c["ts"] < MOMENTUM_RANK_TTL:
+        return c["rows"]
+    rows, skipped = [], []
+    for asset in sorted(gu.SUPPORTED_ASSETS):
+        if asset in MOMENTUM_EXCLUDE:
+            continue
+        try:
+            data = _load_market_frame(gu, asset)
+            close = (data["Global_USD"].astype(float) * data["USDTHB"].astype(float)).dropna()
+            if len(close) < lookback + 1:
+                skipped.append(f"{asset}: ข้อมูล {len(close)} แถว ไม่ถึง {lookback + 1}")
+                continue
+            mom = float(close.pct_change().dropna().tail(lookback).sum()) * 100
+            rows.append({"asset": asset, "momentum_pct": round(mom, 2)})
+        except Exception as e:
+            skipped.append(f"{asset}: {e}")
+    rows.sort(key=lambda r: r["momentum_pct"], reverse=True)
+    c.update({"ts": time.time(), "lookback": lookback, "rows": rows, "skipped": skipped})
+    return rows
+
+
+def _mom_decide(cfg: dict, st: dict, pf: dict, rank: list) -> list:
+    """คืนรายการ (side, asset, amount_thb, sell_all, reason, cooldown_hours)"""
+    cash = float(pf.get("cash_thb") or 0)
+    total = float(pf.get("total_value_thb") or 0)
+    cap = float(cfg["max_weight_pct"]) / 100.0
+    cd = float(cfg["cooldown_hours"])
+    mom = {r["asset"]: r["momentum_pct"] for r in rank}
+
+    held = {}
+    for h in pf.get("holdings") or []:
+        a = str(h.get("asset", "")).upper()
+        if a in MOMENTUM_EXCLUDE or float(h.get("qty") or 0) <= 1e-12:
+            continue
+        held[a] = h
+
+    actions, exited = [], set()
+
+    # 1) ออก: TP / SL / สัญญาณกลับเป็นลบ
+    for a, h in held.items():
+        pnl = float(h.get("pnl_pct") or 0)
+        if pnl >= float(cfg["tp_pct"]):
+            actions.append(("sell", a, 0.0, True, f"TP {pnl:+.2f}%", 0.0))
+        elif pnl <= -float(cfg["sl_pct"]):
+            actions.append(("sell", a, 0.0, True, f"SL {pnl:+.2f}%", cd))
+        elif cfg.get("exit_on_signal") and a in mom and mom[a] <= 0:
+            actions.append(("sell", a, 0.0, True, f"Signal momentum {mom[a]:+.2f}%", 0.0))
+        else:
+            continue
+        exited.add(a)
+
+    # 2) Rebalance: ขายส่วนเกินที่เกินเพดาน
+    if total > 0:
+        for a, h in held.items():
+            if a in exited:
+                continue
+            val = float(h.get("market_value") or 0)
+            excess = val - total * cap
+            if excess >= MOMENTUM_MIN_REBALANCE_THB:
+                actions.append((
+                    "sell", a, excess, False,
+                    f"Rebalance {val / total * 100:.1f}% > {cap * 100:.0f}%", cd,
+                ))
+
+    # 3) เข้า: Top N ที่ momentum เป็นบวก
+    bet = float(cfg["bet_thb"])
+    free_cash = cash
+    for r in rank[: int(cfg["top_n"])]:
+        a = r["asset"]
+        if r["momentum_pct"] <= 0 or a in held or _mom_cooling(st, a):
+            continue
+        if total > 0 and bet / total > cap:
+            continue
+        if free_cash < bet:
+            break
+        actions.append(("buy", a, bet, False, f"Momentum {r['momentum_pct']:+.2f}%", 0.0))
+        free_cash -= bet
+
+    return actions
+
+
+def _mom_execute(gu, actor, side, asset, amount_thb, sell_all, reason, cooldown_hours):
+    """ส่งคำสั่งผ่าน engine เดียวกับ /api/order (เรียกใน ORDER_LOCK เท่านั้น) คืน (ok, ข้อความ)"""
+    data = _load_market_frame(gu, asset)
+    order_date = pd.Timestamp(data.index[-1])
+    px_row = data.loc[order_date]
+
+    cfg = _api_cfg(gu, asset, actor)
+    built = gu.build_dealer_ctx(cfg, data)
+    if built is None:
+        return False, "สร้าง Dealer context ไม่สำเร็จ"
+    ctx, target_stock_thb = built
+
+    sim = _load_existing_sim(gu)
+    bot = _mom_state(sim)
+    sim = gu.sim_normalize_state(
+        sim, asset, order_date,
+        float(px_row["Global_USD"]), float(px_row["USDTHB"]), float(target_stock_thb),
+    )
+    sim["momentum_bot"] = bot
+    sim["asset"] = asset
+    sim["target_thb"] = float(target_stock_thb)
+    gu.ensure_portfolio_ledger(sim)
+
+    customer_thb = _safe_float(sim.get("customer_thb"), 0.0)
+    held_qty = _safe_float(sim.setdefault("customer_coins", {}).get(asset), 0.0)
+    price = _safe_float(px_row["Global_USD"]) * _safe_float(px_row["USDTHB"])
+    min_trade = float(getattr(gu, "MIN_TRADE_THB", 50))
+
+    amount = float(amount_thb)
+    if side == "sell":
+        if held_qty <= 0 or price <= 0:
+            return False, f"ไม่มี {asset} ให้ขาย"
+        held_value = held_qty * price
+        amount = held_value if sell_all else min(amount, held_value)
+    elif amount > customer_thb + 1e-9:
+        return False, f"เงินสดไม่พอ (มี {customer_thb:,.2f})"
+    if amount < min_trade:
+        return False, f"ยอด {amount:,.2f} ต่ำกว่าขั้นต่ำ"
+
+    execution_time = _mom_now()
+    steps, rec = gu.execute_order(
+        sim, side, amount, order_date, px_row, ctx,
+        affect_wallet=True, forced_quote=None,
+    )
+    if rec is None:
+        return False, "คำสั่งไม่ผ่าน engine"
+
+    iso = execution_time.isoformat()
+    for target in (rec, (sim.get("orders") or [None])[-1]):
+        if isinstance(target, dict):
+            target["เวลา"] = iso
+            target["timestamp"] = iso
+            target["วันที่"] = execution_time.strftime("%Y-%m-%d")
+            target["strategy"] = "momentum_bot"
+
+    result = str(rec.get("ผลด่าน", ""))
+    if result.lower().startswith("reject"):
+        return False, f"Engine ปฏิเสธ: {result}"
+
+    bot = _mom_state(sim)
+    bot["log"].append({
+        "time": iso, "side": side, "asset": asset, "amount_thb": round(amount, 2),
+        "reason": reason, "qty": rec.get("เหรียญที่ส่งมอบ"),
+        "quote_thb": rec.get("ราคาที่ลูกค้าได้"),
+    })
+    del bot["log"][:-100]
+    if cooldown_hours > 0:
+        bot["cooldowns"][asset] = (execution_time + pd.Timedelta(hours=cooldown_hours)).isoformat()
+
+    gu.st.session_state.pop("sim_state_save_error", None)
+    gu.save_sim_state(sim)
+    if getattr(gu.st, "session_state", {}).get("sim_state_save_error"):
+        return False, "Engine ประมวลผลแล้วแต่บันทึก Portfolio ไม่สำเร็จ"
+
+    return True, f"{amount:,.2f} บาท · qty {rec.get('เหรียญที่ส่งมอบ')}"
+
+
+def _momentum_tick():
+    gu = load_gu()
+    actor = _actor(MOMENTUM_ADMIN_EMAIL)
+
+    # รอบสั้น: อ่านค่าตั้ง
+    with ORDER_LOCK:
+        _sync_gu_actor(gu, actor)
+        _set_api_role(gu, actor)
+        if not gu.can_trade():
+            _mom_push(_MOM_RUNTIME["errors"], f"บัญชี {actor} ไม่มีสิทธิ์ Trader")
+            return
+        cfg = dict(_mom_state(_load_existing_sim(gu))["config"])
+
+    _MOM_RUNTIME["last_tick"] = _mom_now().isoformat()
+    if not cfg["enabled"]:
+        return
+
+    # คำนวณอันดับนอก lock (ช้า ไม่ให้บล็อกคำสั่งอื่น)
+    rank = _mom_rank(gu, int(cfg["lookback"]))
+
+    with ORDER_LOCK:
+        _sync_gu_actor(gu, actor)
+        _set_api_role(gu, actor)
+        sim = _load_existing_sim(gu)
+        st = _mom_state(sim)
+        cfg = st["config"]
+        if not cfg["enabled"]:
+            return
+
+        pf = _portfolio_response(gu, sim)
+        actions = _mom_decide(cfg, st, pf, rank)
+
+        today = _mom_now().strftime("%Y-%m-%d")
+        seen = _MOM_RUNTIME["seen"]
+        seen.intersection_update({k for k in seen if k[0] == today})
+
+        for side, asset, amount, sell_all, reason, cd in actions:
+            if time.time() < _MOM_RUNTIME["backoff"].get(asset, 0):
+                continue
+            label = f"{'ซื้อ' if side == 'buy' else 'ขาย'} {asset} — {reason}"
+
+            if cfg["dry_run"]:
+                key = (today, side, asset, reason.split(" ")[0])
+                if key not in seen:
+                    seen.add(key)
+                    _mom_push(_MOM_RUNTIME["dry"], label)
+                    _mom_notify(f"🧪 [ทดลอง ไม่ได้ส่งคำสั่ง] {label}")
+                continue
+
+            try:
+                ok, msg = _mom_execute(gu, actor, side, asset, amount, sell_all, reason, cd)
+            except HTTPException as e:
+                ok, msg = False, str(e.detail)
+            except Exception as e:
+                ok, msg = False, str(e)
+
+            if ok:
+                print(f"[MOMENTUM] {label} | {msg}")
+                _mom_notify(f"✅ Momentum Bot\n{label}\n{msg}")
+            else:
+                _MOM_RUNTIME["backoff"][asset] = time.time() + MOMENTUM_BACKOFF_SECONDS
+                _mom_push(_MOM_RUNTIME["errors"], f"{label} ไม่สำเร็จ: {msg}")
+                key = (today, "fail", asset, msg[:40])
+                if key not in seen:
+                    seen.add(key)
+                    _mom_notify(f"⚠️ Momentum Bot\n{label}\nไม่สำเร็จ: {msg}")
+
+
+async def _momentum_loop():
+    await asyncio.sleep(30)
+    while True:
+        try:
+            await asyncio.to_thread(_momentum_tick)
+        except Exception as e:
+            print(f"[MOMENTUM] loop error: {e}")
+            _mom_push(_MOM_RUNTIME["errors"], f"loop error: {e}")
+        await asyncio.sleep(MOMENTUM_LOOP_SECONDS)
+
+
+@app.on_event("startup")
+async def _start_momentum_loop():
+    _MOM_TASKS.append(asyncio.create_task(_momentum_loop()))
+
+
+def _mom_payload(actor: str, st: dict) -> dict:
+    now = _mom_now()
+    cooldowns = {}
+    for a, until in (st.get("cooldowns") or {}).items():
+        try:
+            if now < pd.Timestamp(until):
+                cooldowns[a] = until
+        except Exception:
+            pass
+    c = _MOM_RANK_CACHE
+    return {
+        "status": "ok",
+        "actor": actor,
+        "config": st["config"],
+        "cooldowns": cooldowns,
+        "log": list(reversed(st["log"][-30:])),
+        "ranking": c["rows"],
+        "ranking_skipped": c["skipped"],
+        "ranking_age_sec": int(time.time() - c["ts"]) if c["ts"] else None,
+        "runtime": {
+            "last_tick": _MOM_RUNTIME["last_tick"],
+            "errors": list(reversed(_MOM_RUNTIME["errors"][-10:])),
+            "dry": list(reversed(_MOM_RUNTIME["dry"][-10:])),
+            "notify_ready": bool(
+                os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+                and os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+            ),
+        },
+    }
+
+
+@app.get("/api/momentum", dependencies=[Depends(require_api_key)])
+def momentum_status(user: str = Depends(require_user)):
+    _mom_admin_only(user)
+    with ORDER_LOCK:
+        try:
+            gu, actor, role = _dca_open_session(user)
+            st = _mom_state(_load_existing_sim(gu))
+            return _mom_payload(actor, st)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"โหลดสถานะไม่สำเร็จ: {e}")
+
+
+@app.post("/api/momentum/config", dependencies=[Depends(require_api_key)])
+def momentum_config(req: MomentumConfigRequest, user: str = Depends(require_user)):
+    _mom_admin_only(user)
+    with ORDER_LOCK:
+        try:
+            gu, actor, role = _dca_open_session(user)
+            if not gu.can_trade():
+                raise HTTPException(status_code=403, detail=f"ไม่มีสิทธิ์ Trader (role={role})")
+
+            updates = req.dict(exclude_none=True)
+            for k, (lo, hi) in _MOM_LIMITS.items():
+                if k in updates:
+                    v = float(updates[k])
+                    if not math.isfinite(v) or v < lo or v > hi:
+                        raise HTTPException(status_code=400, detail=f"{k} ต้องอยู่ระหว่าง {lo:g}-{hi:g}")
+
+            sim = _load_existing_sim(gu)
+            st = _mom_state(sim)
+            st["config"].update(updates)
+            if updates.get("enabled"):
+                _MOM_RUNTIME["backoff"].clear()
+                _MOM_RUNTIME["seen"].clear()
+            gu.save_sim_state(sim)
+            return _mom_payload(actor, st)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"บันทึกค่าไม่สำเร็จ: {e}")
 
 
 # =========================================================
