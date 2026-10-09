@@ -2308,7 +2308,6 @@ function TradePage({
         </div>
       </div>
 
-          <MarketOverviewCard />
           <DcaCard onRefresh={onRefresh} />
       </div>        
     )
@@ -2474,6 +2473,7 @@ type DcaPlan = {
 type CoinReturn = { y1: number | null; m6: number | null }
 
 const DCA_FREQS = ["รายวัน", "รายสัปดาห์", "รายเดือน"]
+const DCA_QUICK_AMOUNTS = [500, 1000, 5000, 10000]
 const DCA_ASSETS = ["BTC", "ETH", "SOL", "DOGE", "ADA", "XRP", "HBAR", "LINK", "XLM"]
 const DCA_COIN_NAMES: Record<string, string> = {
   BTC: "Bitcoin", ETH: "Ethereum", SOL: "Solana", DOGE: "Dogecoin", ADA: "Cardano",
@@ -2650,7 +2650,14 @@ function DcaCard({ onRefresh }: { onRefresh: () => void }) {
         </button>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      {/* แถวบน: ภาพรวมตลาด 30% / ฟอร์ม + รายละเอียด 70% */}
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[3fr_7fr]">
+        <div className="order-2 lg:order-1">
+          <MarketOverviewCard />
+        </div>
+
+        <div className="order-1 space-y-4 lg:order-2">
+
         {/* FORM */}
         <div className="rounded-xl border bg-card p-5">
           <h4 className="font-semibold">สร้างคำสั่ง Auto DCA</h4>
@@ -2671,6 +2678,22 @@ function DcaCard({ onRefresh }: { onRefresh: () => void }) {
             placeholder="1,000"
             className={selectCls}
           />
+          <div className="mt-2 grid grid-cols-4 gap-2">
+            {DCA_QUICK_AMOUNTS.map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setAmount(String(v))}
+                className={`rounded-md border px-2 py-1.5 text-xs ${
+                  Number(amount.replace(/,/g, "")) === v
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-accent"
+                }`}
+              >
+                ฿{v.toLocaleString("th-TH")}
+              </button>
+            ))}
+          </div>
 
           <p className="mt-6 text-sm font-medium">2. กำหนดรอบการทำรายการ</p>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -2710,6 +2733,11 @@ function DcaCard({ onRefresh }: { onRefresh: () => void }) {
           <div className="mt-4 rounded-lg border bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground">
             เมื่อถึงเวลา ระบบจะใช้ <b className="text-foreground">ราคาตลาดปัจจุบัน</b> หัก THB จาก Wallet
             แล้วเพิ่มเหรียญเข้า Portfolio ให้อัตโนมัติ
+          </div>
+
+          <div className="mt-4 rounded-lg border p-3 text-xs">
+            สรุป: ซื้อ <b>{asset}</b> ครั้งละ{" "}
+            <b>{formatTHB(Number(amount.replace(/,/g, "")) || 0)}</b> {freq} เวลา {pad(hour)}:{pad(minute)} น.
           </div>
 
           <button
@@ -2753,6 +2781,7 @@ function DcaCard({ onRefresh }: { onRefresh: () => void }) {
             <b className="text-foreground">ระบบจำลอง</b> Auto DCA จะไม่ส่งคำสั่งซื้อเงินจริงไปยัง Exchange
             ภายนอก แต่จะ Execute ภายในระบบจำลอง และใช้ Portfolio Ledger เดียวกับหน้า Trade
           </div>
+        </div>
         </div>
       </div>
 
@@ -2806,7 +2835,7 @@ function DcaCard({ onRefresh }: { onRefresh: () => void }) {
         <div className="mb-3 inline-block rounded-md border border-emerald-500/40 bg-emerald-500/5 px-3 py-1 text-xs font-semibold">
           เหรียญที่รองรับ Auto DCA
         </div>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           {DCA_ASSETS.map((a) => {
             const r = returns[a]
             return (
