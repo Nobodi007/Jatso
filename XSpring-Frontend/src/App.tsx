@@ -2918,30 +2918,30 @@ function PortfolioPage({
       )}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Total Portfolio"
-          value={portfolio ? formatTHB(portfolio.total_value_thb) : "—"}
-          change={portfolio ? "มูลค่ารวมของพอร์ต" : "กำลังโหลด"}
-        />
-        <StatCard
-          title="Cash Balance"
-          value={portfolio ? formatTHB(portfolio.cash_thb) : "—"}
-          change="THB Available"
-        />
-        <StatCard
-          title="Market Value"
-          value={portfolio ? formatTHB(portfolio.market_value_thb) : "—"}
-          change="มูลค่าสินทรัพย์"
-        />
-        <StatCard
-          title="Total P&L"
-          value={portfolio ? formatTHB(portfolio.total_pnl_thb) : "—"}
-          change={
-            portfolio
-              ? `${pnlPositive ? "+" : ""}${portfolio.pnl_pct.toFixed(2)}%`
-              : "—"
-          }
-        />
+          <StatCard
+    title="Total Portfolio"
+    value={portfolio ? <NumberTicker value={portfolio.total_value_thb} currency="THB" /> : "—"}
+    change={portfolio ? "มูลค่ารวมของพอร์ต" : "กำลังโหลด"}
+  />
+  <StatCard
+    title="Cash Balance"
+    value={portfolio ? formatTHB(portfolio.cash_thb) : "—"}
+    change="THB Available"
+  />
+  <StatCard
+    title="Market Value"
+    value={portfolio ? formatTHB(portfolio.market_value_thb) : "—"}
+    change="มูลค่าสินทรัพย์"
+  />
+  <StatCard
+    title="Total P&L"
+    value={portfolio ? <NumberTicker value={portfolio.total_pnl_thb} currency="THB" showSign /> : "—"}
+    change={
+      portfolio
+        ? `${pnlPositive ? "+" : ""}${portfolio.pnl_pct.toFixed(2)}%`
+        : "—"
+    }
+  />
       </div>
 
       <div className="rounded-xl border bg-card p-5">
