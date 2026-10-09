@@ -25,7 +25,7 @@ import {
 } from "lucide-react"
 import MorphOrb from "./components/ui/ai-thiking-orb-and-input"
 import RiskPage from "./components/risk/RiskPage"
-import NumberTicker from "./components/ui/number-ticker"
+import { NumberTicker } from "./components/ui/number-ticker"
 
 type Page =
   | "dashboard"
@@ -1534,11 +1534,33 @@ function DashboardPage({
 
       {/* KPI */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Total Equity"
-          value={loading ? "Loading..." : formatTHB(totalValue)}
-          change="Cash + Crypto"
-        />
+          <StatCard
+    title="Total Equity"
+    value={loading && totalValue === 0 ? "Loading..." : <NumberTicker value={totalValue} currency="THB" />}
+    change="Cash + Crypto"
+  />
+
+  <StatCard
+    title="Available Cash"
+    value={loading && totalValue === 0 ? "Loading..." : <NumberTicker value={cash} currency="THB" />}
+    change={
+      totalValue > 0
+        ? `${((cash / totalValue) * 100).toFixed(1)}% of equity`
+        : "THB"
+    }
+  />
+
+  <StatCard
+    title="Crypto Value"
+    value={loading && totalValue === 0 ? "Loading..." : formatTHB(marketValue)}
+    change={`${openPositions} open positions`}
+  />
+
+  <StatCard
+    title="Total P&L"
+    value={loading && totalValue === 0 ? "Loading..." : <NumberTicker value={totalPnl} currency="THB" showSign />}
+    change={loading ? "—" : `${pnlPositive ? "+" : ""}${pnlPct.toFixed(2)}%`}
+  />
 
         <StatCard
           title="Available Cash"
@@ -3846,7 +3868,7 @@ function StatCard({
   icon,
 }: {
   title: string
-  value: string
+  value: ReactNode
   change: string
   icon?: ReactNode
 }) {
