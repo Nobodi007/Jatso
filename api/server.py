@@ -1408,6 +1408,75 @@ def chat(req: ChatRequest, user: str = Depends(require_user)):
         answer = answer[:237].rstrip() + "…"
 
     return {"status": "ok", "answer": answer or "ไม่ได้รับคำตอบจาก AI"}
+def _num(x, default=0.0) -> float:
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return default
+
+
+@app.get("/api/risk", dependencies=[Depends(require_api_key)])
+def risk(user: str = Depends(require_user)):
+    with ORDER_LOCK:
+        try:
+            gu = load_gu()
+            actor = _actor(user)
+            _sync_gu_actor(gu, actor)
+            sim = _load_existing_sim(gu)
+            pf = _portfolio_response(gu, sim)
+        except Exception as e:
+            raise _internal_server_error("โหลดข้อมูลความเสี่ยงไม่สำเร็จ", e)
+
+    equity = _num(pf.get("total_value_thb"))
+    cash = _num(pf.get("cash_thb"))
+
+    positions = []
+    for h in pf.get("holdings") or []:
+        qty = _num(h.get("qty"))
+        price = _num(h.get("price"))
+        avg_cost = _num(h.get("avg_cost"))
+        value = qty * price
+        cost = qty * avg_cost
+        pnl = _num(h.get("unrealized_pnl"))
+        positions.append({
+            "asset": h.get("asset"),
+            "value_thb": round(value, 2),
+            "weight_pct": round(value / equity * 100, 2) if equity else 0,
+            "pnl_thb": round(pnl, 2),
+            "pnl_pct": round(pnl / cost * 100, 2) if cost else 0,
+        })
+    positions.sort(key=lambda p: p["weight_pct"], reverse=True)
+
+    crypto_value = sum(p["value_thb"] for p in positions)
+    top_weight = positions[0]["weight_pct"] if positions else 0
+    hhi = round(sum((p["weight_pct"] / 100) ** 2 for p in positions), 3)
+    cash_pct = round(cash / equity * 100, 2) if equity else 0
+    worst = min(positions, key=lambda p: p["pnl_pct"]) if positions else None
+
+    alerts = []
+    if top_weight > 50:
+        alerts.append({"level": "high", "text": f"{positions[0]['asset']} คิดเป็น {top_weight:.1f}% ของพอร์ต กระจุกตัวสูง"})
+    elif top_weight > 30:
+        alerts.append({"level": "medium", "text": f"{positions[0]['asset']} คิดเป็น {top_weight:.1f}% ของพอร์ต"})
+    if worst and worst["pnl_pct"] < -10:
+        alerts.append({"level": "high", "text": f"{worst['asset']} ขาดทุน {worst['pnl_pct']:.1f}%"})
+    if equity and cash_pct < 5:
+        alerts.append({"level": "medium", "text": f"เงินสดเหลือ {cash_pct:.1f}% สภาพคล่องต่ำ"})
+
+    return {
+        "status": "ok",
+        "equity_thb": round(equity, 2),
+        "cash_thb": round(cash, 2),
+        "cash_pct": cash_pct,
+        "exposure_thb": round(crypto_value, 2),
+        "exposure_pct": round(crypto_value / equity * 100, 2) if equity else 0,
+        "total_pnl_thb": round(_num(pf.get("total_pnl_thb")), 2),
+        "pnl_pct": round(_num(pf.get("pnl_pct")), 2),
+        "top_weight_pct": top_weight,
+        "concentration_hhi": hhi,
+        "positions": positions,
+        "alerts": alerts,
+    }
 
 # =========================================================
 # ORDER TIMESTAMP NORMALIZATION
