@@ -15,6 +15,8 @@ import math
 import json
 import urllib.parse
 import urllib.request
+import asyncio
+import requests
 
 import jwt
 from google.auth.transport import requests as google_requests
