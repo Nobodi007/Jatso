@@ -509,15 +509,7 @@ function AppInner() {
               />
             )}
 
-            {page === "risk" && (
-              <RiskCenterPage
-                 portfolio={portfolio}
-                 loading={portfolioLoading}
-                 error={portfolioError}
-                 onRefresh={loadPortfolio}
-              />
-            )}
-
+          
             {page === "quant" && (
               <QuantLabPage
                 portfolio={portfolio}
