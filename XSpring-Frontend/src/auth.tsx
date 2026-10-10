@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react"
 import type { ReactNode } from "react"
 import { GoogleLogin, GoogleOAuthProvider } from "@react-oauth/google"
+import LandingPage from "./components/landing/LandingPage"
 
 const API_BASE_URL = "https://xspring-api.onrender.com"
 const GOOGLE_CLIENT_ID = String(import.meta.env.VITE_GOOGLE_CLIENT_ID || "").trim()
@@ -104,10 +105,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 /** แสดงหน้า login ถ้ายังไม่ล็อกอิน ถ้าล็อกอินแล้วค่อย render children */
 export function AuthGate({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(() => readUser())
+  const [showLogin, setShowLogin] = useState(false)
 
   const logout = useCallback(() => {
     clearSession()
     setUser(null)
+    setShowLogin(false)
   }, [])
 
   useEffect(() => {
@@ -115,16 +118,23 @@ export function AuthGate({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, logout)
   }, [logout])
 
-  if (!user) return <LoginScreen onLoggedIn={setUser} />
+    if (!user && !showLogin) {
+    return <LandingPage onLogin={() => setShowLogin(true)} onRegister={() => setShowLogin(true)} />
+  }
+  if (!user) return <LoginScreen onLoggedIn={setUser} onBack={() => setShowLogin(false)} />
 
   return <AuthContext.Provider value={{ user, logout }}>{children}</AuthContext.Provider>
 }
 
 /* ---------- login screen ---------- */
 
-function LoginScreen({ onLoggedIn }: { onLoggedIn: (user: AuthUser) => void }) {
-  const [error, setError] = useState("")
-  const [loading, setLoading] = useState(false)
+function LoginScreen({
+  onLoggedIn,
+  onBack,
+}: {
+  onLoggedIn: (user: AuthUser) => void
+  onBack: () => void
+}) {
 
   // ให้ธีมตรงกับที่ผู้ใช้เลือกไว้ แม้ยังไม่ได้เข้า App หลัก
   useEffect(() => {
@@ -179,6 +189,13 @@ function LoginScreen({ onLoggedIn }: { onLoggedIn: (user: AuthUser) => void }) {
     <div className="flex min-h-screen items-center justify-center bg-background p-6 text-foreground">
       <div className="w-full max-w-sm rounded-2xl border bg-card p-8 text-center shadow-sm">
         <div className="mx-auto flex size-12 items-center justify-center rounded-xl bg-primary text-lg font-bold text-primary-foreground">
+        <button
+          type="button"
+          onClick={onBack}
+          className="mb-4 block w-full text-left text-xs text-muted-foreground hover:text-foreground"
+        >
+          ← กลับหน้าแรก
+        </button>
           X
         </div>
         <h1 className="mt-4 text-xl font-semibold">XSpring Dealer Suite</h1>
