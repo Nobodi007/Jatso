@@ -4865,7 +4865,300 @@ function TrendChart({ keys, timing, hold }: { keys: string[]; timing: number[]; 
   )
 }
 
-function TrendTimingCard() {
+type TrendPlanItem = {
+  side: "buy" | "sell"
+  asset: string
+  amount_thb: number
+  reason: string
+}
+
+type TrendPreview = {
+  plan: TrendPlanItem[]
+  action_keys: string[]
+  warnings: string[]
+  summary: {
+    n_universe: number
+    n_hold: number
+    budget_thb: number
+    target_per_coin_thb: number
+    cash_thb: number
+  }
+}
+
+type TrendExecResult = {
+  side: string
+  asset: string
+  ok: boolean
+  message: string
+  amount_thb: number
+}
+
+function TrendFollowPanel({
+  signals,
+  smaLen,
+  onDone,
+}: {
+  signals: TrendSignalRow[]
+  smaLen: number
+  onDone?: () => void
+}) {
+  const [budget, setBudget] = useState("")
+  const [preview, setPreview] = useState<TrendPreview | null>(null)
+  const [results, setResults] = useState<TrendExecResult[] | null>(null)
+  const [resultStatus, setResultStatus] = useState("")
+  const [busy, setBusy] = useState<"" | "preview" | "confirm">("")
+  const [message, setMessage] = useState("")
+
+  const ready = signals.filter((s) => s.hold !== null)
+  const universe = ready.map((s) => s.asset)
+  const hold = ready.filter((s) => s.hold === true).map((s) => s.asset)
+  const signalKey = `${smaLen}|${universe.join(",")}|${hold.join(",")}|${budget}`
+
+  // สัญญาณ ค่า SMA หรืองบเปลี่ยน รายการที่ดูไว้จะไม่ตรงอีกต่อไป
+  useEffect(() => {
+    setPreview(null)
+  }, [signalKey])
+
+  const parseBudget = (): number | null | "invalid" => {
+    const raw = budget.replace(/,/g, "").trim()
+    if (!raw) return null
+    const v = Number(raw)
+    return Number.isFinite(v) && v > 0 ? v : "invalid"
+  }
+
+  const call = async (confirm: boolean) => {
+    const b = parseBudget()
+    if (b === "invalid") throw new Error("งบต้องเป็นตัวเลขที่มากกว่า 0")
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    }
+    if (confirm) {
+      headers["Idempotency-Key"] =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    }
+    const response = await authFetch(`${API_BASE_URL}/api/trend/rebalance`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        universe,
+        hold,
+        budget_thb: b,
+        sma_months: smaLen,
+        confirm,
+        expected: confirm ? preview?.action_keys ?? [] : undefined,
+      }),
+    })
+    if (!response.ok) throw new Error(await dcaErrorText(response))
+    return response.json()
+  }
+
+  const loadPreview = async () => {
+    setMessage("")
+    setResults(null)
+    setBusy("preview")
+    try {
+      const body = await call(false)
+      setPreview(body as TrendPreview)
+    } catch (err) {
+      setPreview(null)
+      setMessage(err instanceof Error ? err.message : "ดูรายการไม่สำเร็จ")
+    } finally {
+      setBusy("")
+    }
+  }
+
+  const confirmOrders = async () => {
+    if (!preview || preview.plan.length === 0) return
+    setMessage("")
+    setBusy("confirm")
+    try {
+      const body = await call(true)
+      setResults(Array.isArray(body?.results) ? (body.results as TrendExecResult[]) : [])
+      setResultStatus(String(body?.status || ""))
+      setPreview(null)
+      onDone?.()
+    } catch (err) {
+      const text = err instanceof Error ? err.message : "ส่งคำสั่งไม่สำเร็จ"
+      setMessage(text)
+      // 409 = รายการเปลี่ยนไปจากที่ดูไว้ ให้ดูใหม่
+      if (text.includes("กดดูรายการใหม่")) setPreview(null)
+    } finally {
+      setBusy("")
+    }
+  }
+
+  const sells = preview?.plan.filter((p) => p.side === "sell") ?? []
+  const buys = preview?.plan.filter((p) => p.side === "buy") ?? []
+
+  return (
+    <div className="rounded-xl border bg-muted/20 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h4 className="text-sm font-semibold">ทำตามสัญญาณ</h4>
+          <p className="mt-1 max-w-xl text-[11px] leading-5 text-muted-foreground">
+            เทียบพอร์ตจำลองของคุณกับสัญญาณตอนนี้ เหรียญที่ออกจะถูกขายเป็นเงินสด เหรียญที่ถือจะซื้อเพิ่มให้ได้น้ำหนักเท่ากัน
+            ดูรายการก่อน แล้วค่อยกดยืนยัน ระบบจำลอง ไม่ส่งคำสั่งจริงไป Exchange
+          </p>
+        </div>
+        <div className="flex flex-wrap items-end gap-2">
+          <div>
+            <label className="mb-1 block text-[10px] text-muted-foreground">
+              งบ THB (ว่าง = ใช้ทั้งหมด)
+            </label>
+            <input
+              value={budget}
+              onChange={(e) => setBudget(e.target.value)}
+              inputMode="decimal"
+              placeholder="ทั้งหมด"
+              className="w-36 rounded-lg border bg-background px-3 py-1.5 text-sm outline-none"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={loadPreview}
+            disabled={busy !== "" || universe.length === 0}
+            className="rounded-lg bg-primary px-4 py-1.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
+          >
+            {busy === "preview" ? "กำลังคำนวณ..." : "ดูรายการซื้อ/ขาย"}
+          </button>
+        </div>
+      </div>
+
+      {message && (
+        <p className="mt-3 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-500">
+          {message}
+        </p>
+      )}
+
+      {preview && (
+        <div className="mt-4 space-y-3">
+          <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+            {[
+              ["งบกลยุทธ์", formatTHB(preview.summary.budget_thb)],
+              ["เป้าต่อเหรียญ", formatTHB(preview.summary.target_per_coin_thb)],
+              ["เงินสดตอนนี้", formatTHB(preview.summary.cash_thb)],
+              ["ถือ / ทั้งหมด", `${preview.summary.n_hold} / ${preview.summary.n_universe} เหรียญ`],
+            ].map(([k, v]) => (
+              <div key={k} className="rounded-lg border bg-card px-3 py-2">
+                <div className="text-[10px] text-muted-foreground">{k}</div>
+                <div className="mt-0.5 font-semibold tabular-nums">{v}</div>
+              </div>
+            ))}
+          </div>
+
+          {preview.plan.length === 0 ? (
+            <p className="rounded-lg border bg-card px-3 py-3 text-center text-sm text-muted-foreground">
+              พอร์ตของคุณตรงกับสัญญาณแล้ว ไม่มีรายการที่ต้องซื้อหรือขาย
+            </p>
+          ) : (
+            <div className="overflow-x-auto rounded-lg border bg-card">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-xs text-muted-foreground">
+                    <th className="px-3 py-2 text-left font-medium">คำสั่ง</th>
+                    <th className="px-3 py-2 text-left font-medium">เหรียญ</th>
+                    <th className="px-3 py-2 text-right font-medium">ประมาณการ</th>
+                    <th className="px-3 py-2 text-left font-medium">เหตุผล</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {[...sells, ...buys].map((p) => (
+                    <tr key={`${p.side}-${p.asset}`}>
+                      <td className="px-3 py-2">
+                        <span
+                          className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
+                            p.side === "buy"
+                              ? "bg-emerald-500/15 text-emerald-500"
+                              : "bg-red-500/15 text-red-500"
+                          }`}
+                        >
+                          {p.side === "buy" ? "ซื้อ" : "ขาย"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className="flex items-center gap-2 font-medium">
+                          <CoinIcon asset={p.asset} size={18} />
+                          {p.asset}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums">{formatTHB(p.amount_thb)}</td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">{p.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {preview.warnings.length > 0 && (
+            <ul className="space-y-1 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-[11px] text-yellow-600 dark:text-yellow-400">
+              {preview.warnings.map((w) => (
+                <li key={w}>• {w}</li>
+              ))}
+            </ul>
+          )}
+
+          <p className="text-[10px] text-muted-foreground">
+            ยอดเป็นประมาณการ ราคาจริงและค่าธรรมเนียมจะถูกกำหนดโดย Backend / Engine ตอนส่งคำสั่ง
+            ระบบขายก่อนแล้วจึงซื้อ
+          </p>
+
+          {preview.plan.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={confirmOrders}
+                disabled={busy !== ""}
+                className="rounded-lg bg-red-500 px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {busy === "confirm" ? "กำลังส่งคำสั่ง..." : `ยืนยันส่ง ${preview.plan.length} คำสั่ง`}
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreview(null)}
+                disabled={busy !== ""}
+                className="rounded-lg border px-4 py-2 text-sm hover:bg-accent disabled:opacity-50"
+              >
+                ยกเลิก
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {results && (
+        <div className="mt-4 space-y-2">
+          <p className="text-xs font-semibold">
+            {resultStatus === "done"
+              ? "ส่งคำสั่งสำเร็จทั้งหมด"
+              : resultStatus === "partial"
+                ? "สำเร็จบางรายการ"
+                : resultStatus === "nothing"
+                  ? "ไม่มีรายการที่ต้องส่ง"
+                  : "ส่งคำสั่งไม่สำเร็จ"}
+          </p>
+          <ul className="space-y-1">
+            {results.map((r) => (
+              <li
+                key={`${r.side}-${r.asset}`}
+                className={`rounded-lg border px-3 py-2 text-xs ${
+                  r.ok ? "border-emerald-500/30 text-emerald-500" : "border-red-500/30 text-red-500"
+                }`}
+              >
+                {r.ok ? "✓" : "✗"} {r.side === "buy" ? "ซื้อ" : "ขาย"} {r.asset} — {r.message}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TrendTimingCard({ onRefresh }: { onRefresh?: () => void }) {
   const [data, setData] = useState<TrendAssetData[] | null>(trendCache)
   const [loading, setLoading] = useState(trendCache === null)
   const [error, setError] = useState("")
@@ -5049,6 +5342,9 @@ function TrendTimingCard() {
             </p>
           </div>
 
+          {/* FOLLOW SIGNALS */}
+          <TrendFollowPanel signals={signals} smaLen={smaLen} onDone={onRefresh} />
+
           {/* BACKTEST */}
           {result ? (
             <div className="grid gap-5 lg:grid-cols-[minmax(0,6fr)_minmax(0,4fr)]">
@@ -5183,7 +5479,7 @@ function QuantLabPage({
         />
       </div>
 
-      <TrendTimingCard />
+      <TrendTimingCard onRefresh={onRefresh} />
       
       <div className="grid gap-6 xl:grid-cols-2">
         <div className="rounded-xl border bg-card">
