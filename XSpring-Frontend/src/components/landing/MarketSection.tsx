@@ -170,22 +170,8 @@ export default function MarketSection({ onLogin, onRegister }: Props) {
     }
   }, [])
 
-  // กราฟ 7 วัน โหลดครั้งเดียว ถ้าโหลดไม่ได้แค่ไม่แสดงเส้น
-  useEffect(() => {
-    let alive = true
-    Promise.allSettled(ASSETS.map((a) => fetchSpark(a))).then((res) => {
-      if (!alive) return
-      const next: Record<string, number[]> = {}
-      res.forEach((r, i) => {
-        if (r.status === "fulfilled") next[ASSETS[i]] = r.value
-      })
-      setSparks(next)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
+    
+  
   const toggleFav = (asset: string) =>
     setFavs((prev) => {
       const next = prev.includes(asset) ? prev.filter((a) => a !== asset) : [...prev, asset]
