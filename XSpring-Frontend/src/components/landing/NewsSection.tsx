@@ -8,7 +8,7 @@ type NewsItem = {
   published_at: string
 }
 
-const API_BASE = import.meta.env.VITE_API_URL ?? "" // ใช้ตัวเดียวกับ MarketSection
+const API_BASE = "https://xspring-api.onrender.com"
 
 function fmtTime(s: string) {
   const d = new Date(s)
