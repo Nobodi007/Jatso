@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import TradingViewChart from "./TradingViewChart"
+import ExchangeTable from "./ExchangeTable"
 
 const API_BASE_URL = "https://xspring-api.onrender.com"
 
@@ -136,7 +137,7 @@ export default function CoinDetail({ asset, onBack, onLogin, onRegister }: Props
             </div>
           </div>
 
-          {/* ตารางตลาด (ข้อ 2) จะวางตรงนี้ */}
+          <ExchangeTable asset={asset} />
 
           <h2 className="mt-10 text-xl font-bold">ข่าว {row.asset}</h2>
           {news.length === 0 ? (
