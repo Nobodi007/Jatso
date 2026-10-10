@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Globe, Menu, X } from "lucide-react"
+import { Globe, Menu, Moon, Sun, X } from "lucide-react"
 import MarketSection from "./MarketSection"
 import NewsSection from "./NewsSection"
 import SearchBox from "./SearchBox"
@@ -49,10 +49,37 @@ function HeroArt() {
   )
 }
 
+// หน้านี้อยู่นอก AppInner จึงตั้งธีมเองให้ตรงกับที่เคยเลือกไว้
+function initialDark(): boolean {
+  let dark = window.matchMedia("(prefers-color-scheme: dark)").matches
+  try {
+    const saved = localStorage.getItem("theme")
+    if (saved === "light" || saved === "dark") dark = saved === "dark"
+  } catch {
+    // ใช้ค่าตามเครื่อง
+  }
+  return dark
+}
+
 export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [view, setView] = useState<"home" | "market" | "news" | "coin">("home")
   const [coin, setCoin] = useState("BTC")
+  const [dark, setDark] = useState(initialDark)
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", dark)
+  }, [dark])
+
+  const toggleTheme = () => {
+    const next = !dark
+    setDark(next)
+    try {
+      localStorage.setItem("theme", next ? "dark" : "light")
+    } catch {
+      // บันทึกไม่ได้ก็ใช้ชั่วคราว
+    }
+  }
 
   const go = (label: string) => {
     setMenuOpen(false)
@@ -72,18 +99,6 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
     setView("coin")
     window.scrollTo({ top: 0 })
   }
-
-  // หน้านี้อยู่นอก AppInner จึงตั้งธีมเองให้ตรงกับที่เคยเลือกไว้
-  useEffect(() => {
-    let dark = window.matchMedia("(prefers-color-scheme: dark)").matches
-    try {
-      const saved = localStorage.getItem("theme")
-      if (saved === "light" || saved === "dark") dark = saved === "dark"
-    } catch {
-      // ใช้ค่าตามเครื่อง
-    }
-    document.documentElement.classList.toggle("dark", dark)
-  }, [])
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -125,6 +140,14 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
               className="rounded-md bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-black hover:bg-emerald-400"
             >
               ลงทะเบียน
+            </button>
+            <button
+              type="button"
+              aria-label={dark ? "เปลี่ยนเป็นโหมดสว่าง" : "เปลี่ยนเป็นโหมดมืด"}
+              onClick={toggleTheme}
+              className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
             <button
               type="button"
