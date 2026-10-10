@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 
 // สัญลักษณ์บน TradingView ถ้าเหรียญไหนขึ้น "Invalid symbol" ให้แก้ตรงนี้
 const TV_SYMBOL: Record<string, string> = {
@@ -15,13 +15,22 @@ const TV_SYMBOL: Record<string, string> = {
 
 const CHART_HEIGHT = 560
 
+const isDark = () => document.documentElement.classList.contains("dark")
+
 export default function TradingViewChart({ asset }: { asset: string }) {
   const ref = useRef<HTMLDivElement>(null)
+  const [dark, setDark] = useState(isDark)
+
+  // ตามการสลับธีมของเว็บ
+  useEffect(() => {
+    const obs = new MutationObserver(() => setDark(isDark()))
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] })
+    return () => obs.disconnect()
+  }, [])
 
   useEffect(() => {
     const el = ref.current
     if (!el) return
-    const dark = document.documentElement.classList.contains("dark")
 
     el.innerHTML = ""
     const inner = document.createElement("div")
@@ -53,7 +62,7 @@ export default function TradingViewChart({ asset }: { asset: string }) {
     return () => {
       el.innerHTML = ""
     }
-  }, [asset])
+  }, [asset, dark])
 
   return (
     <div
