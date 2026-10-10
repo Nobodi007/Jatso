@@ -1740,10 +1740,13 @@ DCA_LOOP_SECONDS = 60
 DCA_FREQS_API = ("รายวัน", "รายสัปดาห์", "รายเดือน")
 
 
+DCA_MAX_ACTIVE_PLANS = 20
+
+
 class DcaCreateRequest(BaseModel):
-    asset: str
+    asset: str = Field(..., min_length=1, max_length=20)
     amount_thb: float
-    freq: str
+    freq: str = Field(..., min_length=1, max_length=20)
     hour: int = 9
     minute: int = 0
 
@@ -1764,6 +1767,21 @@ def _dca_open_session(user: str):
     _sync_gu_actor(gu, actor)
     role = _set_api_role(gu, actor)
     return gu, actor, role
+
+
+def _dca_save_checked(gu, sim) -> None:
+    """บันทึก sim_state แล้วเช็กว่าสำเร็จจริง ไม่งั้นตอบ 503 (กันหน้าเว็บขึ้นว่าสำเร็จทั้งที่ไม่ได้เก็บ)"""
+    gu.st.session_state.pop("sim_state_save_error", None)
+    gu.save_sim_state(sim)
+    save_error = getattr(gu.st, "session_state", {}).get("sim_state_save_error")
+    if save_error:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "บันทึกแผน Auto DCA ลงฐานข้อมูลไม่สำเร็จ",
+                "retryable": True,
+            },
+        )
 
 
 @app.post("/api/dca", dependencies=[Depends(require_api_key)])
@@ -1792,10 +1810,19 @@ def create_dca(req: DcaCreateRequest, user: str = Depends(require_user)):
                 )
 
             sim = _load_existing_sim(gu)
+            active = [
+                p for p in (sim.get("dca_plans") or [])
+                if isinstance(p, dict) and p.get("enabled")
+            ]
+            if len(active) >= DCA_MAX_ACTIVE_PLANS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"มีแผน Auto DCA ครบ {DCA_MAX_ACTIVE_PLANS} แผนแล้ว กรุณายกเลิกบางแผนก่อน",
+                )
             plan = gu._dca_create_plan(
                 sim, asset, amount_thb, freq, int(req.hour), int(req.minute)
             )
-            gu.save_sim_state(sim)
+            _dca_save_checked(gu, sim)
             return {"status": "ok", "plan": _dca_public(plan)}
         except HTTPException:
             raise
@@ -1831,7 +1858,7 @@ def cancel_dca(plan_id: str, user: str = Depends(require_user)):
             sim = _load_existing_sim(gu)
             if not gu._dca_cancel_plan(sim, plan_id):
                 raise HTTPException(status_code=404, detail="ไม่พบแผนนี้")
-            gu.save_sim_state(sim)
+            _dca_save_checked(gu, sim)
             return {"status": "ok"}
         except HTTPException:
             raise
@@ -1860,34 +1887,229 @@ def _dca_list_actors() -> list:
     return [row["actor"] for row in r.json() if row.get("actor")]
 
 
-def _dca_tick():
-    with ORDER_LOCK:
-        gu = load_gu()
-        for actor in _dca_list_actors():
+import copy as _copy
+
+_DCA_STATE = {
+    "loop_started_at": None,
+    "last_tick_at": None,
+    "last_executed": 0,
+    "total_executed": 0,
+    "last_error": "",
+}
+
+
+def _dca_find_plan(sim: dict, plan_id: str):
+    for plan in sim.get("dca_plans", []) or []:
+        if isinstance(plan, dict) and str(plan.get("id")) == str(plan_id):
+            return plan
+    return None
+
+
+def _dca_stamp_order(sim: dict, rec: dict, plan: dict, now) -> None:
+    """execute_order() ใน gu.py ไม่เขียนเวลา จึงใส่เวลา execution จริง + ที่มา Auto DCA ให้เอง"""
+    execution_iso = now.isoformat()
+    day = now.strftime("%Y-%m-%d")
+    plan_id = str(plan.get("id", ""))
+
+    def stamp(order):
+        order["เวลา"] = execution_iso
+        order["timestamp"] = execution_iso
+        order["วันที่"] = day
+        order["Source"] = "Auto DCA"
+        order["Order Source"] = "Auto DCA"
+        order["DCA Plan ID"] = plan_id
+
+    stamp(rec)
+
+    ledger = sim.get("orders")
+    if isinstance(ledger, list) and ledger:
+        rec_id = str(rec.get("Order ID") or rec.get("order_id") or rec.get("id") or "")
+        target = None
+        if rec_id:
+            for item in reversed(ledger):
+                if isinstance(item, dict) and str(
+                    item.get("Order ID") or item.get("order_id") or item.get("id") or ""
+                ) == rec_id:
+                    target = item
+                    break
+        if target is None and isinstance(ledger[-1], dict):
+            target = ledger[-1]
+        if target is not None and target is not rec:
+            stamp(target)
+
+
+def _dca_run_for_actor(gu, actor: str) -> int:
+    """
+    รันแผนที่ถึงเวลาของบัญชีเดียว (เรียกภายใน ORDER_LOCK)
+    คืนจำนวนออเดอร์ที่ซื้อสำเร็จ
+
+    - ทุกแผนที่ถึงเวลาถูกประมวลผลแล้วบันทึกครั้งเดียว ถ้าบันทึกไม่สำเร็จ จะไม่มีอะไรเปลี่ยน
+      รอบหน้าโหลดจากฐานข้อมูลใหม่ จึงไม่ซื้อซ้ำ
+    - ถ้า engine ปฏิเสธ/พัง จะคืนพอร์ตของแผนนั้นกลับ แล้วข้ามไปรอบถัดไป ไม่ retry ทุกรอบ
+    """
+    _sync_gu_actor(gu, actor)
+    _set_api_role(gu, actor)
+    if not gu.can_trade():
+        return 0
+
+    # อ่านของเดิมเท่านั้น ห้ามสร้างพอร์ตใหม่
+    sim = gu.load_sim_state()
+    if not isinstance(sim, dict):
+        raise RuntimeError("โหลด sim_state ไม่สำเร็จ ข้าม DCA รอบนี้")
+
+    # กันอ่านผิดบัญชี: แถวที่โหลดมาต้องเป็นของ actor นี้จริง
+    loaded_actor = str(getattr(gu.st, "session_state", {}).get("sim_state_actor", "") or "")
+    if loaded_actor and loaded_actor.strip().lower() != actor.strip().lower():
+        raise RuntimeError(f"sim_state ไม่ตรงบัญชี ({loaded_actor} != {actor}) ข้ามเพื่อความปลอดภัย")
+
+    plans = sim.get("dca_plans")
+    if not isinstance(plans, list) or not plans:
+        return 0
+
+    now = gu._dca_now()
+    min_trade = float(getattr(gu, "MIN_TRADE_THB", 50))
+    due_ids = []
+
+    for plan in plans:
+        if not isinstance(plan, dict) or not plan.get("enabled", False):
+            continue
+        next_run = gu._dca_parse_ts(plan.get("next_run_at"))
+        if next_run is None:
+            next_run = gu._dca_next_run(plan, now - pd.Timedelta(seconds=1))
+            plan["next_run_at"] = gu._dca_iso(next_run)
+        if now >= next_run:
+            due_ids.append(str(plan.get("id")))
+
+    if not due_ids:
+        return 0
+
+    executed = 0
+
+    for plan_id in due_ids:
+        plan = _dca_find_plan(sim, plan_id)
+        if plan is None:
+            continue
+
+        def finish(status: str, target_plan=None) -> None:
+            p = target_plan if target_plan is not None else plan
+            p["last_status"] = status
+            p["last_attempt_at"] = gu._dca_iso(now)
+            p["next_run_at"] = gu._dca_iso(gu._dca_next_run(p, now))
+
+        asset = str(plan.get("asset", "")).upper().strip()
+        amount = _safe_float(plan.get("amount_thb"), 0.0)
+
+        if not asset or asset not in gu.SUPPORTED_ASSETS or amount < min_trade:
+            finish(f"INVALID: เหรียญหรือยอดไม่ถูกต้อง (ขั้นต่ำ {min_trade:g} THB)")
+            continue
+
+        cash = _safe_float(sim.get("customer_thb"), 0.0)
+        if amount > cash + 1e-9:
+            finish(f"SKIPPED — เงินสดไม่พอ ({cash:,.2f} THB)")
+            continue
+
+        live_row = gu._dca_live_market_row(asset)
+        if live_row is None:
+            finish("SKIPPED — ดึงราคาตลาดไม่ได้")
+            continue
+
+        try:
+            cfg = _api_cfg(gu, asset, actor)
+        except Exception as exc:
+            print(f"[DCA] {actor} cfg failed {asset}: {exc}")
+            finish("SKIPPED — โหลด config ไม่ได้")
+            continue
+
+        built = gu._dca_build_context(asset, cfg, live_row)
+        if built is None:
+            finish("SKIPPED — สร้าง execution context ไม่ได้")
+            continue
+        ctx, target = built
+
+        snapshot = _copy.deepcopy(sim)
+        saved_asset = sim.get("asset")
+        saved_target = sim.get("target_thb")
+        failed = None
+        rec = None
+        try:
+            sim["asset"] = asset
+            sim["target_thb"] = float(target)
+            gu.ensure_portfolio_ledger(sim)
+            _steps, rec = gu.execute_order(
+                sim, "buy", amount, now, live_row, ctx, affect_wallet=True,
+            )
+        except Exception as exc:
+            failed = exc
+        finally:
+            if saved_asset is not None:
+                sim["asset"] = saved_asset
+            else:
+                sim.pop("asset", None)
+            if saved_target is not None:
+                sim["target_thb"] = saved_target
+            else:
+                sim.pop("target_thb", None)
+
+        result = str(rec.get("ผลด่าน", "")) if isinstance(rec, dict) else ""
+
+        if failed is not None or rec is None or result.lower().startswith("reject"):
+            # คืนพอร์ตกลับก่อนออเดอร์ของแผนนี้ แล้วข้ามรอบ
+            sim.clear()
+            sim.update(snapshot)
+            restored = _dca_find_plan(sim, plan_id)
+            if failed is not None:
+                print(f"[DCA] {actor} execute failed {plan_id}: {failed!r}")
+                finish(f"FAILED — {type(failed).__name__}", restored)
+            elif rec is None:
+                finish("FAILED — คำสั่งไม่ถูก execute", restored)
+            else:
+                finish("REJECTED — " + result[:80], restored)
+            continue
+
+        _dca_stamp_order(sim, rec, plan, now)
+        plan["last_attempt_at"] = gu._dca_iso(now)
+        plan["next_run_at"] = gu._dca_iso(gu._dca_next_run(plan, now))
+        plan["last_order_id"] = str(rec.get("Order ID", ""))
+        plan["last_status"] = "EXECUTED"
+        plan["last_price_thb"] = _safe_float(rec.get("ราคาที่ลูกค้าได้"), 0.0)
+        plan["last_qty"] = _safe_float(rec.get("เหรียญที่ส่งมอบ"), 0.0)
+        executed += 1
+
+    _dca_save_checked(gu, sim)
+    return executed
+
+
+def _dca_tick() -> int:
+    total = 0
+    try:
+        actors = _dca_list_actors()
+    except Exception as e:
+        _DCA_STATE["last_error"] = f"list actors: {type(e).__name__}: {e}"[:500]
+        print(f"[DCA] list actors error: {e}")
+        return 0
+
+    errors = []
+    for actor in actors:
+        # ล็อกทีละบัญชี ไม่ถือ ORDER_LOCK ค้างตลอดทั้งรอบ เพื่อไม่ให้ขวางการสั่งซื้อขายปกติ
+        with ORDER_LOCK:
             try:
-                _sync_gu_actor(gu, actor)
-                _set_api_role(gu, actor)
-                if not gu.can_trade():
-                    continue
-                sim = _load_existing_sim(gu)
-                now = gu._dca_now()
-                due = []
-                for p in sim.get("dca_plans", []):
-                    if not isinstance(p, dict) or not p.get("enabled"):
-                        continue
-                    nxt = gu._dca_parse_ts(p.get("next_run_at"))
-                    if nxt is None or now >= nxt:
-                        due.append(p)
-                if not due:
-                    continue
-                asset = str(due[0].get("asset", "BTC")).upper()
-                cfg = _api_cfg(gu, asset, actor)
-                data = _load_market_frame(gu, asset)
-                n = gu._dca_execute_due_plans(sim, cfg, data)  # บันทึกเองถ้ามีรายการสำเร็จ
+                gu = load_gu()
+                n = _dca_run_for_actor(gu, actor)
                 if n:
+                    total += n
                     print(f"[DCA] {actor}: executed {n} plan(s)")
+            except HTTPException as e:
+                errors.append(f"{actor}: HTTP {e.status_code}")
+                print(f"[DCA] {actor} error: HTTP {e.status_code} {e.detail}")
             except Exception as e:
+                errors.append(f"{actor}: {type(e).__name__}: {e}")
                 print(f"[DCA] {actor} error: {e}")
+
+    _DCA_STATE["last_tick_at"] = pd.Timestamp.now(tz=BANGKOK_TZ).isoformat()
+    _DCA_STATE["last_executed"] = total
+    _DCA_STATE["total_executed"] += total
+    _DCA_STATE["last_error"] = "; ".join(errors)[:500]
+    return total
 
 
 async def _dca_loop():
@@ -1896,12 +2118,23 @@ async def _dca_loop():
         try:
             await asyncio.to_thread(_dca_tick)
         except Exception as e:
+            _DCA_STATE["last_error"] = f"loop: {type(e).__name__}: {e}"[:500]
             print(f"[DCA] loop error: {e}")
 
 
 @app.on_event("startup")
 async def _start_dca_loop():
+    if os.environ.get("DCA_SCHEDULER_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
+        print("[DCA] scheduler disabled (DCA_SCHEDULER_ENABLED=0)")
+        return
+    _DCA_STATE["loop_started_at"] = pd.Timestamp.now(tz="Asia/Bangkok").isoformat()
     asyncio.create_task(_dca_loop())
+
+
+@app.get("/api/dca/status", dependencies=[Depends(require_api_key)])
+def dca_status():
+    return {"status": "ok", "run_every_sec": DCA_LOOP_SECONDS, **_DCA_STATE}
+
 
 # =========================================================
 # MOMENTUM AUTO-TRADE (เฉพาะบัญชีแอดมิน)
@@ -2328,6 +2561,294 @@ def momentum_config(req: MomentumConfigRequest, user: str = Depends(require_user
             raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"บันทึกค่าไม่สำเร็จ: {e}")
+
+
+# =========================================================
+# TREND REBALANCE — ปุ่ม "ทำตามสัญญาณ" ในการ์ด Trend Timing
+# =========================================================
+# หน้าเว็บคำนวณสัญญาณ SMA (ถือ/ออก) แล้วส่งมาที่นี่ ฝั่ง server เทียบกับพอร์ตจำลองจริง
+# แล้วสร้างรายการซื้อ/ขาย:
+#   - เหรียญที่สัญญาณบอกให้ออก = ขายทั้งหมด (ไปเป็นเงินสด)
+#   - เหรียญที่ควรถือ = ซื้อเพิ่มให้ถึงน้ำหนักเท่ากัน (งบ / จำนวนเหรียญในกลยุทธ์)
+#   - ไม่ขายส่วนเกินของเหรียญที่ถืออยู่ (ลดจำนวนครั้งที่ซื้อขาย)
+# ขั้นแรก (confirm=false) แค่ดูรายการ ไม่แตะพอร์ต
+# ขั้นสอง (confirm=true) ส่งคำสั่งผ่าน engine เดียวกับ /api/order ใน ORDER_LOCK
+# สัญญาณมาจาก client เหมือนที่ client ส่ง /api/order ได้เองอยู่แล้ว (เป็นระบบจำลอง)
+# =========================================================
+
+TREND_UNIVERSE = ("BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "HBAR", "LINK", "XLM")
+TREND_BAND_PCT = 10.0  # ไม่เติมถ้าขาดน้อยกว่า 10% ของเป้าต่อเหรียญ (กันซื้อเศษ ๆ)
+
+
+class TrendRebalanceRequest(BaseModel):
+    universe: list[str] = Field(..., min_length=1, max_length=20)
+    hold: list[str] = Field(default_factory=list, max_length=20)
+    budget_thb: Optional[float] = None
+    sma_months: int = Field(default=10, ge=1, le=36)
+    confirm: bool = False
+    expected: Optional[list[str]] = Field(default=None, max_length=40)
+
+
+def _trend_clean_assets(gu, items, label: str) -> list:
+    out = []
+    for raw in items or []:
+        a = str(raw).upper().strip()
+        if a not in TREND_UNIVERSE or a not in gu.SUPPORTED_ASSETS:
+            raise HTTPException(status_code=400, detail=f"{label}: ไม่รองรับเหรียญ {a or '(ว่าง)'}")
+        if a not in out:
+            out.append(a)
+    return out
+
+
+def _trend_build_plan(universe, hold, values, cash, budget_req, min_trade):
+    """
+    ฟังก์ชันคำนวณล้วน ไม่แตะ engine
+    values = {asset: มูลค่าที่ถืออยู่ (THB)}  คืน (plan, summary, warnings)
+    """
+    warnings = []
+    n = len(universe)
+    held_total = sum(float(values.get(a, 0.0)) for a in universe)
+    max_budget = float(cash) + held_total
+
+    if budget_req is None:
+        budget = max_budget
+    else:
+        budget = min(float(budget_req), max_budget)
+        if float(budget_req) > max_budget + 1e-9:
+            warnings.append(f"งบที่ระบุเกินเงินสดรวมมูลค่าเหรียญในกลยุทธ์ ใช้ {max_budget:,.2f} บาทแทน")
+
+    target = budget / n if n else 0.0
+    band = max(float(min_trade), target * TREND_BAND_PCT / 100.0)
+
+    sells, buys = [], []
+    for a in universe:
+        val = float(values.get(a, 0.0))
+        if a in hold:
+            diff = target - val
+            if diff >= band:
+                buys.append({
+                    "side": "buy", "asset": a, "amount_thb": diff, "sell_all": False,
+                    "reason": f"สัญญาณถือ — เติมให้ถึงเป้า {target:,.0f} บาท (ตอนนี้ {val:,.0f})",
+                })
+        elif val >= float(min_trade):
+            sells.append({
+                "side": "sell", "asset": a, "amount_thb": val, "sell_all": True,
+                "reason": "สัญญาณออก (ราคาต่ำกว่า SMA) — ขายทั้งหมดเป็นเงินสด",
+            })
+        elif val > 0:
+            warnings.append(f"{a} เหลือเศษ {val:,.2f} บาท ต่ำกว่าขั้นต่ำ ไม่ขาย")
+
+    est_cash = float(cash) + sum(s["amount_thb"] for s in sells)
+    need = sum(b["amount_thb"] for b in buys)
+    if need > est_cash + 1e-9:
+        scale = (est_cash / need) if need > 0 else 0.0
+        kept = []
+        for b in buys:
+            amt = b["amount_thb"] * scale
+            if amt >= float(min_trade):
+                b["amount_thb"] = amt
+                kept.append(b)
+        warnings.append("เงินสดไม่พอสำหรับทุกคำสั่ง ลดยอดซื้อตามสัดส่วน")
+        buys = kept
+
+    plan = sells + buys
+    for p in plan:
+        p["amount_thb"] = round(float(p["amount_thb"]), 2)
+
+    summary = {
+        "n_universe": n,
+        "n_hold": len([a for a in universe if a in hold]),
+        "budget_thb": round(budget, 2),
+        "target_per_coin_thb": round(target, 2),
+        "cash_thb": round(float(cash), 2),
+        "est_cash_after_sells_thb": round(est_cash, 2),
+    }
+    return plan, summary, warnings
+
+
+def _trend_execute_one(gu, actor, side, asset, amount_thb, sell_all, reason):
+    """
+    ส่ง 1 คำสั่งผ่าน engine เดียวกับ /api/order (เรียกใน ORDER_LOCK เท่านั้น)
+    โหลด sim ใหม่ทุกคำสั่ง และบันทึกเฉพาะเมื่อสำเร็จ  คืน (ok, ข้อความ, ยอดที่ส่งจริง)
+    """
+    data = _load_market_frame(gu, asset)
+    order_date = pd.Timestamp(data.index[-1])
+    px_row = data.loc[order_date]
+
+    cfg = _api_cfg(gu, asset, actor)
+    built = gu.build_dealer_ctx(cfg, data)
+    if built is None:
+        return False, "สร้าง Dealer context ไม่สำเร็จ", 0.0
+    ctx, target_stock_thb = built
+
+    sim = _load_existing_sim(gu)
+    sim = gu.sim_normalize_state(
+        sim, asset, order_date,
+        float(px_row["Global_USD"]), float(px_row["USDTHB"]), float(target_stock_thb),
+    )
+    sim["asset"] = asset
+    sim["target_thb"] = float(target_stock_thb)
+    gu.ensure_portfolio_ledger(sim)
+
+    customer_thb = _safe_float(sim.get("customer_thb"), 0.0)
+    held_qty = _safe_float(sim.setdefault("customer_coins", {}).get(asset), 0.0)
+    price = _safe_float(px_row["Global_USD"]) * _safe_float(px_row["USDTHB"])
+    min_trade = float(getattr(gu, "MIN_TRADE_THB", 50))
+
+    amount = float(amount_thb)
+    note = ""
+    if side == "sell":
+        if held_qty <= 0 or price <= 0:
+            return False, f"ไม่มี {asset} ให้ขาย", 0.0
+        held_value = held_qty * price
+        amount = held_value if sell_all else min(amount, held_value)
+    elif amount > customer_thb + 1e-9:
+        # ขายแล้วได้เงินน้อยกว่าที่ประมาณ (spread/fee) ลดยอดซื้อเท่าที่มี
+        amount = customer_thb
+        note = f" (ลดยอดเหลือ {customer_thb:,.2f} เพราะเงินสดไม่พอ)"
+    if amount < min_trade:
+        return False, f"ยอด {amount:,.2f} ต่ำกว่าขั้นต่ำ {min_trade:g} บาท", 0.0
+
+    execution_time = pd.Timestamp.now(tz="Asia/Bangkok")
+    steps, rec = gu.execute_order(
+        sim, side, amount, order_date, px_row, ctx,
+        affect_wallet=True, forced_quote=None,
+    )
+    if rec is None:
+        return False, "คำสั่งไม่ผ่าน engine", 0.0
+
+    result = str(rec.get("ผลด่าน", ""))
+    if result.lower().startswith("reject"):
+        # ไม่บันทึก sim ที่เปลี่ยนในหน่วยความจำ
+        return False, f"Engine ปฏิเสธ: {result}", 0.0
+
+    iso = execution_time.isoformat()
+    ledger = sim.get("orders")
+    for target in (rec, ledger[-1] if isinstance(ledger, list) and ledger else None):
+        if isinstance(target, dict):
+            target["เวลา"] = iso
+            target["timestamp"] = iso
+            target["วันที่"] = execution_time.strftime("%Y-%m-%d")
+            target["Source"] = "Trend Signal"
+            target["strategy"] = "trend_gtaa"
+            target["strategy_reason"] = reason[:120]
+
+    gu.st.session_state.pop("sim_state_save_error", None)
+    gu.save_sim_state(sim)
+    if getattr(gu.st, "session_state", {}).get("sim_state_save_error"):
+        return False, "Engine ประมวลผลแล้วแต่บันทึก Portfolio ไม่สำเร็จ", 0.0
+
+    return True, f"{amount:,.2f} บาท · qty {rec.get('เหรียญที่ส่งมอบ')}{note}", amount
+
+
+@app.post("/api/trend/rebalance", dependencies=[Depends(require_api_key)])
+def trend_rebalance(
+    req: TrendRebalanceRequest,
+    user: str = Depends(require_user),
+    idempotency_key: str = Header(default="", alias="Idempotency-Key"),
+):
+    with ORDER_LOCK:
+        try:
+            gu, actor, role = _dca_open_session(user)
+
+            universe = _trend_clean_assets(gu, req.universe, "universe")
+            hold = _trend_clean_assets(gu, req.hold, "hold")
+            if not universe:
+                raise HTTPException(status_code=400, detail="ไม่มีเหรียญในกลยุทธ์")
+            if any(a not in universe for a in hold):
+                raise HTTPException(status_code=400, detail="hold ต้องเป็นส่วนหนึ่งของ universe")
+
+            budget_req = None
+            if req.budget_thb is not None:
+                budget_req = _safe_float(req.budget_thb, -1.0)
+                if not math.isfinite(budget_req) or budget_req <= 0 or budget_req > 100_000_000_000:
+                    raise HTTPException(status_code=400, detail="งบต้องเป็นตัวเลขที่มากกว่า 0")
+
+            if not gu.can_trade():
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"บัญชี {actor} ไม่มีสิทธิ์ Trader (role={role})",
+                )
+
+            idempotency_key = str(idempotency_key or "").strip()
+            if len(idempotency_key) > 200:
+                raise HTTPException(status_code=400, detail="Idempotency-Key ยาวเกินกำหนด")
+            fingerprint = hashlib.sha256(
+                (
+                    "|".join(sorted(universe)) + "#" + "|".join(sorted(hold)) + "#"
+                    + f"{budget_req!r}" + "#" + "|".join(sorted(req.expected or []))
+                ).encode("utf-8")
+            ).hexdigest()
+            if req.confirm:
+                cached = _get_idempotent_result(actor, idempotency_key, fingerprint)
+                if cached is not None:
+                    return cached
+
+            sim = _load_existing_sim(gu)
+            pf = _portfolio_response(gu, sim)
+            values = {
+                str(h.get("asset", "")).upper(): _safe_float(h.get("market_value"), 0.0)
+                for h in (pf.get("holdings") or [])
+                if isinstance(h, dict)
+            }
+            min_trade = float(getattr(gu, "MIN_TRADE_THB", 50))
+            plan, summary, warnings = _trend_build_plan(
+                universe, hold, values, _safe_float(pf.get("cash_thb"), 0.0), budget_req, min_trade,
+            )
+            action_keys = [f"{p['side']}:{p['asset']}" for p in plan]
+
+            if not req.confirm:
+                return {
+                    "status": "preview", "actor": actor, "sma_months": req.sma_months,
+                    "plan": plan, "summary": summary, "warnings": warnings,
+                    "action_keys": action_keys,
+                }
+
+            # ---------- CONFIRM ----------
+            if req.expected is None:
+                raise HTTPException(status_code=400, detail="ต้องกดดูรายการก่อนยืนยัน")
+            if sorted(req.expected) != sorted(action_keys):
+                raise HTTPException(
+                    status_code=409,
+                    detail="รายการเปลี่ยนไปจากที่ดูไว้ (ราคาหรือพอร์ตเปลี่ยน) กรุณากดดูรายการใหม่",
+                )
+            if not plan:
+                response = {"status": "nothing", "results": [], "summary": summary, "warnings": warnings}
+                _store_idempotent_result(actor, idempotency_key, response, fingerprint)
+                return response
+
+            results = []
+            for p in plan:
+                try:
+                    ok, msg, sent = _trend_execute_one(
+                        gu, actor, p["side"], p["asset"], p["amount_thb"], p["sell_all"], p["reason"],
+                    )
+                except HTTPException as e:
+                    ok, msg, sent = False, str(e.detail), 0.0
+                except Exception as e:
+                    print(f"[TREND] {actor} {p['side']} {p['asset']} error: {type(e).__name__}: {e}")
+                    ok, msg, sent = False, f"ผิดพลาดภายใน ({type(e).__name__})", 0.0
+                results.append({
+                    "side": p["side"], "asset": p["asset"], "ok": ok,
+                    "message": msg, "amount_thb": round(sent, 2),
+                })
+
+            n_ok = sum(1 for r in results if r["ok"])
+            status = "done" if n_ok == len(results) else ("partial" if n_ok else "failed")
+            response = {
+                "status": status, "results": results, "summary": summary, "warnings": warnings,
+            }
+            try:
+                response["portfolio"] = _portfolio_response(gu, _load_existing_sim(gu))
+            except Exception:
+                pass
+            _store_idempotent_result(actor, idempotency_key, response, fingerprint)
+            return response
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise _internal_server_error("เกิดข้อผิดพลาดภายใน API", e)
 
 
 # =========================================================
