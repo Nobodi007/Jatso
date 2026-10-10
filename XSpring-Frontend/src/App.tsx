@@ -4634,6 +4634,9 @@ type TrendResult = {
   holdStats: TrendStats
   avgInvested: number
   months: number
+  timingRets: number[]
+  holdRets: number[]
+  invested: number[]
 }
 
 type TrendSignalRow = {
@@ -4805,8 +4808,11 @@ function runTrendBacktest(data: TrendAssetData[], n: number, feePct: number): Tr
     holdStats: trendStats(holdRets, hold),
     avgInvested: investedFrac.reduce((a, b) => a + b, 0) / investedFrac.length,
     months: timingRets.length,
+    timingRets,
+    holdRets,
+    invested: investedFrac,
   }
-}
+  }
 
 function currentTrendSignals(data: TrendAssetData[], n: number): TrendSignalRow[] {
   return data.map((d) => {
@@ -4823,6 +4829,343 @@ function currentTrendSignals(data: TrendAssetData[], n: number): TrendSignalRow[
       months: closes.length,
     }
   })
+}
+
+// ---------- Trend extras: drawdown / รายปี / เทียบ SMA / Volatility clustering ----------
+
+const monthIndex = (key: string) => Number(key.slice(0, 4)) * 12 + Number(key.slice(5, 7))
+
+function trendDrawdowns(equity: number[]): number[] {
+  let peak = equity[0]
+  return equity.map((v) => {
+    if (v > peak) peak = v
+    return v / peak - 1
+  })
+}
+
+type YearRow = { year: string; timing: number; hold: number; months: number }
+
+function yearlyTrendReturns(keys: string[], timingRets: number[], holdRets: number[]): YearRow[] {
+  const map = new Map<string, YearRow>()
+  keys.forEach((k, i) => {
+    const year = k.slice(0, 4)
+    const row = map.get(year) ?? { year, timing: 1, hold: 1, months: 0 }
+    row.timing *= 1 + timingRets[i]
+    row.hold *= 1 + holdRets[i]
+    row.months += 1
+    map.set(year, row)
+  })
+  return Array.from(map.values()).map((r) => ({ ...r, timing: r.timing - 1, hold: r.hold - 1 }))
+}
+
+type SmaCompareRow = {
+  n: number
+  timing: TrendStats
+  hold: TrendStats
+  avgInvested: number
+  months: number
+}
+
+function compareSmaLengths(data: TrendAssetData[], feePct: number): SmaCompareRow[] {
+  const rows: SmaCompareRow[] = []
+  for (const n of TREND_SMA_OPTIONS) {
+    const r = runTrendBacktest(data, n, feePct)
+    if (r) {
+      rows.push({ n, timing: r.timingStats, hold: r.holdStats, avgInvested: r.avgInvested, months: r.months })
+    }
+  }
+  return rows
+}
+
+type ClusterSide = { ret: number; vol: number }
+type ClusterRow = { asset: string; pctAbove: number; above: ClusterSide | null; below: ClusterSide | null }
+
+function clusterSide(rets: number[]): ClusterSide | null {
+  if (rets.length < 6) return null
+  const mean = rets.reduce((a, b) => a + b, 0) / rets.length
+  const variance = rets.reduce((a, b) => a + (b - mean) ** 2, 0) / (rets.length - 1)
+  return { ret: mean, vol: Math.sqrt(variance) * Math.sqrt(12) }
+}
+
+// แยกผลตอบแทนรายเดือนตามสัญญาณ ณ สิ้นเดือนก่อนหน้า (ราคา > SMA หรือ ไม่) เหมือน Figure 18 ในงานวิจัย
+function volatilityClustering(data: TrendAssetData[], n: number): ClusterRow[] {
+  const rows: ClusterRow[] = []
+  for (const d of data) {
+    const closes = d.months.map((m) => m.close)
+    const above: number[] = []
+    const below: number[] = []
+    for (let j = n - 1; j < closes.length - 1; j++) {
+      if (monthIndex(d.months[j + 1].key) !== monthIndex(d.months[j].key) + 1) continue
+      const sma = smaAt(closes, j, n)
+      if (sma === null) continue
+      const r = closes[j + 1] / closes[j] - 1
+      if (closes[j] > sma) above.push(r)
+      else below.push(r)
+    }
+    const total = above.length + below.length
+    if (total === 0) continue
+    rows.push({
+      asset: d.asset,
+      pctAbove: above.length / total,
+      above: clusterSide(above),
+      below: clusterSide(below),
+    })
+  }
+  return rows
+}
+
+function DrawdownChart({ timing, hold }: { timing: number[]; hold: number[] }) {
+  const W = 640
+  const H = 150
+  const P = 10
+  const dt = trendDrawdowns(timing)
+  const dh = trendDrawdowns(hold)
+  const minT = Math.min(...dt)
+  const minH = Math.min(...dh)
+  const lo = Math.min(minT, minH, -0.01)
+  const x = (i: number) => P + (i / Math.max(1, dt.length - 1)) * (W - 2 * P)
+  const y = (v: number) => P + (v / lo) * (H - 2 * P)
+  const line = (arr: number[]) =>
+    arr.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ")
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full">
+        <line x1={P} x2={W - P} y1={P} y2={P} stroke="#71717a" strokeOpacity={0.4} />
+        <path d={line(dh)} fill="none" stroke="#a1a1aa" strokeWidth={2} />
+        <path d={line(dt)} fill="none" stroke="#10b981" strokeWidth={2.5} />
+      </svg>
+      <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
+        <span>0%</span>
+        <span>
+          ลึกสุด: Timing {trendPct(minT, 1)} · Buy &amp; Hold {trendPct(minH, 1)}
+        </span>
+        <span>{trendPct(lo, 0)}</span>
+      </div>
+    </div>
+  )
+}
+
+function TrendExtras({
+  data,
+  result,
+  smaLen,
+  feePct,
+  onPickSma,
+}: {
+  data: TrendAssetData[]
+  result: TrendResult | null
+  smaLen: number
+  feePct: number
+  onPickSma: (n: number) => void
+}) {
+  const compare = compareSmaLengths(data, feePct)
+  const cluster = volatilityClustering(data, smaLen)
+  const years = result ? yearlyTrendReturns(result.keys, result.timingRets, result.holdRets) : []
+  const sign = (v: number) => (v >= 0 ? "text-emerald-500" : "text-red-500")
+
+  const buckets: [string, (v: number) => boolean][] = [
+    ["0%", (v) => v === 0],
+    ["1–25%", (v) => v > 0 && v <= 0.25],
+    ["26–50%", (v) => v > 0.25 && v <= 0.5],
+    ["51–75%", (v) => v > 0.5 && v <= 0.75],
+    ["76–100%", (v) => v > 0.75],
+  ]
+  const bucketRows = result
+    ? buckets.map(([label, test]) => ({
+        label,
+        pct: result.invested.filter(test).length / result.invested.length,
+      }))
+    : []
+
+  const avgSide = (pick: (r: ClusterRow) => ClusterSide | null): ClusterSide | null => {
+    const xs = cluster.map(pick).filter((v): v is ClusterSide => v !== null)
+    if (xs.length === 0) return null
+    return {
+      ret: xs.reduce((a, b) => a + b.ret, 0) / xs.length,
+      vol: xs.reduce((a, b) => a + b.vol, 0) / xs.length,
+    }
+  }
+  const avgAbove = avgSide((r) => r.above)
+  const avgBelow = avgSide((r) => r.below)
+  const both = cluster.filter((r) => r.above && r.below)
+  const lowerRet = both.filter((r) => (r.below as ClusterSide).ret < (r.above as ClusterSide).ret).length
+  const higherVol = both.filter((r) => (r.below as ClusterSide).vol > (r.above as ClusterSide).vol).length
+
+  const cell = (s: ClusterSide | null, k: "ret" | "vol") =>
+    s === null ? "—" : trendPct(s[k], 1)
+
+  return (
+    <div className="space-y-6 border-t pt-5">
+      {/* 1) กราฟเพิ่ม */}
+      {result && (
+        <div className="grid gap-5 lg:grid-cols-2">
+          <div>
+            <h4 className="mb-2 text-sm font-semibold">Drawdown (ตกจากจุดสูงสุด)</h4>
+            <DrawdownChart timing={result.timing} hold={result.hold} />
+          </div>
+          <div>
+            <h4 className="mb-2 text-sm font-semibold">
+              % เวลาที่ลงทุนอยู่ (เฉลี่ย {trendPct(result.avgInvested, 0)})
+            </h4>
+            <div className="space-y-1.5">
+              {bucketRows.map((b) => (
+                <div key={b.label} className="flex items-center gap-2 text-xs">
+                  <span className="w-16 text-muted-foreground">{b.label}</span>
+                  <div className="h-3 flex-1 rounded bg-muted">
+                    <div
+                      className="h-3 rounded bg-emerald-500"
+                      style={{ width: `${(b.pct * 100).toFixed(1)}%` }}
+                    />
+                  </div>
+                  <span className="w-12 text-right tabular-nums">{trendPct(b.pct, 0)}</span>
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 text-[10px] text-muted-foreground">
+              สัดส่วนของเดือนที่ถือเหรียญอยู่กี่ % ของพอร์ต (ที่เหลือเป็นเงินสด)
+            </p>
+          </div>
+        </div>
+      )}
+
+      {result && (
+        <div>
+          <h4 className="mb-2 text-sm font-semibold">ผลตอบแทนรายปี</h4>
+          <div className="max-h-64 overflow-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-xs text-muted-foreground">
+                  <th className="px-2 py-2 text-left font-medium">ปี</th>
+                  <th className="px-2 py-2 text-right font-medium">Timing</th>
+                  <th className="px-2 py-2 text-right font-medium">Buy &amp; Hold</th>
+                  <th className="px-2 py-2 text-right font-medium">เดือนที่มีข้อมูล</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {years.map((y) => (
+                  <tr key={y.year}>
+                    <td className="px-2 py-1.5">{y.year}</td>
+                    <td className={`px-2 py-1.5 text-right font-medium tabular-nums ${sign(y.timing)}`}>
+                      {trendPct(y.timing, 1)}
+                    </td>
+                    <td className={`px-2 py-1.5 text-right tabular-nums ${sign(y.hold)}`}>
+                      {trendPct(y.hold, 1)}
+                    </td>
+                    <td className="px-2 py-1.5 text-right text-xs text-muted-foreground">{y.months}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            ปีแรกและปีล่าสุดอาจไม่เต็ม 12 เดือน (ดูคอลัมน์สุดท้าย)
+          </p>
+        </div>
+      )}
+
+      {/* 2) ตารางเทียบ SMA */}
+      <div>
+        <h4 className="mb-2 text-sm font-semibold">เทียบทุกค่า SMA ในที่เดียว</h4>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-xs text-muted-foreground">
+                <th className="px-2 py-2 text-left font-medium">SMA</th>
+                <th className="px-2 py-2 text-right font-medium">CAGR (T / B&amp;H)</th>
+                <th className="px-2 py-2 text-right font-medium">Sharpe (T / B&amp;H)</th>
+                <th className="px-2 py-2 text-right font-medium">Max DD (T / B&amp;H)</th>
+                <th className="px-2 py-2 text-right font-medium">ลงทุนเฉลี่ย</th>
+                <th className="px-2 py-2 text-right font-medium">เดือน</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {compare.map((r) => (
+                <tr
+                  key={r.n}
+                  onClick={() => onPickSma(r.n)}
+                  className={`cursor-pointer hover:bg-accent/50 ${r.n === smaLen ? "bg-accent/40" : ""}`}
+                >
+                  <td className="px-2 py-1.5 font-medium">{r.n} เดือน</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">
+                    {trendPct(r.timing.cagr, 0)} / {trendPct(r.hold.cagr, 0)}
+                  </td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">
+                    {r.timing.sharpe.toFixed(2)} / {r.hold.sharpe.toFixed(2)}
+                  </td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">
+                    {trendPct(r.timing.maxDD, 0)} / {trendPct(r.hold.maxDD, 0)}
+                  </td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{trendPct(r.avgInvested, 0)}</td>
+                  <td className="px-2 py-1.5 text-right text-xs text-muted-foreground">{r.months}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+          กดแถวเพื่อสลับ SMA ด้านบน SMA ยิ่งยาวยิ่งเริ่มคำนวณช้า ช่วงเวลาแต่ละแถวจึงไม่เท่ากัน
+          ให้เทียบ Timing กับ Buy &amp; Hold ในแถวเดียวกัน ถ้าตัวเลขต่างกันมากตามค่า SMA แปลว่าผลพึ่งพาพารามิเตอร์
+          (งานวิจัยใช้ตารางแบบนี้ยืนยันว่าผลไม่ได้อยู่ที่ค่าใดค่าหนึ่ง)
+        </p>
+      </div>
+
+      {/* 3) ทำไมถึงได้ผล */}
+      <div>
+        <h4 className="mb-2 text-sm font-semibold">ทำไมถึงได้ผล: ตอนอยู่ใต้ SMA {smaLen} เดือน</h4>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-xs text-muted-foreground">
+                <th className="px-2 py-2 text-left font-medium">เหรียญ</th>
+                <th className="px-2 py-2 text-right font-medium">% เวลาเหนือ SMA</th>
+                <th className="px-2 py-2 text-right font-medium">ผลตอบแทน/เดือน (เหนือ)</th>
+                <th className="px-2 py-2 text-right font-medium">ผลตอบแทน/เดือน (ใต้)</th>
+                <th className="px-2 py-2 text-right font-medium">Vol/ปี (เหนือ)</th>
+                <th className="px-2 py-2 text-right font-medium">Vol/ปี (ใต้)</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {cluster.map((r) => (
+                <tr key={r.asset}>
+                  <td className="px-2 py-1.5 font-medium">{r.asset}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{trendPct(r.pctAbove, 0)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{cell(r.above, "ret")}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{cell(r.below, "ret")}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{cell(r.above, "vol")}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{cell(r.below, "vol")}</td>
+                </tr>
+              ))}
+              <tr className="font-semibold">
+                <td className="px-2 py-1.5">เฉลี่ย</td>
+                <td className="px-2 py-1.5" />
+                <td className="px-2 py-1.5 text-right tabular-nums">{cell(avgAbove, "ret")}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums">{cell(avgBelow, "ret")}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums">{cell(avgAbove, "vol")}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums">{cell(avgBelow, "vol")}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p className="mt-2 text-xs leading-5 text-muted-foreground">
+          {both.length > 0 ? (
+            <>
+              จาก {both.length} เหรียญที่ข้อมูลพอ (ฝั่งละ ≥ 6 เดือน) มี <b className="text-foreground">{lowerRet}</b>{" "}
+              เหรียญที่ผลตอบแทนเดือนถัดไปต่ำกว่าเมื่ออยู่ใต้ SMA และ{" "}
+              <b className="text-foreground">{higherVol}</b> เหรียญที่ผันผวนสูงกว่า
+              งานวิจัยพบว่าหุ้นเป็นแบบนี้ (ผลตอบแทนต่ำลงราว 60% ผันผวนสูงขึ้นราว 30%) ถ้าตัวเลขของคริปโตไม่เป็นไปตามนั้น
+              แปลว่ากลยุทธ์นี้อาจได้ผลจากเหตุผลอื่น
+            </>
+          ) : (
+            "ข้อมูลยังไม่พอสำหรับเทียบ (ต้องมีอย่างน้อย 6 เดือนทั้งสองฝั่ง)"
+          )}
+        </p>
+        <p className="mt-1 text-[10px] text-muted-foreground">
+          ผลตอบแทน/เดือน = ค่าเฉลี่ยผลตอบแทนรายเดือนของเดือนถัดจากสัญญาณ, Vol = ส่วนเบี่ยงเบนมาตรฐานรายเดือน × √12
+        </p>
+      </div>
+    </div>
+  )
 }
 
 let trendCache: TrendAssetData[] | null = null
@@ -5381,6 +5724,13 @@ function TrendTimingCard({ onRefresh }: { onRefresh?: () => void }) {
               ข้อมูลยังไม่พอสำหรับ Backtest ด้วย SMA {smaLen} เดือน ลองเลือกค่าที่สั้นลง
             </p>
           )}
+          <TrendExtras
+            data={data}
+            result={result}
+            smaLen={smaLen}
+            feePct={feePct}
+            onPickSma={setSmaLen}
+          />
         </>
       )}
 
