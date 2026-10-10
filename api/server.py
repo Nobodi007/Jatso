@@ -1446,6 +1446,83 @@ def public_news(request: Request):
 
     return {"status": "ok", "items": items}
 
+
+# =========================================================
+# PUBLIC EXCHANGES (ตารางเทียบราคากระดานไทย) — ดึงจาก gu.fetch_perp_venues
+# =========================================================
+
+_EX_CACHE: dict = {}
+_EX_CACHE_LOCK = RLock()
+_EX_TTL_SECONDS = 5
+
+
+def _pos_float(value):
+    try:
+        v = float(value)
+        return v if math.isfinite(v) and v > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+@app.get("/api/public/exchanges")
+def public_exchanges(request: Request, asset: str = "BTC"):
+    _check_rate_limit(request, "public-exchanges")
+    asset = str(asset or "").strip().upper()
+    if asset not in PUBLIC_ASSETS:
+        raise HTTPException(status_code=400, detail=f"ไม่รองรับเหรียญ {asset or '(ว่าง)'}")
+
+    now = time.monotonic()
+    with _EX_CACHE_LOCK:
+        hit = _EX_CACHE.get(asset)
+        if hit and now - hit[0] < _EX_TTL_SECONDS:
+            return hit[1]
+
+    try:
+        gu = load_gu()
+        df, _ts = gu.fetch_perp_venues(asset, board="thai")
+        fees = getattr(gu, "_THAI_TAKER_FEE_PCT", {}) or {}
+        venues = {v.get("name"): v for v in (getattr(gu, "_THAI_SPOT_VENUES", []) or [])}
+
+        rows = []
+        for _, r in df.iterrows():
+            name = str(r.get("exchange") or "").strip()
+            v = venues.get(name, {})
+            bid = _pos_float(r.get("bid"))
+            ask = _pos_float(r.get("ask"))
+            fee = _pos_float(fees.get(name))
+            ok = bid is not None and ask is not None
+
+            rows.append({
+                "exchange": name,
+                "symbol": str(r.get("symbol") or ""),
+                "url": _safe_http_url(r.get("url")),
+                "logo": _safe_http_url(r.get("logo") or v.get("logo")),
+                "badge": str(v.get("tx") or name[:2]).upper(),
+                "bg": str(v.get("bg") or "#444444"),
+                "fg": str(v.get("fg") or "#ffffff"),
+                "bid": bid,
+                "ask": ask,
+                "spread": (ask - bid) if ok else None,
+                "spread_pct": ((ask - bid) / bid * 100.0) if ok else None,
+                "fee_pct": fee,
+                "net_buy": (ask * (1 + fee / 100.0)) if (ask is not None and fee is not None) else None,
+                "net_sell": (bid * (1 - fee / 100.0)) if (bid is not None and fee is not None) else None,
+                "error": "" if ok else str(r.get("err") or "ข้อมูลไม่พร้อม")[:80],
+            })
+    except Exception as exc:
+        with _EX_CACHE_LOCK:
+            hit = _EX_CACHE.get(asset)
+            if hit:
+                return hit[1]
+        raise _internal_server_error("โหลดตารางกระดานไม่สำเร็จ", exc, 502)
+
+    result = {"status": "ok", "asset": asset, "rows": rows}
+    if any(r["bid"] is not None for r in rows):
+        with _EX_CACHE_LOCK:
+            _EX_CACHE[asset] = (now, result)
+    return result
+
+
 # =========================================================
 # CHAT (AI ASSISTANT) — read-only, never places orders
 # =========================================================
