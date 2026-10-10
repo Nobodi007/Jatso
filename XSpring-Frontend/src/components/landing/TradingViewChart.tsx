@@ -13,6 +13,8 @@ const TV_SYMBOL: Record<string, string> = {
   XLM: "BITKUB:XLMTHB",
 }
 
+const CHART_HEIGHT = 560
+
 export default function TradingViewChart({ asset }: { asset: string }) {
   const ref = useRef<HTMLDivElement>(null)
 
@@ -24,7 +26,7 @@ export default function TradingViewChart({ asset }: { asset: string }) {
     el.innerHTML = ""
     const inner = document.createElement("div")
     inner.className = "tradingview-widget-container__widget"
-    inner.style.height = "100%"
+    inner.style.height = `${CHART_HEIGHT}px`
     inner.style.width = "100%"
     el.appendChild(inner)
 
@@ -32,7 +34,9 @@ export default function TradingViewChart({ asset }: { asset: string }) {
     script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js"
     script.async = true
     script.innerHTML = JSON.stringify({
-      autosize: true,
+      autosize: false,
+      width: "100%",
+      height: CHART_HEIGHT,
       symbol: TV_SYMBOL[asset] ?? `BITKUB:${asset}THB`,
       interval: "60",
       timezone: "Asia/Bangkok",
@@ -54,7 +58,8 @@ export default function TradingViewChart({ asset }: { asset: string }) {
   return (
     <div
       ref={ref}
-      className="tradingview-widget-container h-[520px] w-full overflow-hidden rounded-2xl border"
+      className="tradingview-widget-container w-full overflow-hidden rounded-2xl border"
+      style={{ height: CHART_HEIGHT, minHeight: CHART_HEIGHT }}
     />
   )
 }
