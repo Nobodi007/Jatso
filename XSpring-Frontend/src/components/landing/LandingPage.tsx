@@ -4,11 +4,14 @@ import MarketSection from "./MarketSection"
 import NewsSection from "./NewsSection"
 import SearchBox from "./SearchBox"
 import CoinDetail from "./CoinDetail"
+import BacktestSection from "./BacktestSection"
 
 type LandingPageProps = {
   onLogin: () => void
   onRegister: () => void
 }
+
+type View = "home" | "market" | "news" | "coin" | "backtest"
 
 // แก้ข้อความตรงนี้ได้เลย
 const BRAND = "Nobodi"
@@ -16,6 +19,13 @@ const HERO_TITLE = "เริ่มต้นลงทุนคริปโตอ
 const HERO_SUB =
   "ดูราคาตลาดแบบสด ทดลองลงทุนย้อนหลัง และฝึกซื้อขายในบัญชีจำลองก่อนตัดสินใจจริง ทุกอย่างอยู่ในที่เดียว"
 const MENU = ["ตลาด", "การซื้อขาย", "เรียนรู้", "ข่าว", "ลองลงทุนย้อนหลัง"]
+
+// เมนูไหนเปิดหน้าอะไร (เมนูที่ไม่อยู่ในนี้ = พาไปล็อกอิน)
+const VIEW_OF: Record<string, View> = {
+  "ตลาด": "market",
+  "ข่าว": "news",
+  "ลองลงทุนย้อนหลัง": "backtest",
+}
 
 const CANDLES = [
   { x: 60, w1: 150, w2: 240, b: 170, h: 45, up: false },
@@ -63,7 +73,7 @@ function initialDark(): boolean {
 
 export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
   const [menuOpen, setMenuOpen] = useState(false)
-  const [view, setView] = useState<"home" | "market" | "news" | "coin">("home")
+  const [view, setView] = useState<View>("home")
   const [coin, setCoin] = useState("BTC")
   const [dark, setDark] = useState(initialDark)
 
@@ -83,11 +93,9 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
 
   const go = (label: string) => {
     setMenuOpen(false)
-    if (label === "ตลาด") {
-      setView("market")
-      window.scrollTo({ top: 0 })
-    } else if (label === "ข่าว") {
-      setView("news")
+    const target = VIEW_OF[label]
+    if (target) {
+      setView(target)
       window.scrollTo({ top: 0 })
     } else {
       onLogin()
@@ -115,7 +123,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
                 type="button"
                 onClick={() => go(label)}
                 className={`transition-colors hover:text-foreground ${
-                  (label === "ตลาด" && view === "market") || (label === "ข่าว" && view === "news")
+                  VIEW_OF[label] === view
                     ? "border-b-2 border-emerald-500 pb-0.5 font-semibold text-foreground"
                     : "text-muted-foreground"
                 }`}
@@ -187,6 +195,8 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
         <MarketSection onLogin={onLogin} onRegister={onRegister} />
       ) : view === "news" ? (
         <NewsSection />
+      ) : view === "backtest" ? (
+        <BacktestSection onLogin={onLogin} onRegister={onRegister} />
       ) : view === "coin" ? (
         <CoinDetail asset={coin} onBack={() => setView("market")} onLogin={onLogin} onRegister={onRegister} />
       ) : (
