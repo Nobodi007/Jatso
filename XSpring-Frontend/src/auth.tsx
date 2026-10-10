@@ -207,6 +207,10 @@ function LoginScreen({
               onError={() => setError("Google login ไม่สำเร็จ")}
               theme="filled_black"
               shape="pill"
+              size="large"
+              width="300"
+              text="continue_with"
+              locale="th"
             />
           )}
         </div>
