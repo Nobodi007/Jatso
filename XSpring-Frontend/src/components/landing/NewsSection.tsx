@@ -8,7 +8,7 @@ type NewsItem = {
   published_at: string
 }
 
-const API_BASE = "https://xspring-api.onrender.com"
+const API_BASE_URL = "https://xspring-api.onrender.com"
 
 function fmtTime(s: string) {
   const d = new Date(s)
@@ -23,7 +23,7 @@ export default function NewsSection() {
 
   useEffect(() => {
     const ctrl = new AbortController()
-    fetch(`${API_BASE}/api/public/news`, { signal: ctrl.signal })
+    fetch(`${API_BASE_URL}/api/public/news`, { signal: ctrl.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => setItems(d.items ?? []))
       .catch((e) => {
