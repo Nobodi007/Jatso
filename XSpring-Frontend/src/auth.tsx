@@ -187,35 +187,28 @@ function LoginScreen({
     }
   }
 
-  return (
-    return (
-  <AuthShell onBack={...ของเดิมจากปุ่ม C...}>
-    <div className="flex justify-center">
-      ...GoogleLogin (บรรทัด 207–218 เหมือนเดิมทุกตัวอักษร)...
-    </div>
-    {error && ...}
-  </AuthShell>
-)
-        <div className="flex justify-center">
-          {!GOOGLE_CLIENT_ID ? (
-            <p className="text-sm text-red-500">ยังไม่ได้ตั้ง VITE_GOOGLE_CLIENT_ID</p>
-          ) : loading ? (
-            <p className="text-sm text-muted-foreground">กำลังตรวจสอบ...</p>
-          ) : (
-            <GoogleLogin
-              onSuccess={(res) => handleCredential(res.credential)}
-              onError={() => setError("Google login ไม่สำเร็จ")}
-              theme="filled_black"
-              shape="pill"
-              size="large"
-              width="300"
-              text="continue_with"
-              locale="th"
-            />
-          )}
-        </div>
+   return (
+    <AuthShell onBack={onBack}>
+      <div className="flex justify-center">
+        {!GOOGLE_CLIENT_ID ? (
+          <p className="text-sm text-red-500">ยังไม่ได้ตั้ง VITE_GOOGLE_CLIENT_ID</p>
+        ) : loading ? (
+          <p className="text-sm text-muted-foreground">กำลังตรวจสอบ...</p>
+        ) : (
+          <GoogleLogin
+            onSuccess={(res) => handleCredential(res.credential)}
+            onError={() => setError("Google login ไม่สำเร็จ")}
+            theme="filled_black"
+            shape="pill"
+            size="large"
+            width="300"
+            text="continue_with"
+            locale="th"
+          />
+        )}
+      </div>
 
-        {error && <p className="mt-4 text-sm text-red-500">{error}</p>}
+      {error && <p className="mt-4 text-sm text-red-500">{error}</p>}
     </AuthShell>
   )
 }
