@@ -4614,6 +4614,491 @@ const ethChange = tickers.find((t) => t.asset === "ETH")?.change
   )
 }
 
+type TrendBar = { t: number; c: number }
+type MonthPoint = { key: string; close: number }
+type TrendAssetData = { asset: string; months: MonthPoint[] }
+
+type TrendStats = {
+  total: number
+  cagr: number
+  vol: number
+  sharpe: number
+  maxDD: number
+}
+
+type TrendResult = {
+  keys: string[]
+  timing: number[]
+  hold: number[]
+  timingStats: TrendStats
+  holdStats: TrendStats
+  avgInvested: number
+  months: number
+}
+
+type TrendSignalRow = {
+  asset: string
+  price: number
+  sma: number | null
+  distPct: number | null
+  hold: boolean | null
+  months: number
+}
+
+const TREND_ASSETS = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "HBAR", "LINK", "XLM"]
+const TREND_SMA_OPTIONS = [3, 6, 9, 10, 12]
+const TREND_FEE_OPTIONS = [0, 0.25]
+const TREND_CHUNK_DAYS = 380
+const TREND_START_UNIX = 1514764800 // 2018-01-01
+
+async function fetchDailyCloses(asset: string): Promise<TrendBar[]> {
+  const now = Math.floor(Date.now() / 1000)
+  const step = TREND_CHUNK_DAYS * 86400
+  const ranges: [number, number][] = []
+  for (let from = TREND_START_UNIX; from < now; from += step) {
+    ranges.push([from, Math.min(from + step, now)])
+  }
+
+  const chunks = await Promise.all(
+    ranges.map(async ([from, to]): Promise<TrendBar[]> => {
+      const response = await fetch(
+        `https://api.bitkub.com/tradingview/history?symbol=${asset}_THB&resolution=1D&from=${from}&to=${to}`,
+        { headers: { Accept: "application/json" }, cache: "no-store" }
+      )
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const body = await response.json()
+      // ช่วงที่เหรียญยังไม่เข้าตลาดจะได้ no_data ให้ข้ามไป
+      if (body?.s !== "ok" || !Array.isArray(body.t) || !Array.isArray(body.c)) return []
+      return body.t.map((t: unknown, i: number) => ({ t: Number(t), c: Number(body.c[i]) }))
+    })
+  )
+
+  const unique = new Map<number, number>()
+  for (const chunk of chunks) {
+    for (const bar of chunk) {
+      if (Number.isFinite(bar.t) && bar.c > 0) unique.set(bar.t, bar.c)
+    }
+  }
+  return Array.from(unique.entries())
+    .map(([t, c]) => ({ t, c }))
+    .sort((a, b) => a.t - b.t)
+}
+
+// ปิดรายเดือน = ราคาปิดของวันสุดท้ายที่มีข้อมูลในเดือนนั้น (เวลาไทย)
+function toMonthly(bars: TrendBar[]): MonthPoint[] {
+  const out: MonthPoint[] = []
+  for (const bar of bars) {
+    const d = new Date((bar.t + 7 * 3600) * 1000)
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`
+    const last = out[out.length - 1]
+    if (last && last.key === key) last.close = bar.c
+    else out.push({ key, close: bar.c })
+  }
+  return out
+}
+
+function smaAt(closes: number[], i: number, n: number): number | null {
+  if (i + 1 < n) return null
+  let sum = 0
+  for (let k = i - n + 1; k <= i; k++) sum += closes[k]
+  return sum / n
+}
+
+function trendStats(rets: number[], equity: number[]): TrendStats {
+  const months = rets.length
+  const first = equity[0]
+  const last = equity[equity.length - 1]
+  const mean = rets.reduce((a, b) => a + b, 0) / months
+  const variance =
+    months > 1 ? rets.reduce((a, b) => a + (b - mean) ** 2, 0) / (months - 1) : 0
+  const vol = Math.sqrt(variance) * Math.sqrt(12)
+  let peak = equity[0]
+  let maxDD = 0
+  for (const v of equity) {
+    if (v > peak) peak = v
+    const dd = v / peak - 1
+    if (dd < maxDD) maxDD = dd
+  }
+  return {
+    total: last / first - 1,
+    cagr: Math.pow(last / first, 12 / months) - 1,
+    vol,
+    sharpe: vol > 0 ? (mean * 12) / vol : 0,
+    maxDD,
+  }
+}
+
+// กฎ: สิ้นเดือน ถ้าราคาปิด > SMA(n เดือน) ถือเหรียญนั้นตลอดเดือนถัดไป ไม่งั้นถือเงินสด (ผลตอบแทน 0)
+// น้ำหนักเท่ากันทุกเหรียญ ปรับสมดุลทุกเดือน
+function runTrendBacktest(data: TrendAssetData[], n: number, feePct: number): TrendResult | null {
+  const keySet = new Set<string>()
+  data.forEach((d) => d.months.forEach((m) => keySet.add(m.key)))
+  const keys = Array.from(keySet).sort()
+  if (keys.length < n + 3) return null
+
+  const idx = new Map<string, number>()
+  keys.forEach((k, i) => idx.set(k, i))
+  const fee = feePct / 100
+
+  const sig: (0 | 1 | null)[][] = []
+  const ret: (number | null)[][] = []
+
+  for (const d of data) {
+    const s: (0 | 1 | null)[] = Array(keys.length).fill(null)
+    const r: (number | null)[] = Array(keys.length).fill(null)
+    const closes = d.months.map((m) => m.close)
+    d.months.forEach((m, j) => {
+      const i = idx.get(m.key)
+      if (i === undefined) return
+      const sma = smaAt(closes, j, n)
+      s[i] = sma === null ? null : m.close > sma ? 1 : 0
+      if (j > 0 && idx.get(d.months[j - 1].key) === i - 1) {
+        r[i] = m.close / closes[j - 1] - 1
+      }
+    })
+    sig.push(s)
+    ret.push(r)
+  }
+
+  const outKeys: string[] = []
+  const timingRets: number[] = []
+  const holdRets: number[] = []
+  const investedFrac: number[] = []
+
+  for (let i = 1; i < keys.length; i++) {
+    let count = 0
+    let tSum = 0
+    let hSum = 0
+    let posSum = 0
+    for (let a = 0; a < data.length; a++) {
+      const pos = sig[a][i - 1]
+      const r = ret[a][i]
+      if (pos === null || r === null) continue
+      const prevRaw = i >= 2 ? sig[a][i - 2] : null
+      const prevPos = prevRaw === null ? 0 : prevRaw
+      tSum += pos * r - fee * Math.abs(pos - prevPos)
+      hSum += r
+      posSum += pos
+      count++
+    }
+    if (count === 0) continue
+    outKeys.push(keys[i])
+    timingRets.push(tSum / count)
+    holdRets.push(hSum / count)
+    investedFrac.push(posSum / count)
+  }
+
+  if (timingRets.length < 6) return null
+
+  const timing = [100]
+  const hold = [100]
+  timingRets.forEach((r, i) => {
+    timing.push(timing[i] * (1 + r))
+    hold.push(hold[i] * (1 + holdRets[i]))
+  })
+
+  return {
+    keys: outKeys,
+    timing,
+    hold,
+    timingStats: trendStats(timingRets, timing),
+    holdStats: trendStats(holdRets, hold),
+    avgInvested: investedFrac.reduce((a, b) => a + b, 0) / investedFrac.length,
+    months: timingRets.length,
+  }
+}
+
+function currentTrendSignals(data: TrendAssetData[], n: number): TrendSignalRow[] {
+  return data.map((d) => {
+    const closes = d.months.map((m) => m.close)
+    const last = closes.length - 1
+    const price = closes[last] ?? 0
+    const sma = last >= 0 ? smaAt(closes, last, n) : null
+    return {
+      asset: d.asset,
+      price,
+      sma,
+      distPct: sma ? (price / sma - 1) * 100 : null,
+      hold: sma === null ? null : price > sma,
+      months: closes.length,
+    }
+  })
+}
+
+let trendCache: TrendAssetData[] | null = null
+
+function trendPct(value: number, digits = 2) {
+  return `${(value * 100).toFixed(digits)}%`
+}
+
+function TrendChart({ keys, timing, hold }: { keys: string[]; timing: number[]; hold: number[] }) {
+  const W = 640
+  const H = 220
+  const P = 10
+  const all = [...timing, ...hold]
+  const lo = Math.log(Math.min(...all))
+  const hi = Math.log(Math.max(...all))
+  const x = (i: number) => P + (i / Math.max(1, timing.length - 1)) * (W - 2 * P)
+  const y = (v: number) => H - P - ((Math.log(v) - lo) / Math.max(1e-9, hi - lo)) * (H - 2 * P)
+  const line = (arr: number[]) =>
+    arr.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ")
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full">
+        <path d={line(hold)} fill="none" stroke="#a1a1aa" strokeWidth={2} />
+        <path d={line(timing)} fill="none" stroke="#10b981" strokeWidth={2.5} />
+      </svg>
+      <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
+        <span>{keys[0]}</span>
+        <span className="flex items-center gap-3">
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-0.5 w-4 bg-emerald-500" /> Trend Timing
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-0.5 w-4 bg-zinc-400" /> Buy &amp; Hold
+          </span>
+        </span>
+        <span>{keys[keys.length - 1]}</span>
+      </div>
+    </div>
+  )
+}
+
+function TrendTimingCard() {
+  const [data, setData] = useState<TrendAssetData[] | null>(trendCache)
+  const [loading, setLoading] = useState(trendCache === null)
+  const [error, setError] = useState("")
+  const [smaLen, setSmaLen] = useState(10)
+  const [feePct, setFeePct] = useState(0.25)
+
+  useEffect(() => {
+    if (trendCache) return
+    let alive = true
+    const run = async () => {
+      const results = await Promise.allSettled(
+        TREND_ASSETS.map(async (asset) => ({
+          asset,
+          months: toMonthly(await fetchDailyCloses(asset)),
+        }))
+      )
+      if (!alive) return
+      const ok: TrendAssetData[] = []
+      for (const r of results) {
+        if (r.status === "fulfilled" && r.value.months.length >= 2) ok.push(r.value)
+      }
+      if (ok.length === 0) {
+        setError("โหลดข้อมูลราคาย้อนหลังจาก Bitkub ไม่สำเร็จ")
+      } else {
+        trendCache = ok
+        setData(ok)
+      }
+      setLoading(false)
+    }
+    run()
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const result = data ? runTrendBacktest(data, smaLen, feePct) : null
+  const signals = data ? currentTrendSignals(data, smaLen) : []
+  const holdCount = signals.filter((s) => s.hold === true).length
+  const readyCount = signals.filter((s) => s.hold !== null).length
+
+  const statRows: [string, string, string][] = result
+    ? [
+        ["ผลตอบแทนรวม", trendPct(result.timingStats.total, 1), trendPct(result.holdStats.total, 1)],
+        ["CAGR (ต่อปี)", trendPct(result.timingStats.cagr), trendPct(result.holdStats.cagr)],
+        ["Volatility", trendPct(result.timingStats.vol), trendPct(result.holdStats.vol)],
+        ["Sharpe (rf = 0)", result.timingStats.sharpe.toFixed(2), result.holdStats.sharpe.toFixed(2)],
+        ["Max Drawdown", trendPct(result.timingStats.maxDD), trendPct(result.holdStats.maxDD)],
+        ["ลงทุนเฉลี่ย", trendPct(result.avgInvested, 0), "100%"],
+      ]
+    : []
+
+  return (
+    <div className="space-y-5 rounded-xl border bg-card p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-bold">Trend Timing (GTAA-style)</h3>
+          <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
+            อิงงานวิจัย “A Quantitative Approach to Tactical Asset Allocation” (Faber) สิ้นเดือน
+            ถ้าราคาปิด &gt; ค่าเฉลี่ย {smaLen} เดือน ถือเหรียญนั้นต่อ ไม่งั้นออกเป็นเงินสด
+            น้ำหนักเท่ากันทุกเหรียญ ปรับสมดุลรายเดือน
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <div>
+            <label className="mb-1 block text-[10px] text-muted-foreground">SMA (เดือน)</label>
+            <div className="flex gap-1">
+              {TREND_SMA_OPTIONS.map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setSmaLen(n)}
+                  className={`rounded-md border px-2.5 py-1 text-xs ${
+                    smaLen === n ? "bg-primary text-primary-foreground" : "hover:bg-accent"
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] text-muted-foreground">ค่าธรรมเนียม/ครั้ง</label>
+            <div className="flex gap-1">
+              {TREND_FEE_OPTIONS.map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setFeePct(f)}
+                  className={`rounded-md border px-2.5 py-1 text-xs ${
+                    feePct === f ? "bg-primary text-primary-foreground" : "hover:bg-accent"
+                  }`}
+                >
+                  {f}%
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {loading && (
+        <p className="py-8 text-center text-sm text-muted-foreground">
+          กำลังโหลดราคาย้อนหลังจาก Bitkub (ครั้งแรกอาจใช้เวลาสักครู่)...
+        </p>
+      )}
+
+      {error && (
+        <p className="rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-sm text-red-500">
+          {error}
+        </p>
+      )}
+
+      {data && (
+        <>
+          {/* SIGNALS */}
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <h4 className="text-sm font-semibold">สัญญาณปัจจุบัน</h4>
+              <span className="text-xs text-muted-foreground">
+                ถือ {holdCount} / {readyCount} เหรียญ
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-xs text-muted-foreground">
+                    <th className="px-2 py-2 text-left font-medium">เหรียญ</th>
+                    <th className="px-2 py-2 text-right font-medium">ราคาล่าสุด</th>
+                    <th className="px-2 py-2 text-right font-medium">SMA {smaLen} เดือน</th>
+                    <th className="px-2 py-2 text-right font-medium">ห่างจาก SMA</th>
+                    <th className="px-2 py-2 text-right font-medium">สัญญาณ</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {signals.map((s) => (
+                    <tr key={s.asset}>
+                      <td className="px-2 py-2">
+                        <span className="flex items-center gap-2 font-medium">
+                          <CoinIcon asset={s.asset} size={20} />
+                          {s.asset}
+                        </span>
+                      </td>
+                      <td className="px-2 py-2 text-right tabular-nums">{formatTHB(s.price)}</td>
+                      <td className="px-2 py-2 text-right tabular-nums">
+                        {s.sma === null ? "—" : formatTHB(s.sma)}
+                      </td>
+                      <td
+                        className={`px-2 py-2 text-right tabular-nums ${
+                          s.distPct === null
+                            ? "text-muted-foreground"
+                            : s.distPct >= 0
+                              ? "text-emerald-500"
+                              : "text-red-500"
+                        }`}
+                      >
+                        {s.distPct === null ? "—" : `${s.distPct >= 0 ? "+" : ""}${s.distPct.toFixed(2)}%`}
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        {s.hold === null ? (
+                          <span className="rounded bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                            ข้อมูลไม่พอ ({s.months} เดือน)
+                          </span>
+                        ) : s.hold ? (
+                          <span className="rounded bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-500">
+                            ถือ
+                          </span>
+                        ) : (
+                          <span className="rounded bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-500">
+                            ออกเป็นเงินสด
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-[10px] text-muted-foreground">
+              ตามกฎต้นฉบับ สัญญาณจะอัปเดตเฉพาะวันสุดท้ายของเดือน แถวนี้ใช้ราคาล่าสุดของเดือนที่ยังไม่จบ
+              จึงอาจเปลี่ยนก่อนสิ้นเดือน
+            </p>
+          </div>
+
+          {/* BACKTEST */}
+          {result ? (
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,6fr)_minmax(0,4fr)]">
+              <div>
+                <h4 className="mb-2 text-sm font-semibold">
+                  Backtest ({result.keys[0]} ถึง {result.keys[result.keys.length - 1]} · {result.months} เดือน)
+                </h4>
+                <TrendChart keys={result.keys} timing={result.timing} hold={result.hold} />
+              </div>
+              <div>
+                <h4 className="mb-2 text-sm font-semibold">เทียบสถิติ</h4>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b text-xs text-muted-foreground">
+                      <th className="px-2 py-2 text-left font-medium" />
+                      <th className="px-2 py-2 text-right font-medium">Timing</th>
+                      <th className="px-2 py-2 text-right font-medium">Buy &amp; Hold</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {statRows.map(([label, a, b]) => (
+                      <tr key={label}>
+                        <td className="px-2 py-2 text-xs text-muted-foreground">{label}</td>
+                        <td className="px-2 py-2 text-right font-medium tabular-nums">{a}</td>
+                        <td className="px-2 py-2 text-right tabular-nums">{b}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <p className="rounded-lg border px-3 py-2 text-xs text-muted-foreground">
+              ข้อมูลยังไม่พอสำหรับ Backtest ด้วย SMA {smaLen} เดือน ลองเลือกค่าที่สั้นลง
+            </p>
+          )}
+        </>
+      )}
+
+      <div className="rounded-lg border bg-muted/30 p-3 text-[11px] leading-5 text-muted-foreground">
+        <b className="text-foreground">ข้อควรรู้</b> งานวิจัยทดสอบกับสินทรัพย์ดั้งเดิมช่วงปี 1973–2012
+        ส่วนคริปโตมีประวัติสั้นและผันผวนกว่ามาก ผลย้อนหลังนี้จึงไม่ควรคาดหวังให้ใกล้เคียงตัวเลขในงานวิจัย
+        Backtest ไม่รวม slippage/spread เงินสดให้ผลตอบแทน 0% และผลในอดีตไม่รับประกันอนาคต
+        ใช้เพื่อการศึกษา ไม่ใช่คำแนะนำการลงทุน
+      </div>
+    </div>
+  )
+}
+
+
 /* =========================================================
    QUANT LAB
 ========================================================= */
@@ -4698,6 +5183,8 @@ function QuantLabPage({
         />
       </div>
 
+      <TrendTimingCard />
+      
       <div className="grid gap-6 xl:grid-cols-2">
         <div className="rounded-xl border bg-card">
           <div className="border-b px-5 py-4">
