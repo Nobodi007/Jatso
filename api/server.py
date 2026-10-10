@@ -1319,6 +1319,73 @@ def portfolio(user: str = Depends(require_user)):
                 e,
             )
 
+
+# =========================================================
+# PUBLIC MARKETS (หน้าตลาดก่อนล็อกอิน)
+# =========================================================
+
+PUBLIC_ASSETS = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "HBAR", "LINK", "XLM"]
+PUBLIC_NAMES = {
+    "BTC": "Bitcoin", "ETH": "Ethereum", "SOL": "Solana", "XRP": "XRP", "ADA": "Cardano",
+    "DOGE": "Dogecoin", "HBAR": "Hedera", "LINK": "Chainlink", "XLM": "Stellar",
+}
+_PUB_CACHE = {"ts": 0.0, "rows": [], "spark_ts": 0.0, "sparks": {}}
+
+
+@app.get("/api/public/markets")
+def public_markets(request: Request):
+    _check_rate_limit(request, "public-markets")
+    c = _PUB_CACHE
+    now = time.time()
+
+    # ราคา: แคช 10 วินาที
+    if not c["rows"] or now - c["ts"] > 10:
+        try:
+            r = requests.get("https://api.bitkub.com/api/market/ticker", timeout=10)
+            r.raise_for_status()
+            body = r.json()
+            rows = []
+            for a in PUBLIC_ASSETS:
+                t = body.get(f"THB_{a}") or body.get(f"{a}_THB")
+                price = float((t or {}).get("last") or 0)
+                if not t or price <= 0:
+                    continue
+                rows.append({
+                    "asset": a,
+                    "name": PUBLIC_NAMES.get(a, a),
+                    "price": price,
+                    "change": float(t.get("percentChange") or 0),
+                    "volume": float(t.get("quoteVolume") or (float(t.get("baseVolume") or 0) * price)),
+                })
+            if rows:
+                c["rows"], c["ts"] = rows, now
+        except Exception as e:
+            if not c["rows"]:
+                raise HTTPException(status_code=502, detail=f"ดึงข้อมูลตลาดไม่สำเร็จ: {e}")
+
+    # กราฟ 7 วัน: แคช 10 นาที
+    if not c["sparks"] or now - c["spark_ts"] > 600:
+        sparks = {}
+        t_now = int(now)
+        for a in PUBLIC_ASSETS:
+            try:
+                r = requests.get(
+                    "https://api.bitkub.com/tradingview/history",
+                    params={"symbol": f"{a}_THB", "resolution": 60,
+                            "from": t_now - 7 * 86400, "to": t_now},
+                    timeout=6,
+                )
+                b = r.json()
+                if b.get("s") == "ok" and isinstance(b.get("c"), list) and b["c"]:
+                    closes = [float(x) for x in b["c"]]
+                    step = max(1, len(closes) // 40)
+                    sparks[a] = closes[::step]
+            except Exception:
+                pass
+        c["sparks"], c["spark_ts"] = sparks, now
+
+    return {"status": "ok", "rows": c["rows"], "sparks": c["sparks"]}
+
 # =========================================================
 # CHAT (AI ASSISTANT) — read-only, never places orders
 # =========================================================
