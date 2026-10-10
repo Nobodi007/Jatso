@@ -188,22 +188,15 @@ function LoginScreen({
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-6 text-foreground">
-      <div className="w-full max-w-sm rounded-2xl border bg-card p-8 text-center shadow-sm">
-        <div className="mx-auto flex size-12 items-center justify-center rounded-xl bg-primary text-lg font-bold text-primary-foreground">
-        <button
-          type="button"
-          onClick={onBack}
-          className="mb-4 block w-full text-left text-xs text-muted-foreground hover:text-foreground"
-        >
-          ← กลับหน้าแรก
-        </button>
-          X
-        </div>
-        <h1 className="mt-4 text-xl font-semibold">XSpring Dealer Suite</h1>
-        <p className="mt-1 text-sm text-muted-foreground">เข้าสู่ระบบด้วยบัญชี Google</p>
-
-        <div className="mt-6 flex justify-center">
+    return (
+  <AuthShell onBack={...ของเดิมจากปุ่ม C...}>
+    <div className="flex justify-center">
+      ...GoogleLogin (บรรทัด 207–218 เหมือนเดิมทุกตัวอักษร)...
+    </div>
+    {error && ...}
+  </AuthShell>
+)
+        <div className="flex justify-center">
           {!GOOGLE_CLIENT_ID ? (
             <p className="text-sm text-red-500">ยังไม่ได้ตั้ง VITE_GOOGLE_CLIENT_ID</p>
           ) : loading ? (
@@ -219,7 +212,6 @@ function LoginScreen({
         </div>
 
         {error && <p className="mt-4 text-sm text-red-500">{error}</p>}
-      </div>
-    </div>
+    </AuthShell>
   )
 }
