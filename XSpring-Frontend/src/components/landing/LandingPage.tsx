@@ -80,9 +80,9 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
     <div className="min-h-screen bg-background text-foreground">
       <header className="sticky top-0 z-10 border-b bg-background/90 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-7xl items-center gap-6 px-4">
-             <button type="button" onClick={() => setView("home")} className="text-xl font-extrabold tracking-tight">
-               {BRAND}
-             </button>
+          <button type="button" onClick={() => setView("home")} className="text-xl font-extrabold tracking-tight">
+            {BRAND}
+          </button>
 
           <nav className="hidden items-center gap-5 text-sm md:flex">
             {MENU.map((label) => (
@@ -163,22 +163,22 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
       ) : view === "news" ? (
         <NewsSection />
       ) : (
-      <main className="mx-auto grid max-w-7xl items-center gap-10 px-4 py-16 lg:grid-cols-2 lg:py-24">
-        <div>
-          <h1 className="text-4xl font-extrabold leading-tight tracking-tight sm:text-5xl">{HERO_TITLE}</h1>
-          <p className="mt-5 max-w-xl text-base leading-7 text-muted-foreground">{HERO_SUB}</p>
-          <button
-            type="button"
-            onClick={onRegister}
-            className="mt-8 rounded-lg bg-emerald-500 px-6 py-3 text-sm font-bold text-black hover:bg-emerald-400"
-          >
-            สมัครตอนนี้
-          </button>
-        </div>
-        <div className="flex justify-center lg:justify-end">
-          <HeroArt />
-        </div>
-      </main>
+        <main className="mx-auto grid max-w-7xl items-center gap-10 px-4 py-16 lg:grid-cols-2 lg:py-24">
+          <div>
+            <h1 className="text-4xl font-extrabold leading-tight tracking-tight sm:text-5xl">{HERO_TITLE}</h1>
+            <p className="mt-5 max-w-xl text-base leading-7 text-muted-foreground">{HERO_SUB}</p>
+            <button
+              type="button"
+              onClick={onRegister}
+              className="mt-8 rounded-lg bg-emerald-500 px-6 py-3 text-sm font-bold text-black hover:bg-emerald-400"
+            >
+              สมัครตอนนี้
+            </button>
+          </div>
+          <div className="flex justify-center lg:justify-end">
+            <HeroArt />
+          </div>
+        </main>
       )}
     </div>
   )
