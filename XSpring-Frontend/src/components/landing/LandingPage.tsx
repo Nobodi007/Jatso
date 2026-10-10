@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { Globe, Menu, Search, X } from "lucide-react"
+import MarketSection from "./MarketSection"
 
 type LandingPageProps = {
   onLogin: () => void
@@ -47,7 +48,18 @@ function HeroArt() {
 
 export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [view, setView] = useState<"home" | "market">("home")
 
+  const go = (label: string) => {
+    setMenuOpen(false)
+    if (label === "ตลาด") {
+      setView("market")
+      window.scrollTo({ top: 0 })
+    } else {
+      onLogin()
+    }
+  }
+  
   // หน้านี้อยู่นอก AppInner จึงตั้งธีมเองให้ตรงกับที่เคยเลือกไว้
   useEffect(() => {
     let dark = window.matchMedia("(prefers-color-scheme: dark)").matches
@@ -64,15 +76,21 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
     <div className="min-h-screen bg-background text-foreground">
       <header className="sticky top-0 z-10 border-b bg-background/90 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-7xl items-center gap-6 px-4">
-          <span className="text-xl font-extrabold tracking-tight">{BRAND}</span>
+             <button type="button" onClick={() => setView("home")} className="text-xl font-extrabold tracking-tight">
+               {BRAND}
+             </button>
 
           <nav className="hidden items-center gap-5 text-sm md:flex">
             {MENU.map((label) => (
               <button
                 key={label}
                 type="button"
-                onClick={onLogin}
-                className="text-muted-foreground transition-colors hover:text-foreground"
+                onClick={() => go(label)}
+                className={`transition-colors hover:text-foreground ${
+                  label === "ตลาด" && view === "market"
+                    ? "border-b-2 border-emerald-500 pb-0.5 font-semibold text-foreground"
+                    : "text-muted-foreground"
+                }`}
               >
                 {label}
               </button>
@@ -126,7 +144,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
               <button
                 key={label}
                 type="button"
-                onClick={onLogin}
+                onClick={() => (label === "เข้าสู่ระบบ" ? onLogin() : go(label))}
                 className="block w-full py-2 text-left text-sm"
               >
                 {label}
@@ -136,6 +154,9 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
         )}
       </header>
 
+      {view === "market" ? (
+        <MarketSection onLogin={onLogin} onRegister={onRegister} />
+      ) : (
       <main className="mx-auto grid max-w-7xl items-center gap-10 px-4 py-16 lg:grid-cols-2 lg:py-24">
         <div>
           <h1 className="text-4xl font-extrabold leading-tight tracking-tight sm:text-5xl">{HERO_TITLE}</h1>
@@ -152,6 +173,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
           <HeroArt />
         </div>
       </main>
+      )}
     </div>
   )
 }
