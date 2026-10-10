@@ -616,10 +616,10 @@ function WalletPage({
       )}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Total Equity" value={loading ? "Loading..." : formatTHB(totalValue)} change="Cash + Market Value" />
-        <StatCard title="Available Cash" value={loading ? "Loading..." : formatTHB(cash)} change={`${cashRatio.toFixed(2)}% ของพอร์ต`} />
-        <StatCard title="Crypto Value" value={loading ? "Loading..." : formatTHB(marketValue)} change={`${holdings.length} assets`} />
-        <StatCard title="Total P&L" value={loading ? "Loading..." : formatTHB(totalPnl)} change={loading ? "—" : `${Number(portfolio?.pnl_pct || 0) >= 0 ? "+" : ""}${Number(portfolio?.pnl_pct || 0).toFixed(2)}%`} />
+        <StatCard title="Total Equity" value={<THB value={totalValue} />} change="Cash + Market Value" />
+        <StatCard title="Available Cash" value={<THB value={cash} />} change={`${cashRatio.toFixed(2)}% ของพอร์ต`} />
+        <StatCard title="Crypto Value" value={<THB value={marketValue} />} change={`${holdings.length} assets`} />
+        <StatCard title="Total P&L" value={<THB value={totalPnl} sign />} change={`${Number(portfolio?.pnl_pct || 0) >= 0 ? "+" : ""}${Number(portfolio?.pnl_pct || 0).toFixed(2)}%`} />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-3">
@@ -1566,7 +1566,7 @@ function DashboardPage({
 
   <StatCard
     title="Crypto Value"
-    value={loading && totalValue === 0 ? "Loading..." : formatTHB(marketValue)}
+    value={loading && totalValue === 0 ? "Loading..." : <THB value={marketValue} />}
     change={`${openPositions} open positions`}
   />
 
@@ -2939,12 +2939,12 @@ function PortfolioPage({
   />
   <StatCard
     title="Cash Balance"
-    value={portfolio ? formatTHB(portfolio.cash_thb) : "—"}
+    value={portfolio ? <THB value={portfolio.cash_thb} /> : "—"}
     change="THB Available"
   />
   <StatCard
     title="Market Value"
-    value={portfolio ? formatTHB(portfolio.market_value_thb) : "—"}
+    value={portfolio ? <THB value={portfolio.market_value_thb} /> : "—"}
     change="มูลค่าสินทรัพย์"
   />
   <StatCard
@@ -3142,17 +3142,13 @@ function PositionsPage({
 
         <StatCard
           title="Market Value"
-          value={loading ? "Loading..." : formatTHB(totalMarketValue)}
+          value={loading ? "Loading..." : <THB value={totalMarketValue} />}
           change="มูลค่าตลาดของสินทรัพย์ที่ถือ"
         />
 
         <StatCard
           title="Unrealized P&L"
-          value={
-            loading
-              ? "Loading..."
-              : `${pnlPositive ? "+" : ""}${formatTHB(totalUnrealizedPnl)}`
-          }
+          value={loading ? "Loading..." : <THB value={totalUnrealizedPnl} sign />}
           change={
             loading
               ? "—"
@@ -3358,9 +3354,11 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
   const [lastLoaded, setLastLoaded] = useState("")
   const [selectedOrder, setSelectedOrder] = useState<OrderHistoryRow | null>(null)
 
-  const loadOrders = async () => {
+  const loadOrders = async (silent = false) => {
+  if (!silent) {
     setLoading(true)
     setError("")
+  }
 
     try {
       if (!DEALER_API_KEY) {
@@ -3430,22 +3428,26 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
         })
       )
     } catch (err) {
-      setOrders([])
-      setError(
-        err instanceof Error ? err.message : "ไม่สามารถโหลด Order History ได้"
-      )
+      if (!silent) {
+        setOrders([])
+        setError(err instanceof Error ? err.message : "ไม่สามารถโหลด Order History ได้")
+      }
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
      useEffect(() => {
-     loadOrders()
-     const timer = window.setInterval(() => {
-       if (document.visibilityState === "visible") loadOrders()
-     }, 10000)
-     return () => window.clearInterval(timer)
-   }, [refreshKey])
+         loadRecentOrders()
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") loadRecentOrders()
+    }, 10000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [])
 
   return (
     <div className="space-y-6">
@@ -3853,6 +3855,9 @@ function MiniStat({
   )
 }
 
+function THB({ value, sign = false }: { value: number; sign?: boolean }) {
+  return <NumberTicker value={Number(value) || 0} currency="THB" showSign={sign} />
+}
 
 /* =========================================================
    STAT CARD
