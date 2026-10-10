@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react"
-import { Globe, Menu, Search, X } from "lucide-react"
+import { Globe, Menu, X } from "lucide-react"
 import MarketSection from "./MarketSection"
 import NewsSection from "./NewsSection"
+import SearchBox from "./SearchBox"
+import CoinDetail from "./CoinDetail"
 
 type LandingPageProps = {
   onLogin: () => void
@@ -49,7 +51,8 @@ function HeroArt() {
 
 export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
   const [menuOpen, setMenuOpen] = useState(false)
-  const [view, setView] = useState<"home" | "market" | "news">("home")
+  const [view, setView] = useState<"home" | "market" | "news" | "coin">("home")
+  const [coin, setCoin] = useState("BTC")
 
   const go = (label: string) => {
     setMenuOpen(false)
@@ -62,6 +65,12 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
     } else {
       onLogin()
     }
+  }
+
+  const openCoin = (asset: string) => {
+    setCoin(asset)
+    setView("coin")
+    window.scrollTo({ top: 0 })
   }
 
   // หน้านี้อยู่นอก AppInner จึงตั้งธีมเองให้ตรงกับที่เคยเลือกไว้
@@ -102,14 +111,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
-            <button
-              type="button"
-              aria-label="ค้นหา"
-              onClick={onLogin}
-              className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
-            >
-              <Search className="h-4 w-4" />
-            </button>
+            <SearchBox onSelect={openCoin} />
             <button
               type="button"
               onClick={onLogin}
@@ -162,6 +164,8 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
         <MarketSection onLogin={onLogin} onRegister={onRegister} />
       ) : view === "news" ? (
         <NewsSection />
+      ) : view === "coin" ? (
+        <CoinDetail asset={coin} onBack={() => setView("market")} onLogin={onLogin} onRegister={onRegister} />
       ) : (
         <main className="mx-auto grid max-w-7xl items-center gap-10 px-4 py-16 lg:grid-cols-2 lg:py-24">
           <div>
