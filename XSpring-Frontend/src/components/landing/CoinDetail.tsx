@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import TradingViewChart from "./TradingViewChart"
 
 const API_BASE_URL = "https://xspring-api.onrender.com"
 
@@ -30,36 +31,12 @@ function timeAgo(ts: number) {
   return `${Math.floor(secs / 86400)} วันที่แล้ว`
 }
 
-function Spark({ data, up }: { data: number[]; up: boolean }) {
-  if (data.length < 2) return null
-  const min = Math.min(...data)
-  const max = Math.max(...data)
-  const span = max - min || 1
-  const W = 600
-  const H = 220
-  const pts = data
-    .map((v, i) => `${(i / (data.length - 1)) * W},${H - 10 - ((v - min) / span) * (H - 20)}`)
-    .join(" ")
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="h-56 w-full" preserveAspectRatio="none" aria-hidden="true">
-      <polyline
-        points={pts}
-        fill="none"
-        strokeWidth={2.5}
-        vectorEffect="non-scaling-stroke"
-        className={up ? "stroke-emerald-500" : "stroke-red-500"}
-      />
-    </svg>
-  )
-}
-
 export default function CoinDetail({ asset, onBack, onLogin, onRegister }: Props) {
   const [row, setRow] = useState<Row | null>(null)
-  const [spark, setSpark] = useState<number[]>([])
   const [news, setNews] = useState<NewsItem[]>([])
   const [error, setError] = useState("")
 
-  // ราคา + กราฟ รีเฟรชทุก 15 วินาที
+  // ราคา รีเฟรชทุก 15 วินาที
   useEffect(() => {
     let alive = true
     const load = () =>
@@ -67,14 +44,12 @@ export default function CoinDetail({ asset, onBack, onLogin, onRegister }: Props
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then((d) => {
           if (!alive) return
-          const found = (d.rows as Row[]).find((r) => r.asset === asset) ?? null
+          const found = ((d.rows ?? []) as Row[]).find((r) => r.asset === asset) ?? null
           setRow(found)
-          setSpark(d.sparks?.[asset] ?? [])
           setError(found ? "" : "ไม่พบข้อมูลเหรียญนี้")
         })
         .catch(() => alive && setError("โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง"))
     setRow(null)
-    setSpark([])
     setError("")
     load()
     const id = setInterval(load, 15000)
@@ -139,13 +114,8 @@ export default function CoinDetail({ asset, onBack, onLogin, onRegister }: Props
             </div>
           </div>
 
-          <div className="mt-6 rounded-2xl border bg-muted/30 p-4">
-            <p className="mb-2 text-xs text-muted-foreground">ราคา 7 วันล่าสุด (THB)</p>
-            {spark.length > 1 ? (
-              <Spark data={spark} up={spark[spark.length - 1] >= spark[0]} />
-            ) : (
-              <p className="py-10 text-center text-sm text-muted-foreground">ยังไม่มีข้อมูลกราฟ</p>
-            )}
+          <div className="mt-6">
+            <TradingViewChart asset={asset} />
           </div>
 
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -165,6 +135,8 @@ export default function CoinDetail({ asset, onBack, onLogin, onRegister }: Props
               <p className="mt-1 text-lg font-bold">Bitkub</p>
             </div>
           </div>
+
+          {/* ตารางตลาด (ข้อ 2) จะวางตรงนี้ */}
 
           <h2 className="mt-10 text-xl font-bold">ข่าว {row.asset}</h2>
           {news.length === 0 ? (
