@@ -3438,16 +3438,12 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
   }
 
      useEffect(() => {
-         loadRecentOrders()
+    loadOrders()
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") loadRecentOrders()
+      if (document.visibilityState === "visible") loadOrders(true)
     }, 10000)
-
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [])
+    return () => window.clearInterval(timer)
+  }, [refreshKey])
 
   return (
     <div className="space-y-6">
