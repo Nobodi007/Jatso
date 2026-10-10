@@ -3457,7 +3457,7 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
 
         <button
           type="button"
-          onClick={loadOrders}
+          onClick={() => loadOrders()}
           disabled={loading}
           className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
         >
@@ -3475,7 +3475,7 @@ function OrdersPage({ refreshKey }: { refreshKey: number }) {
           </p>
           <button
             type="button"
-            onClick={loadOrders}
+            onClick={() => loadOrders()}
             className="mt-3 rounded-lg border px-3 py-1.5 text-xs font-medium hover:bg-accent"
           >
             ลองใหม่
