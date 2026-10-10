@@ -11,11 +11,8 @@ type Row = {
   volume: number // มูลค่าซื้อขาย 24 ชม. (THB)
 }
 
-const ASSETS = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "HBAR", "LINK", "XLM"]
-const NAMES: Record<string, string> = {
-  BTC: "Bitcoin", ETH: "Ethereum", SOL: "Solana", XRP: "XRP", ADA: "Cardano",
-  DOGE: "Dogecoin", HBAR: "Hedera", LINK: "Chainlink", XLM: "Stellar",
-}
+const API_BASE_URL = "https://xspring-api.onrender.com"
+
 const FAV_KEY = "nobodi_favorites"
 
 type Tab = "all" | "up" | "down" | "volume" | "fav"
@@ -39,42 +36,22 @@ const compact = (v: number) => {
 
 const pct = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`
 
-async function fetchRows(): Promise<Row[]> {
-  const res = await fetch("https://api.bitkub.com/api/market/ticker", {
+async function fetchMarket(): Promise<{ rows: Row[]; sparks: Record<string, number[]> }> {
+  const res = await fetch(`${API_BASE_URL}/api/public/markets`, {
     headers: { Accept: "application/json" },
     cache: "no-store",
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const body = await res.json()
-  const rows: Row[] = []
-  for (const asset of ASSETS) {
-    const t = body?.[`THB_${asset}`] || body?.[`${asset}_THB`]
-    const price = Number(t?.last || 0)
-    if (!t || price <= 0) continue
-    rows.push({
-      asset,
-      name: NAMES[asset] || asset,
-      price,
-      change: Number(t.percentChange || 0),
-      volume: Number(t.quoteVolume || Number(t.baseVolume || 0) * price),
-    })
-  }
+  const rows: Row[] = (Array.isArray(body?.rows) ? body.rows : []).map((r: any) => ({
+    asset: String(r.asset),
+    name: String(r.name || r.asset),
+    price: Number(r.price || 0),
+    change: Number(r.change || 0),
+    volume: Number(r.volume || 0),
+  }))
   if (rows.length === 0) throw new Error("ไม่พบข้อมูลตลาด")
-  return rows
-}
-
-async function fetchSpark(asset: string): Promise<number[]> {
-  const now = Math.floor(Date.now() / 1000)
-  const res = await fetch(
-    `https://api.bitkub.com/tradingview/history?symbol=${asset}_THB&resolution=60&from=${now - 7 * 86400}&to=${now}`,
-    { cache: "no-store" }
-  )
-  if (!res.ok) throw new Error("spark")
-  const body = await res.json()
-  if (body?.s !== "ok" || !Array.isArray(body.c)) throw new Error("spark")
-  const closes: number[] = body.c.map(Number)
-  const step = Math.max(1, Math.floor(closes.length / 40))
-  return closes.filter((_, i) => i % step === 0)
+  return { rows, sparks: body?.sparks || {} }
 }
 
 function Spark({ data, up }: { data?: number[]; up: boolean }) {
@@ -171,9 +148,10 @@ export default function MarketSection({ onLogin, onRegister }: Props) {
     let alive = true
     const run = async () => {
       try {
-        const r = await fetchRows()
+        const { rows: r, sparks: s } = await fetchMarket()
         if (!alive) return
         setRows(r)
+        if (Object.keys(s).length > 0) setSparks(s)
         setError("")
         setUpdated(new Date().toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", second: "2-digit" }))
       } catch (e) {
