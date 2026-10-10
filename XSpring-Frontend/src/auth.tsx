@@ -135,6 +135,8 @@ function LoginScreen({
   onLoggedIn: (user: AuthUser) => void
   onBack: () => void
 }) {
+  const [error, setError] = useState("")
+  const [loading, setLoading] = useState(false)
 
   // ให้ธีมตรงกับที่ผู้ใช้เลือกไว้ แม้ยังไม่ได้เข้า App หลัก
   useEffect(() => {
