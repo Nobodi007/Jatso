@@ -1321,155 +1321,69 @@ def portfolio(user: str = Depends(require_user)):
 
 
 # =========================================================
-# PUBLIC MARKETS (หน้าตลาดก่อนล็อกอิน)
+# PUBLIC NEWS (หน้าข่าวก่อนล็อกอิน) — ดึงจาก gu.fetch_crypto_news
 # =========================================================
 
-PUBLIC_ASSETS = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "HBAR", "LINK", "XLM"]
-PUBLIC_NAMES = {
-    "BTC": "Bitcoin", "ETH": "Ethereum", "SOL": "Solana", "XRP": "XRP", "ADA": "Cardano",
-    "DOGE": "Dogecoin", "HBAR": "Hedera", "LINK": "Chainlink", "XLM": "Stellar",
-}
-_PUB_CACHE = {"ts": 0.0, "rows": [], "spark_ts": 0.0, "sparks": {}}
+_NEWS_CACHE = {"ts": 0.0, "items": []}
+_NEWS_TTL_SECONDS = 300
+_NEWS_CACHE_LOCK = RLock()
 
 
-@app.get("/api/public/markets")
-def public_markets(request: Request):
-    _check_rate_limit(request, "public-markets")
-    c = _PUB_CACHE
-    now = time.time()
+def _safe_http_url(value) -> str:
+    url = str(value or "").strip()
+    return url if url.lower().startswith(("http://", "https://")) else ""
 
-    # ราคา: แคช 10 วินาที
-    if not c["rows"] or now - c["ts"] > 10:
-        try:
-            r = requests.get("https://api.bitkub.com/api/market/ticker", timeout=10)
-            r.raise_for_status()
-            body = r.json()
-            rows = []
-            for a in PUBLIC_ASSETS:
-                t = body.get(f"THB_{a}") or body.get(f"{a}_THB")
-                price = float((t or {}).get("last") or 0)
-                if not t or price <= 0:
-                    continue
-                rows.append({
-                    "asset": a,
-                    "name": PUBLIC_NAMES.get(a, a),
-                    "price": price,
-                    "change": float(t.get("percentChange") or 0),
-                    "volume": float(t.get("quoteVolume") or (float(t.get("baseVolume") or 0) * price)),
-                })
-            if rows:
-                c["rows"], c["ts"] = rows, now
-        except Exception as e:
-            if not c["rows"]:
-                raise HTTPException(status_code=502, detail=f"ดึงข้อมูลตลาดไม่สำเร็จ: {e}")
 
-    # กราฟ 7 วัน: แคช 10 นาที
-    if not c["sparks"] or now - c["spark_ts"] > 600:
-        sparks = {}
-        t_now = int(now)
-        for a in PUBLIC_ASSETS:
-            try:
-                r = requests.get(
-                    "https://api.bitkub.com/tradingview/history",
-                    params={"symbol": f"{a}_THB", "resolution": 60,
-                            "from": t_now - 7 * 86400, "to": t_now},
-                    timeout=6,
-                )
-                b = r.json()
-                if b.get("s") == "ok" and isinstance(b.get("c"), list) and b["c"]:
-                    closes = [float(x) for x in b["c"]]
-                    step = max(1, len(closes) // 40)
-                    sparks[a] = closes[::step]
-            except Exception:
-                pass
-        c["sparks"], c["spark_ts"] = sparks, now
+def _normalize_news(raw) -> list[dict]:
+    if not isinstance(raw, (list, tuple)):
+        return []
 
-    return {"status": "ok", "rows": c["rows"], "sparks": c["sparks"]}
+    items = []
+    for r in raw:
+        if not isinstance(r, dict):
+            continue
+        title = str(r.get("title") or "").strip()
+        if not title:
+            continue
 
-import { useEffect, useState } from "react"
+        ts = int(_safe_float(r.get("published_ts"), 0.0))
+        tags = r.get("tags")
+        tags = [str(t).upper() for t in tags][:6] if isinstance(tags, list) else []
 
-type NewsItem = {
-  title: string
-  url: string
-  source: string
-  image_url: string
-  published_ts: number
-  tags: string[]
-}
+        items.append({
+            "title": title[:300],
+            "url": _safe_http_url(r.get("url")),
+            "source": str(r.get("source") or "").strip()[:60],
+            "image_url": _safe_http_url(r.get("image_url")),
+            "published_ts": ts,
+            "tags": tags,
+        })
+    return items[:30]
 
-const API_BASE = import.meta.env.VITE_API_URL ?? "" // <-- ใช้ตัวเดียวกับ MarketSection
 
-function timeAgo(ts: number) {
-  if (!ts) return ""
-  const secs = Math.max(0, Date.now() / 1000 - ts)
-  if (secs < 3600) return `${Math.floor(secs / 60)} นาทีที่แล้ว`
-  if (secs < 86400) return `${Math.floor(secs / 3600)} ชั่วโมงที่แล้ว`
-  return `${Math.floor(secs / 86400)} วันที่แล้ว`
-}
+@app.get("/api/public/news")
+def public_news(request: Request):
+    _check_rate_limit(request, "public-news")
+    now = time.monotonic()
 
-export default function NewsSection() {
-  const [items, setItems] = useState<NewsItem[] | null>(null)
-  const [error, setError] = useState("")
+    with _NEWS_CACHE_LOCK:
+        if _NEWS_CACHE["items"] and now - _NEWS_CACHE["ts"] < _NEWS_TTL_SECONDS:
+            return {"status": "ok", "items": _NEWS_CACHE["items"]}
 
-  useEffect(() => {
-    const ctrl = new AbortController()
-    fetch(`${API_BASE}/api/public/news`, { signal: ctrl.signal })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((d) => setItems(d.items ?? []))
-      .catch((e) => {
-        if (e.name !== "AbortError") setError("โหลดข่าวไม่สำเร็จ กรุณาลองใหม่อีกครั้ง")
-      })
-    return () => ctrl.abort()
-  }, [])
+    try:
+        gu = load_gu()
+        items = _normalize_news(gu.fetch_crypto_news(limit=30))
+    except Exception as exc:
+        with _NEWS_CACHE_LOCK:
+            if _NEWS_CACHE["items"]:
+                return {"status": "ok", "items": _NEWS_CACHE["items"]}
+        raise _internal_server_error("โหลดข่าวไม่สำเร็จ", exc, 502)
 
-  return (
-    <main className="mx-auto max-w-4xl px-4 py-10">
-      <h1 className="text-3xl font-extrabold tracking-tight">ข่าวคริปโต</h1>
+    if items:
+        with _NEWS_CACHE_LOCK:
+            _NEWS_CACHE["ts"], _NEWS_CACHE["items"] = now, items
 
-      {error && <p className="mt-6 text-sm text-red-500">{error}</p>}
-      {!error && items === null && <p className="mt-6 text-sm text-muted-foreground">กำลังโหลด…</p>}
-      {items?.length === 0 && <p className="mt-6 text-sm text-muted-foreground">ยังไม่มีข่าวในขณะนี้</p>}
-
-      <ul className="mt-6 divide-y">
-        {items?.map((n, i) => {
-          const body = (
-            <div className="flex gap-4">
-              <div className="h-20 w-32 shrink-0 overflow-hidden rounded-lg bg-muted">
-                {n.image_url && (
-                  <img
-                    src={n.image_url}
-                    alt=""
-                    loading="lazy"
-                    referrerPolicy="no-referrer"
-                    className="h-full w-full object-cover"
-                    onError={(e) => (e.currentTarget.style.display = "none")}
-                  />
-                )}
-              </div>
-              <div className="min-w-0">
-                <h2 className="font-semibold leading-snug">{n.title}</h2>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {[n.source, timeAgo(n.published_ts), n.tags.join(" · ")].filter(Boolean).join(" • ")}
-                </p>
-              </div>
-            </div>
-          )
-          return (
-            <li key={`${n.url}-${i}`} className="py-4">
-              {n.url ? (
-                <a href={n.url} target="_blank" rel="noopener noreferrer" className="block hover:text-emerald-500">
-                  {body}
-                </a>
-              ) : (
-                body
-              )}
-            </li>
-          )
-        })}
-      </ul>
-    </main>
-  )
-}
+    return {"status": "ok", "items": items}
 
 # =========================================================
 # CHAT (AI ASSISTANT) — read-only, never places orders
