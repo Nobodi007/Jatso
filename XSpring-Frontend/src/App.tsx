@@ -2066,15 +2066,15 @@ function TradePage({
     }
   }
 
-  const market = marketData[asset] || {
-    name: asset,
-    price: currentPrice,
-    change: 0,
-    bid: currentPrice,
-    ask: currentPrice,
-    high: currentPrice,
-    low: currentPrice,
-    volume: 0,
+  const market = {
+  name: liveTicker?.name || marketData[asset]?.name || asset,
+  price: currentPrice,
+  change: liveTicker?.change ?? 0,
+  bid: liveTicker?.bid || currentPrice,
+  ask: liveTicker?.ask || currentPrice,
+  high: liveTicker?.high || currentPrice,
+  low: liveTicker?.low || currentPrice,
+  volume: liveTicker?.volume ?? 0,
   }
 
   const tradeAssets = Array.from(
@@ -3912,6 +3912,28 @@ function NewsPage() {
   const [newsLoading, setNewsLoading] = useState(true)
   const [newsError, setNewsError] = useState("")
   const [activeSource, setActiveSource] = useState("All")
+  const [tickers, setTickers] = useState<MarketTicker[]>([])
+
+useEffect(() => {
+  let alive = true
+  const run = async () => {
+    try {
+      const rows = await fetchMarketTickers()
+      if (alive) setTickers(rows)
+    } catch {
+      // ใช้ค่าเดิม
+    }
+  }
+  run()
+  const t = setInterval(run, 10000)
+  return () => {
+    alive = false
+    clearInterval(t)
+  }
+}, [])
+
+const btcChange = tickers.find((t) => t.asset === "BTC")?.change
+const ethChange = tickers.find((t) => t.asset === "ETH")?.change
 
   const loadNews = async () => {
     setNewsLoading(true)
@@ -4012,14 +4034,14 @@ function NewsPage() {
         />
         <StatCard
           title="BTC"
-          value={`${marketData.BTC.change >= 0 ? "+" : ""}${marketData.BTC.change.toFixed(2)}%`}
-          change="Market snapshot"
+          value={btcChange === undefined ? "—" : `${btcChange >= 0 ? "+" : ""}${btcChange.toFixed(2)}%`}
+          change="24h change"
         />
-        <StatCard
-          title="ETH"
-          value={`${marketData.ETH.change >= 0 ? "+" : ""}${marketData.ETH.change.toFixed(2)}%`}
-          change="Market snapshot"
-        />
+      <StatCard
+        title="ETH"
+        value={ethChange === undefined ? "—" : `${ethChange >= 0 ? "+" : ""}${ethChange.toFixed(2)}%`}
+        change="24h change"
+      />
       </div>
 
       <div className="flex flex-wrap gap-2">
