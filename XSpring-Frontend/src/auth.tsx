@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from "rea
 import type { ReactNode } from "react"
 import { GoogleLogin, GoogleOAuthProvider } from "@react-oauth/google"
 import LandingPage from "./components/landing/LandingPage"
+import AuthShell from "./components/ui/AuthShell"
 
 const API_BASE_URL = "https://xspring-api.onrender.com"
 const GOOGLE_CLIENT_ID = String(import.meta.env.VITE_GOOGLE_CLIENT_ID || "").trim()
