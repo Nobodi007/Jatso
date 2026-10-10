@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { Search, TrendingDown, TrendingUp } from "lucide-react"
+import { API_BASE_URL } from "@/lib/api"
 
 type Props = { onLogin: () => void; onRegister: () => void }
 
