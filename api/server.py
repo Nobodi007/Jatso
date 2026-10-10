@@ -1524,6 +1524,140 @@ def public_exchanges(request: Request, asset: str = "BTC"):
 
 
 # =========================================================
+# PUBLIC BACKTEST (ลองลงทุนย้อนหลัง) — ใช้ engine จาก gu.mobile_bt_compare
+# =========================================================
+
+_BT_KINDS = {"lump", "dca", "dip", "trend"}
+_BT_FREQS = ("รายสัปดาห์", "รายเดือน")
+_BT_CACHE: dict = {}
+_BT_CACHE_LOCK = RLock()
+_BT_TTL_SECONDS = 600
+_BT_CACHE_MAX = 300
+_BT_MAX_POINTS = 240
+
+
+class PublicBacktestRequest(BaseModel):
+    asset: str = Field(..., min_length=1, max_length=10)
+    kind: str = Field(..., min_length=1, max_length=10)
+    amount: float = Field(..., ge=100, le=1_000_000_000)
+    start: str = Field(..., min_length=10, max_length=10)
+    end: str = Field(..., min_length=10, max_length=10)
+    freq: str = Field(default="รายเดือน", max_length=20)
+
+
+def _bt_pick(series, idx: list) -> list:
+    return [round(_safe_float(series.iloc[i]), 2) for i in idx]
+
+
+@app.post("/api/public/backtest")
+def public_backtest(body: PublicBacktestRequest, request: Request):
+    _check_rate_limit(request, "public-backtest")
+
+    asset = body.asset.strip().upper()
+    kind = body.kind.strip().lower()
+    freq = body.freq.strip()
+    amount = _safe_float(body.amount, -1.0)
+
+    if asset not in PUBLIC_ASSETS:
+        raise HTTPException(status_code=400, detail=f"ไม่รองรับเหรียญ {asset}")
+    if kind not in _BT_KINDS:
+        raise HTTPException(status_code=400, detail="กลยุทธ์ไม่ถูกต้อง")
+    if freq not in _BT_FREQS:
+        raise HTTPException(status_code=400, detail="ความถี่ไม่ถูกต้อง")
+    if amount < 100:
+        raise HTTPException(status_code=400, detail="เงินลงทุนขั้นต่ำ 100 บาท")
+
+    try:
+        start = pd.Timestamp(body.start).normalize()
+        end = pd.Timestamp(body.end).normalize()
+    except Exception:
+        raise HTTPException(status_code=400, detail="รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)")
+
+    today = pd.Timestamp.now().normalize()
+    if end > today:
+        end = today
+    if start < pd.Timestamp("2015-01-01"):
+        start = pd.Timestamp("2015-01-01")
+    if (end - start).days < 14:
+        raise HTTPException(status_code=400, detail="ช่วงเวลาสั้นเกินไป (อย่างน้อย 14 วัน)")
+    if (end - start).days > 365 * 6:
+        raise HTTPException(status_code=400, detail="ช่วงเวลายาวเกินไป (ไม่เกิน 6 ปี)")
+
+    cache_key = (asset, kind, freq, round(amount, 2), str(start.date()), str(end.date()))
+    now = time.monotonic()
+    with _BT_CACHE_LOCK:
+        hit = _BT_CACHE.get(cache_key)
+        if hit and now - hit[0] < _BT_TTL_SECONDS:
+            return hit[1]
+
+    try:
+        gu = load_gu()
+        df, err = gu.fetch_price_data(asset, start, end, use_fx_proxy=False)
+        if df is None or df.empty or len(df) < 10:
+            raise HTTPException(
+                status_code=422,
+                detail=f"ข้อมูลไม่พอสำหรับคำนวณ: {err or 'น้อยกว่า 10 วัน'}",
+            )
+
+        ui = getattr(gu, "UI_DEFAULTS", {}) or {}
+        premium = _safe_float(ui.get("local_premium_pct", 0.1), 0.1) / 100.0
+        spread = _safe_float(ui.get("dealer_spread_pct", 0.5), 0.5) / 100.0
+
+        res = gu.mobile_bt_compare(df, kind, float(amount), premium, spread, freq)
+        s, h, sv = res["strategy"], res["hold"], res["savings"]
+
+        n = len(df)
+        step = max(1, math.ceil(n / _BT_MAX_POINTS))
+        idx = list(range(0, n, step))
+        if idx[-1] != n - 1:
+            idx.append(n - 1)
+
+        s_final = _safe_float(s["final"])
+        h_final = _safe_float(h["final"])
+        sav_final = _safe_float(sv.iloc[-1])
+        fee = _safe_float(getattr(gu, "LOCAL_TRADING_FEE_PCT", 0.0025), 0.0025)
+
+        result = {
+            "status": "ok",
+            "asset": asset,
+            "kind": kind,
+            "freq": freq,
+            "amount": amount,
+            "start": str(df.index.min().date()),
+            "end": str(df.index.max().date()),
+            "fee_pct": fee * 100.0 if fee < 1 else fee,
+            "spread_pct": spread * 100.0,
+            "dates": [df.index[i].strftime("%Y-%m-%d") for i in idx],
+            "strategy": _bt_pick(s["equity"], idx),
+            "hold": _bt_pick(h["equity"], idx),
+            "savings": _bt_pick(sv, idx),
+            "summary": {
+                "final": round(s_final, 2),
+                "profit": round(s_final - amount, 2),
+                "pct": round((s_final / amount - 1) * 100, 2),
+                "hold_final": round(h_final, 2),
+                "hold_pct": round((h_final / amount - 1) * 100, 2),
+                "sav_final": round(sav_final, 2),
+                "sav_pct": round((sav_final / amount - 1) * 100, 2),
+                "max_dd": round(_safe_float(s.get("max_dd")), 2),
+                "hold_max_dd": round(_safe_float(h.get("max_dd")), 2),
+                "trades": int(s.get("trades") or 0),
+                "cash_left": round(_safe_float(s.get("cash_left")), 2),
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _internal_server_error("คำนวณย้อนหลังไม่สำเร็จ", exc, 502)
+
+    with _BT_CACHE_LOCK:
+        if len(_BT_CACHE) >= _BT_CACHE_MAX:
+            _BT_CACHE.pop(next(iter(_BT_CACHE)), None)
+        _BT_CACHE[cache_key] = (now, result)
+    return result
+
+
+# =========================================================
 # CHAT (AI ASSISTANT) — read-only, never places orders
 # =========================================================
 
