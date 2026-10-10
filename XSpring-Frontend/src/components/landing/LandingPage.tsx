@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { Globe, Menu, Search, X } from "lucide-react"
 import MarketSection from "./MarketSection"
+import NewsSection from "./NewsSection"
 
 type LandingPageProps = {
   onLogin: () => void
@@ -48,7 +49,18 @@ function HeroArt() {
 
 export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
   const [menuOpen, setMenuOpen] = useState(false)
-  const [view, setView] = useState<"home" | "market">("home")
+  const go = (label: string) => {
+    setMenuOpen(false)
+    if (label === "ตลาด") {
+      setView("market")
+      window.scrollTo({ top: 0 })
+    } else if (label === "ข่าว") {
+      setView("news")
+      window.scrollTo({ top: 0 })
+    } else {
+      onLogin()
+    }
+  }
 
   const go = (label: string) => {
     setMenuOpen(false)
@@ -87,7 +99,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
                 type="button"
                 onClick={() => go(label)}
                 className={`transition-colors hover:text-foreground ${
-                  label === "ตลาด" && view === "market"
+                  (label === "ตลาด" && view === "market") || (label === "ข่าว" && view === "news")
                     ? "border-b-2 border-emerald-500 pb-0.5 font-semibold text-foreground"
                     : "text-muted-foreground"
                 }`}
@@ -156,6 +168,8 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
 
       {view === "market" ? (
         <MarketSection onLogin={onLogin} onRegister={onRegister} />
+      ) : view === "news" ? (
+        <NewsSection />
       ) : (
       <main className="mx-auto grid max-w-7xl items-center gap-10 px-4 py-16 lg:grid-cols-2 lg:py-24">
         <div>
