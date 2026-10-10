@@ -1387,6 +1387,67 @@ def public_markets(request: Request):
     return {"status": "ok", "rows": c["rows"], "sparks": c["sparks"]}
 
 # =========================================================
+# PUBLIC NEWS (หน้าข่าวก่อนล็อกอิน) — ดึงจาก gu.py
+# =========================================================
+
+_NEWS_CACHE = {"ts": 0.0, "items": []}
+_NEWS_TTL_SECONDS = 300
+
+
+def _normalize_news(raw) -> list[dict]:
+    """แปลงผลลัพธ์จาก gu.py ให้เป็นรูปแบบเดียว (รองรับ list[dict] หรือ DataFrame)"""
+    if isinstance(raw, pd.DataFrame):
+        raw = raw.to_dict("records")
+    if not isinstance(raw, (list, tuple)):
+        return []
+
+    items = []
+    for r in raw:
+        if not isinstance(r, dict):
+            continue
+        title = str(r.get("title") or r.get("headline") or "").strip()
+        if not title:
+            continue
+        url = str(r.get("url") or r.get("link") or "").strip()
+        if not url.lower().startswith(("http://", "https://")):
+            url = ""
+        items.append({
+            "title": title[:300],
+            "summary": str(r.get("summary") or r.get("description") or "").strip()[:400],
+            "source": str(r.get("source") or r.get("publisher") or "").strip()[:60],
+            "url": url,
+            "published_at": str(r.get("published_at") or r.get("published") or r.get("time") or ""),
+        })
+    return items[:30]
+
+
+@app.get("/api/public/news")
+def public_news(request: Request):
+    _check_rate_limit(request, "public-news")
+    now = time.monotonic()
+
+    with _MARKETS_CACHE_LOCK:
+        if _NEWS_CACHE["items"] and now - _NEWS_CACHE["ts"] < _NEWS_TTL_SECONDS:
+            return {"status": "ok", "items": _NEWS_CACHE["items"]}
+
+    try:
+        gu = load_gu()
+        fn = getattr(gu, "get_news", None)  # <-- เปลี่ยนเป็นชื่อฟังก์ชันจริงใน gu.py
+        if not callable(fn):
+            raise RuntimeError("gu.py ไม่มีฟังก์ชันข่าว")
+        items = _normalize_news(fn())
+    except Exception as exc:
+        with _MARKETS_CACHE_LOCK:
+            if _NEWS_CACHE["items"]:  # Fallback เป็นข่าวที่แคชไว้
+                return {"status": "ok", "items": _NEWS_CACHE["items"]}
+        raise _internal_server_error("โหลดข่าวไม่สำเร็จ", exc, 502)
+
+    with _MARKETS_CACHE_LOCK:
+        _NEWS_CACHE["ts"], _NEWS_CACHE["items"] = now, items
+
+    return {"status": "ok", "items": items}
+
+# =========================================================
 # CHAT (AI ASSISTANT) — read-only, never places orders
 # =========================================================
 
