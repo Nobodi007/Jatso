@@ -49,6 +49,8 @@ function HeroArt() {
 
 export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [view, setView] = useState<"home" | "market" | "news">("home")
+
   const go = (label: string) => {
     setMenuOpen(false)
     if (label === "ตลาด") {
@@ -62,16 +64,6 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
     }
   }
 
-  const go = (label: string) => {
-    setMenuOpen(false)
-    if (label === "ตลาด") {
-      setView("market")
-      window.scrollTo({ top: 0 })
-    } else {
-      onLogin()
-    }
-  }
-  
   // หน้านี้อยู่นอก AppInner จึงตั้งธีมเองให้ตรงกับที่เคยเลือกไว้
   useEffect(() => {
     let dark = window.matchMedia("(prefers-color-scheme: dark)").matches
