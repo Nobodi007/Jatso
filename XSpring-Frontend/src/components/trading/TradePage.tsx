@@ -1,19 +1,15 @@
-"use client";
-import { useState } from "react";
-import { useParams } from "next/navigation";
-import { useMarket } from "@/hooks/useMarket";
-import TickerBar from "@/components/trade/TickerBar";
-import OrderBook from "@/components/trade/OrderBook";
-import PriceChart from "@/components/trade/PriceChart";
-import OrderForm from "@/components/trade/OrderForm";
-import PairList from "@/components/trade/PairList";
-import RecentTrades from "@/components/trade/RecentTrades";
+import { useState } from "react"
+import { useMarket } from "../../hooks/useMarket"
+import TickerBar from "./TickerBar"
+import OrderBook from "./OrderBook"
+import PriceChart from "./PriceChart"
+import OrderForm from "./OrderForm"
+import PairList from "./PairList"
+import RecentTrades from "./RecentTrades"
 
-export default function TradePage() {
-  const { symbol: raw } = useParams<{ symbol: string }>();
-  const symbol = (raw ?? "BTCUSDT").toUpperCase();
-  const [interval, setInterval] = useState("4h");
-  const { ticker, candles, live, book, trades } = useMarket(symbol, interval);
+export default function TradePage({ symbol = "BTCUSDT" }: { symbol?: string }) {
+  const [interval, setInterval] = useState("4h")
+  const { ticker, candles, live, book, trades } = useMarket(symbol, interval)
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-zinc-200">
