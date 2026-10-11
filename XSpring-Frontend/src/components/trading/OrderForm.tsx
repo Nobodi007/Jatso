@@ -1,8 +1,4 @@
-"use client";
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { fmt } from "../../lib/market"
-import type { Trade } from "../../lib/market"
+import { dp, splitSymbol } from "../../lib/market"
 
 const TABS = ["ลิมิตออเดอร์", "มาร์เก็ตออเดอร์", "สต็อปลิมิตออเดอร์"];
 
