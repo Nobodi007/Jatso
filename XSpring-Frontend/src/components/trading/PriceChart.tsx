@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useRef } from "react";
 import { ColorType, CrosshairMode, IChartApi, ISeriesApi, UTCTimestamp, createChart } from "lightweight-charts";
-import { Candle, dp } from "@/lib/market";
+import { fmt } from "../../lib/market"
+import type { Trade } from "../../lib/market"
 
 const G = "#13c38b", R = "#f6465d";
 export const INTERVALS = [
