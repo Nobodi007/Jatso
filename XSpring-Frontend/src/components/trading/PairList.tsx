@@ -2,7 +2,6 @@ import { useEffect, useState } from "react"
 import { dp, fetchTickers, fmt, splitSymbol } from "../../lib/market"
 import type { Ticker } from "../../lib/market"
 
-// ใส่คู่ที่เว็บมีอยู่
 const PAIRS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "TRXUSDT", "LINKUSDT", "AVAXUSDT"]
 
 export default function PairList({ active }: { active: string }) {
@@ -48,3 +47,9 @@ export default function PairList({ active }: { active: string }) {
               {t.changePct >= 0 ? "+" : ""}
               {t.changePct.toFixed(2)}%
             </span>
+          </a>
+        )
+      })}
+    </div>
+  )
+}
