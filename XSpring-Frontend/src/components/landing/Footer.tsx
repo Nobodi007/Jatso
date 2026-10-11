@@ -1,10 +1,8 @@
-type FooterLink = { label: string; go?: string; asset?: string; highlight?: boolean }
+type FooterLink = { label: string; go?: string; asset?: string; page?: string; highlight?: boolean }
 
-// go = ชื่อเมนูที่ฟังก์ชัน go() รู้จัก, asset = เปิดหน้าเหรียญ
-// ไม่มีทั้งสองอย่าง = หน้ายังไม่ได้ทำ (กดแล้วยังไม่ไปไหน)
 const ABOUT: FooterLink[] = [
   { label: "ประวัติความเป็นมา" },
-  { label: "เกี่ยวกับระบบ" },
+  { label: "เกี่ยวกับระบบ", page: "about" },
   { label: "คู่มือการใช้งาน" },
   { label: "ความเป็นส่วนตัว" },
   { label: "เปิดเผยข้อมูล/แจ้งความเสี่ยง" },
@@ -22,11 +20,16 @@ const SERVICES: FooterLink[] = [
   { label: "ซื้อ DOGE", asset: "DOGE" },
 ]
 
-type Props = { onGo: (label: string) => void; onOpenCoin: (asset: string) => void }
+type Props = {
+  onGo: (label: string) => void
+  onOpenCoin: (asset: string) => void
+  onPage?: (page: string) => void
+}
 
-export default function Footer({ onGo, onOpenCoin }: Props) {
+export default function Footer({ onGo, onOpenCoin, onPage }: Props) {
   const click = (l: FooterLink) => {
-    if (l.asset) onOpenCoin(l.asset)
+    if (l.page) onPage?.(l.page)
+    else if (l.asset) onOpenCoin(l.asset)
     else if (l.go) onGo(l.go)
   }
 
