@@ -30,5 +30,5 @@ export default function TradePage({ symbol = "BTCUSDT" }: { symbol?: string }) {
         </div>
       </div>
     </div>
-  );
+  )
 }
