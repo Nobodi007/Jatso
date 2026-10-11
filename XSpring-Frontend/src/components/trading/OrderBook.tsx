@@ -1,4 +1,4 @@
-import { Book, Level, dp, fmt, splitSymbol } from "@/lib/market";
+import { Book, Candle, Ticker, Trade } from "../../lib/market"
 
 export default function OrderBook({ symbol, book, last, rows = 14 }:
   { symbol: string; book: Book; last?: number; rows?: number }) {
