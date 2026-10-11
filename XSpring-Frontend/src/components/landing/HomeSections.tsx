@@ -253,7 +253,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
         </div>
       </section>
 
-      {/* ปิดท้าย + footer */}
+            {/* ปิดท้าย */}
       <section className="mx-auto max-w-4xl px-4 py-16 text-center">
         <h2 className="text-3xl font-extrabold tracking-tight">พร้อมลองแล้วหรือยัง?</h2>
         <p className="mt-2 text-sm text-muted-foreground">สมัครฟรี ใช้บัญชี Google ของคุณได้เลย</p>
@@ -271,49 +271,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
         </div>
       </section>
 
-        <Footer onGo={onGo} onOpenCoin={onOpenCoin} />
-        <div className="mx-auto grid max-w-6xl gap-8 px-4 py-10 text-sm md:grid-cols-4">
-          <div>
-            <p className="text-lg font-extrabold">Nobodi</p>
-            <p className="mt-2 text-xs leading-5 text-muted-foreground">แพลตฟอร์มฝึกลงทุนคริปโตด้วยบัญชีจำลอง</p>
-          </div>
-          <div>
-            <p className="font-semibold">สินค้า</p>
-            <ul className="mt-3 space-y-2 text-muted-foreground">
-              {["ตลาด", "ข่าว", "ลองลงทุนย้อนหลัง"].map((l) => (
-                <li key={l}>
-                  <button type="button" onClick={() => onGo(l)} className="hover:text-foreground">
-                    {l}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div>
-            <p className="font-semibold">เริ่มใช้งาน</p>
-            <ul className="mt-3 space-y-2 text-muted-foreground">
-              <li>
-                <button type="button" onClick={onRegister} className="hover:text-foreground">
-                  สมัครสมาชิก
-                </button>
-              </li>
-              <li>
-                <button type="button" onClick={onLogin} className="hover:text-foreground">
-                  เข้าสู่ระบบ
-                </button>
-              </li>
-            </ul>
-          </div>
-          <div>
-            <p className="font-semibold">ข้อควรรู้</p>
-            <p className="mt-3 text-xs leading-5 text-muted-foreground">
-              การลงทุนในสินทรัพย์ดิจิทัลมีความเสี่ยงสูง ผลย้อนหลังไม่ได้รับประกันผลตอบแทนในอนาคต
-              และบัญชีของเราเป็นบัญชีจำลองเพื่อการเรียนรู้เท่านั้น
-            </p>
-          </div>
-        </div>
-        <p className="border-t py-4 text-center text-xs text-muted-foreground">© Nobodi</p>
-      </footer>
+      <Footer onGo={onGo} onOpenCoin={onOpenCoin} />
     </>
   )
 }
