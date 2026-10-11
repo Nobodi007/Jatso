@@ -7,6 +7,7 @@ import CoinDetail from "./CoinDetail"
 import BacktestSection from "./BacktestSection"
 import LearnSection from "./LearnSection"
 import TradePage from "../trading/TradePage"
+import HomeSections from "./HomeSections"
 
 type LandingPageProps = {
   onLogin: () => void
@@ -208,22 +209,15 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
       ) : view === "learn" ? (
         <LearnSection />
       ) : (
-        <main className="mx-auto grid max-w-7xl items-center gap-10 px-4 py-16 lg:grid-cols-2 lg:py-24">
-          <div>
-            <h1 className="text-4xl font-extrabold leading-tight tracking-tight sm:text-5xl">{HERO_TITLE}</h1>
-            <p className="mt-5 max-w-xl text-base leading-7 text-muted-foreground">{HERO_SUB}</p>
-            <button
-              type="button"
-              onClick={onRegister}
-              className="mt-8 rounded-lg bg-emerald-500 px-6 py-3 text-sm font-bold text-black hover:bg-emerald-400"
-            >
-              สมัครตอนนี้
-            </button>
-          </div>
-          <div className="flex justify-center lg:justify-end">
-            <HeroArt />
-          </div>
-        </main>
+        <HomeSections
+          onLogin={onLogin}
+          onRegister={onRegister}
+          onOpenCoin={openCoin}
+          onGo={go}
+          heroTitle={HERO_TITLE}
+          heroSub={HERO_SUB}
+          heroArt={<HeroArt />}
+        />
       )}
     </div>
   )
