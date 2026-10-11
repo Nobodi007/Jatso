@@ -1,7 +1,7 @@
 type FooterLink = { label: string; go?: string; asset?: string; page?: string; highlight?: boolean }
 
 const ABOUT: FooterLink[] = [
-  { label: "ประวัติความเป็นมา" },
+  { label: "ประวัติความเป็นมา", go: "ประวัติความเป็นมา" }
   { label: "เกี่ยวกับระบบ", page: "about" },
   { label: "คู่มือการใช้งาน", page: "guide" },
   { label: "ความเป็นส่วนตัวและข้อมูล", page: "privacy" },
