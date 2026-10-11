@@ -286,7 +286,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
         </div>
       </section>
 
-      <Footer onGo={onGo} onOpenCoin={onOpenCoin} />
+      <Footer onGo={onGo} onOpenCoin={onOpenCoin} onPage={openPage} />
     </>
   )
 }
