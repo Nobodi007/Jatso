@@ -31,6 +31,7 @@ const VIEW_OF: Record<string, View> = {
   "เรียนรู้": "learn",
   "ข่าว": "news",
   "ลองลงทุนย้อนหลัง": "backtest",
+  "ประวัติความเป็นมา": "about",
 }
 
 const CANDLES = [
