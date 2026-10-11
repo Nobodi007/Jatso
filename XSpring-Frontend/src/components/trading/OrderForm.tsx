@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import { dp, splitSymbol } from "../../lib/market"
 
 const TABS = ["ลิมิตออเดอร์", "มาร์เก็ตออเดอร์", "สต็อปลิมิตออเดอร์"];
@@ -38,7 +39,7 @@ export default function OrderForm({ symbol, last }: { symbol: string; last?: num
       <Field label="จำนวน" unit={base} />
       <input type="range" defaultValue={0} className={side === "buy" ? "accent-[#13c38b]" : "accent-[#f6465d]"} />
       <div className="rounded-md bg-[#1f1f1f] py-3 text-center text-sm">
-        <Link href="/login" className="text-[#13c38b]">เข้าสู่ระบบ</Link>
+        <a href="..." className="...">ข้อความ</a>
         <span className="text-zinc-300"> หรือ </span>
         <Link href="/register" className="text-[#13c38b]">สมัครตอนนี้</Link>
       </div>
