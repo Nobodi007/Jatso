@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react"
 import { createChart, ColorType } from "lightweight-charts"
-import type { IChartApi, ISeriesApi } from "lightweight-charts"
+import type { IChartApi, ISeriesApi, UTCTimestamp } from "lightweight-charts"
 import { dp } from "../../lib/market"
 import type { Candle } from "../../lib/market"
 
@@ -15,7 +15,8 @@ export default function PriceChart({ candles, live, interval, onInterval }:
   const el = useRef<HTMLDivElement>(null);
   const wrap = useRef<HTMLDivElement>(null)
   const chart = useRef<IChartApi | null>(null)
-  const series = useRef<ISeriesApi<"Candlestick"> | null>(null)
+  const cs = useRef<ISeriesApi<"Candlestick"> | null>(null)
+  const vs = useRef<ISeriesApi<"Histogram"> | null>(null)
 
   useEffect(() => {
     if (!el.current) return;
