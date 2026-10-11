@@ -13,9 +13,9 @@ export const INTERVALS = [
 export default function PriceChart({ candles, live, interval, onInterval }:
   { candles: Candle[]; live: Candle | null; interval: string; onInterval: (v: string) => void }) {
   const el = useRef<HTMLDivElement>(null);
-  const chart = useRef<IChartApi>();
-  const cs = useRef<ISeriesApi<"Candlestick">>();
-  const vs = useRef<ISeriesApi<"Histogram">>();
+  const wrap = useRef<HTMLDivElement>(null)
+  const chart = useRef<IChartApi | null>(null)
+  const series = useRef<ISeriesApi<"Candlestick"> | null>(null)
 
   useEffect(() => {
     if (!el.current) return;
