@@ -8,13 +8,14 @@ import BacktestSection from "./BacktestSection"
 import LearnSection from "./LearnSection"
 import TradePage from "../trading/TradePage"
 import HomeSections from "./HomeSections"
+import AboutSection from "./AboutSection"
 
 type LandingPageProps = {
   onLogin: () => void
   onRegister: () => void
 }
 
-type View = "home" | "market" | "news" | "coin" | "backtest" | "trade" | "learn"
+type View = "home" | "market" | "news" | "coin" | "backtest" | "trade" | "learn" | "about"
 
 // แก้ข้อความตรงนี้ได้เลย
 const BRAND = "Nobodi"
@@ -204,6 +205,8 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
         <BacktestSection onLogin={onLogin} onRegister={onRegister} />
       ) : view === "trade" ? (
         <TradePage symbol="BTCUSDT" onLogin={onLogin} onRegister={onRegister} />
+      ) : view === "about" ? (
+        <AboutSection onBack={() => setView("home")} onRegister={onRegister} />
       ) : view === "coin" ? (
         <CoinDetail asset={coin} onBack={() => setView("market")} onLogin={onLogin} onRegister={onRegister} />
       ) : view === "learn" ? (
