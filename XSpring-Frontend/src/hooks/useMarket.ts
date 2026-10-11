@@ -1,6 +1,6 @@
-"use client";
-import { useEffect, useRef, useState } from "react";
-import { Book, Candle, Ticker, Trade, fetchCandles, fetchDepth, fetchTicker, fetchTrades, subscribe } from "@/lib/market";
+import { useEffect, useRef, useState } from "react"
+import { fetchCandles, fetchDepth, fetchTicker, fetchTrades, subscribe } from "../lib/market"
+import type { Book, Candle, Ticker, Trade } from "../lib/market"
 
 export function useMarket(symbol: string, interval: string) {
   const [ticker, setTicker] = useState<Ticker | null>(null);
