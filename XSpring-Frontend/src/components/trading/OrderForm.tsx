@@ -1,64 +1,150 @@
 import { useEffect, useState } from "react"
 import { dp, splitSymbol } from "../../lib/market"
 
-const TABS = ["ลิมิตออเดอร์", "มาร์เก็ตออเดอร์", "สต็อปลิมิตออเดอร์"];
+type Props = {
+  symbol: string
+  last?: number
+  onLogin: () => void
+  onRegister: () => void
+}
 
-export default function OrderForm({ symbol, last }: { symbol: string; last?: number }) {
-  const { base, quote } = splitSymbol(symbol);
-  const [tab, setTab] = useState(0);
-  const [buyPrice, setBuyPrice] = useState("");
-  const [sellPrice, setSellPrice] = useState("");
+const TYPES = ["ลิมิตออเดอร์", "มาร์เก็ตออเดอร์", "สต็อปลิมิตออเดอร์"]
 
+function Side({
+  last,
+  base,
+  quote,
+  asset,
+  accent,
+  cta,
+  ctaClass,
+  onCta,
+  market,
+}: {
+  last?: number
+  base: string
+  quote: string
+  asset: string
+  accent: string
+  cta: string
+  ctaClass: string
+  onCta: () => void
+  market: boolean
+}) {
+  const [price, setPrice] = useState("")
+  const [qty, setQty] = useState("")
+  const [pct, setPct] = useState(0)
+
+  // เติมราคาล่าสุดให้ครั้งแรก และเมื่อเปลี่ยนเหรียญ
   useEffect(() => {
-    if (last && !buyPrice) {
-      setBuyPrice(last.toFixed(dp(last)));
-      setSellPrice(last.toFixed(dp(last)));
-    }
-  }, [last]); // eslint-disable-line
-
-  const Field = ({ label, unit, value, onChange, disabled }:
-    { label: string; unit: string; value?: string; onChange?: (v: string) => void; disabled?: boolean }) => (
-    <label className="flex items-center rounded-md bg-[#1a1a1a] px-3 py-2.5 text-sm">
-      <span className="text-zinc-500">{label}</span>
-      <input value={value ?? ""} disabled={disabled} onChange={(e) => onChange?.(e.target.value)}
-        placeholder={disabled ? "ราคาตลาด" : ""}
-        className="flex-1 bg-transparent text-right text-white outline-none placeholder:text-zinc-500" />
-      <span className="ml-2 text-white">{unit}</span>
-    </label>
-  );
-
-  const Side = ({ side }: { side: "buy" | "sell" }) => (
-    <div className="flex flex-1 flex-col gap-3">
-      <div className="flex justify-between text-xs text-zinc-500">
-        <span>ยอดคงเหลือ</span><span>- {side === "buy" ? quote : base}</span>
-      </div>
-      {tab === 2 && <Field label="ราคาสต็อป" unit={quote} />}
-      <Field label="ราคา" unit={quote} disabled={tab === 1}
-        value={side === "buy" ? buyPrice : sellPrice}
-        onChange={side === "buy" ? setBuyPrice : setSellPrice} />
-      <Field label="จำนวน" unit={base} />
-      <input type="range" defaultValue={0} className={side === "buy" ? "accent-[#13c38b]" : "accent-[#f6465d]"} />
-      <div className="rounded-md bg-[#1f1f1f] py-3 text-center text-sm">
-        <a href="..." className="...">ข้อความ</a>
-        <span className="text-zinc-300"> หรือ </span>
-        <a href="..." className="...">ข้อความ</a>
-      </div>
-    </div>
-  );
+    if (last) setPrice(last.toFixed(dp(last)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asset])
 
   return (
-    <div className="bg-[#0f0f0f]">
-      <div className="border-b border-[#1c1c1c] px-4">
-        <span className="inline-block border-b-2 border-[#13c38b] px-4 py-3 text-sm text-white">Spot</span>
+    <div>
+      <div className="mb-2 flex justify-between text-xs text-zinc-500">
+        <span>ยอดคงเหลือ</span>
+        <span>- {asset}</span>
       </div>
-      <div className="p-4">
-        <div className="mb-4 flex gap-4 text-sm">
-          {TABS.map((t, i) => (
-            <button key={t} onClick={() => setTab(i)} className={tab === i ? "text-[#13c38b]" : "text-zinc-400"}>{t}</button>
-          ))}
-        </div>
-        <div className="flex gap-6"><Side side="buy" /><Side side="sell" /></div>
-      </div>
+
+      <label className="mb-3 flex items-center justify-between rounded-lg bg-[#1a1a1a] px-4 py-3 text-sm">
+        <span className="text-zinc-500">ราคา</span>
+        <span className="flex items-center gap-2">
+          <input
+            value={market ? "ราคาตลาด" : price}
+            disabled={market}
+            onChange={(e) => setPrice(e.target.value.replace(/[^\d.]/g, ""))}
+            inputMode="decimal"
+            className="w-32 bg-transparent text-right outline-none disabled:text-zinc-400"
+          />
+          <span>{quote}</span>
+        </span>
+      </label>
+
+      <label className="mb-3 flex items-center justify-between rounded-lg bg-[#1a1a1a] px-4 py-3 text-sm">
+        <span className="text-zinc-500">จำนวน</span>
+        <span className="flex items-center gap-2">
+          <input
+            value={qty}
+            onChange={(e) => setQty(e.target.value.replace(/[^\d.]/g, ""))}
+            inputMode="decimal"
+            placeholder="0.00"
+            className="w-32 bg-transparent text-right outline-none placeholder:text-zinc-600"
+          />
+          <span>{base}</span>
+        </span>
+      </label>
+
+      <input
+        type="range"
+        min={0}
+        max={100}
+        step={25}
+        value={pct}
+        onChange={(e) => setPct(Number(e.target.value))}
+        style={{ accentColor: accent }}
+        className="mb-4 w-full"
+        aria-label="สัดส่วน"
+      />
+
+      <button type="button" onClick={onCta} className={`w-full rounded-lg py-3 text-sm font-bold ${ctaClass}`}>
+        {cta}
+      </button>
     </div>
-  );
+  )
+}
+
+export default function OrderForm({ symbol, last, onLogin, onRegister }: Props) {
+  const { base, quote } = splitSymbol(symbol)
+  const [type, setType] = useState(0)
+  const market = type === 1
+
+  return (
+    <div className="bg-[#0f0f0f] p-6">
+      <div className="mb-4 border-b border-white/10">
+        <span className="inline-block border-b-2 border-emerald-500 pb-2 text-sm font-semibold">Spot</span>
+      </div>
+
+      <div className="mb-5 flex flex-wrap gap-5 text-sm">
+        {TYPES.map((t, i) => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => setType(i)}
+            className={type === i ? "font-semibold text-emerald-500" : "text-zinc-400 hover:text-zinc-200"}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+
+      <div className="grid gap-8 md:grid-cols-2">
+        <Side
+          last={last}
+          base={base}
+          quote={quote}
+          asset={quote}
+          accent="#10b981"
+          cta="ลงทะเบียน"
+          ctaClass="bg-emerald-500 text-black hover:bg-emerald-400"
+          onCta={onRegister}
+          market={market}
+        />
+        <Side
+          last={last}
+          base={base}
+          quote={quote}
+          asset={base}
+          accent="#f6465d"
+          cta="เข้าสู่ระบบ"
+          ctaClass="border border-white/20 text-white hover:bg-white/10"
+          onCta={onLogin}
+          market={market}
+        />
+      </div>
+
+      <p className="mt-4 text-center text-xs text-zinc-500">ลงทะเบียนหรือเข้าสู่ระบบเพื่อซื้อขายในบัญชีจำลอง</p>
+    </div>
+  )
 }
