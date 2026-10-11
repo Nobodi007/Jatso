@@ -201,6 +201,8 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
         <BacktestSection onLogin={onLogin} onRegister={onRegister} />
       ) : view === "coin" ? (
         <CoinDetail asset={coin} onBack={() => setView("market")} onLogin={onLogin} onRegister={onRegister} />
+      ) : view === "learn" ? (
+        <LearnSection />
       ) : (
         <main className="mx-auto grid max-w-7xl items-center gap-10 px-4 py-16 lg:grid-cols-2 lg:py-24">
           <div>
