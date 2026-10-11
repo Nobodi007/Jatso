@@ -8,7 +8,6 @@ import PairList from "./PairList"
 import RecentTrades from "./RecentTrades"
 
 export default function TradePage({ symbol = "BTCUSDT" }: { symbol?: string }) {
-}
   const [interval, setInterval] = useState("4h")
   const { ticker, candles, live, book, trades } = useMarket(symbol, interval)
 
