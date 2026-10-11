@@ -1,5 +1,5 @@
-import { Book, splitSymbol, dp, fmt } from "../../lib/market"
-import type { Level } from "../../lib/market"
+import { dp, fmt, splitSymbol } from "../../lib/market"
+import type { Book, Level } from "../../lib/market"
 
 export default function OrderBook({ symbol, book, last, rows = 14 }:
   { symbol: string; book: Book; last?: number; rows?: number }) {
