@@ -1,4 +1,5 @@
-import { Ticker, dp, fmt, splitSymbol } from "@/lib/market";
+import { fmt } from "../../lib/market"
+import type { Trade } from "../../lib/market"
 
 export default function TickerBar({ symbol, t }: { symbol: string; t: Ticker | null }) {
   const { base, quote } = splitSymbol(symbol);
