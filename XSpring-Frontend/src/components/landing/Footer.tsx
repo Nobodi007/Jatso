@@ -4,7 +4,7 @@ const ABOUT: FooterLink[] = [
   { label: "ประวัติความเป็นมา" },
   { label: "เกี่ยวกับระบบ", page: "about" },
   { label: "คู่มือการใช้งาน", page: "guide" },
-  { label: "ความเป็นส่วนตัว" },
+  { label: "ความเป็นส่วนตัวและข้อมูล", page: "privacy" },
   { label: "เปิดเผยข้อมูล/แจ้งความเสี่ยง" },
   { label: "ข่าวสาร", go: "ข่าว" },
   { label: "ติดต่อ คุณNobodi สุดเท่", highlight: true },
