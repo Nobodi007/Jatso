@@ -8,6 +8,14 @@ import PairList from "./PairList"
 import RecentTrades from "./RecentTrades"
 
 export default function TradePage({ symbol = "BTCUSDT" }: { symbol?: string }) {
+type View = "home" | "market" | "news" | "coin" | "backtest" | "trade"
+
+const VIEW_OF: Record<string, View> = {
+  "ตลาด": "market",
+  "ข่าว": "news",
+  "การซื้อขาย": "trade",
+  "ลองลงทุนย้อนหลัง": "backtest",
+}
   const [interval, setInterval] = useState("4h")
   const { ticker, candles, live, book, trades } = useMarket(symbol, interval)
 
