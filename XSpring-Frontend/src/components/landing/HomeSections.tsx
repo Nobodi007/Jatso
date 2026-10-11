@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { BarChart3, Newspaper, Scale, ShieldCheck, TestTube2, UserPlus } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
+import Footer from "./Footer"
 
 const API_BASE_URL = "https://xspring-api.onrender.com"
 
