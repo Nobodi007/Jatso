@@ -3,7 +3,7 @@ type FooterLink = { label: string; go?: string; asset?: string; page?: string; h
 const ABOUT: FooterLink[] = [
   { label: "ประวัติความเป็นมา" },
   { label: "เกี่ยวกับระบบ", page: "about" },
-  { label: "คู่มือการใช้งาน" },
+  { label: "คู่มือการใช้งาน", page: "guide" },
   { label: "ความเป็นส่วนตัว" },
   { label: "เปิดเผยข้อมูล/แจ้งความเสี่ยง" },
   { label: "ข่าวสาร", go: "ข่าว" },
