@@ -13,7 +13,7 @@ type LandingPageProps = {
   onRegister: () => void
 }
 
-type View = "home" | "market" | "news" | "coin" | "backtest" | "learn"
+type View = "home" | "market" | "news" | "coin" | "backtest" | "trade" | "learn"
 
 // แก้ข้อความตรงนี้ได้เลย
 const BRAND = "Nobodi"
