@@ -5,6 +5,7 @@ import NewsSection from "./NewsSection"
 import SearchBox from "./SearchBox"
 import CoinDetail from "./CoinDetail"
 import BacktestSection from "./BacktestSection"
+import LearnSection from "./LearnSection"
 
 type LandingPageProps = {
   onLogin: () => void
