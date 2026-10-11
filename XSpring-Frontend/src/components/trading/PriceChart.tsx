@@ -65,7 +65,7 @@ export default function PriceChart({ candles, live, interval, onInterval }:
           </button>
         ))}
       </div>
-      <div ref={el} className="min-h-0 flex-1" />
+      <div ref={wrap} className="..." />
     </div>
   );
 }
