@@ -12,7 +12,7 @@ type LandingPageProps = {
   onRegister: () => void
 }
 
-type View = "home" | "market" | "news" | "coin" | "backtest"
+type View = "home" | "market" | "news" | "coin" | "backtest" | "learn"
 
 // แก้ข้อความตรงนี้ได้เลย
 const BRAND = "Nobodi"
@@ -24,6 +24,7 @@ const MENU = ["ตลาด", "การซื้อขาย", "เรียน
 // เมนูไหนเปิดหน้าอะไร (เมนูที่ไม่อยู่ในนี้ = พาไปล็อกอิน)
 const VIEW_OF: Record<string, View> = {
   "ตลาด": "market",
+  "เรียนรู้": "learn",
   "ข่าว": "news",
   "ลองลงทุนย้อนหลัง": "backtest",
 }
