@@ -1,7 +1,7 @@
+import Footer from "./Footer"
 import { useEffect, useState } from "react"
 import { BarChart3, Newspaper, Scale, ShieldCheck, TestTube2, UserPlus } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
-import Footer from "./Footer"
 
 const API_BASE_URL = "https://xspring-api.onrender.com"
 
@@ -271,7 +271,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
         </div>
       </section>
 
-      <footer className="border-t">
+        <Footer onGo={onGo} onOpenCoin={onOpenCoin} />
         <div className="mx-auto grid max-w-6xl gap-8 px-4 py-10 text-sm md:grid-cols-4">
           <div>
             <p className="text-lg font-extrabold">Nobodi</p>
