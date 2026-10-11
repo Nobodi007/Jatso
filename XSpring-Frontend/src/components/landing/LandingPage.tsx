@@ -202,7 +202,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
       ) : view === "backtest" ? (
         <BacktestSection onLogin={onLogin} onRegister={onRegister} />
       ) : view === "trade" ? (
-        <TradePage symbol="BTCUSDT" />
+        <TradePage symbol="BTCUSDT" onLogin={onLogin} onRegister={onRegister} />
       ) : view === "coin" ? (
         <CoinDetail asset={coin} onBack={() => setView("market")} onLogin={onLogin} onRegister={onRegister} />
       ) : view === "learn" ? (
