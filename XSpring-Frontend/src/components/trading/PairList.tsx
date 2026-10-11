@@ -2,9 +2,21 @@ import { useEffect, useState } from "react"
 import { dp, fetchTickers, fmt, splitSymbol } from "../../lib/market"
 import type { Ticker } from "../../lib/market"
 
-const PAIRS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "TRXUSDT", "LINKUSDT", "AVAXUSDT"]
+// แก้รายชื่อคู่เทรดตรงนี้
+const PAIRS = [
+  "BTCUSDT",
+  "ETHUSDT",
+  "SOLUSDT",
+  "XRPUSDT",
+  "ADAUSDT",
+  "DOGEUSDT",
+  "LINKUSDT",
+  "HBARUSDT",
+  "XLMUSDT",
+  "USDCUSDT",
+]
 
-export default function PairList({ active }: { active: string }) {
+export default function PairList({ active, onSelect }: { active: string; onSelect: (symbol: string) => void }) {
   const [list, setList] = useState<Ticker[]>([])
   const [q, setQ] = useState("")
 
@@ -33,10 +45,13 @@ export default function PairList({ active }: { active: string }) {
       {shown.map((t) => {
         const { base, quote } = splitSymbol(t.symbol)
         return (
-          <a
+          <button
+            type="button"
             key={t.symbol}
-            href={`/trade/${t.symbol}`}
-            className={`grid grid-cols-3 py-1.5 text-xs hover:bg-white/5 ${t.symbol === active ? "bg-white/5" : ""}`}
+            onClick={() => onSelect(t.symbol)}
+            className={`grid w-full grid-cols-3 px-1 py-1.5 text-left text-xs hover:bg-white/5 ${
+              t.symbol === active ? "bg-white/10" : ""
+            }`}
           >
             <span className="text-white">
               {base}
@@ -47,7 +62,7 @@ export default function PairList({ active }: { active: string }) {
               {t.changePct >= 0 ? "+" : ""}
               {t.changePct.toFixed(2)}%
             </span>
-          </a>
+          </button>
         )
       })}
     </div>
