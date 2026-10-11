@@ -7,7 +7,15 @@ import OrderForm from "./OrderForm"
 import PairList from "./PairList"
 import RecentTrades from "./RecentTrades"
 
-export default function TradePage({ symbol: initial = "BTCUSDT" }: { symbol?: string }) {
+export default function TradePage({
+  symbol: initial = "BTCUSDT",
+  onLogin,
+  onRegister,
+}: {
+  symbol?: string
+  onLogin: () => void
+  onRegister: () => void
+}) {
   const [symbol, setSymbol] = useState(initial)
   const { ticker, book, trades } = useMarket(symbol, "1h")
 
@@ -18,7 +26,7 @@ export default function TradePage({ symbol: initial = "BTCUSDT" }: { symbol?: st
         <OrderBook symbol={symbol} book={book} last={ticker?.last} />
         <div className="flex min-w-0 flex-col gap-px">
           <TvChart symbol={symbol} />
-          <OrderForm symbol={symbol} last={ticker?.last} />
+          <OrderForm symbol={symbol} last={ticker?.last} onLogin={onLogin} onRegister={onRegister} />
         </div>
         <div className="flex flex-col gap-px">
           <PairList active={symbol} onSelect={setSymbol} />
