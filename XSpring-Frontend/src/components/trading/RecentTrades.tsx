@@ -1,4 +1,5 @@
-import { Trade, dp, fmt, splitSymbol } from "@/lib/market";
+import { fmt } from "../../lib/market"
+import type { Trade } from "../../lib/market"
 
 export default function RecentTrades({ symbol, trades }: { symbol: string; trades: Trade[] }) {
   const { base, quote } = splitSymbol(symbol);
