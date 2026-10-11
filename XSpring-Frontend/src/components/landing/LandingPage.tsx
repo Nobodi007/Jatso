@@ -6,6 +6,7 @@ import SearchBox from "./SearchBox"
 import CoinDetail from "./CoinDetail"
 import BacktestSection from "./BacktestSection"
 import LearnSection from "./LearnSection"
+import TradePage from "../trading/TradePage"
 
 type LandingPageProps = {
   onLogin: () => void
