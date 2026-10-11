@@ -1,5 +1,6 @@
 import Footer from "./Footer"
 import AboutSystem from "./AboutSystem"
+import UserGuide from "./UserGuide"
 import { useEffect, useState } from "react"
 import { BarChart3, Newspaper, Scale, ShieldCheck, TestTube2, UserPlus } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
@@ -72,9 +73,9 @@ const TOOLS: { icon: LucideIcon; title: string; text: string; go: string }[] = [
 export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, heroTitle, heroSub, heroArt }: Props) {
   const [rows, setRows] = useState<Row[] | null>(null)
   const [sparks, setSparks] = useState<Record<string, number[]>>({})
-  const [page, setPage] = useState<"home" | "about">("home")
+  const [page, setPage] = useState<"home" | "about" | "guide">("home")
   const openPage = (p: string) => {
-    if (p === "about") setPage("about")
+    if (p === "about" || p === "guide") setPage(p)
   }
 
 
@@ -97,10 +98,11 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
     }
   }, [])
   
-  if (page === "about") {
+   if (page !== "home") {
     return (
       <>
-        <AboutSystem onBack={() => setPage("home")} />
+        {page === "about" && <AboutSystem onBack={() => setPage("home")} />}
+        {page === "guide" && <UserGuide onBack={() => setPage("home")} />}
         <Footer onGo={onGo} onOpenCoin={onOpenCoin} onPage={openPage} />
       </>
     )
