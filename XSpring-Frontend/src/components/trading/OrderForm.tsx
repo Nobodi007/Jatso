@@ -41,7 +41,7 @@ export default function OrderForm({ symbol, last }: { symbol: string; last?: num
       <div className="rounded-md bg-[#1f1f1f] py-3 text-center text-sm">
         <a href="..." className="...">ข้อความ</a>
         <span className="text-zinc-300"> หรือ </span>
-        <Link href="/register" className="text-[#13c38b]">สมัครตอนนี้</Link>
+        <a href="..." className="...">ข้อความ</a>
       </div>
     </div>
   );
