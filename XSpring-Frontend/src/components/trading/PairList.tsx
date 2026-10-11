@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Ticker, dp, fetchTickers, fmt, splitSymbol } from "@/lib/market";
+import { fmt } from "../../lib/market"
+import type { Trade } from "../../lib/market"
 
 // ใส่คู่ที่เว็บมึงมี
 const PAIRS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "TRXUSDT", "LINKUSDT", "AVAXUSDT"];
