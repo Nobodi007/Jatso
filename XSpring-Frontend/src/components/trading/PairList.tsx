@@ -1,7 +1,5 @@
-"use client";
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { fmt } from "../../lib/market"
+import { useEffect, useState } from "react"
+import { dp, fetchTickers, fmt, splitSymbol } from "../../lib/market"
 import type { Trade } from "../../lib/market"
 
 // ใส่คู่ที่เว็บมึงมี
@@ -29,15 +27,23 @@ export default function PairList({ active }: { active: string }) {
       </div>
       {shown.map((t) => {
         const { base, quote } = splitSymbol(t.symbol);
-        return (
-          <Link key={t.symbol} href={`/trade/${t.symbol}`}
-            className={`grid grid-cols-3 py-1.5 text-xs hover:bg-white/5 ${t.symbol === active ? "bg-white/5" : ""}`}>
-            <span className="text-white">{base}<span className="text-zinc-500">/{quote}</span></span>
-            <span className="text-right text-zinc-200">{fmt(t.last, dp(t.last))}</span>
-            <span className={`text-right ${t.changePct >= 0 ? "text-[#13c38b]" : "text-[#f6465d]"}`}>
-              {t.changePct >= 0 ? "+" : ""}{t.changePct.toFixed(2)}%
-            </span>
-          </Link>
+              return (
+        <a
+          key={t.symbol}
+          href={`/trade/${t.symbol}`}
+          className={`grid grid-cols-3 py-1.5 text-xs hover:bg-white/5 ${t.symbol === active ? "bg-white/5" : ""}`}
+        >
+          <span className="text-white">
+            {base}
+            <span className="text-zinc-500">/{quote}</span>
+          </span>
+          <span className="text-right text-zinc-200">{fmt(t.last, dp(t.last))}</span>
+          <span className={`text-right ${t.changePct >= 0 ? "text-[#13c38b]" : "text-[#f6465d]"}`}>
+            {t.changePct >= 0 ? "+" : ""}
+            {t.changePct.toFixed(2)}%
+          </span>
+        </a>
+      );
         );
       })}
     </div>
