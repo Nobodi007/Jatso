@@ -49,21 +49,21 @@ function Logo({ v }: { v: Venue }) {
 export default function ExchangeTable({ asset }: { asset: string }) {
   const { t } = useLanguage()
   const [rows, setRows] = useState<Venue[] | null>(null)
-  const [error, setError] = useState(false)
+  const [error, setError] = useState("")
 
   useEffect(() => {
     let alive = true
     const load = () =>
       fetch(`${API_BASE_URL}/api/public/exchanges?asset=${encodeURIComponent(asset)}`, { cache: "no-store" })
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-                .then((d) => {
+        .then((d) => {
           if (!alive) return
           setRows(Array.isArray(d.rows) ? d.rows : [])
-          setError(false)
+          setError("")
         })
-        .catch(() => alive && setError(true))
+        .catch(() => alive && setError("exch.loadFailed"))
     setRows(null)
-    setError(false)
+    setError("")
     load()
     const id = setInterval(load, 10000)
     return () => {
@@ -82,9 +82,10 @@ export default function ExchangeTable({ asset }: { asset: string }) {
     <section className="mt-10">
       <h2 className="text-xl font-bold">{t("exch.title", { asset })}</h2>
       <p className="mt-1 text-sm text-muted-foreground">{t("exch.subtitle")}</p>
-      
-      {error && <p className="mt-4 text-sm text-red-500">{t("exch.loadFailed")}</p>}
+
+      {error && <p className="mt-4 text-sm text-red-500">{t(error)}</p>}
       {!error && !rows && <p className="mt-4 text-sm text-muted-foreground">{t("exch.loading")}</p>}
+
       {rows && (
         <div className="mt-4 overflow-x-auto rounded-xl border">
           <table className="w-full min-w-[820px] text-sm">
