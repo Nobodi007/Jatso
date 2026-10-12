@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { useLanguage } from "../i18n/LanguageContext"
 
 type NewsItem = {
   title: string
@@ -10,16 +11,18 @@ type NewsItem = {
 
 const API_BASE_URL = "https://xspring-api.onrender.com"
 
-function fmtTime(s: string) {
+function fmtTime(s: string, locale: string) {
   const d = new Date(s)
   return isNaN(d.getTime())
     ? s
-    : d.toLocaleString("th-TH", { dateStyle: "medium", timeStyle: "short" })
+    : d.toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" })
 }
 
 export default function NewsSection() {
+  const { t, lang } = useLanguage()
+  const locale = lang === "th" ? "th-TH" : "en-US"
   const [items, setItems] = useState<NewsItem[] | null>(null)
-  const [error, setError] = useState("")
+  const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     const ctrl = new AbortController()
@@ -27,7 +30,7 @@ export default function NewsSection() {
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => setItems(d.items ?? []))
       .catch((e) => {
-        if (e.name !== "AbortError") setError("โหลดข่าวไม่สำเร็จ กรุณาลองใหม่อีกครั้ง")
+        if (e.name !== "AbortError") setFailed(true)
       })
     return () => ctrl.abort()
   }, [])
