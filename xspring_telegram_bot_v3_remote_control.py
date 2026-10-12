@@ -2392,6 +2392,13 @@ def _remote_trade_config(email: str) -> dict:
 
 
 def _sim_state(email: str) -> dict:
+    # Website API loads sim_state by the authenticated email actor.
+    # Normalize it exactly as email_for_chat() does to share the same ledger.
+    email = str(email or "").strip().lower()
+    if not email:
+        raise ValueError("ไม่พบ email actor สำหรับโหลด Portfolio")
+    if sb is None:
+        raise RuntimeError("Supabase ยังไม่ได้เชื่อมต่อ")
     res = (sb.table("sim_state").select("data").eq("actor", email).limit(1).execute())
     if res.data and isinstance(res.data[0].get("data"), dict):
         sim = dict(res.data[0]["data"])
@@ -2410,6 +2417,12 @@ def _sim_state(email: str) -> dict:
 
 
 def _save_sim_state(email: str, sim: dict) -> None:
+    # Write to the same normalized sim_state actor that /api/orders reads.
+    email = str(email or "").strip().lower()
+    if not email:
+        raise ValueError("ไม่พบ email actor สำหรับบันทึก Portfolio")
+    if sb is None:
+        raise RuntimeError("Supabase ยังไม่ได้เชื่อมต่อ")
     sb.table("sim_state").upsert({
         "actor": email,
         "data": sim,
@@ -2666,14 +2679,32 @@ def _enrich_trade_ledger_record(
     else:
         nc_status = "ผ่าน"
 
+    execution_time = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    normalized_side = "BUY" if side == "buy" else "SELL"
+    normalized_type = order_type.upper()
     record = {
+        # Original Thai ledger fields are kept for compatibility with gu.py.
         "วันที่": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        "เวลา": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "เวลา": execution_time,
         "ฝั่ง": "ซื้อ" if side == "buy" else "ขาย",
         "เหรียญ": asset,
         "มูลค่า (บาท)": amount_thb,
         "ราคาที่ลูกค้าได้": exec_price,
         "เหรียญที่ส่งมอบ": qty,
+        # Standard API fields make Telegram orders directly readable by /api/orders.
+        "timestamp": execution_time,
+        "execution_time": execution_time,
+        "side": normalized_side,
+        "asset": asset,
+        "amount_thb": amount_thb,
+        "quote_thb": exec_price,
+        "quantity": qty,
+        "fee_thb": fee,
+        "exchange": "Bitkub",
+        "source": "Telegram",
+        "order_id": order_id,
+        "status": "Filled",
+        "type": normalized_type,
         "Hedge (เหรียญ)": hedged_coins,
         "Hedge (USD)": hedge_usd,
         "CEX Liquidity ใช้ (บาท)": cex_used_this,
@@ -2844,6 +2875,41 @@ def _execute_pending(chat_id: int) -> str:
                     "status": "open",
                 }
                 open_orders.append(order)
+                # Also put unfilled LIMIT orders in the same ledger read by the website.
+                # Keep them separate from the filled execution record and mark fee as zero
+                # until an actual fill occurs.
+                opened_at = str(pending.get("created_at") or datetime.now(timezone.utc).isoformat(timespec="seconds"))
+                history_order = {
+                    "วันที่": opened_at[:10],
+                    "เวลา": opened_at,
+                    "ฝั่ง": "ซื้อ" if side == "buy" else "ขาย",
+                    "เหรียญ": asset,
+                    "มูลค่า (บาท)": amount if side == "buy" else amount * float(limit_price or 0.0),
+                    "ราคาที่ลูกค้าได้": float(limit_price or 0.0),
+                    "เหรียญที่ส่งมอบ": 0.0,
+                    "ค่าธรรมเนียม": 0.0,
+                    "ประเภท": "LIMIT",
+                    "Exchange": "Bitkub",
+                    "Source": "Telegram",
+                    "Order ID": pending["id"],
+                    "สถานะ": "Open",
+                    "timestamp": opened_at,
+                    "execution_time": opened_at,
+                    "side": "BUY" if side == "buy" else "SELL",
+                    "asset": asset,
+                    "amount_thb": amount if side == "buy" else amount * float(limit_price or 0.0),
+                    "quote_thb": float(limit_price or 0.0),
+                    "quantity": 0.0,
+                    "fee_thb": 0.0,
+                    "exchange": "Bitkub",
+                    "source": "Telegram",
+                    "order_id": pending["id"],
+                    "status": "Open",
+                    "type": "LIMIT",
+                }
+                ledger = sim.setdefault("orders", [])
+                ledger.append(history_order)
+                sim["orders"] = ledger[-500:]
                 _save_sim_state(email, sim)
                 _audit_trade(
                     email, chat_id, "telegram_sim_order_open",
