@@ -38,6 +38,26 @@ function CoinLogo({ symbol, accent, size = 44 }: { symbol: string; accent: strin
   )
 }
 
+type CoinProfile = {
+  name: string
+  category: string
+  tagline: string
+  about: string
+  launched: string
+  creator: string
+  consensus: string
+  supply: string
+  chapters: string | number
+  strengths: string[]
+  risks: string[]
+  tech: string[]
+  tokenomics: string[]
+  timeline: [string, string][]
+  ecosystem: string[]
+  metrics: string[]
+  myths: { myth: string; fact: string }[]
+}
+
 const TABS = [
   { key: "overview", label: "overview" },
   { key: "tech", label: "tech" },
@@ -65,9 +85,10 @@ export default function CoinEncyclopedia() {
     })
   }, [search])
 
-  const baseProfile = COIN_PROFILES[selected]
-  const profile = baseProfile && lang === "en"
-    ? { ...baseProfile, ...(ENGLISH_COIN_PROFILES[selected] ?? {}) }
+  const baseProfile = COIN_PROFILES[selected] as unknown as CoinProfile | undefined
+  const profile: CoinProfile | undefined =
+  baseProfile && lang === "en"
+    ? ({ ...baseProfile, ...(ENGLISH_COIN_PROFILES[selected] ?? {}) } as CoinProfile)
     : baseProfile
   const accent = COIN_ACCENT[selected] ?? "#10b981"
   const rgb = hexToRgb(accent)
