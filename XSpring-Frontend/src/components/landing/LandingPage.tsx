@@ -19,12 +19,17 @@ type LandingPageProps = {
 
 type View = "home" | "market" | "news" | "coin" | "backtest" | "trade" | "learn" | "about"
 
-// แก้ข้อความตรงนี้ได้เลย
 const BRAND = "Nobodi"
-const HERO_TITLE = "เริ่มต้นลงทุนคริปโตอย่างมีระบบ ไปกับ Nobodi"
-const HERO_SUB =
-  "ดูราคาตลาดแบบสด ทดลองลงทุนย้อนหลัง และฝึกซื้อขายในบัญชีจำลองก่อนตัดสินใจจริง ทุกอย่างอยู่ในที่เดียว"
 const MENU = ["ตลาด", "การซื้อขาย", "เรียนรู้", "ข่าว", "ลองลงทุนย้อนหลัง"]
+
+// ข้อความไทยด้านบนใช้เป็นรหัสอ้างอิงภายใน (ห้ามแปล) ตัวนี้แมปไปหาคำแปลที่แสดงจริง
+const MENU_KEY: Record<string, string> = {
+  "ตลาด": "nav.market",
+  "การซื้อขาย": "nav.trade",
+  "เรียนรู้": "nav.learn",
+  "ข่าว": "nav.news",
+  "ลองลงทุนย้อนหลัง": "nav.backtest",
+}
 
 // เมนูไหนเปิดหน้าอะไร (เมนูที่ไม่อยู่ในนี้ = พาไปล็อกอิน)
 const VIEW_OF: Record<string, View> = {
@@ -85,7 +90,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
   const [view, setView] = useState<View>("home")
   const [coin, setCoin] = useState("BTC")
   const [dark, setDark] = useState(initialDark)
-  const { t } = useLanguage();   
+  const { t } = useLanguage()
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark)
@@ -138,7 +143,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
                     : "text-muted-foreground"
                 }`}
               >
-                {label}
+                {t(MENU_KEY[label])}
               </button>
             ))}
           </nav>
@@ -150,14 +155,14 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
               onClick={onLogin}
               className="hidden rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent sm:block"
             >
-              เข้าสู่ระบบ
+              {t("nav.login")}
             </button>
             <button
               type="button"
               onClick={onRegister}
               className="rounded-md bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-black hover:bg-emerald-400"
             >
-              ลงทะเบียน
+              {t("nav.register")}
             </button>
             <button
               type="button"
@@ -167,8 +172,9 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
             >
               {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
-           
-            <LanguageSwitcher />  
+
+            <LanguageSwitcher />
+
             <button
               type="button"
               aria-label="เมนู"
@@ -182,16 +188,23 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
 
         {menuOpen && (
           <div className="border-t px-4 py-2 md:hidden">
-            {[...MENU, "เข้าสู่ระบบ"].map((label) => (
+            {MENU.map((label) => (
               <button
                 key={label}
                 type="button"
-                onClick={() => (label === "เข้าสู่ระบบ" ? onLogin() : go(label))}
+                onClick={() => go(label)}
                 className="block w-full py-2 text-left text-sm"
               >
-                {label}
+                {t(MENU_KEY[label])}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={onLogin}
+              className="block w-full py-2 text-left text-sm"
+            >
+              {t("nav.login")}
+            </button>
           </div>
         )}
       </header>
@@ -216,8 +229,8 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
           onRegister={onRegister}
           onOpenCoin={openCoin}
           onGo={go}
-          heroTitle={HERO_TITLE}
-          heroSub={HERO_SUB}
+          heroTitle={t("hero.title")}
+          heroSub={t("hero.desc")}
           heroArt={<HeroArt />}
         />
       )}
