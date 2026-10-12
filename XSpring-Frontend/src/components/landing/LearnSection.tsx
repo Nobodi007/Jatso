@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { BookOpen, Coins } from "lucide-react"
+import { useLanguage } from "../../i18n/LanguageContext"
 import ChapterNotes from "./learn/ChapterNotes"
 import CoinEncyclopedia from "./learn/CoinEncyclopedia"
 
@@ -7,15 +8,14 @@ type Tab = "notes" | "coins"
 
 export default function LearnSection() {
   const [tab, setTab] = useState<Tab>("notes")
+  const { t } = useLanguage()
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-10">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-extrabold tracking-tight">เรียนรู้</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            สรุปบทเรียนสินทรัพย์ดิจิทัล 9 บท และคลังข้อมูลเหรียญที่ใช้ในระบบ — เพื่อการศึกษา ไม่ใช่คำแนะนำการลงทุน
-          </p>
+          <h1 className="text-3xl font-extrabold tracking-tight">{t("learnPage.title")}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t("learnPage.subtitle")}</p>
         </div>
       </div>
 
@@ -27,7 +27,7 @@ export default function LearnSection() {
             tab === "notes" ? "bg-emerald-500 text-black" : "bg-muted text-muted-foreground hover:bg-accent hover:text-foreground"
           }`}
         >
-          <BookOpen className="size-4" /> สรุปบทเรียน
+          <BookOpen className="size-4" /> {t("learnPage.notesTab")}
         </button>
         <button
           type="button"
@@ -36,7 +36,7 @@ export default function LearnSection() {
             tab === "coins" ? "bg-emerald-500 text-black" : "bg-muted text-muted-foreground hover:bg-accent hover:text-foreground"
           }`}
         >
-          <Coins className="size-4" /> คลังข้อมูลเหรียญ
+          <Coins className="size-4" /> {t("learnPage.coinsTab")}
         </button>
       </div>
 
