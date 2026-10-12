@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react"
 import { Search, CheckCircle2, AlertTriangle, XCircle } from "lucide-react"
 import { COIN_PROFILES, COIN_ACCENT, SUPPORTED_ASSETS } from "./coin-data"
+import { ENGLISH_COIN_PROFILES } from "./coin-data.en"
+import { useLanguage } from "../../../i18n/LanguageContext"
 
 function hexToRgb(hex: string) {
   const h = hex.replace("#", "")
@@ -37,17 +39,18 @@ function CoinLogo({ symbol, accent, size = 44 }: { symbol: string; accent: strin
 }
 
 const TABS = [
-  { key: "overview", label: "ภาพรวม" },
-  { key: "tech", label: "เทคโนโลยี" },
-  { key: "tokenomics", label: "Tokenomics" },
-  { key: "timeline", label: "ไทม์ไลน์" },
-  { key: "ecosystem", label: "ระบบนิเวศ" },
-  { key: "metrics", label: "ตัวชี้วัด" },
-  { key: "myths", label: "ข้อควรรู้" },
+  { key: "overview", label: "overview" },
+  { key: "tech", label: "tech" },
+  { key: "tokenomics", label: "tokenomics" },
+  { key: "timeline", label: "timeline" },
+  { key: "ecosystem", label: "ecosystem" },
+  { key: "metrics", label: "metrics" },
+  { key: "myths", label: "myths" },
 ] as const
 type TabKey = (typeof TABS)[number]["key"]
 
 export default function CoinEncyclopedia() {
+  const { t: tr, lang } = useLanguage()
   const [search, setSearch] = useState("")
   const [selected, setSelected] = useState(SUPPORTED_ASSETS[0])
   const [tab, setTab] = useState<TabKey>("overview")
@@ -62,7 +65,10 @@ export default function CoinEncyclopedia() {
     })
   }, [search])
 
-  const profile = COIN_PROFILES[selected]
+  const baseProfile = COIN_PROFILES[selected]
+  const profile = baseProfile && lang === "en"
+    ? { ...baseProfile, ...(ENGLISH_COIN_PROFILES[selected] ?? {}) }
+    : baseProfile
   const accent = COIN_ACCENT[selected] ?? "#10b981"
   const rgb = hexToRgb(accent)
 
@@ -77,7 +83,7 @@ export default function CoinEncyclopedia() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="ค้นหาเหรียญ"
+            placeholder={tr("learnPage.searchCoin")}
             className="w-full rounded-md border bg-background py-1.5 pl-8 pr-2 text-xs outline-none focus:ring-1 focus:ring-emerald-500"
           />
         </div>
@@ -141,7 +147,7 @@ export default function CoinEncyclopedia() {
                 tab === t.key ? "bg-emerald-500 text-black" : "bg-muted text-muted-foreground hover:bg-accent hover:text-foreground"
               }`}
             >
-              {t.label}
+              {tr(`learnPage.tabs.${t.key}`)}
             </button>
           ))}
         </div>
@@ -153,10 +159,10 @@ export default function CoinEncyclopedia() {
             </div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {[
-                ["เปิดตัว", profile.launched],
-                ["ผู้สร้าง", profile.creator],
-                ["กลไกฉันทามติ", profile.consensus],
-                ["Supply", profile.supply],
+                [tr("learnPage.launched"), profile.launched],
+                [tr("learnPage.creator"), profile.creator],
+                [tr("learnPage.consensus"), profile.consensus],
+                [tr("learnPage.supply"), profile.supply],
               ].map(([k, v]) => (
                 <div key={k} className="rounded-lg border bg-card p-3">
                   <div className="text-[11px] text-muted-foreground">{k}</div>
@@ -166,7 +172,7 @@ export default function CoinEncyclopedia() {
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="rounded-lg border border-t-2 border-t-emerald-500 bg-card p-3">
-                <h5 className="mb-2 flex items-center gap-1.5 text-sm font-semibold"><CheckCircle2 className="size-4 text-emerald-500" /> จุดเด่น</h5>
+                <h5 className="mb-2 flex items-center gap-1.5 text-sm font-semibold"><CheckCircle2 className="size-4 text-emerald-500" /> {tr("learnPage.strengths")}</h5>
                 <ul className="space-y-1.5">
                   {profile.strengths.map((s, i) => (
                     <li key={i} className="flex gap-2 text-sm leading-6 text-foreground/90">
@@ -176,7 +182,7 @@ export default function CoinEncyclopedia() {
                 </ul>
               </div>
               <div className="rounded-lg border border-t-2 border-t-red-500 bg-card p-3">
-                <h5 className="mb-2 flex items-center gap-1.5 text-sm font-semibold"><AlertTriangle className="size-4 text-red-500" /> ความเสี่ยงที่ควรรู้</h5>
+                <h5 className="mb-2 flex items-center gap-1.5 text-sm font-semibold"><AlertTriangle className="size-4 text-red-500" /> {tr("learnPage.risks")}</h5>
                 <ul className="space-y-1.5">
                   {profile.risks.map((s, i) => (
                     <li key={i} className="flex gap-2 text-sm leading-6 text-foreground/90">
@@ -187,7 +193,7 @@ export default function CoinEncyclopedia() {
               </div>
             </div>
             <div className="inline-block rounded-full border border-dashed px-3 py-1.5 text-xs text-muted-foreground">
-              📖 อ่านเพิ่มในสรุปบทเรียน: {profile.chapters}
+              📖 {tr("learnPage.readMore", { chapters: profile.chapters })}
             </div>
           </div>
         )}
@@ -211,7 +217,7 @@ export default function CoinEncyclopedia() {
         {tab === "tokenomics" && (
           <div className="space-y-3">
             <div className="rounded-xl border p-4" style={{ backgroundColor: `rgba(${rgb},0.1)`, borderColor: `rgba(${rgb},0.3)` }}>
-              <div className="text-xs text-muted-foreground">📦 Supply</div>
+              <div className="text-xs text-muted-foreground">📦 {tr("learnPage.supply")}</div>
               <div className="mt-1 text-base font-bold">{profile.supply}</div>
             </div>
             <ul className="space-y-1.5">
@@ -265,7 +271,7 @@ export default function CoinEncyclopedia() {
                 )
               })}
             </div>
-            <p className="text-xs text-muted-foreground">ตัวชี้วัดเหล่านี้ช่วยประกอบการเรียนรู้ ไม่ใช่สัญญาณซื้อ/ขาย</p>
+            <p className="text-xs text-muted-foreground">{tr("learnPage.metricsNote")}</p>
           </div>
         )}
 
@@ -281,7 +287,7 @@ export default function CoinEncyclopedia() {
                 </div>
               </div>
             ))}
-            <p className="text-xs text-muted-foreground">ข้อมูลเพื่อการศึกษา ไม่ใช่คำแนะนำการลงทุน การลงทุนในสินทรัพย์ดิจิทัลมีความเสี่ยงสูง</p>
+            <p className="text-xs text-muted-foreground">{tr("learnPage.mythsNote")}</p>
           </div>
         )}
       </div>
