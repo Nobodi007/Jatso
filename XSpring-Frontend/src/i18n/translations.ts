@@ -1,287 +1,923 @@
-import { useEffect } from "react"
-import { useLanguage } from "../../i18n/LanguageContext"
-import type { LucideIcon } from "lucide-react"
-import {
-  AlertTriangle, ArrowLeft, ArrowLeftRight, BookOpen, Bot, Briefcase, FlaskConical, Layers,
-  LayoutDashboard, Lightbulb, LineChart, ListOrdered, Newspaper, RefreshCw, Settings, ShieldAlert, Wallet,
-} from "lucide-react"
-
-type Mod = { id: string; icon: LucideIcon; name: string; th: string; text: string; points?: string[]; tip?: string }
-type Group = { id: string; title: string; mods: Mod[] }
-
-const GROUPS: Group[] = [
-  {
-    id: "g-view", title: "guideText.k001",
-    mods: [
-      { id: "dashboard", icon: LayoutDashboard, name: "Dashboard", th: "guideText.k002",
-        text: "guideText.k006",
-        points: ["guideText.k007", "guideText.k008", "guideText.k009", "guideText.k010", "guideText.k011"],
-        tip: "guideText.k012" },
-      { id: "markets", icon: LineChart, name: "Markets", th: "guideText.k003",
-        text: "guideText.k013",
-        points: ["guideText.k014", "guideText.k015", "guideText.k016"],
-        tip: "guideText.k017" },
-      { id: "orderbook", icon: BookOpen, name: "Order Book", th: "guideText.k004",
-        text: "guideText.k018",
-        points: ["Best Bid", "Best Ask", "Mid Price", "Spread", "Spread %", "guideText.k019"],
-        tip: "guideText.k020" },
-      { id: "news", icon: Newspaper, name: "News", th: "guideText.k005",
-        text: "guideText.k021",
-        tip: "guideText.k022" },
+const th = {
+  nav: {
+    market: "ตลาด",
+    trade: "การซื้อขาย",
+    learn: "เรียนรู้",
+    news: "ข่าว",
+    backtest: "ลองลงทุนย้อนหลัง",
+    login: "เข้าสู่ระบบ",
+    register: "ลงทะเบียน",
+    menu: "เมนู",
+    language: "ภาษา",
+    themeLight: "เปลี่ยนเป็นโหมดสว่าง",
+    themeDark: "เปลี่ยนเป็นโหมดมืด",
+  },
+  hero: {
+    title: "เริ่มต้นลงทุนคริปโตอย่างมีระบบ ไปกับ Nobodi",
+    desc: "ดูราคาตลาดแบบสด ทดลองลงทุนย้อนหลัง และฝึกซื้อขายในบัญชีจำลองก่อนตัดสินใจจริง ทุกอย่างอยู่ในที่เดียว",
+    cta: "สมัครตอนนี้",
+  },
+  // ตลาดบนหน้าแรก
+  market: {
+    title: "ตลาด",
+    subtitle: "ราคาสดเป็นสกุลเงินบาท อัปเดตอัตโนมัติ",
+    colName: "ชื่อ",
+    colPrice: "ราคาล่าสุด",
+    colChange: "เปลี่ยนแปลง 24 ชม.",
+    colTrend: "แนวโน้ม 7 วัน",
+    loading: "กำลังโหลด…",
+    loadFailed: "โหลดราคาไม่สำเร็จ",
+    viewMore: "ดูเพิ่มเติม ›",
+  },
+  why: {
+    title: "ทำไมต้อง Nobodi?",
+    subtitle: "เริ่มต้นเรียนรู้ตลาดคริปโตได้อย่างเป็นขั้นเป็นตอน โดยไม่ต้องใช้เงินจริง",
+    c1Title: "ฝึกโดยไม่เสี่ยงเงินจริง",
+    c1Desc: "ทุกการซื้อขายเกิดในบัญชีจำลอง คุณลองผิดลองถูกได้เต็มที่ โดยที่เงินในกระเป๋ายังอยู่ครบ",
+    c2Title: "ข้อมูลราคาเป็นบาท",
+    c2Desc: "ดูราคาสดจากกระดานไทย พร้อมเทียบต้นทุนซื้อและรายรับขายหลังหักค่าธรรมเนียม ไม่ต้องคำนวณเอง",
+    c3Title: "ทดสอบก่อนตัดสินใจ",
+    c3Desc: "ลองจำลองการลงทุนย้อนหลังหลายรูปแบบ แล้วดูว่าผลต่างจากการฝากออมทรัพย์แค่ไหน",
+  },
+  steps: {
+    title: "เริ่มต้นง่าย ๆ ใน 3 ขั้นตอน",
+    s1Title: "สมัครด้วยบัญชี Google",
+    s1Desc: "ใช้เวลาไม่กี่วินาที ไม่ต้องตั้งรหัสผ่านใหม่",
+    s2Title: "ฝึกซื้อขายในบัญชีจำลอง",
+    s2Desc: "เริ่มจากเงินจำลอง เรียนรู้จังหวะและต้นทุนจริงของตลาด",
+    s3Title: "ทดสอบกลยุทธ์ย้อนหลัง",
+    s3Desc: "เทียบผลลัพธ์ก่อนนำไปใช้กับการตัดสินใจของคุณเอง",
+  },
+  tools: {
+    title: "เครื่องมือที่ช่วยให้ตัดสินใจได้ดีขึ้น",
+    open: "เปิดดู ›",
+    t1Title: "ข่าวคริปโต",
+    t1Desc: "ข่าวล่าสุดที่เกี่ยวกับเหรียญในระบบ",
+    t2Title: "เทียบราคากระดานไทย",
+    t2Desc: "ดูว่ากระดานไหนซื้อถูกและขายได้มากกว่า",
+    t3Title: "ลองลงทุนย้อนหลัง",
+    t3Desc: "ซื้อทีเดียว ทยอยซื้อ หรือตามเทรนด์",
+  },
+  cta: {
+    title: "พร้อมลองแล้วหรือยัง?",
+    subtitle: "สมัครฟรี ใช้บัญชี Google ของคุณได้เลย",
+    register: "สมัครตอนนี้",
+    login: "เข้าสู่ระบบ",
+  },
+  // ช่องค้นหาเหรียญ
+  search: {
+    aria: "ค้นหา",
+    placeholder: "ค้นหาเหรียญ เช่น BTC, Bitcoin",
+    loadFailed: "โหลดรายชื่อเหรียญไม่สำเร็จ",
+    loading: "กำลังโหลด…",
+    notFound: "ไม่พบเหรียญที่ค้นหา",
+    all: "เหรียญทั้งหมด",
+  },
+  // หน้าตลาดเต็ม (MarketSection)
+  mkt: {
+    title: "ตลาดคริปโต",
+    subtitle: "ราคาสดจาก Bitkub เป็นสกุลเงินบาท",
+    unavailable: "ข้อมูลไม่พร้อมใช้งาน",
+    loadFailed: "โหลดข้อมูลตลาดไม่สำเร็จ",
+    noData: "ไม่พบข้อมูลตลาด",
+    topGain: "ขึ้นแรงสุด 24 ชม.",
+    topLoss: "ลงแรงสุด 24 ชม.",
+    volume24: "มูลค่าซื้อขาย 24 ชม.",
+    coinsCount: "{n} เหรียญ",
+    searchPh: "ค้นหาเหรียญ",
+    tabAll: "ทั้งหมด",
+    tabUp: "ขึ้น",
+    tabDown: "ลง",
+    tabVolume: "ปริมาณสูง",
+    tabFav: "⭐ โปรด",
+    colCoin: "เหรียญ",
+    colPrice: "ราคา",
+    col24h: "24 ชม.",
+    col7d: "7 วัน",
+    colVolume: "ปริมาณ",
+    loading: "กำลังโหลดตลาด...",
+    emptyFav: "ยังไม่มีเหรียญโปรด กดดาวที่เหรียญเพื่อเพิ่ม",
+    notFound: "ไม่พบเหรียญ",
+    favRemove: "เอาออกจากรายการโปรด",
+    favAdd: "เพิ่มในรายการโปรด",
+    buy: "ซื้อ",
+    bannerTitle: "อยากลองซื้อขายก่อนใช้เงินจริง?",
+    bannerSub: "สมัครบัญชีจำลองฟรี ฝึกซื้อขายด้วยราคาตลาดจริง",
+    bannerBtn: "สมัครบัญชีจำลองฟรี",
+  },
+  // Footer
+  footer: {
+    tagline: "แพลตฟอร์มฝึกลงทุนคริปโตด้วยบัญชีจำลอง",
+    aboutTitle: "เกี่ยวกับเรา",
+    history: "ประวัติความเป็นมา",
+    system: "เกี่ยวกับระบบ",
+    guide: "คู่มือการใช้งาน",
+    privacy: "ความเป็นส่วนตัวและข้อมูล",
+    disclosure: "เปิดเผยข้อมูล/แจ้งความเสี่ยง",
+    news: "ข่าวสาร",
+    contact: "ติดต่อ คุณNobodi สุดเท่",
+    servicesTitle: "บริการ",
+    tradingCenter: "ศูนย์ซื้อขาย",
+    buyBtc: "ซื้อ Bitcoin",
+    buyEth: "ซื้อ ETH",
+    buyUsdt: "ซื้อ USDT",
+    buyDoge: "ซื้อ DOGE",
+    noticeTitle: "ข้อควรรู้",
+    notice: "การลงทุนในสินทรัพย์ดิจิทัลมีความเสี่ยงสูง ผลย้อนหลังไม่ได้รับประกันผลตอบแทนในอนาคต และบัญชีของเราเป็นบัญชีจำลองเพื่อการเรียนรู้เท่านั้น",
+  },
+    news: {
+    title: "ข่าวคริปโต",
+    loading: "กำลังโหลด…",
+    loadFailed: "โหลดข่าวไม่สำเร็จ กรุณาลองใหม่อีกครั้ง",
+    empty: "ยังไม่มีข่าวในขณะนี้",
+  },
+  exch: {
+    title: "{asset} เทียบราคา — กระดานไทย",
+    subtitle: "Spot ราคา THB · ต้นทุน/รายรับคิดค่าธรรมเนียม Taker แล้ว",
+    loadFailed: "โหลดตารางกระดานไม่สำเร็จ",
+    loading: "กำลังโหลด…",
+    colExchange: "Exchange",
+    colSymbol: "Symbol",
+    colBid: "Bid (รับซื้อ)",
+    colAsk: "Ask (เสนอขาย)",
+    colSpread: "Spread",
+    colFee: "ค่าธรรมเนียม",
+    colNetBuy: "ต้นทุนซื้อสุทธิ",
+    colNetSell: "รายรับขายสุทธิ",
+    noData: "ข้อมูลไม่พร้อม",
+    legend: "★ = กระดานที่ได้ราคาดีที่สุด (ซื้อถูกสุด / ขายได้มากสุด)",
+  },
+  privacy: {
+    back: "กลับหน้าแรก",
+    badge: "ความเป็นส่วนตัว",
+    title: "ความเป็นส่วนตัวและข้อมูล",
+    intro: "อธิบายว่าเราใช้ข้อมูลอะไร เก็บไว้ที่ไหน ส่งต่อให้ใครบ้าง และคุณควบคุมข้อมูลของตัวเองได้อย่างไร",
+    summary: [
+      { title: "บัญชีจำลอง", text: "ระบบไม่ได้ใช้เงินจริง ข้อมูลพอร์ตทั้งหมดเป็นการจำลองเพื่อการเรียนรู้" },
+      { title: "ใช้ข้อมูลเท่าที่จำเป็น", text: "ใช้ข้อมูลบัญชี Google พื้นฐานเพื่อยืนยันตัวตนและแสดงชื่อ" },
+      { title: "ไม่ขอข้อมูลลับ", text: "ระบบไม่เคยขอรหัสผ่าน หรือกุญแจกระเป๋าเงินของคุณ" },
+    ],
+    nav: ["ข้อมูลที่ใช้", "เก็บที่ไหน", "บริการภายนอก", "ข้อมูลที่ไม่ควรส่ง", "ควบคุมและลบข้อมูล"],
+    dataTitle: "เราใช้ข้อมูลอะไร",
+    data: [
+      { title: "ข้อมูลบัญชี", text: "อีเมล ชื่อ รูปโปรไฟล์ และสิทธิ์การใช้งานของบัญชี ได้จากการเข้าสู่ระบบด้วย Google ใช้เพื่อยืนยันตัวตนและแสดงในเมนูผู้ใช้" },
+      { title: "พอร์ตและคำสั่งซื้อขายจำลอง", text: "เงินสดจำลอง เหรียญที่ถือ ต้นทุน กำไรขาดทุน ค่าธรรมเนียม ประวัติคำสั่ง และแผน Auto DCA ที่คุณตั้งไว้ เก็บบนเซิร์ฟเวอร์ของระบบเพื่อให้เปิดดูได้ทุกครั้งที่เข้าสู่ระบบ" },
+      { title: "ข้อความที่คุยกับผู้ช่วย AI", text: "ข้อความที่คุณพิมพ์และบทสนทนาก่อนหน้าบางส่วนจะถูกส่งไปประมวลผลเพื่อให้ผู้ช่วยตอบได้ต่อเนื่อง" },
+      { title: "การตั้งค่าในเบราว์เซอร์", text: "ธีมมืด/สว่าง ภาษา และรายการเหรียญโปรด เก็บไว้ในเบราว์เซอร์ของคุณเอง เพื่อให้เปิดครั้งหน้าเป็นแบบเดิม" },
+    ],
+    whereTitle: "ข้อมูลถูกเก็บไว้ที่ไหน",
+    where: [
+      { place: "เบราว์เซอร์ของคุณ", what: "ธีม ภาษา รายการโปรด และข้อมูลที่แสดงบนหน้าจอระหว่างใช้งาน", persist: "ค้างอยู่จนกว่าคุณจะล้างข้อมูลเว็บไซต์" },
+      { place: "เซิร์ฟเวอร์ของระบบ", what: "พอร์ตจำลอง ประวัติคำสั่ง แผน Auto DCA และข้อมูลบัญชีที่จำเป็น", persist: "เก็บเพื่อให้ใช้งานต่อเนื่องข้ามอุปกรณ์" },
+    ],
+    whereNote: "ข้อมูลที่แสดงอยู่บนหน้าจอชั่วคราว ไม่ได้หมายความว่าถูกบันทึกถาวร",
+    thirdTitle: "บริการภายนอกที่เกี่ยวข้อง",
+    third: [
+      { title: "ผู้ให้บริการข้อมูลราคา", text: "ราคาและข้อมูลตลาดมาจากแหล่งข้อมูลตลาดภายนอก (เช่น Bitkub) ซึ่งอาจบันทึกข้อมูลการเชื่อมต่อทั่วไปตามนโยบายของเขา" },
+      { title: "แหล่งข่าว", text: "ข่าวถูกดึงจากสำนักข่าวคริปโตภายนอกผ่านบริการแปลงข้อมูลข่าว" },
+      { title: "Google", text: "ใช้สำหรับเข้าสู่ระบบ ระบบได้รับเฉพาะข้อมูลโปรไฟล์พื้นฐานที่ Google ส่งให้ ไม่ได้รับรหัสผ่านของคุณ" },
+      { title: "ผู้ให้บริการ AI", text: "ข้อความที่ส่งให้ผู้ช่วย AI ถูกประมวลผลโดยผู้ให้บริการด้านโมเดลภาษาที่ระบบใช้" },
+    ],
+    thirdNote: "บริการแต่ละรายมีนโยบายความเป็นส่วนตัวและระยะเวลาเก็บข้อมูลของตัวเอง",
+    dontTitle: "ข้อมูลที่ไม่ควรใส่ในระบบ",
+    dontIntro: "โดยเฉพาะในข้อความที่พิมพ์คุยกับผู้ช่วย AI ข้อความเหล่านี้ถูกส่งไปประมวลผล",
+    dont: ["รหัสผ่าน", "Private Key หรือ Seed Phrase", "API Secret / Token", "ข้อมูลส่วนตัวที่อ่อนไหว เช่น เลขบัตรประชาชน"],
+    controlTitle: "การควบคุมและลบข้อมูล",
+    control: [
+      "ล้างธีมและรายการโปรดได้เองโดยล้างข้อมูลเว็บไซต์ในเบราว์เซอร์ การล้างนี้ไม่ได้ลบข้อมูลที่เก็บบนเซิร์ฟเวอร์",
+      "การออกจากระบบเป็นการปิด session บนอุปกรณ์นี้ ไม่ได้ลบพอร์ตหรือประวัติคำสั่งของคุณ",
+      "หากต้องการให้ลบพอร์ต ประวัติคำสั่ง หรือข้อมูลบัญชีบนเซิร์ฟเวอร์ ให้ติดต่อผู้ดูแลระบบ [ใส่ช่องทางติดต่อ]",
+      "ยกเลิกแผน Auto DCA ได้เองทุกเมื่อในหน้า Trade",
+    ],
+    disclaimer: "หน้านี้อธิบายการทำงานของระบบเพื่อให้เข้าใจง่าย ไม่ใช่เอกสารทางกฎหมาย ระบบเป็นบัญชีจำลองเพื่อการเรียนรู้ และไม่ใช่คำแนะนำการลงทุน",
+  },
+  about: {
+    back: "กลับ",
+    eyebrow: "ประวัติความเป็นมา",
+    heroTitle: "จุดเริ่มต้นของ Nobodi",
+    heroIntro: "**Nobodi** เริ่มต้นจากคนเพียงคนเดียว กับคำถามง่าย ๆ ว่า",
+    q1: "“ถ้าภาพในอุดมคติที่อยู่ในหัว สามารถสร้างขึ้นมาเป็นความจริงได้ มันจะไปได้ไกลแค่ไหน?”",
+    founderAlt: "ธีรภัทร นิยม ผู้ก่อตั้ง Nobodi",
+    founderName: "ธีรภัทร นิยม",
+    founderRole: "ผู้ก่อตั้ง Nobodi · อายุ 22 ปี",
+    founderEdu: "บริหารธุรกิจ สาขาการเงินและการลงทุน มหาวิทยาลัยหอการค้าไทย",
+    p1: "ผมชื่อ **ธีรภัทร นิยม** อายุ 22 ปี เป็นเด็กจบใหม่จากคณะบริหารธุรกิจ สาขาการเงินและการลงทุน มหาวิทยาลัยหอการค้าไทย",
+    p2: "ช่วงเวลาที่เรียนมหาวิทยาลัย ผมใช้เวลาส่วนใหญ่ไปกับการเรียนรู้เรื่องการลงทุน และหลังจากเรียนเสร็จหรือในวันที่ไม่มีเรียน ผมมักจะเข้าไปนั่งอยู่ในห้องคอมพิวเตอร์ หรือห้องที่ใช้สำหรับเทรดหุ้น",
+    p3: "ส่วนใหญ่ผมจะนั่งอยู่คนเดียว",
+    p4: "รวมถึงช่วงการแข่งขันเทรดหุ้น ตั้งแต่ปี 1 จนถึงปี 3 ผมก็ยังคงไปนั่งเทรดคนเดียว และจนถึงทุกวันนี้ ผมก็ยังใช้ชีวิตและทำหลายสิ่งหลายอย่างด้วยตัวเองเป็นส่วนใหญ่",
+    nameLabel: "ที่มาของชื่อ",
+    nameText: "สิ่งเหล่านี้จึงกลายเป็นส่วนหนึ่งของตัวตน และเป็นที่มาของชื่อ **Nobodi** ซึ่งมาจากคำว่า **Nobody** ที่แปลว่า “ไม่มีใคร”",
+    p5: "แต่ Nobodi ไม่ได้เริ่มต้นจากการวางแผนสร้างเว็บไซต์หรือระบบขนาดใหญ่",
+    p6: "มันเริ่มต้นจากความสงสัยเล็ก ๆ ในวันหนึ่ง",
+    p7: "วันหนึ่งผมกำลังเลื่อน TikTok และบังเอิญไปเจอคลิปที่อธิบายเกี่ยวกับ **Monte Carlo Simulation**",
+    p8: "ด้วยความสงสัย ผมจึงลองตั้งคำถามกับตัวเองว่า",
+    q2: "“ถ้าใช้ AI เราจะสามารถสร้างมันขึ้นมาได้ไหม?”",
+    p9: "ตอนนั้นผมไม่ได้มีพื้นฐานด้านการเขียนโปรแกรม และยังไม่สามารถรันโค้ดด้วยตัวเองได้ด้วยซ้ำ",
+    p10: "ผมจึงเริ่มต้นจากการลองให้ AI ช่วยสร้างสิ่งที่ผมคิดออกมา และเรียนรู้จากการลองผิดลองถูกไปเรื่อย ๆ",
+    loop: ["ทำผิดก็แก้", "ไม่เข้าใจก็ลองใหม่", "ทำไม่ได้ก็หาวิธีใหม่"],
+    p11: "จนในที่สุด ผลลัพธ์ที่ออกมาก็เริ่มกลายเป็นสิ่งที่ผมต้องการ",
+    p12: "และนั่นทำให้ผมเริ่มรู้สึกสนุกกับการสร้าง",
+    p13: "จากการทดลองเพียงครั้งเดียว จึงกลายเป็นการทดลองครั้งต่อไป และค่อย ๆ ต่อยอดออกไปเรื่อย ๆ",
+    p14: "ต่อมา ผมมีโอกาสสัมภาษณ์เกี่ยวกับบริษัทที่ทำธุรกิจเกี่ยวกับคริปโต จึงนำสิ่งที่กำลังทดลองสร้างอยู่มาพัฒนาเป็นเว็บไซต์เพื่อนำไปใช้ในการนำเสนอ",
+    p15: "เมื่อได้รับผลตอบรับที่ดี สิ่งที่เดิมทีเป็นเพียงการทดลองก็เริ่มกลายเป็นโปรเจกต์ที่ผมอยากพัฒนาต่อ",
+    p16: "ผมเริ่มอยากรู้ว่า",
+    q3: "“ภาพในอุดมคติที่อยู่ในหัวของเรา ถ้าเราพยายามสร้างมันขึ้นมาจริง ๆ จะสามารถไปได้ไกลแค่ไหน?”",
+    dateDay: "18",
+    dateMonth: "กันยายน",
+    dateLabel: "วันที่ผมเริ่มโปรเจกต์นี้",
+    p17: "จุดเริ่มต้นไม่ได้ยิ่งใหญ่หรือสวยหรูอะไร",
+    p18: "ตอนแรกผมเพียงต้องการทดลองทำสิ่งที่เกี่ยวข้องกับงานที่กำลังจะไปสัมภาษณ์ เพื่อทำความเข้าใจก่อนว่า กระบวนการทำงานเบื้องหลังของระบบลักษณะนี้เป็นอย่างไร",
+    p19: "มันเป็นเพียงงานเตรียมตัว",
+    p20: "แต่เมื่อเริ่มทำ ผมก็เริ่มมีไอเดียใหม่ ๆ เพิ่มขึ้นเรื่อย ๆ",
+    chain: [
+      "เมื่อมีไอเดีย ก็อยากลองทำ",
+      "เมื่อทำสำเร็จ ก็อยากลองต่อ",
+      "และเมื่อเห็นว่าสิ่งหนึ่งสามารถพัฒนาได้ ก็เริ่มอยากรู้ว่ามันจะไปได้ไกลกว่านั้นอีกแค่ไหน",
+    ],
+    p21: "จากโปรเจกต์เล็ก ๆ ที่เริ่มต้นเพียงเพื่อเรียนรู้ จึงค่อย ๆ เติบโตขึ้นจากการลองผิดลองถูก ความอยากรู้ และความสนุกในการสร้าง จนกลายมาเป็น **Nobodi ในวันนี้**",
+    visionLabel: "VISION",
+    visionTitle: "ทำให้ภาพในอุดมคติ กับความเป็นจริงมาบรรจบกัน",
+    visionP1: "ทุกสิ่งที่เกิดขึ้นบน Nobodi เริ่มต้นจากภาพบางอย่างที่อยู่ในหัว",
+    visionP2: "Nobodi จึงเกิดขึ้นจากความต้องการที่จะนำสิ่งเหล่านั้นออกจากความคิด และค่อย ๆ เปลี่ยนให้กลายเป็นสิ่งที่สามารถสร้าง ทดลอง และเกิดขึ้นจริงได้",
+    missionLabel: "MISSION",
+    missionTitle: "“ถ้าคนเพียงคนเดียวไม่หยุดเรียนรู้และไม่หยุดสร้าง จะสามารถพาสิ่งที่อยู่ในหัวไปได้ไกลแค่ไหน”",
+    missionP1: "นี่คือคำถามที่อยู่เบื้องหลังการพัฒนา Nobodi",
+    missionP2: "Nobodi เริ่มต้นจากคนเพียงคนเดียว เรียนรู้จากข้อผิดพลาด ลงมือทำ และพัฒนาต่อไปทีละขั้น",
+    missionP3a: "ไม่ใช่เพื่อพิสูจน์ว่าคนเพียงคนเดียวสามารถสร้างได้มากแค่ไหน แต่เพื่อค้นหาว่า",
+    missionP3b: "ขีดจำกัดของสิ่งที่คนหนึ่งคนสามารถเรียนรู้และสร้างขึ้นมาได้ อยู่ไกลแค่ไหน",
+    ctaTitle: "อยากลองใช้ Nobodi?",
+    ctaSub: "สมัครฟรีด้วยบัญชี Google แล้วลองในบัญชีจำลอง",
+    ctaBtn: "สมัครตอนนี้",
+  },
+    sys: {
+    back: "กลับหน้าแรก",
+    badge: "เกี่ยวกับระบบ",
+    intro: "ระบบหน้าเว็บสำหรับดูตลาด ฝึกซื้อขายในบัญชีจำลอง จัดการพอร์ต วิเคราะห์ความเสี่ยง และใช้เครื่องมือวิจัย ทั้งหมดในที่เดียว",
+    stats: [
+      { value: "12", label: "ระบบหลักในแอป" },
+      { value: "10 วิ", label: "รีเฟรชพอร์ตอัตโนมัติ" },
+      { value: "100%", label: "บัญชีจำลอง ไม่ใช้เงินจริง" },
+    ],
+    overviewEyebrow: "ภาพรวม",
+    overviewTitle: "ระบบนี้ทำงานอย่างไร",
+    overviewDesc: "หน้าเว็บมีหน้าที่แสดงผลและรับคำสั่งจากผู้ใช้ ส่วนการคำนวณพอร์ตและการบันทึกคำสั่งซื้อขายทำที่เซิร์ฟเวอร์ แล้วส่งผลกลับมาแสดงบนหน้าจอ",
+    flow: [
+      { title: "หน้าจอ React", text: "ผู้ใช้ดูข้อมูลหรือส่งคำสั่ง" },
+      { title: "สถานะในหน้าเว็บ", text: "เก็บข้อมูลที่ใช้แสดงผล" },
+      { title: "Backend API", text: "ประมวลผลและตอบกลับ" },
+      { title: "พอร์ต / คำสั่ง / ราคา", text: "ส่งกลับมาแสดงบนหน้าจอ" },
+    ],
+    modulesEyebrow: "ฟีเจอร์",
+    modulesTitle: "ระบบหลักในแอป",
+    modules: [
+      "ภาพรวมพอร์ต มูลค่าสินทรัพย์ กำไรขาดทุน และคำสั่งล่าสุด",
+      "ราคาตลาดสดเป็นเงินบาท มีแหล่งข้อมูลสำรองเมื่อระบบหลักขัดข้อง",
+      "ส่งคำสั่งซื้อขายในบัญชีจำลอง แล้วอัปเดตพอร์ตให้ทันที",
+      "ราคาเสนอซื้อ/ขาย, Best Bid, Best Ask, Mid Price และ Spread",
+      "สินทรัพย์ที่ถือ ต้นทุน มูลค่าปัจจุบัน และกำไรขาดทุน",
+      "เงินสด มูลค่าสินทรัพย์ ยอดรวมพอร์ต และค่าธรรมเนียม",
+      "ประวัติคำสั่งซื้อขาย เรียงตามเวลาล่าสุด",
+      "สถานะการถือครองของแต่ละสินทรัพย์",
+      "เครื่องมือวิเคราะห์ความเสี่ยงของพอร์ต",
+      "เครื่องมือวิเคราะห์เชิงปริมาณและทดสอบกลยุทธ์",
+      "ข่าวคริปโตล่าสุดจากหลายแหล่ง",
+      "ตั้งค่าการใช้งานของระบบ",
+    ],
+    techEyebrow: "เทคโนโลยี",
+    techTitle: "สร้างด้วยอะไร",
+    stackGroups: ["สร้างหน้าเว็บ", "เชื่อมต่อข้อมูล"],
+    dataEyebrow: "การไหลของข้อมูล",
+    dataTitle: "ข้อมูลเดินทางอย่างไร",
+    refresh: "ทุก 10 วินาที",
+    dataFlow: [
+      { title: "พอร์ตการลงทุน", tag: "GET /api/portfolio", text: "ดึงเงินสด มูลค่าสินทรัพย์ ต้นทุน กำไรขาดทุน และค่าธรรมเนียม แล้วส่งต่อให้ Dashboard, Wallet และ Portfolio ใช้ร่วมกัน จะโหลดใหม่เฉพาะตอนที่เปิดหน้าเว็บอยู่" },
+      { title: "ราคาตลาด", tag: "Backend → สำรอง Bitkub", text: "ดึงราคาจากเซิร์ฟเวอร์ของเราก่อน ถ้าไม่สำเร็จจะดึงจาก Bitkub โดยตรงแทน ราคาจึงยังแสดงได้" },
+      { title: "Order Book", tag: "GET /api/orderbook", text: "ระบุเหรียญและจำนวนระดับราคาที่ต้องการ แล้วแสดงผลเป็นฝั่งเสนอซื้อและเสนอขาย" },
+      { title: "ประวัติคำสั่ง", tag: "GET /api/orders", text: "ดึงคำสั่งซื้อขายล่าสุด 100 รายการ และรีเฟรชอัตโนมัติขณะที่เปิดหน้าเว็บอยู่" },
+      { title: "ผู้ช่วย AI", tag: "POST /api/chat", text: "ส่งคำถามพร้อมประวัติการสนทนาไปที่เซิร์ฟเวอร์ แล้วแสดงคำตอบในหน้าต่างผู้ช่วย" },
+    ],
+    secEyebrow: "ความปลอดภัย",
+    secTitle: "การดูแลความปลอดภัยและข้อผิดพลาด",
+    security: [
+      { title: "เข้าสู่ระบบด้วย Google", text: "ยืนยันตัวตนผ่านบัญชี Google และแนบสิทธิ์การใช้งานไปกับทุกคำขอ" },
+      { title: "จัดการข้อผิดพลาด", text: "ตรวจผลตอบกลับทุกครั้ง และแจ้งผู้ใช้เมื่อโหลดข้อมูลไม่สำเร็จ" },
+      { title: "ไม่มีข้อมูลค้าง", text: "ยกเลิกการอัปเดตเมื่อออกจากหน้า กันไม่ให้ข้อมูลเก่ามาทับข้อมูลใหม่" },
+      { title: "จำธีมที่เลือก", text: "บันทึกโหมดมืดหรือสว่างไว้ในเครื่อง เปิดครั้งหน้าก็ยังเป็นธีมเดิม" },
+      { title: "แยกหน้าเว็บกับเซิร์ฟเวอร์", text: "การคำนวณพอร์ตและคำสั่งซื้อขายทำที่เซิร์ฟเวอร์ ไม่ได้คำนวณในเบราว์เซอร์" },
+      { title: "ผู้ช่วย AI ผ่านเซิร์ฟเวอร์", text: "คำถามถูกส่งผ่านเซิร์ฟเวอร์ของเรา ไม่ได้ต่อกับผู้ให้บริการ AI จากเบราว์เซอร์โดยตรง" },
+    ],
+    scopeTitle: "ขอบเขตการใช้งาน",
+    scope: [
+      "เป็นบัญชีจำลองเพื่อการเรียนรู้ ไม่มีการซื้อขายด้วยเงินจริง",
+      "ข้อมูลบางส่วนบนหน้าเว็บเป็นข้อมูลตัวอย่าง ไม่ใช่ราคาสด",
+      "บางเมนู เช่น Risk Center, Quant Lab และ Settings ยังอยู่ระหว่างพัฒนา ฟังก์ชันอาจยังไม่ครบ",
+      "ข้อมูลและผลลัพธ์ในระบบไม่ใช่คำแนะนำการลงทุน",
     ],
   },
-  {
-    id: "g-trade", title: "guideText.k023",
-    mods: [
-      { id: "trade", icon: ArrowLeftRight, name: "Trade", th: "guideText.k023",
-        text: "guideText.k024",
-        points: ["guideText.k025", "guideText.k026", "guideText.k027"],
-        tip: "guideText.k028" },
-      { id: "orders", icon: ListOrdered, name: "Orders", th: "guideText.k029",
-        text: "guideText.k030",
-        tip: "guideText.k031" },
-      { id: "positions", icon: Layers, name: "Positions", th: "guideText.k032",
-        text: "guideText.k033" },
+
+  guideText: {
+    k001: "ดูข้อมูลตลาด",
+    k002: "ภาพรวม",
+    k003: "ตลาด",
+    k004: "สมุดคำสั่งซื้อขาย",
+    k005: "ข่าว",
+    k006: "หน้าแรกหลังเข้าสู่ระบบ ดูสถานะพอร์ตทั้งหมดได้ในหน้าเดียว",
+    k007: "มูลค่าพอร์ต",
+    k008: "เงินสด",
+    k009: "สินทรัพย์ที่ถือ",
+    k010: "กำไร/ขาดทุน",
+    k011: "รายการซื้อขายล่าสุด",
+    k012: "ข้อมูลรีเฟรชเองทุก 10 วินาที ไม่ต้องกดรีโหลดหน้า",
+    k013: "ดูราคาล่าสุดและการเปลี่ยนแปลงของทุกเหรียญที่ระบบรองรับ ราคาทั้งหมดเป็นเงินบาท",
+    k014: "ราคาล่าสุด",
+    k015: "% เปลี่ยนแปลง 24 ชม.",
+    k016: "ราคาสูงสุด/ต่ำสุด",
+    k017: "ถ้าเซิร์ฟเวอร์ของเราขัดข้อง ระบบจะดึงราคาจาก Bitkub มาแสดงแทนให้อัตโนมัติ",
+    k018: "ดูว่าตอนนี้มีคนตั้งซื้อและตั้งขายไว้ที่ราคาเท่าไหร่ จำนวนเท่าไหร่ เลือกเหรียญที่ต้องการดูได้",
+    k019: "ปริมาณแต่ละระดับราคา",
+    k020: "Spread ยิ่งแคบ ราคาซื้อกับราคาขายยิ่งใกล้กัน ต้นทุนแฝงก็ยิ่งต่ำ ดูความหมายคำศัพท์ได้ท้ายหน้า",
+    k021: "รวมข่าวคริปโตล่าสุดจากหลายสำนักไว้ในที่เดียว",
+    k022: "ข่าวใช้ประกอบการติดตามตลาดเท่านั้น ไม่ใช่สัญญาณให้ซื้อหรือขาย",
+    k023: "ซื้อขาย",
+    k024: "เลือกเหรียญ ใส่รายละเอียดคำสั่ง แล้วกดส่ง พอคำสั่งสำเร็จ ระบบจะอัปเดตพอร์ตให้ทันที",
+    k025: "เลือกเหรียญ",
+    k026: "ใส่จำนวน",
+    k027: "กดซื้อหรือขาย",
+    k028: "เช็กเงินสดใน Wallet ก่อนส่งคำสั่งทุกครั้ง",
+    k029: "ประวัติคำสั่ง",
+    k030: "ดูคำสั่งซื้อขายย้อนหลัง เรียงจากรายการล่าสุดลงไป",
+    k031: "รายการใหม่จะขึ้นเองภายใน 10 วินาที",
+    k032: "สถานะการถือครอง",
+    k033: "ดูว่าตอนนี้ถือเหรียญอะไรอยู่บ้าง และแต่ละเหรียญมีสถานะอย่างไร",
+    k034: "พอร์ตและเงิน",
+    k035: "พอร์ตการลงทุน",
+    k036: "ดูรายละเอียดสินทรัพย์ทุกตัวในพอร์ต ว่าซื้อมาเท่าไหร่ ตอนนี้มีมูลค่าเท่าไหร่ และกำไรหรือขาดทุนอยู่",
+    k037: "จำนวนที่ถือ",
+    k038: "ต้นทุนเฉลี่ย",
+    k039: "มูลค่าตลาด",
+    k040: "กำไร/ขาดทุนที่ยังไม่ขาย",
+    k041: "P&L %",
+    k042: "สัดส่วนในพอร์ต",
+    k043: "กระเป๋าเงิน",
+    k044: "ดูเงินสด มูลค่าสินทรัพย์ ยอดรวมพอร์ต และค่าธรรมเนียมที่จ่ายไปแล้ว",
+    k045: "ดูหน้านี้ก่อนซื้อขาย จะได้รู้ว่ามีเงินสดพอหรือไม่",
+    k046: "เครื่องมือวิเคราะห์",
+    k047: "ศูนย์ความเสี่ยง",
+    k048: "ดูตัวชี้วัดความเสี่ยงที่คำนวณจากพอร์ตของคุณ ช่วยให้เห็นว่าพอร์ตเสี่ยงแค่ไหน",
+    k049: "ห้องทดลองเชิงตัวเลข",
+    k050: "เครื่องมือวิเคราะห์ข้อมูลเชิงสถิติ ไว้ทดลองแนวคิดก่อนนำไปใช้จริง",
+    k051: "ผู้ช่วย AI",
+    k052: "กดไอคอนผู้ช่วยแล้วพิมพ์คำถามได้เลย ผู้ช่วยจำบทสนทนาก่อนหน้าได้บางส่วน จึงถามต่อเนื่องได้",
+    k053: "คำตอบของ AI อาจผิดพลาดได้ ควรตรวจสอบก่อนตัดสินใจ",
+    k054: "ตั้งค่า",
+    k055: "เปลี่ยนธีมมืดหรือสว่าง ระบบจำค่าที่เลือกไว้ในเบราว์เซอร์ เปิดครั้งหน้าก็ยังเป็นธีมเดิม",
+    k056: "ดูภาพรวม",
+    k057: "เริ่มที่ Dashboard ดูสถานะพอร์ต",
+    k058: "เช็กราคา",
+    k059: "เข้า Markets ดูราคาล่าสุด",
+    k060: "ดู Spread",
+    k061: "เปิด Order Book ดูราคาเสนอซื้อ/ขาย",
+    k062: "ส่งคำสั่ง",
+    k063: "ซื้อหรือขายในหน้า Trade",
+    k064: "ตรวจพอร์ต",
+    k065: "ดู Portfolio และ Wallet หลังทำรายการ",
+    k066: "ดูประวัติ",
+    k067: "ย้อนดูรายการใน Orders",
+    k068: "ทุก 10 วินาที",
+    k069: "คำศัพท์ที่ควรรู้",
+    k070: "การอัปเดตข้อมูล",
+    k071: "ขอบเขตการใช้งาน",
+    k072: "ราคาสูงสุดที่มีคนตั้งรอซื้ออยู่ตอนนี้",
+    k073: "ราคาต่ำสุดที่มีคนตั้งรอขายอยู่ตอนนี้",
+    k074: "ราคากึ่งกลางระหว่าง Best Bid กับ Best Ask",
+    k075: "ส่วนต่างระหว่าง Best Ask กับ Best Bid ยิ่งแคบยิ่งดี",
+    k076: "Spread คิดเป็นเปอร์เซ็นต์ของราคา ใช้เทียบข้ามเหรียญได้",
+    k077: "ต้นทุนเฉลี่ยต่อเหรียญ จากการซื้อทุกครั้งรวมกัน",
+    k078: "มูลค่าของเหรียญที่ถือ คิดจากราคาตลาดตอนนี้",
+    k079: "กำไรหรือขาดทุนบนกระดาษ ยังไม่เกิดจริงจนกว่าจะขาย",
+    k080: "รีเฟรชอัตโนมัติ",
+    k081: "ระบบจะหยุดรีเฟรชเมื่อคุณสลับไปแท็บอื่น และกลับมารีเฟรชต่อเมื่อเปิดหน้าเว็บอีกครั้ง เพื่อไม่ให้โหลดข้อมูลโดยไม่จำเป็น",
+    k082: "ทุกการซื้อขายเกิดในบัญชีจำลองเพื่อการเรียนรู้ ไม่ได้ใช้เงินจริง",
+    k083: "ราคาตลาดอาจช้ากว่าราคาจริงเล็กน้อย หรือขาดหายชั่วคราวตามข้อจำกัดของผู้ให้บริการข้อมูล",
+    k084: "ผลลัพธ์ในระบบไม่ใช่คำแนะนำการลงทุน และไม่รับประกันผลตอบแทนในอนาคต",
+    k085: "กลับหน้าแรก",
+    k086: "คู่มือการใช้งาน",
+    k087: "ใช้งานระบบอย่างไร",
+    k088: "รวมวิธีใช้ทุกเมนู ตั้งแต่ดูราคา ส่งคำสั่งซื้อขายในบัญชีจำลอง ไปจนถึงตรวจพอร์ตและวิเคราะห์ความเสี่ยง",
+    k089: "เริ่มต้นใน 6 ขั้น",
+  },
+  bt: {
+    title: "ลองลงทุนย้อนหลัง",
+    subtitle: "ดูว่าถ้าลงทุนแบบนี้ในอดีต ผลจะเป็นยังไง คิดราคาเป็นบาท รวมส่วนต่างราคาและค่าธรรมเนียมแล้ว",
+    asset: "เหรียญ",
+    period: "ช่วงเวลาย้อนหลัง",
+    periods: { "1m": "1 เดือน", "3m": "3 เดือน", "6m": "6 เดือน", "1y": "1 ปี", "3y": "3 ปี", "5y": "5 ปี", custom: "กำหนดเอง" },
+    start: "เริ่มต้น",
+    end: "สิ้นสุด",
+    strategy: "กลยุทธ์ลงทุน",
+    strategies: {
+      lump: { title: "ซื้อทีเดียวแล้วถือ", desc: "ซื้อทั้งก้อนวันแรก แล้วไม่ทำอะไรเลย" },
+      dca: { title: "ทยอยซื้อสม่ำเสมอ (DCA)", desc: "แบ่งเงินเป็นงวดเท่า ๆ กันตามความถี่ที่เลือก" },
+      dip: { title: "ซื้อเพิ่มตอนราคาตก", desc: "ซื้อ 50% วันแรก ที่เหลือแบ่งซื้อเมื่อราคาตกจากจุดสูงสุด 10/20/30/40/50%" },
+      trend: { title: "ตามเทรนด์ (เส้นค่าเฉลี่ย)", desc: "ถือเมื่อราคาอยู่เหนือเส้นค่าเฉลี่ย 50 วัน ขายเป็นเงินสดเมื่อหลุดเส้น" },
+    },
+    freqLabel: "ความถี่ในการซื้อ",
+    freqs: { weekly: "รายสัปดาห์", monthly: "รายเดือน" },
+    amount: "เงินลงทุน (บาท)",
+    run: "เริ่มลองลงทุนย้อนหลัง",
+    running: "กำลังคำนวณ…",
+    emptyTitle: "เลือกเงื่อนไขทางซ้าย แล้วกดเริ่ม",
+    emptyDesc: "ระบบจะจำลองการลงทุนด้วยราคาจริงย้อนหลัง แล้วเทียบกับการถือเฉยๆ และการฝากออมทรัพย์",
+    loadingDesc: "กำลังดึงราคาย้อนหลังและคำนวณ ครั้งแรกอาจใช้เวลาสักครู่",
+    finalValue: "มูลค่าสุดท้าย",
+    fromAmount: "จากเงินลงทุน {amount}",
+    compare: "เทียบผลลัพธ์",
+    maxDd: "ขาดทุนสูงสุดระหว่างทาง",
+    trades: "จำนวนครั้งที่ซื้อ/ขาย",
+    tradesCount: "{n} ครั้ง",
+    vsHold: "เทียบ “ถือเฉยๆ”",
+    vsSav: "เทียบ “ฝากออมทรัพย์”",
+    cashLeft: "มีเงินสดที่ยังไม่ได้ลงทุนคงเหลือ {amount} (นับรวมในมูลค่าสุดท้ายแล้ว)",
+    equityTitle: "มูลค่าพอร์ตรายวัน",
+    lineStrategy: "กลยุทธ์นี้",
+    lineHold: "ถือเฉยๆ",
+    lineSavings: "ฝากออมทรัพย์",
+    barHold: "ถือเฉยๆ (ซื้อทีเดียว)",
+    barSavings: "ฝากออมทรัพย์ (สมมติ 1.5%/ปี)",
+    verdictLoseSav: "กลยุทธ์นี้ได้ผลแย่กว่าฝากออมทรัพย์ในช่วงนี้ ราคาคริปโตผันผวนสูง ผลย้อนหลังอาจเป็นลบได้",
+    verdictLoseHold: "ชนะการฝากออมทรัพย์ แต่ยังแพ้การซื้อทีเดียวแล้วถือในช่วงนี้",
+    verdictWinLump: "ชนะการฝากออมทรัพย์ในช่วงนี้",
+    verdictWinAll: "ชนะทั้งการถือเฉยๆ และการฝากออมทรัพย์ในช่วงนี้",
+    disclaimer: "ผลย้อนหลังไม่ได้รับประกันอนาคต · คิดราคาบาท + ส่วนต่างราคา {spread}% + ค่าธรรมเนียม {fee}% ไม่รวมภาษี",
+    ctaText: "อยากลองซื้อขายในบัญชีจำลองต่อ?",
+    ctaBtn: "สมัครตอนนี้",
+    errMin: "เงินลงทุนขั้นต่ำ 100 บาท",
+    errDate: "วันเริ่มต้นต้องมาก่อนวันสิ้นสุด",
+    errHttp: "คำนวณไม่สำเร็จ (HTTP {status})",
+    errTimeout: "ใช้เวลานานเกินไป กรุณาลองใหม่อีกครั้ง",
+    errGeneric: "คำนวณไม่สำเร็จ",
+  },
+};
+
+type Translations = typeof th;
+
+const en: Translations = {
+  nav: {
+    market: "Market",
+    trade: "Trade",
+    learn: "Learn",
+    news: "News",
+    backtest: "Backtest",
+    login: "Log in",
+    register: "Sign up",
+    menu: "Menu",
+    language: "Language",
+    themeLight: "Switch to light mode",
+    themeDark: "Switch to dark mode",
+  },
+  hero: {
+    title: "Start investing in crypto systematically with Nobodi",
+    desc: "Watch live market prices, backtest strategies, and practice trading with a demo account before going real. All in one place.",
+    cta: "Sign up now",
+  },
+  market: {
+    title: "Market",
+    subtitle: "Live prices in Thai baht, updated automatically",
+    colName: "Name",
+    colPrice: "Last price",
+    colChange: "24h change",
+    colTrend: "7-day trend",
+    loading: "Loading…",
+    loadFailed: "Couldn't load prices",
+    viewMore: "View more ›",
+  },
+  why: {
+    title: "Why Nobodi?",
+    subtitle: "Learn the crypto market step by step, without using real money",
+    c1Title: "Practice without risking real money",
+    c1Desc: "Every trade happens in a demo account. Experiment freely while the money in your wallet stays untouched.",
+    c2Title: "Prices in Thai baht",
+    c2Desc: "See live prices from Thai exchanges, with buy cost and sell proceeds after fees. No manual math needed.",
+    c3Title: "Test before you decide",
+    c3Desc: "Simulate several investing approaches on past data and see how they compare with a savings account.",
+  },
+  steps: {
+    title: "Get started in 3 easy steps",
+    s1Title: "Sign up with Google",
+    s1Desc: "Takes a few seconds, no new password needed",
+    s2Title: "Practice in a demo account",
+    s2Desc: "Start with virtual money and learn real market timing and costs",
+    s3Title: "Backtest your strategy",
+    s3Desc: "Compare results before applying them to your own decisions",
+  },
+  tools: {
+    title: "Tools to help you decide better",
+    open: "Open ›",
+    t1Title: "Crypto news",
+    t1Desc: "Latest news on the coins in the system",
+    t2Title: "Compare Thai exchanges",
+    t2Desc: "See which exchange gives the cheapest buy and best sell",
+    t3Title: "Backtest",
+    t3Desc: "Lump sum, dollar-cost averaging, or trend following",
+  },
+  cta: {
+    title: "Ready to try?",
+    subtitle: "Sign up free with your Google account",
+    register: "Sign up now",
+    login: "Log in",
+  },
+  search: {
+    aria: "Search",
+    placeholder: "Search coins, e.g. BTC, Bitcoin",
+    loadFailed: "Couldn't load the coin list",
+    loading: "Loading…",
+    notFound: "No coins found",
+    all: "All coins",
+  },
+  mkt: {
+    title: "Crypto market",
+    subtitle: "Live prices from Bitkub in Thai baht",
+    unavailable: "Data unavailable",
+    loadFailed: "Couldn't load market data",
+    noData: "No market data found",
+    topGain: "Top gainer, 24h",
+    topLoss: "Top loser, 24h",
+    volume24: "24h trading volume",
+    coinsCount: "{n} coins",
+    searchPh: "Search coins",
+    tabAll: "All",
+    tabUp: "Up",
+    tabDown: "Down",
+    tabVolume: "High volume",
+    tabFav: "⭐ Favorites",
+    colCoin: "Coin",
+    colPrice: "Price",
+    col24h: "24h",
+    col7d: "7d",
+    colVolume: "Volume",
+    loading: "Loading market...",
+    emptyFav: "No favorites yet. Tap the star on a coin to add it",
+    notFound: "No coins found",
+    favRemove: "Remove from favorites",
+    favAdd: "Add to favorites",
+    buy: "Buy",
+    bannerTitle: "Want to try trading before using real money?",
+    bannerSub: "Sign up for a free demo account and practice with real market prices",
+    bannerBtn: "Get a free demo account",
+  },
+  footer: {
+    tagline: "A platform for practicing crypto investing with a demo account",
+    aboutTitle: "About Us",
+    history: "Our story",
+    system: "About the system",
+    guide: "User guide",
+    privacy: "Privacy & data",
+    disclosure: "Disclosures & risk notice",
+    news: "News",
+    contact: "Contact Nobodi, the cool guy",
+    servicesTitle: "Services",
+    tradingCenter: "Trading center",
+    buyBtc: "Buy Bitcoin",
+    buyEth: "Buy ETH",
+    buyUsdt: "Buy USDT",
+    buyDoge: "Buy DOGE",
+    noticeTitle: "Good to know",
+    notice: "Investing in digital assets carries high risk. Past performance does not guarantee future returns, and our accounts are demo accounts for learning purposes only.",
+  },
+      news: {
+    title: "Crypto news",
+    loading: "Loading…",
+    loadFailed: "Couldn't load the news. Please try again.",
+    empty: "No news at the moment",
+  },
+  exch: {
+    title: "{asset} price comparison — Thai exchanges",
+    subtitle: "Spot prices in THB · Costs and proceeds include taker fees",
+    loadFailed: "Couldn't load the exchange table",
+    loading: "Loading…",
+    colExchange: "Exchange",
+    colSymbol: "Symbol",
+    colBid: "Bid (buy offer)",
+    colAsk: "Ask (sell offer)",
+    colSpread: "Spread",
+    colFee: "Fee",
+    colNetBuy: "Net buy cost",
+    colNetSell: "Net sell proceeds",
+    noData: "Data unavailable",
+    legend: "★ = best price (cheapest to buy / highest to sell)",
+  },
+  privacy: {
+    back: "Back to home",
+    badge: "Privacy",
+    title: "Privacy & data",
+    intro: "How we use your data, where it's stored, who it's shared with, and how you can control it.",
+    summary: [
+      { title: "Demo account", text: "No real money is involved. All portfolio data is simulated for learning." },
+      { title: "Only what's necessary", text: "We use basic Google account info to verify your identity and show your name." },
+      { title: "No secrets requested", text: "We never ask for your passwords or wallet keys." },
+    ],
+    nav: ["Data we use", "Where it's stored", "Third parties", "What not to send", "Control & deletion"],
+    dataTitle: "What data we use",
+    data: [
+      { title: "Account info", text: "Email, name, profile picture, and account permissions, obtained when you sign in with Google. Used to verify your identity and shown in the user menu." },
+      { title: "Demo portfolio and orders", text: "Virtual cash, holdings, cost basis, profit/loss, fees, order history, and your Auto DCA plans. Stored on our server so you can see them every time you sign in." },
+      { title: "AI assistant chats", text: "The messages you type and part of the earlier conversation are sent for processing so the assistant can reply coherently." },
+      { title: "Browser settings", text: "Dark/light theme, language, and your favorite coins are stored in your own browser so the next visit looks the same." },
+    ],
+    whereTitle: "Where is data stored",
+    where: [
+      { place: "Your browser", what: "Theme, language, favorites, and data shown on screen while you use the app", persist: "Stays until you clear site data" },
+      { place: "Our server", what: "Demo portfolio, order history, Auto DCA plans, and necessary account data", persist: "Kept so you can continue across devices" },
+    ],
+    whereNote: "Data shown on screen is temporary and isn't necessarily saved permanently.",
+    thirdTitle: "Related third-party services",
+    third: [
+      { title: "Price data providers", text: "Prices and market data come from external market sources (e.g. Bitkub), which may log general connection data under their own policies." },
+      { title: "News sources", text: "News is pulled from external crypto outlets through a news aggregation service." },
+      { title: "Google", text: "Used for sign-in. We only receive the basic profile info Google sends us, never your password." },
+      { title: "AI provider", text: "Messages sent to the AI assistant are processed by the language model provider the system uses." },
+    ],
+    thirdNote: "Each service has its own privacy policy and data retention period.",
+    dontTitle: "Data you shouldn't enter",
+    dontIntro: "Especially in messages to the AI assistant, since they are sent for processing.",
+    dont: ["Passwords", "Private keys or seed phrases", "API secrets / tokens", "Sensitive personal data, such as national ID numbers"],
+    controlTitle: "Control & deletion",
+    control: [
+      "You can clear your theme and favorites by clearing site data in your browser. This does not delete data stored on the server.",
+      "Logging out only closes the session on this device. It doesn't delete your portfolio or order history.",
+      "To have your portfolio, order history, or account data deleted from the server, contact the administrator [add contact channel].",
+      "You can cancel an Auto DCA plan at any time on the Trade page.",
+    ],
+    disclaimer: "This page explains how the system works in plain terms and is not a legal document. The system is a demo account for learning and is not investment advice.",
+  },
+  about: {
+    back: "Back",
+    eyebrow: "Our story",
+    heroTitle: "How Nobodi began",
+    heroIntro: "**Nobodi** started with one person and a simple question:",
+    q1: "“If the ideal picture in my head could become real, how far could it go?”",
+    founderAlt: "Thiraphat Niyom, founder of Nobodi",
+    founderName: "Thiraphat Niyom",
+    founderRole: "Founder of Nobodi · Age 22",
+    founderEdu: "Business Administration (Finance and Investment), University of the Thai Chamber of Commerce",
+    p1: "I'm **Thiraphat Niyom**, 22, a recent graduate in Business Administration (Finance and Investment) from the University of the Thai Chamber of Commerce.",
+    p2: "During university I spent most of my time learning about investing. After class, or on days without class, I'd often sit in the computer room, or the room used for stock trading.",
+    p3: "Most of the time, I sat there alone.",
+    p4: "That included stock trading competitions from year 1 through year 3. I still went and traded alone. To this day I still live and do most things on my own.",
+    nameLabel: "Where the name comes from",
+    nameText: "These things became part of who I am, and the source of the name **Nobodi**, which comes from the word **Nobody**.",
+    p5: "But Nobodi didn't start as a plan to build a website or a large system.",
+    p6: "It started with a small bit of curiosity one day.",
+    p7: "One day I was scrolling TikTok and happened to come across a clip explaining **Monte Carlo Simulation**.",
+    p8: "Curious, I asked myself:",
+    q2: "“If I use AI, could I build it?”",
+    p9: "I had no programming background at the time, and couldn't even run code myself.",
+    p10: "So I started by asking AI to help build what I had in mind, and learned through trial and error.",
+    loop: ["Wrong? Fix it", "Don't understand? Try again", "Can't do it? Find another way"],
+    p11: "Eventually, the results started to become what I wanted.",
+    p12: "And that made me start to enjoy building.",
+    p13: "One experiment became the next experiment, and it kept building on itself.",
+    p14: "Later, I got an interview with a crypto company, so I developed what I'd been experimenting with into a website to use in my presentation.",
+    p15: "After getting good feedback, what was once just an experiment became a project I wanted to keep developing.",
+    p16: "I started to wonder:",
+    q3: "“If we really try to build the ideal picture in our heads, how far could it go?”",
+    dateDay: "18",
+    dateMonth: "September",
+    dateLabel: "The day I started this project",
+    p17: "The beginning wasn't grand or glamorous.",
+    p18: "At first I just wanted to try building something related to the job I was about to interview for, to understand how a system like that works behind the scenes.",
+    p19: "It was just preparation.",
+    p20: "But once I started, new ideas kept coming.",
+    chain: [
+      "When there's an idea, I want to try it",
+      "When it works, I want to take it further",
+      "And when I see something can be improved, I start wondering how much further it can go",
+    ],
+    p21: "From a small project started just to learn, it slowly grew through trial and error, curiosity, and the joy of building, into **Nobodi as it is today**.",
+    visionLabel: "VISION",
+    visionTitle: "Bring the ideal picture and reality together",
+    visionP1: "Everything on Nobodi starts from a picture in someone's head.",
+    visionP2: "Nobodi exists to take those pictures out of our minds and gradually turn them into things that can be built, tested, and made real.",
+    missionLabel: "MISSION",
+    missionTitle: "“If one person never stops learning and never stops building, how far can they take what's in their head?”",
+    missionP1: "This is the question behind the development of Nobodi.",
+    missionP2: "Nobodi started with one person who learns from mistakes, takes action, and keeps improving step by step.",
+    missionP3a: "Not to prove how much one person can build, but to find out",
+    missionP3b: "how far the limit of what one person can learn and build really is.",
+    ctaTitle: "Want to try Nobodi?",
+    ctaSub: "Sign up free with a Google account and try the demo account",
+    ctaBtn: "Sign up now",
+  },
+    sys: {
+    back: "Back to home",
+    badge: "About the system",
+    intro: "A web app for watching the market, practicing trades in a demo account, managing a portfolio, analyzing risk, and using research tools, all in one place.",
+    stats: [
+      { value: "12", label: "Core modules in the app" },
+      { value: "10s", label: "Automatic portfolio refresh" },
+      { value: "100%", label: "Demo account, no real money" },
+    ],
+    overviewEyebrow: "Overview",
+    overviewTitle: "How the system works",
+    overviewDesc: "The web app displays data and takes commands from the user. Portfolio calculation and order recording happen on the server, which sends the results back to show on screen.",
+    flow: [
+      { title: "React UI", text: "Users view data or send commands" },
+      { title: "Page state", text: "Holds the data used for display" },
+      { title: "Backend API", text: "Processes and responds" },
+      { title: "Portfolio / Orders / Prices", text: "Sent back to show on screen" },
+    ],
+    modulesEyebrow: "Features",
+    modulesTitle: "Core modules in the app",
+    modules: [
+      "Portfolio overview, asset value, profit/loss, and latest orders",
+      "Live market prices in Thai baht, with a backup source if the main one goes down",
+      "Place trades in the demo account and update the portfolio instantly",
+      "Bid/ask prices, Best Bid, Best Ask, Mid Price, and Spread",
+      "Assets held, cost basis, current value, and profit/loss",
+      "Cash, asset value, total portfolio value, and fees",
+      "Order history, newest first",
+      "Holding status of each asset",
+      "Tools for analyzing portfolio risk",
+      "Quantitative analysis and strategy testing tools",
+      "Latest crypto news from multiple sources",
+      "System preferences",
+    ],
+    techEyebrow: "Technology",
+    techTitle: "What it's built with",
+    stackGroups: ["Front end", "Data connections"],
+    dataEyebrow: "Data flow",
+    dataTitle: "How data travels",
+    refresh: "Every 10 seconds",
+    dataFlow: [
+      { title: "Investment portfolio", tag: "GET /api/portfolio", text: "Fetches cash, asset value, cost basis, profit/loss, and fees, then shares them with the Dashboard, Wallet, and Portfolio pages. It only reloads while the page is open." },
+      { title: "Market prices", tag: "Backend → Bitkub fallback", text: "Prices are fetched from our server first. If that fails, they're fetched directly from Bitkub instead, so prices can still be shown." },
+      { title: "Order Book", tag: "GET /api/orderbook", text: "Specify the coin and the number of price levels, and the result is shown as the bid and ask sides." },
+      { title: "Order history", tag: "GET /api/orders", text: "Fetches the latest 100 orders and refreshes automatically while the page is open." },
+      { title: "AI assistant", tag: "POST /api/chat", text: "Sends the question along with the conversation history to the server, then shows the answer in the assistant window." },
+    ],
+    secEyebrow: "Security",
+    secTitle: "Security and error handling",
+    security: [
+      { title: "Sign in with Google", text: "Identity is verified through a Google account, and permissions are attached to every request." },
+      { title: "Error handling", text: "Every response is checked, and users are told when data fails to load." },
+      { title: "No stale data", text: "Updates are cancelled when you leave a page, so old data never overwrites new data." },
+      { title: "Remembers your theme", text: "Dark or light mode is saved on your device, so the next visit looks the same." },
+      { title: "Front end and server separated", text: "Portfolio and order calculations happen on the server, not in the browser." },
+      { title: "AI assistant via our server", text: "Questions go through our server and never connect to the AI provider directly from the browser." },
+    ],
+    scopeTitle: "Scope of use",
+    scope: [
+      "This is a demo account for learning. No real-money trading takes place.",
+      "Some data on the pages is sample data, not live prices.",
+      "Some menus, such as Risk Center, Quant Lab, and Settings, are still in development and may be incomplete.",
+      "Information and results in the system are not investment advice.",
     ],
   },
-  {
-    id: "g-money", title: "guideText.k034",
-    mods: [
-      { id: "portfolio", icon: Briefcase, name: "Portfolio", th: "guideText.k035",
-        text: "guideText.k036",
-        points: ["guideText.k037", "guideText.k038", "guideText.k039", "guideText.k040", "guideText.k041", "guideText.k042"] },
-      { id: "wallet", icon: Wallet, name: "Wallet", th: "guideText.k043",
-        text: "guideText.k044",
-        tip: "guideText.k045" },
-    ],
+
+  guideText: {
+    k001: "Market data",
+    k002: "Overview",
+    k003: "Markets",
+    k004: "Order book",
+    k005: "News",
+    k006: "View the status of your entire portfolio on one page after signing in.",
+    k007: "Portfolio value",
+    k008: "Cash",
+    k009: "Assets held",
+    k010: "Profit/loss",
+    k011: "Latest trades",
+    k012: "Data refreshes automatically every 10 seconds. No need to reload the page.",
+    k013: "View the latest prices and changes for all supported coins. All prices are in Thai baht.",
+    k014: "Latest price",
+    k015: "24-hour change %",
+    k016: "High/low price",
+    k017: "If our server is unavailable, prices are automatically retrieved from Bitkub instead.",
+    k018: "See current buy and sell orders, their prices and amounts, and choose which coin to view.",
+    k019: "Volume at each price level",
+    k020: "A narrower spread means buy and sell prices are closer, lowering hidden costs. See the glossary at the bottom.",
+    k021: "The latest crypto news from multiple sources in one place.",
+    k022: "News is for market monitoring only, not a signal to buy or sell.",
+    k023: "Trading",
+    k024: "Choose a coin, enter order details, and submit. Your portfolio updates as soon as the order succeeds.",
+    k025: "Choose a coin",
+    k026: "Enter an amount",
+    k027: "Click Buy or Sell",
+    k028: "Check your cash in Wallet before submitting an order.",
+    k029: "Order history",
+    k030: "View past orders, sorted from newest to oldest.",
+    k031: "New entries appear automatically within 10 seconds.",
+    k032: "Positions",
+    k033: "See which coins you currently hold and the status of each.",
+    k034: "Portfolio and funds",
+    k035: "Investment portfolio",
+    k036: "View each portfolio asset, how much you bought, its current value, and its profit or loss.",
+    k037: "Quantity held",
+    k038: "Average cost",
+    k039: "Market value",
+    k040: "Unrealized profit/loss",
+    k041: "P&L %",
+    k042: "Portfolio allocation",
+    k043: "Wallet",
+    k044: "View cash, asset value, total portfolio value, and fees paid.",
+    k045: "Check this page before trading to make sure you have enough cash.",
+    k046: "Analysis tools",
+    k047: "Risk Center",
+    k048: "View risk indicators calculated from your portfolio to understand its risk level.",
+    k049: "Quant Lab",
+    k050: "Statistical analysis tools for testing ideas before applying them.",
+    k051: "AI Assistant",
+    k052: "Click the assistant icon and type a question. It remembers part of the previous conversation, so you can ask follow-up questions.",
+    k053: "AI responses may be incorrect. Verify them before making decisions.",
+    k054: "Settings",
+    k055: "Switch between dark and light themes. Your choice is saved in the browser for your next visit.",
+    k056: "View overview",
+    k057: "Start at Dashboard to view your portfolio status.",
+    k058: "Check prices",
+    k059: "Open Markets to see the latest prices.",
+    k060: "View spread",
+    k061: "Open Order Book to view bid/ask prices.",
+    k062: "Place an order",
+    k063: "Buy or sell on the Trade page.",
+    k064: "Check portfolio",
+    k065: "Check Portfolio and Wallet after a transaction.",
+    k066: "View history",
+    k067: "Review entries in Orders.",
+    k068: "Every 10 seconds",
+    k069: "Glossary",
+    k070: "Data updates",
+    k071: "Scope of use",
+    k072: "The highest price someone is currently willing to pay.",
+    k073: "The lowest price someone is currently willing to accept.",
+    k074: "The midpoint between Best Bid and Best Ask.",
+    k075: "The difference between Best Ask and Best Bid; narrower is better.",
+    k076: "Spread expressed as a percentage of price, useful for comparing coins.",
+    k077: "The average cost per coin across all purchases.",
+    k078: "The current market value of the coins you hold.",
+    k079: "Paper profit or loss that is not realized until you sell.",
+    k080: "Automatic refresh",
+    k081: "The system pauses refreshing when you switch to another tab and resumes when you return, avoiding unnecessary data requests.",
+    k082: "All trades take place in a demo account for learning. No real money is used.",
+    k083: "Market prices may be slightly delayed or temporarily unavailable due to data-provider limitations.",
+    k084: "System results are not investment advice and do not guarantee future returns.",
+    k085: "Back to home",
+    k086: "User guide",
+    k087: "How to use the system",
+    k088: "A guide to every menu, from checking prices and placing demo trades to reviewing your portfolio and analyzing risk.",
+    k089: "Get started in 6 steps",
   },
-  {
-    id: "g-tools", title: "guideText.k046",
-    mods: [
-      { id: "risk", icon: ShieldAlert, name: "Risk Center", th: "guideText.k047",
-        text: "guideText.k048" },
-      { id: "quant", icon: FlaskConical, name: "Quant Lab", th: "guideText.k049",
-        text: "guideText.k050" },
-      { id: "ai", icon: Bot, name: "AI Assistant", th: "guideText.k051",
-        text: "guideText.k052",
-        tip: "guideText.k053" },
-    ],
+  bt: {
+    title: "Backtest",
+    subtitle: "See how this kind of investing would have performed in the past. Priced in baht, with spread and fees included.",
+    asset: "Coin",
+    period: "Look-back period",
+    periods: { "1m": "1 month", "3m": "3 months", "6m": "6 months", "1y": "1 year", "3y": "3 years", "5y": "5 years", custom: "Custom" },
+    start: "Start",
+    end: "End",
+    strategy: "Investing strategy",
+    strategies: {
+      lump: { title: "Lump sum and hold", desc: "Buy everything on day one, then do nothing" },
+      dca: { title: "Dollar-cost averaging (DCA)", desc: "Split the money into equal installments at the chosen frequency" },
+      dip: { title: "Buy the dip", desc: "Buy 50% on day one, then split the rest across drops of 10/20/30/40/50% from the peak" },
+      trend: { title: "Trend following (moving average)", desc: "Hold while the price is above the 50-day average, move to cash when it falls below" },
+    },
+    freqLabel: "Buying frequency",
+    freqs: { weekly: "Weekly", monthly: "Monthly" },
+    amount: "Investment amount (THB)",
+    run: "Run backtest",
+    running: "Calculating…",
+    emptyTitle: "Pick your settings on the left, then press start",
+    emptyDesc: "The system simulates investing with real historical prices and compares it with buy-and-hold and a savings account.",
+    loadingDesc: "Fetching historical prices and calculating. The first run may take a moment.",
+    finalValue: "Final value",
+    fromAmount: "from {amount} invested",
+    compare: "Comparison",
+    maxDd: "Max drawdown",
+    trades: "Number of trades",
+    tradesCount: "{n} trades",
+    vsHold: "vs. “Buy & hold”",
+    vsSav: "vs. “Savings account”",
+    cashLeft: "{amount} of cash was left uninvested (already included in the final value)",
+    equityTitle: "Daily portfolio value",
+    lineStrategy: "This strategy",
+    lineHold: "Buy & hold",
+    lineSavings: "Savings account",
+    barHold: "Buy & hold (lump sum)",
+    barSavings: "Savings account (assumed 1.5%/yr)",
+    verdictLoseSav: "This strategy did worse than a savings account in this period. Crypto prices are highly volatile, so past results can be negative.",
+    verdictLoseHold: "Beat the savings account, but lost to lump sum and hold in this period.",
+    verdictWinLump: "Beat the savings account in this period.",
+    verdictWinAll: "Beat both buy & hold and the savings account in this period.",
+    disclaimer: "Past results don't guarantee the future · Priced in baht + {spread}% spread + {fee}% fee, before tax",
+    ctaText: "Want to keep practicing in the demo account?",
+    ctaBtn: "Sign up now",
+    errMin: "Minimum investment is 100 baht",
+    errDate: "The start date must be before the end date",
+    errHttp: "Calculation failed (HTTP {status})",
+    errTimeout: "This is taking too long. Please try again.",
+    errGeneric: "Calculation failed",
   },
-  {
-    id: "g-settings", title: "guideText.k054",
-    mods: [
-      { id: "settings", icon: Settings, name: "Settings", th: "guideText.k054",
-        text: "guideText.k055" },
-    ],
-  },
-]
+};
 
-const QUICK = [
-  { id: "dashboard", title: "guideText.k056", text: "guideText.k057" },
-  { id: "markets", title: "guideText.k058", text: "guideText.k059" },
-  { id: "orderbook", title: "guideText.k060", text: "guideText.k061" },
-  { id: "trade", title: "guideText.k062", text: "guideText.k063" },
-  { id: "portfolio", title: "guideText.k064", text: "guideText.k065" },
-  { id: "orders", title: "guideText.k066", text: "guideText.k067" },
-]
+export type Lang = "th" | "en";
 
-const GLOSSARY = [
-  { term: "Best Bid", def: "guideText.k072" },
-  { term: "Best Ask", def: "guideText.k073" },
-  { term: "Mid Price", def: "guideText.k074" },
-  { term: "Spread", def: "guideText.k075" },
-  { term: "Spread %", def: "guideText.k076" },
-  { term: "Average Cost", def: "guideText.k077" },
-  { term: "Market Value", def: "guideText.k078" },
-  { term: "Unrealized P&L", def: "guideText.k079" },
-]
-
-const REFRESH = [
-  { name: "Portfolio / Dashboard", every: "guideText.k068" },
-  { name: "Orders", every: "guideText.k068" },
-]
-
-const SCOPE = [
-  "guideText.k082",
-  "guideText.k083",
-  "guideText.k084",
-]
-
-const jump = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })
-
-function IconBox({ icon: Icon }: { icon: LucideIcon }) {
-  return (
-    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-500">
-      <Icon className="h-5 w-5" />
-    </span>
-  )
-}
-
-function ModCard({ m }: { m: Mod }) {
-  return (
-    <div id={m.id} className="scroll-mt-24 rounded-2xl border p-6">
-      <div className="flex items-start gap-4">
-        <IconBox icon={m.icon} />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-baseline gap-2">
-            <h3 className="text-lg font-bold">{m.name}</h3>
-            <span className="text-sm text-muted-foreground">{t(m.th)}</span>
-          </div>
-          <p className="mt-2 text-sm leading-7 text-muted-foreground">{t(m.text)}</p>
-          {m.points && (
-            <div className="mt-4 flex flex-wrap gap-2">
-              {m.points.map((p) => (
-                <span key={p} className="rounded-full border bg-muted/40 px-3 py-1 text-xs font-medium">{t(p)}</span>
-              ))}
-            </div>
-          )}
-          {m.tip && (
-            <div className="mt-4 flex gap-2 rounded-xl bg-emerald-500/10 p-3 text-sm leading-6 text-emerald-700 dark:text-emerald-400">
-              <Lightbulb className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{t(m.tip)}</span>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-export default function UserGuide({ onBack }: { onBack: () => void }) {
-  const { t } = useLanguage()
-  useEffect(() => {
-    window.scrollTo({ top: 0 })
-  }, [])
-
-  return (
-    <div className="mx-auto max-w-6xl px-4">
-      <div className="pt-10">
-        <button type="button" onClick={onBack}
-          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="h-4 w-4" /> {t("guideText.k085")}
-        </button>
-      </div>
-
-      {/* หัวหน้า */}
-      <header className="py-12">
-        <span className="inline-block rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-500">
-          {t("guideText.k086")}
-        </span>
-        <h1 className="mt-4 text-4xl font-extrabold leading-tight tracking-tight sm:text-5xl">{t("guideText.k087")}</h1>
-        <p className="mt-4 max-w-2xl text-base leading-7 text-muted-foreground">
-          {t("guideText.k088")}
-        </p>
-      </header>
-
-      {/* เริ่มต้น 6 ขั้น */}
-      <section className="pb-12">
-        <h2 className="text-2xl font-extrabold tracking-tight">{t("guideText.k089")}</h2>
-        <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {QUICK.map((q, i) => (
-            <button key={q.id} type="button" onClick={() => jump(q.id)}
-              className="flex items-center gap-4 rounded-2xl border p-4 text-left transition-colors hover:bg-accent">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-sm font-bold text-black">
-                {i + 1}
-              </span>
-              <span>
-                <span className="block font-bold">{t(q.title)}</span>
-                <span className="block text-xs text-muted-foreground">{t(q.text)}</span>
-              </span>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <div className="grid gap-10 pb-16 lg:grid-cols-[200px_1fr]">
-        {/* สารบัญ */}
-        <aside className="hidden lg:block">
-          <nav className="sticky top-24 space-y-5 text-sm">
-            {GROUPS.map((g) => (
-              <div key={g.id}>
-                <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-emerald-500">{t(g.title)}</p>
-                <ul className="space-y-1.5">
-                  {g.mods.map((m) => (
-                    <li key={m.id}>
-                      <button type="button" onClick={() => jump(m.id)} className="text-muted-foreground hover:text-foreground">
-                        {m.name}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-            <div className="space-y-1.5 border-t pt-4">
-              <button type="button" onClick={() => jump("glossary")} className="block text-muted-foreground hover:text-foreground">{t("guideText.k069")}</button>
-              <button type="button" onClick={() => jump("refresh")} className="block text-muted-foreground hover:text-foreground">{t("guideText.k070")}</button>
-              <button type="button" onClick={() => jump("scope")} className="block text-muted-foreground hover:text-foreground">{t("guideText.k071")}</button>
-            </div>
-          </nav>
-        </aside>
-
-        <div className="min-w-0 space-y-12">
-          {/* แต่ละหมวด */}
-          {GROUPS.map((g) => (
-            <section key={g.id} id={g.id} className="scroll-mt-24">
-              <h2 className="text-2xl font-extrabold tracking-tight">{t(g.title)}</h2>
-              <div className="mt-5 space-y-4">
-                {g.mods.map((m) => <ModCard key={m.id} m={m} />)}
-              </div>
-            </section>
-          ))}
-
-          {/* คำศัพท์ */}
-          <section id="glossary" className="scroll-mt-24">
-            <h2 className="text-2xl font-extrabold tracking-tight">{t("guideText.k069")}</h2>
-            <div className="mt-5 overflow-hidden rounded-2xl border">
-              {GLOSSARY.map((g, i) => (
-                <div key={g.term} className={`grid gap-1 px-5 py-4 sm:grid-cols-[160px_1fr] sm:gap-4 ${i ? "border-t" : ""}`}>
-                  <span className="font-semibold">{g.term}</span>
-                  <span className="text-sm leading-6 text-muted-foreground">{t(g.def)}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          {/* การอัปเดตข้อมูล */}
-          <section id="refresh" className="scroll-mt-24">
-            <h2 className="text-2xl font-extrabold tracking-tight">{t("guideText.k070")}</h2>
-            <div className="mt-5 rounded-2xl border p-6">
-              <div className="flex items-center gap-2 font-bold">
-                <RefreshCw className="h-5 w-5 text-emerald-500" /> {t("guideText.k080")}
-              </div>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                {REFRESH.map((r) => (
-                  <div key={r.name} className="flex items-center justify-between rounded-xl bg-muted/40 px-4 py-3 text-sm">
-                    <span>{r.name}</span>
-                    <span className="font-semibold text-emerald-500">{t(r.every)}</span>
-                  </div>
-                ))}
-              </div>
-              <p className="mt-4 text-sm leading-6 text-muted-foreground">
-                {t("guideText.k081")}
-              </p>
-            </div>
-          </section>
-
-          {/* ขอบเขต */}
-          <section id="scope" className="scroll-mt-24">
-            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-6">
-              <div className="flex items-center gap-2 text-amber-500">
-                <AlertTriangle className="h-5 w-5" />
-                <p className="font-bold">{t("guideText.k071")}</p>
-              </div>
-              <ul className="mt-4 space-y-2">
-                {SCOPE.map((s) => (
-                  <li key={t(s)} className="flex gap-2 text-sm leading-6 text-muted-foreground">
-                    <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
-                    {t(s)}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </section>
-        </div>
-      </div>
-    </div>
-  )
-}
+export const translations: Record<Lang, Translations> = { th, en };
