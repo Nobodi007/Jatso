@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { Search, TrendingDown, TrendingUp } from "lucide-react"
+import { useLanguage } from "../../i18n/LanguageContext"
 
 type Props = { onLogin: () => void; onRegister: () => void }
 
@@ -17,15 +18,15 @@ const FAV_KEY = "nobodi_favorites"
 
 type Tab = "all" | "up" | "down" | "volume" | "fav"
 const TABS: { key: Tab; label: string }[] = [
-  { key: "all", label: "ทั้งหมด" },
-  { key: "up", label: "ขึ้น" },
-  { key: "down", label: "ลง" },
-  { key: "volume", label: "ปริมาณสูง" },
-  { key: "fav", label: "⭐ โปรด" },
+  { key: "all", label: "mkt.tabAll" },
+  { key: "up", label: "mkt.tabUp" },
+  { key: "down", label: "mkt.tabDown" },
+  { key: "volume", label: "mkt.tabVolume" },
+  { key: "fav", label: "mkt.tabFav" },
 ]
 
-const thb = (v: number) =>
-  `฿${Number(v || 0).toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+const thb = (v: number, locale: string) =>
+  `฿${Number(v || 0).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 const compact = (v: number) => {
   if (v >= 1e9) return `฿${(v / 1e9).toFixed(2)}B`
@@ -50,7 +51,7 @@ async function fetchMarket(): Promise<{ rows: Row[]; sparks: Record<string, numb
     change: Number(r.change || 0),
     volume: Number(r.volume || 0),
   }))
-  if (rows.length === 0) throw new Error("ไม่พบข้อมูลตลาด")
+  if (rows.length === 0) throw new Error("NO_DATA")
   return { rows, sparks: body?.sparks || {} }
 }
 
@@ -127,6 +128,8 @@ function SummaryCard({
 }
 
 export default function MarketSection({ onLogin, onRegister }: Props) {
+  const { t, lang } = useLanguage()
+  const locale = lang === "th" ? "th-TH" : "en-US"
   const [rows, setRows] = useState<Row[]>([])
   const [sparks, setSparks] = useState<Record<string, number[]>>({})
   const [loading, setLoading] = useState(true)
@@ -153,25 +156,26 @@ export default function MarketSection({ onLogin, onRegister }: Props) {
         setRows(r)
         if (Object.keys(s).length > 0) setSparks(s)
         setError("")
-        setUpdated(new Date().toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", second: "2-digit" }))
+        setUpdated(new Date().toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit" }))
       } catch (e) {
-        if (alive) setError(e instanceof Error ? e.message : "โหลดข้อมูลตลาดไม่สำเร็จ")
+        if (alive) setError(e instanceof Error ? e.message : "LOAD_FAILED")
       } finally {
         if (alive) setLoading(false)
       }
     }
     run()
-    const t = setInterval(() => {
+    const timer = setInterval(() => {
       if (document.visibilityState === "visible") run()
     }, 15000)
     return () => {
       alive = false
-      clearInterval(t)
+      clearInterval(timer)
     }
-  }, [])
+  // ดึงข้อมูลใหม่เมื่อสลับภาษา เพื่อให้เวลาอัปเดตตามภาษา
+  }, [locale])
 
-    
-  
+  const errText = error === "NO_DATA" ? t("mkt.noData") : error === "LOAD_FAILED" ? t("mkt.loadFailed") : error
+
   const toggleFav = (asset: string) =>
     setFavs((prev) => {
       const next = prev.includes(asset) ? prev.filter((a) => a !== asset) : [...prev, asset]
@@ -209,18 +213,18 @@ export default function MarketSection({ onLogin, onRegister }: Props) {
       {/* หัวหน้า */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-extrabold tracking-tight">ตลาดคริปโต</h1>
-          <p className="mt-1 text-sm text-muted-foreground">ราคาสดจาก Bitkub เป็นสกุลเงินบาท</p>
+          <h1 className="text-3xl font-extrabold tracking-tight">{t("mkt.title")}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t("mkt.subtitle")}</p>
         </div>
         <span className="flex items-center gap-2 text-xs text-muted-foreground">
           <span className={`size-2 rounded-full ${error ? "bg-red-500" : "animate-pulse bg-emerald-500"}`} />
-          {error ? "ข้อมูลไม่พร้อมใช้งาน" : `Live${updated ? ` · ${updated}` : ""}`}
+          {error ? t("mkt.unavailable") : `Live${updated ? ` · ${updated}` : ""}`}
         </span>
       </div>
 
       {error && (
         <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-500">
-          โหลดข้อมูลตลาดไม่สำเร็จ ({error})
+          {t("mkt.loadFailed")} ({errText})
         </div>
       )}
 
@@ -228,26 +232,26 @@ export default function MarketSection({ onLogin, onRegister }: Props) {
       <div className="mt-6 flex gap-3 overflow-x-auto pb-1">
         <SummaryCard
           label="Bitcoin (BTC)"
-          value={stats.btc ? thb(stats.btc.price) : "—"}
+          value={stats.btc ? thb(stats.btc.price, locale) : "—"}
           sub={stats.btc ? pct(stats.btc.change) : undefined}
           tone={stats.btc ? (stats.btc.change >= 0 ? "up" : "down") : undefined}
         />
         <SummaryCard
-          label="ขึ้นแรงสุด 24 ชม."
+          label={t("mkt.topGain")}
           value={stats.gain ? stats.gain.asset : "—"}
           sub={stats.gain ? pct(stats.gain.change) : undefined}
           tone="up"
         />
         <SummaryCard
-          label="ลงแรงสุด 24 ชม."
+          label={t("mkt.topLoss")}
           value={stats.lose ? stats.lose.asset : "—"}
           sub={stats.lose ? pct(stats.lose.change) : undefined}
           tone="down"
         />
         <SummaryCard
-          label="มูลค่าซื้อขาย 24 ชม."
+          label={t("mkt.volume24")}
           value={rows.length ? compact(stats.total) : "—"}
-          sub={`${rows.length} เหรียญ`}
+          sub={t("mkt.coinsCount", { n: rows.length })}
         />
       </div>
 
@@ -258,23 +262,23 @@ export default function MarketSection({ onLogin, onRegister }: Props) {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="ค้นหาเหรียญ"
+            placeholder={t("mkt.searchPh")}
             className="w-full rounded-lg border bg-card py-2 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
           />
         </div>
         <div className="flex flex-wrap gap-2">
-          {TABS.map((t) => (
+          {TABS.map((tb) => (
             <button
-              key={t.key}
+              key={tb.key}
               type="button"
-              onClick={() => setTab(t.key)}
+              onClick={() => setTab(tb.key)}
               className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
-                tab === t.key
+                tab === tb.key
                   ? "bg-emerald-500 text-black"
                   : "bg-muted text-muted-foreground hover:bg-accent hover:text-foreground"
               }`}
             >
-              {t.label}
+              {t(tb.label)}
             </button>
           ))}
         </div>
@@ -285,19 +289,19 @@ export default function MarketSection({ onLogin, onRegister }: Props) {
         <div className={`${gridCols} border-b px-4 py-3 text-xs font-medium text-muted-foreground`}>
           <div />
           <div className="hidden md:block">#</div>
-          <div>เหรียญ</div>
-          <div className="text-right md:text-left">ราคา</div>
-          <div className="text-right md:text-left">24 ชม.</div>
-          <div className="hidden md:block">7 วัน</div>
-          <div className="hidden md:block">ปริมาณ</div>
+          <div>{t("mkt.colCoin")}</div>
+          <div className="text-right md:text-left">{t("mkt.colPrice")}</div>
+          <div className="text-right md:text-left">{t("mkt.col24h")}</div>
+          <div className="hidden md:block">{t("mkt.col7d")}</div>
+          <div className="hidden md:block">{t("mkt.colVolume")}</div>
           <div className="hidden md:block" />
         </div>
 
         {loading && rows.length === 0 ? (
-          <p className="py-14 text-center text-sm text-muted-foreground">กำลังโหลดตลาด...</p>
+          <p className="py-14 text-center text-sm text-muted-foreground">{t("mkt.loading")}</p>
         ) : visible.length === 0 ? (
           <p className="py-14 text-center text-sm text-muted-foreground">
-            {tab === "fav" ? "ยังไม่มีเหรียญโปรด กดดาวที่เหรียญเพื่อเพิ่ม" : "ไม่พบเหรียญ"}
+            {tab === "fav" ? t("mkt.emptyFav") : t("mkt.notFound")}
           </p>
         ) : (
           visible.map((r, idx) => {
@@ -311,7 +315,7 @@ export default function MarketSection({ onLogin, onRegister }: Props) {
               >
                 <button
                   type="button"
-                  aria-label={isFav ? "เอาออกจากรายการโปรด" : "เพิ่มในรายการโปรด"}
+                  aria-label={isFav ? t("mkt.favRemove") : t("mkt.favAdd")}
                   onClick={(e) => {
                     e.stopPropagation()
                     toggleFav(r.asset)
@@ -328,7 +332,7 @@ export default function MarketSection({ onLogin, onRegister }: Props) {
                     <p className="truncate text-[11px] text-muted-foreground">{r.name}</p>
                   </div>
                 </div>
-                <div className="text-right text-sm font-medium tabular-nums md:text-left">{thb(r.price)}</div>
+                <div className="text-right text-sm font-medium tabular-nums md:text-left">{thb(r.price, locale)}</div>
                 <div
                   className={`flex items-center justify-end gap-1 text-sm font-medium tabular-nums md:justify-start ${
                     up ? "text-emerald-500" : "text-red-500"
@@ -350,7 +354,7 @@ export default function MarketSection({ onLogin, onRegister }: Props) {
                     }}
                     className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-semibold text-black hover:bg-emerald-400"
                   >
-                    ซื้อ
+                    {t("mkt.buy")}
                   </button>
                 </div>
               </div>
@@ -362,15 +366,15 @@ export default function MarketSection({ onLogin, onRegister }: Props) {
       {/* แบนเนอร์ชวนสมัคร */}
       <div className="mt-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border bg-card p-6">
         <div>
-          <p className="text-lg font-bold">อยากลองซื้อขายก่อนใช้เงินจริง?</p>
-          <p className="mt-1 text-sm text-muted-foreground">สมัครบัญชีจำลองฟรี ฝึกซื้อขายด้วยราคาตลาดจริง</p>
+          <p className="text-lg font-bold">{t("mkt.bannerTitle")}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{t("mkt.bannerSub")}</p>
         </div>
         <button
           type="button"
           onClick={onRegister}
           className="rounded-lg bg-emerald-500 px-5 py-2.5 text-sm font-bold text-black hover:bg-emerald-400"
         >
-          สมัครบัญชีจำลองฟรี
+          {t("mkt.bannerBtn")}
         </button>
       </div>
     </main>
