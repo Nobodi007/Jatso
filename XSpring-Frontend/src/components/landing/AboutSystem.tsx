@@ -176,8 +176,3 @@ export default function AboutSystem({ onBack }: { onBack: () => void }) {
     </div>
   )
 }
-        </div>
-      </section>
-    </div>
-  )
-}
