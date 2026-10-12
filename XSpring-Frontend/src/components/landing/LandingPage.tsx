@@ -11,6 +11,7 @@ import HomeSections from "./HomeSections"
 import AboutSection from "./AboutSection"
 import LanguageSwitcher from "../LanguageSwitcher";
 import { useLanguage } from "../../i18n/LanguageContext";
+import { HeroVisual, PriceTicker } from "./LandingEffects"
 
 type LandingPageProps = {
   onLogin: () => void
@@ -39,38 +40,6 @@ const VIEW_OF: Record<string, View> = {
   "ข่าว": "news",
   "ลองลงทุนย้อนหลัง": "backtest",
   "ประวัติความเป็นมา": "about",
-}
-
-const CANDLES = [
-  { x: 60, w1: 150, w2: 240, b: 170, h: 45, up: false },
-  { x: 110, w1: 140, w2: 225, b: 160, h: 45, up: true },
-  { x: 160, w1: 120, w2: 210, b: 135, h: 55, up: true },
-  { x: 210, w1: 130, w2: 215, b: 150, h: 45, up: false },
-  { x: 260, w1: 85, w2: 185, b: 100, h: 65, up: true },
-  { x: 310, w1: 60, w2: 150, b: 75, h: 55, up: true },
-  { x: 360, w1: 40, w2: 120, b: 55, h: 45, up: true },
-]
-
-function HeroArt() {
-  return (
-    <svg viewBox="0 0 420 300" className="h-auto w-full max-w-md" aria-hidden="true">
-      <rect x="10" y="10" width="400" height="280" rx="24" className="fill-muted/40 stroke-border" />
-      {CANDLES.map((c) => (
-        <g key={c.x}>
-          <line x1={c.x} x2={c.x} y1={c.w1} y2={c.w2} strokeWidth={2} className={c.up ? "stroke-emerald-500" : "stroke-red-500"} />
-          <rect x={c.x - 12} y={c.b} width={24} height={c.h} rx={4} className={c.up ? "fill-emerald-500" : "fill-red-500"} />
-        </g>
-      ))}
-      <polyline
-        points="60,200 110,182 160,162 210,172 260,132 310,102 360,78"
-        fill="none"
-        strokeWidth={3}
-        strokeDasharray="6 6"
-        strokeLinecap="round"
-        className="stroke-foreground/50"
-      />
-    </svg>
-  )
 }
 
 // หน้านี้อยู่นอก AppInner จึงตั้งธีมเองให้ตรงกับที่เคยเลือกไว้
@@ -231,7 +200,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
           onGo={go}
           heroTitle={t("hero.title")}
           heroSub={t("hero.desc")}
-          heroArt={<HeroArt />}
+          heroArt={<HeroVisual />}
         />
       )}
     </div>
