@@ -202,7 +202,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
               onGo={go}
               heroTitle={t("hero.title")}
               heroSub={t("hero.desc")}
-              heroArt={<HeroVisual />}
+              heroArt={<GlobeHero />}
             />
             <PriceTicker />
           </>
