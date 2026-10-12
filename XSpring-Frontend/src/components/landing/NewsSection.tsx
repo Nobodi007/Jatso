@@ -37,11 +37,11 @@ export default function NewsSection() {
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-10">
-      <h1 className="text-3xl font-extrabold tracking-tight">ข่าวคริปโต</h1>
+      <h1 className="text-3xl font-extrabold tracking-tight">{t("news.title")}</h1>
 
-      {error && <p className="mt-6 text-sm text-red-500">{error}</p>}
-      {!error && items === null && <p className="mt-6 text-sm text-muted-foreground">กำลังโหลด…</p>}
-      {items?.length === 0 && <p className="mt-6 text-sm text-muted-foreground">ยังไม่มีข่าวในขณะนี้</p>}
+    {failed && <p className="mt-6 text-sm text-red-500">{t("news.loadFailed")}</p>}
+    {!failed && items === null && <p className="mt-6 text-sm text-muted-foreground">{t("news.loading")}</p>}
+    {items?.length === 0 && <p className="mt-6 text-sm text-muted-foreground">{t("news.empty")}</p>}
 
       <ul className="mt-6 divide-y">
         {items?.map((n, i) => {
@@ -50,7 +50,7 @@ export default function NewsSection() {
               <h2 className="font-semibold leading-snug">{n.title}</h2>
               {n.summary && <p className="mt-1 text-sm text-muted-foreground line-clamp-2">{n.summary}</p>}
               <p className="mt-2 text-xs text-muted-foreground">
-                {[n.source, n.published_at && fmtTime(n.published_at)].filter(Boolean).join(" · ")}
+                {[n.source, n.published_at && fmtTime(n.published_at, locale)].filter(Boolean).join(" · ")}
               </p>
             </>
           )
