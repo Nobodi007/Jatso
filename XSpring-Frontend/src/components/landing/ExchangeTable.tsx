@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { useLanguage } from "../i18n/LanguageContext"   
 
 const API_BASE_URL = "https://xspring-api.onrender.com"
 
@@ -46,22 +47,23 @@ function Logo({ v }: { v: Venue }) {
 }
 
 export default function ExchangeTable({ asset }: { asset: string }) {
+  const { t } = useLanguage()
   const [rows, setRows] = useState<Venue[] | null>(null)
-  const [error, setError] = useState("")
+  const [error, setError] = useState(false)
 
   useEffect(() => {
     let alive = true
     const load = () =>
       fetch(`${API_BASE_URL}/api/public/exchanges?asset=${encodeURIComponent(asset)}`, { cache: "no-store" })
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-        .then((d) => {
+                .then((d) => {
           if (!alive) return
           setRows(Array.isArray(d.rows) ? d.rows : [])
-          setError("")
+          setError(false)
         })
-        .catch(() => alive && setError("โหลดตารางกระดานไม่สำเร็จ"))
+        .catch(() => alive && setError(true))
     setRows(null)
-    setError("")
+    setError(false)
     load()
     const id = setInterval(load, 10000)
     return () => {
@@ -78,25 +80,24 @@ export default function ExchangeTable({ asset }: { asset: string }) {
 
   return (
     <section className="mt-10">
-      <h2 className="text-xl font-bold">{asset} เทียบราคา — กระดานไทย</h2>
-      <p className="mt-1 text-sm text-muted-foreground">Spot ราคา THB · ต้นทุน/รายรับคิดค่าธรรมเนียม Taker แล้ว</p>
-
-      {error && <p className="mt-4 text-sm text-red-500">{error}</p>}
-      {!error && !rows && <p className="mt-4 text-sm text-muted-foreground">กำลังโหลด…</p>}
-
+      <h2 className="text-xl font-bold">{t("exch.title", { asset })}</h2>
+      <p className="mt-1 text-sm text-muted-foreground">{t("exch.subtitle")}</p>
+      
+      {error && <p className="mt-4 text-sm text-red-500">{t("exch.loadFailed")}</p>}
+      {!error && !rows && <p className="mt-4 text-sm text-muted-foreground">{t("exch.loading")}</p>}
       {rows && (
         <div className="mt-4 overflow-x-auto rounded-xl border">
           <table className="w-full min-w-[820px] text-sm">
             <thead className="bg-muted/40 text-left text-xs text-muted-foreground">
               <tr>
-                <th className="px-4 py-3 font-medium">Exchange</th>
-                <th className="px-4 py-3 font-medium">Symbol</th>
-                <th className="px-4 py-3 text-right font-medium">Bid (รับซื้อ)</th>
-                <th className="px-4 py-3 text-right font-medium">Ask (เสนอขาย)</th>
-                <th className="px-4 py-3 text-right font-medium">Spread</th>
-                <th className="px-4 py-3 text-right font-medium">ค่าธรรมเนียม</th>
-                <th className="px-4 py-3 text-right font-medium">ต้นทุนซื้อสุทธิ</th>
-                <th className="px-4 py-3 text-right font-medium">รายรับขายสุทธิ</th>
+                <th className="px-4 py-3 font-medium">{t("exch.colExchange")}</th>
+                <th className="px-4 py-3 font-medium">{t("exch.colSymbol")}</th>
+                <th className="px-4 py-3 text-right font-medium">{t("exch.colBid")}</th>
+                <th className="px-4 py-3 text-right font-medium">{t("exch.colAsk")}</th>
+                <th className="px-4 py-3 text-right font-medium">{t("exch.colSpread")}</th>
+                <th className="px-4 py-3 text-right font-medium">{t("exch.colFee")}</th>
+                <th className="px-4 py-3 text-right font-medium">{t("exch.colNetBuy")}</th>
+                <th className="px-4 py-3 text-right font-medium">{t("exch.colNetSell")}</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -147,7 +148,7 @@ export default function ExchangeTable({ asset }: { asset: string }) {
                       </>
                     ) : (
                       <td colSpan={6} className="px-4 py-3 text-center text-muted-foreground">
-                        {r.error || "ข้อมูลไม่พร้อม"}
+                        {r.error || t("exch.noData")}
                       </td>
                     )}
                   </tr>
@@ -157,7 +158,7 @@ export default function ExchangeTable({ asset }: { asset: string }) {
           </table>
         </div>
       )}
-      <p className="mt-2 text-xs text-muted-foreground">★ = กระดานที่ได้ราคาดีที่สุด (ซื้อถูกสุด / ขายได้มากสุด)</p>
+      <p className="mt-2 text-xs text-muted-foreground">{t("exch.legend")}</p>
     </section>
   )
 }
