@@ -192,17 +192,20 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
         <CoinDetail asset={coin} onBack={() => setView("market")} onLogin={onLogin} onRegister={onRegister} />
       ) : view === "learn" ? (
         <LearnSection />
-      ) : (
-        <HomeSections
-          onLogin={onLogin}
-          onRegister={onRegister}
-          onOpenCoin={openCoin}
-          onGo={go}
-          heroTitle={t("hero.title")}
-          heroSub={t("hero.desc")}
-          heroArt={<HeroVisual />}
-        />
-      )}
+              ) : (
+          <>
+            <HomeSections
+              onLogin={onLogin}
+              onRegister={onRegister}
+              onOpenCoin={openCoin}
+              onGo={go}
+              heroTitle={t("hero.title")}
+              heroSub={t("hero.desc")}
+              heroArt={<HeroVisual />}
+            />
+            <PriceTicker />
+          </>
+        )}
     </div>
   )
 }
