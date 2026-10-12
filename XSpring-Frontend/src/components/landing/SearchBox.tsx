@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Search } from "lucide-react"
+import { useLanguage } from "../../i18n/LanguageContext"
 
 const API_BASE_URL = "https://xspring-api.onrender.com"
 
 type Row = { asset: string; name: string; price: number; change: number }
 
-const fmtPrice = (v: number) =>
-  v.toLocaleString("th-TH", { maximumFractionDigits: v < 1 ? 4 : 2 })
+const fmtPrice = (v: number, locale: string) =>
+  v.toLocaleString(locale, { maximumFractionDigits: v < 1 ? 4 : 2 })
 
 export default function SearchBox({ onSelect }: { onSelect: (asset: string) => void }) {
+  const { t, lang } = useLanguage()
+  const locale = lang === "th" ? "th-TH" : "en-US"
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState("")
   const [rows, setRows] = useState<Row[] | null>(null)
@@ -64,7 +67,7 @@ export default function SearchBox({ onSelect }: { onSelect: (asset: string) => v
     <div ref={boxRef} className="relative">
       <button
         type="button"
-        aria-label="ค้นหา"
+        aria-label={t("search.aria")}
         onClick={() => setOpen((v) => !v)}
         className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
       >
@@ -80,18 +83,18 @@ export default function SearchBox({ onSelect }: { onSelect: (asset: string) => v
             onKeyDown={(e) => {
               if (e.key === "Enter" && results[0]) pick(results[0].asset)
             }}
-            placeholder="ค้นหาเหรียญ เช่น BTC, Bitcoin"
+            placeholder={t("search.placeholder")}
             className="w-full rounded-md border bg-transparent px-3 py-2 text-sm outline-none focus:border-emerald-500"
           />
 
           <div className="mt-2 max-h-80 overflow-y-auto">
-            {error && <p className="px-3 py-3 text-sm text-red-500">โหลดรายชื่อเหรียญไม่สำเร็จ</p>}
-            {!error && !rows && <p className="px-3 py-3 text-sm text-muted-foreground">กำลังโหลด…</p>}
+            {error && <p className="px-3 py-3 text-sm text-red-500">{t("search.loadFailed")}</p>}
+            {!error && !rows && <p className="px-3 py-3 text-sm text-muted-foreground">{t("search.loading")}</p>}
             {rows && results.length === 0 && (
-              <p className="px-3 py-3 text-sm text-muted-foreground">ไม่พบเหรียญที่ค้นหา</p>
+              <p className="px-3 py-3 text-sm text-muted-foreground">{t("search.notFound")}</p>
             )}
             {!q.trim() && results.length > 0 && (
-              <p className="px-3 pb-1 pt-2 text-xs text-muted-foreground">เหรียญทั้งหมด</p>
+              <p className="px-3 pb-1 pt-2 text-xs text-muted-foreground">{t("search.all")}</p>
             )}
             {results.map((r) => (
               <button
@@ -105,7 +108,7 @@ export default function SearchBox({ onSelect }: { onSelect: (asset: string) => v
                   <span className="block truncate text-xs text-muted-foreground">{r.name}</span>
                 </span>
                 <span className="shrink-0 text-right">
-                  <span className="block text-sm">฿{fmtPrice(r.price)}</span>
+                  <span className="block text-sm">฿{fmtPrice(r.price, locale)}</span>
                   <span className={`block text-xs ${r.change >= 0 ? "text-emerald-500" : "text-red-500"}`}>
                     {r.change >= 0 ? "+" : ""}
                     {r.change.toFixed(2)}%
