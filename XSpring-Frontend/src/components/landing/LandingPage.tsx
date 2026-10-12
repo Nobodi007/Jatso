@@ -10,7 +10,6 @@ import TradePage from "../trading/TradePage"
 import HomeSections from "./HomeSections"
 import AboutSection from "./AboutSection"
 import LanguageSwitcher from "../LanguageSwitcher";
-import { useLanguage } from "../../i18n/LanguageContext";
 
 type LandingPageProps = {
   onLogin: () => void
