@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { useLanguage } from "../i18n/LanguageContext"
+import { useLanguage } from "../../i18n/LanguageContext"
 
 type NewsItem = {
   title: string
