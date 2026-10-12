@@ -57,7 +57,7 @@ async function translateText(text: string): Promise<string> {
   return text
 }
 
-async function translateValue(value: unknown): Promise<unknown> {
+export async function translateValue(value: unknown): Promise<unknown> {
   if (typeof value === "string") return translateText(value)
   if (Array.isArray(value)) return Promise.all(value.map(translateValue))
   if (value && typeof value === "object") {
