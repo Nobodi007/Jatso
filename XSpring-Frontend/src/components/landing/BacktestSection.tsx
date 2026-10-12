@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react"
+import { useLanguage } from "../i18n/LanguageContext"
 import type { PointerEvent } from "react"
 import { CalendarClock, Check, Loader2, TrendingDown, TrendingUp, Wallet } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
@@ -40,33 +41,27 @@ type Kind = "lump" | "dca" | "dip" | "trend"
 const ASSETS = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "HBAR", "LINK", "XLM"]
 
 const PERIODS = [
-  { key: "1m", label: "1 เดือน", days: 30 },
-  { key: "3m", label: "3 เดือน", days: 90 },
-  { key: "6m", label: "6 เดือน", days: 180 },
-  { key: "1y", label: "1 ปี", days: 365 },
-  { key: "3y", label: "3 ปี", days: 365 * 3 },
-  { key: "5y", label: "5 ปี", days: 365 * 5 },
-  { key: "custom", label: "กำหนดเอง", days: 0 },
+  { key: "1m", days: 30 },
+  { key: "3m", days: 90 },
+  { key: "6m", days: 180 },
+  { key: "1y", days: 365 },
+  { key: "3y", days: 365 * 3 },
+  { key: "5y", days: 365 * 5 },
+  { key: "custom", days: 0 },
 ]
 
-const STRATEGIES: { kind: Kind; title: string; desc: string; icon: LucideIcon }[] = [
-  { kind: "lump", title: "ซื้อทีเดียวแล้วถือ", desc: "ซื้อทั้งก้อนวันแรก แล้วไม่ทำอะไรเลย", icon: Wallet },
-  { kind: "dca", title: "ทยอยซื้อสม่ำเสมอ (DCA)", desc: "แบ่งเงินเป็นงวดเท่า ๆ กันตามความถี่ที่เลือก", icon: CalendarClock },
-  {
-    kind: "dip",
-    title: "ซื้อเพิ่มตอนราคาตก",
-    desc: "ซื้อ 50% วันแรก ที่เหลือแบ่งซื้อเมื่อราคาตกจากจุดสูงสุด 10/20/30/40/50%",
-    icon: TrendingDown,
-  },
-  {
-    kind: "trend",
-    title: "ตามเทรนด์ (เส้นค่าเฉลี่ย)",
-    desc: "ถือเมื่อราคาอยู่เหนือเส้นค่าเฉลี่ย 50 วัน ขายเป็นเงินสดเมื่อหลุดเส้น",
-    icon: TrendingUp,
-  },
+const STRATEGIES: { kind: Kind; icon: LucideIcon }[] = [
+  { kind: "lump", icon: Wallet },
+  { kind: "dca", icon: CalendarClock },
+  { kind: "dip", icon: TrendingDown },
+  { kind: "trend", icon: TrendingUp },
 ]
 
-const KIND_LABEL: Record<string, string> = Object.fromEntries(STRATEGIES.map((s) => [s.kind, s.title]))
+// value = ค่าที่ backend รู้จัก (ห้ามแปล), key = ใช้หา label ใน translations
+const FREQS = [
+  { value: "รายสัปดาห์", key: "weekly" },
+  { value: "รายเดือน", key: "monthly" },
+]
 
 const QUICK_AMOUNTS = [10000, 50000, 100000, 500000]
 
@@ -78,12 +73,19 @@ const daysAgo = (n: number) => {
   return d
 }
 
-const baht = (v: number) => `฿${Math.round(v).toLocaleString("th-TH")}`
-const signedBaht = (v: number) => `${v >= 0 ? "+" : "−"}฿${Math.abs(Math.round(v)).toLocaleString("th-TH")}`
 const signedPct = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`
 const tone = (v: number) => (v >= 0 ? "text-emerald-500" : "text-red-500")
-const thDate = (s: string) =>
-  new Date(s).toLocaleDateString("th-TH", { day: "numeric", month: "short", year: "numeric" })
+
+function useFmt() {
+  const { lang } = useLanguage()
+  const locale = lang === "th" ? "th-TH" : "en-US"
+  return {
+    locale,
+    baht: (v: number) => `฿${Math.round(v).toLocaleString(locale)}`,
+    signedBaht: (v: number) => `${v >= 0 ? "+" : "−"}฿${Math.abs(Math.round(v)).toLocaleString(locale)}`,
+    date: (s: string) => new Date(s).toLocaleDateString(locale, { day: "numeric", month: "short", year: "numeric" }),
+  }
+}
 
 const compact = (v: number) => {
   const a = Math.abs(v)
@@ -95,6 +97,7 @@ const compact = (v: number) => {
 type Line = { name: string; color: string; values: number[]; dashed?: boolean }
 
 function EquityChart({ dates, lines, baseline }: { dates: string[]; lines: Line[]; baseline: number }) {
+  const { baht, date } = useFmt()
   const [hover, setHover] = useState<number | null>(null)
   const ref = useRef<HTMLDivElement>(null)
   const n = dates.length
@@ -191,7 +194,7 @@ function EquityChart({ dates, lines, baseline }: { dates: string[]; lines: Line[
               className="pointer-events-none absolute top-2 z-10 w-48 rounded-lg border bg-background/95 p-3 text-xs shadow-lg"
               style={xPct(hover) > 55 ? { right: `${100 - xPct(hover) + 2}%` } : { left: `${xPct(hover) + 2}%` }}
             >
-              <p className="mb-2 font-semibold">{thDate(dates[hover])}</p>
+              <p className="mb-2 font-semibold">{date(dates[hover])}</p>
               {lines.map((l) => (
                 <p key={l.name} className="flex items-center justify-between gap-2 py-0.5">
                   <span className="flex items-center gap-1.5 text-muted-foreground">
@@ -207,8 +210,8 @@ function EquityChart({ dates, lines, baseline }: { dates: string[]; lines: Line[
       </div>
 
       <div className="mt-2 flex justify-between text-xs text-muted-foreground">
-        <span>{thDate(dates[0])}</span>
-        <span>{thDate(dates[n - 1])}</span>
+        <span>{date(dates[0])}</span>
+        <span>{date(dates[n - 1])}</span>
       </div>
     </div>
   )
@@ -225,12 +228,14 @@ function Stat({ label, value, sub, valueClass = "" }: { label: string; value: st
 }
 
 export default function BacktestSection({ onRegister }: { onLogin: () => void; onRegister: () => void }) {
+  const { t } = useLanguage()
+  const { locale, baht, signedBaht, date } = useFmt()
   const [asset, setAsset] = useState("BTC")
   const [period, setPeriod] = useState("1y")
   const [customStart, setCustomStart] = useState(iso(daysAgo(365)))
   const [customEnd, setCustomEnd] = useState(iso(new Date()))
   const [kind, setKind] = useState<Kind>("lump")
-  const [freq, setFreq] = useState("รายเดือน")
+  const [freq, setFreq] = useState(FREQS[1].value)
   const [amountText, setAmountText] = useState("100000")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
@@ -240,7 +245,7 @@ export default function BacktestSection({ onRegister }: { onLogin: () => void; o
   const run = async () => {
     const amount = Number(amountText.replace(/,/g, ""))
     if (!Number.isFinite(amount) || amount < 100) {
-      setError("เงินลงทุนขั้นต่ำ 100 บาท")
+      setError(t("bt.errMin"))
       return
     }
     let start: string
@@ -253,7 +258,7 @@ export default function BacktestSection({ onRegister }: { onLogin: () => void; o
       end = iso(new Date())
     }
     if (!start || !end || start >= end) {
-      setError("วันเริ่มต้นต้องมาก่อนวันสิ้นสุด")
+      setError(t("bt.errDate"))
       return
     }
 
@@ -272,7 +277,7 @@ export default function BacktestSection({ onRegister }: { onLogin: () => void; o
         signal: ctrl.signal,
       })
       if (!res.ok) {
-        let msg = `คำนวณไม่สำเร็จ (HTTP ${res.status})`
+        let msg = t("bt.errHttp", { status: res.status })
         try {
           const j = await res.json()
           if (typeof j.detail === "string") msg = j.detail
@@ -284,9 +289,9 @@ export default function BacktestSection({ onRegister }: { onLogin: () => void; o
       setResult((await res.json()) as Result)
     } catch (e) {
       if ((e as Error).name === "AbortError") {
-        if (abortRef.current === ctrl) setError("ใช้เวลานานเกินไป กรุณาลองใหม่อีกครั้ง")
+        if (abortRef.current === ctrl) setError(t("bt.errTimeout"))
       } else {
-        setError((e as Error).message || "คำนวณไม่สำเร็จ")
+        setError((e as Error).message || t("bt.errGeneric"))
       }
     } finally {
       clearTimeout(timer)
@@ -301,33 +306,31 @@ export default function BacktestSection({ onRegister }: { onLogin: () => void; o
 
   let verdict = ""
   if (s) {
-    if (vsSav < 0) verdict = "กลยุทธ์นี้ได้ผลแย่กว่าฝากออมทรัพย์ในช่วงนี้ ราคาคริปโตผันผวนสูง ผลย้อนหลังอาจเป็นลบได้"
-    else if (!isLump && vsHold < 0) verdict = "ชนะการฝากออมทรัพย์ แต่ยังแพ้การซื้อทีเดียวแล้วถือในช่วงนี้"
-    else verdict = isLump ? "ชนะการฝากออมทรัพย์ในช่วงนี้" : "ชนะทั้งการถือเฉยๆ และการฝากออมทรัพย์ในช่วงนี้"
+    if (vsSav < 0) verdict = t("bt.verdictLoseSav")
+    else if (!isLump && vsHold < 0) verdict = t("bt.verdictLoseHold")
+    else verdict = isLump ? t("bt.verdictWinLump") : t("bt.verdictWinAll")
   }
 
   const bars = s
     ? [
-        { name: "กลยุทธ์นี้", value: s.final, pct: s.pct, color: "#10b981" },
-        ...(isLump ? [] : [{ name: "ถือเฉยๆ (ซื้อทีเดียว)", value: s.hold_final, pct: s.hold_pct, color: "#94a3b8" }]),
-        { name: "ฝากออมทรัพย์ (สมมติ 1.5%/ปี)", value: s.sav_final, pct: s.sav_pct, color: "#f59e0b" },
+        { name: t("bt.lineStrategy"), value: s.final, pct: s.pct, color: "#10b981" },
+        ...(isLump ? [] : [{ name: t("bt.barHold"), value: s.hold_final, pct: s.hold_pct, color: "#94a3b8" }]),
+        { name: t("bt.barSavings"), value: s.sav_final, pct: s.sav_pct, color: "#f59e0b" },
       ]
     : []
   const barMax = Math.max(...bars.map((b) => b.value), 1)
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8">
-      <h1 className="text-3xl font-extrabold tracking-tight">ลองลงทุนย้อนหลัง</h1>
-      <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-        ดูว่าถ้าลงทุนแบบนี้ในอดีต ผลจะเป็นยังไง คิดราคาเป็นบาท รวมส่วนต่างราคาและค่าธรรมเนียมแล้ว
-      </p>
+      <h1 className="text-3xl font-extrabold tracking-tight">{t("bt.title")}</h1>
+      <p className="mt-2 max-w-2xl text-sm text-muted-foreground">{t("bt.subtitle")}</p>
 
       <div className="mt-8 grid gap-6 lg:grid-cols-[400px_1fr]">
         {/* ---------- แผงตั้งค่า ---------- */}
         <section className="h-fit space-y-6 rounded-2xl border bg-muted/20 p-5 lg:sticky lg:top-24">
           <div>
             <label htmlFor="bt-asset" className="mb-2 block text-sm font-semibold">
-              เหรียญ
+              {t("bt.asset")}
             </label>
             <select
               id="bt-asset"
@@ -344,7 +347,7 @@ export default function BacktestSection({ onRegister }: { onLogin: () => void; o
           </div>
 
           <div>
-            <p className="mb-2 text-sm font-semibold">ช่วงเวลาย้อนหลัง</p>
+            <p className="mb-2 text-sm font-semibold">{t("bt.period")}</p>
             <div className="grid grid-cols-4 gap-1 rounded-lg border bg-background p-1">
               {PERIODS.map((p) => (
                 <button
@@ -355,14 +358,14 @@ export default function BacktestSection({ onRegister }: { onLogin: () => void; o
                     period === p.key ? "bg-emerald-500 text-black" : "text-muted-foreground hover:bg-accent hover:text-foreground"
                   }`}
                 >
-                  {p.label}
+                  {t(`bt.periods.${p.key}`)}
                 </button>
               ))}
             </div>
             {period === "custom" && (
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <label className="text-xs text-muted-foreground">
-                  เริ่มต้น
+                  {t("bt.start")}
                   <input
                     type="date"
                     value={customStart}
@@ -373,7 +376,7 @@ export default function BacktestSection({ onRegister }: { onLogin: () => void; o
                   />
                 </label>
                 <label className="text-xs text-muted-foreground">
-                  สิ้นสุด
+                  {t("bt.end")}
                   <input
                     type="date"
                     value={customEnd}
@@ -388,7 +391,7 @@ export default function BacktestSection({ onRegister }: { onLogin: () => void; o
           </div>
 
           <div>
-            <p className="mb-2 text-sm font-semibold">กลยุทธ์ลงทุน</p>
+            <p className="mb-2 text-sm font-semibold">{t("bt.strategy")}</p>
             <div className="space-y-2">
               {STRATEGIES.map((st) => {
                 const Icon = st.icon
@@ -410,8 +413,8 @@ export default function BacktestSection({ onRegister }: { onLogin: () => void; o
                       <Icon className="h-4 w-4" />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block text-sm font-semibold">{st.title}</span>
-                      <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">{st.desc}</span>
+                      <span className="block text-sm font-semibold">{t(`bt.strategies.${st.kind}.title`)}</span>
+                      <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">{t(`bt.strategies.${st.kind}.desc`)}</span>
                     </span>
                     {active && <Check className="mt-1 h-4 w-4 shrink-0 text-emerald-500" />}
                   </button>
@@ -422,18 +425,18 @@ export default function BacktestSection({ onRegister }: { onLogin: () => void; o
 
           {kind === "dca" && (
             <div>
-              <p className="mb-2 text-sm font-semibold">ความถี่ในการซื้อ</p>
+              <p className="mb-2 text-sm font-semibold">{t("bt.freqLabel")}</p>
               <div className="grid grid-cols-2 gap-1 rounded-lg border bg-background p-1">
-                {["รายสัปดาห์", "รายเดือน"].map((f) => (
+                {FREQS.map((f) => (
                   <button
-                    key={f}
+                    key={f.value}
                     type="button"
-                    onClick={() => setFreq(f)}
+                    onClick={() => setFreq(f.value)}
                     className={`rounded-md py-2 text-sm font-medium transition-colors ${
-                      freq === f ? "bg-emerald-500 text-black" : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                      freq === f.value ? "bg-emerald-500 text-black" : "text-muted-foreground hover:bg-accent hover:text-foreground"
                     }`}
                   >
-                    {f}
+                    {t(`bt.freqs.${f.key}`)}
                   </button>
                 ))}
               </div>
@@ -442,7 +445,7 @@ export default function BacktestSection({ onRegister }: { onLogin: () => void; o
 
           <div>
             <label htmlFor="bt-amount" className="mb-2 block text-sm font-semibold">
-              เงินลงทุน (บาท)
+              {t("bt.amount")}
             </label>
             <input
               id="bt-amount"
@@ -459,7 +462,7 @@ export default function BacktestSection({ onRegister }: { onLogin: () => void; o
                   onClick={() => setAmountText(String(a))}
                   className="rounded-full border px-3 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
                 >
-                  {a.toLocaleString("th-TH")}
+                  {a.toLocaleString(locale)}
                 </button>
               ))}
             </div>
@@ -472,7 +475,7 @@ export default function BacktestSection({ onRegister }: { onLogin: () => void; o
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-500 py-3 text-sm font-bold text-black hover:bg-emerald-400 disabled:opacity-60"
           >
             {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-            {loading ? "กำลังคำนวณ…" : "เริ่มลองลงทุนย้อนหลัง"}
+            {loading ? t("bt.running") : t("bt.run")}
           </button>
           {error && <p className="text-sm text-red-500">{error}</p>}
         </section>
@@ -482,17 +485,15 @@ export default function BacktestSection({ onRegister }: { onLogin: () => void; o
           {!result && !loading && (
             <div className="flex h-full min-h-[420px] flex-col items-center justify-center rounded-2xl border border-dashed p-8 text-center">
               <TrendingUp className="h-10 w-10 text-muted-foreground" />
-              <p className="mt-4 text-lg font-semibold">เลือกเงื่อนไขทางซ้าย แล้วกดเริ่ม</p>
-              <p className="mt-1 max-w-sm text-sm text-muted-foreground">
-                ระบบจะจำลองการลงทุนด้วยราคาจริงย้อนหลัง แล้วเทียบกับการถือเฉยๆ และการฝากออมทรัพย์
-              </p>
+              <p className="mt-4 text-lg font-semibold">{t("bt.emptyTitle")}</p>
+              <p className="mt-1 max-w-sm text-sm text-muted-foreground">{t("bt.emptyDesc")}</p>
             </div>
           )}
 
           {loading && !result && (
             <div className="flex min-h-[420px] flex-col items-center justify-center rounded-2xl border p-8 text-center">
               <Loader2 className="h-8 w-8 animate-spin text-emerald-500" />
-              <p className="mt-4 text-sm text-muted-foreground">กำลังดึงราคาย้อนหลังและคำนวณ ครั้งแรกอาจใช้เวลาสักครู่</p>
+              <p className="mt-4 text-sm text-muted-foreground">{t("bt.loadingDesc")}</p>
             </div>
           )}
 
@@ -500,21 +501,24 @@ export default function BacktestSection({ onRegister }: { onLogin: () => void; o
             <div className={`space-y-4 transition-opacity ${loading ? "opacity-50" : ""}`}>
               <div className="rounded-2xl border bg-muted/20 p-6">
                 <p className="text-xs text-muted-foreground">
-                  {result.asset} · {KIND_LABEL[result.kind]}
-                  {result.kind === "dca" ? ` (${result.freq})` : ""} · {thDate(result.start)} – {thDate(result.end)}
+                  {result.asset} · {t(`bt.strategies.${result.kind}.title`)}
+                  {result.kind === "dca"
+                    ? ` (${(() => { const f = FREQS.find((x) => x.value === result.freq); return f ? t(`bt.freqs.${f.key}`) : result.freq })()})`
+                    : ""}{" "}
+                  · {date(result.start)} – {date(result.end)}
                 </p>
-                <p className="mt-3 text-xs text-muted-foreground">มูลค่าสุดท้าย</p>
+                <p className="mt-3 text-xs text-muted-foreground">{t("bt.finalValue")}</p>
                 <p className={`text-4xl font-extrabold tracking-tight sm:text-5xl ${tone(s.profit)}`}>{baht(s.final)}</p>
                 <p className="mt-2 text-sm">
                   <span className={`font-semibold ${tone(s.profit)}`}>
                     {signedBaht(s.profit)} ({signedPct(s.pct)})
                   </span>{" "}
-                  <span className="text-muted-foreground">จากเงินลงทุน {baht(result.amount)}</span>
+                  <span className="text-muted-foreground">{t("bt.fromAmount", { amount: baht(result.amount) })}</span>
                 </p>
               </div>
 
               <div className="rounded-2xl border p-5">
-                <p className="mb-4 text-sm font-semibold">เทียบผลลัพธ์</p>
+                <p className="mb-4 text-sm font-semibold">{t("bt.compare")}</p>
                 <div className="space-y-4">
                   {bars.map((b) => (
                     <div key={b.name}>
@@ -536,29 +540,29 @@ export default function BacktestSection({ onRegister }: { onLogin: () => void; o
               </div>
 
               <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                <Stat label="ขาดทุนสูงสุดระหว่างทาง" value={`${s.max_dd.toFixed(2)}%`} valueClass="text-red-500" />
-                <Stat label="จำนวนครั้งที่ซื้อ/ขาย" value={`${s.trades} ครั้ง`} />
+                <Stat label={t("bt.maxDd")} value={`${s.max_dd.toFixed(2)}%`} valueClass="text-red-500" />
+                <Stat label={t("bt.trades")} value={t("bt.tradesCount", { n: s.trades })} />
                 {!isLump && (
-                  <Stat label="เทียบ “ถือเฉยๆ”" value={signedBaht(vsHold)} valueClass={tone(vsHold)} sub={signedPct(s.hold_pct)} />
+                  <Stat label={t("bt.vsHold")} value={signedBaht(vsHold)} valueClass={tone(vsHold)} sub={signedPct(s.hold_pct)} />
                 )}
-                <Stat label="เทียบ “ฝากออมทรัพย์”" value={signedBaht(vsSav)} valueClass={tone(vsSav)} sub={signedPct(s.sav_pct)} />
+                <Stat label={t("bt.vsSav")} value={signedBaht(vsSav)} valueClass={tone(vsSav)} sub={signedPct(s.sav_pct)} />
               </div>
 
               {s.cash_left > 1 && (
                 <p className="text-xs text-muted-foreground">
-                  มีเงินสดที่ยังไม่ได้ลงทุนคงเหลือ {baht(s.cash_left)} (นับรวมในมูลค่าสุดท้ายแล้ว)
+                  {t("bt.cashLeft", { amount: baht(s.cash_left) })}
                 </p>
               )}
 
               <div className="rounded-2xl border p-5">
-                <p className="mb-4 text-sm font-semibold">มูลค่าพอร์ตรายวัน</p>
+                <p className="mb-4 text-sm font-semibold">{t("bt.equityTitle")}</p>
                 <EquityChart
                   dates={result.dates}
                   baseline={result.amount}
                   lines={[
-                    { name: "กลยุทธ์นี้", color: "#10b981", values: result.strategy },
-                    ...(isLump ? [] : [{ name: "ถือเฉยๆ", color: "#94a3b8", values: result.hold }]),
-                    { name: "ฝากออมทรัพย์", color: "#f59e0b", values: result.savings, dashed: true },
+                    { name: t("bt.lineStrategy"), color: "#10b981", values: result.strategy },
+                    ...(isLump ? [] : [{ name: t("bt.lineHold"), color: "#94a3b8", values: result.hold }]),
+                    { name: t("bt.lineSavings"), color: "#f59e0b", values: result.savings, dashed: true },
                   ]}
                 />
               </div>
@@ -566,19 +570,18 @@ export default function BacktestSection({ onRegister }: { onLogin: () => void; o
               <div className="rounded-xl border-l-4 border-emerald-500 bg-emerald-500/10 p-4 text-sm leading-6">
                 <p>{verdict}</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  ผลย้อนหลังไม่ได้รับประกันอนาคต · คิดราคาบาท + ส่วนต่างราคา {result.spread_pct.toFixed(2)}% + ค่าธรรมเนียม{" "}
-                  {result.fee_pct.toFixed(2)}% ไม่รวมภาษี
+                  {t("bt.disclaimer", { spread: result.spread_pct.toFixed(2), fee: result.fee_pct.toFixed(2) })}
                 </p>
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border p-5">
-                <p className="text-sm text-muted-foreground">อยากลองซื้อขายในบัญชีจำลองต่อ?</p>
+                <p className="text-sm text-muted-foreground">{t("bt.ctaText")}</p>
                 <button
                   type="button"
                   onClick={onRegister}
                   className="rounded-lg bg-emerald-500 px-5 py-2.5 text-sm font-bold text-black hover:bg-emerald-400"
                 >
-                  สมัครตอนนี้
+                  {t("bt.ctaBtn")}
                 </button>
               </div>
             </div>
