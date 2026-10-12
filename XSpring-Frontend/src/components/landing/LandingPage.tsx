@@ -12,6 +12,7 @@ import AboutSection from "./AboutSection"
 import LanguageSwitcher from "../LanguageSwitcher";
 import { useLanguage } from "../../i18n/LanguageContext";
 import { HeroVisual, PriceTicker } from "./LandingEffects"
+import { GlobeHero } from "./GlobeHero"
 
 type LandingPageProps = {
   onLogin: () => void
