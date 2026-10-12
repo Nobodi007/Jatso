@@ -9,6 +9,8 @@ import LearnSection from "./LearnSection"
 import TradePage from "../trading/TradePage"
 import HomeSections from "./HomeSections"
 import AboutSection from "./AboutSection"
+import LanguageSwitcher from "../LanguageSwitcher";
+import { useLanguage } from "../../i18n/LanguageContext";
 
 type LandingPageProps = {
   onLogin: () => void
@@ -171,6 +173,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
             >
               <Globe className="h-4 w-4" />
             </button>
+            <LanguageSwitcher />  
             <button
               type="button"
               aria-label="เมนู"
