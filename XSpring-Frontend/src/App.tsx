@@ -4634,6 +4634,75 @@ const NEWS_FEEDS = [
   }
 }
 
+function NewsAiButton({
+  url,
+  title,
+  snippet,
+}: {
+  url: string
+  title: string
+  snippet: string
+}) {
+  const [data, setData] = useState<any>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState("")
+
+  const run = async () => {
+    setBusy(true)
+    setErr("")
+    try {
+      const res = await authFetch(`${API_BASE_URL}/api/news/summarize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, title, snippet }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setData(await res.json())
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "สรุปไม่สำเร็จ")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const color =
+    data?.sentiment === "bullish"
+      ? "text-emerald-500"
+      : data?.sentiment === "bearish"
+        ? "text-red-500"
+        : "text-muted-foreground"
+
+  return (
+    <div className="mt-3">
+      {!data && (
+        <button
+          type="button"
+          onClick={run}
+          disabled={busy}
+          className="rounded-md border px-3 py-1.5 text-xs hover:bg-accent disabled:opacity-50"
+        >
+          {busy ? "กำลังแปล..." : "✨ แปล/สรุปไทย"}
+        </button>
+      )}
+      {err && <p className="mt-2 text-xs text-red-500">{err}</p>}
+      {data && (
+        <div className="space-y-1.5 rounded-lg bg-muted/50 p-3 text-xs">
+          <p className="font-semibold">{data.title_th}</p>
+          <p>{data.summary_th}</p>
+          <p className={color}>
+            {data.sentiment === "bullish"
+              ? "▲ บวก"
+              : data.sentiment === "bearish"
+                ? "▼ ลบ"
+                : "● กลาง"}
+            {data.note ? ` · ${data.note}` : ""}
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function NewsPage() {
   const [items, setItems] = useState<NewsItem[]>([])
   const [newsLoading, setNewsLoading] = useState(true)
