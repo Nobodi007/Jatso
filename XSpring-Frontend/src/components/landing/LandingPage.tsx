@@ -166,7 +166,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
             </button>
             <button
               type="button"
-              aria-label={dark ? "เปลี่ยนเป็นโหมดสว่าง" : "เปลี่ยนเป็นโหมดมืด"}
+              aria-label={dark ? t("nav.themeLight") : t("nav.themeDark")}
               onClick={toggleTheme}
               className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
             >
@@ -177,7 +177,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
 
             <button
               type="button"
-              aria-label="เมนู"
+              aria-label={t("nav.menu")}
               onClick={() => setMenuOpen((v) => !v)}
               className="rounded-md p-2 hover:bg-accent md:hidden"
             >
