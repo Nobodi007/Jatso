@@ -2,7 +2,7 @@ import type { ReactNode } from "react"
 import { ArrowLeft } from "lucide-react"
 
 // ใส่ "/founder.jpg" เมื่อวางรูปไว้ที่ public/founder.jpg (ปล่อยว่าง = ใช้ตัวอักษร N แทน)
-const FOUNDER_PHOTO = ""
+const FOUNDER_PHOTO = "/founder.jpg"
 
 const BODY = "mt-5 text-base leading-8 text-foreground/90"
 
@@ -53,8 +53,10 @@ export default function AboutSection({
         {FOUNDER_PHOTO ? (
           <img
             src={FOUNDER_PHOTO}
-            alt="ธีรภัทร นิยม"
-            className="h-20 w-20 shrink-0 rounded-2xl object-cover"
+            alt="ธีรภัทร นิยม ผู้ก่อตั้ง Nobodi"
+            width={112}
+            height={112}
+            className="h-24 w-24 shrink-0 rounded-2xl object-cover sm:h-28 sm:w-28"
           />
         ) : (
           <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl bg-emerald-500 text-3xl font-extrabold text-black">
