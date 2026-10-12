@@ -17,6 +17,21 @@ const MARKERS: Marker[] = [
   { id: "saopaulo", location: [-23.5505, -46.6333] },
 ]
 
+const LABELS: Record<string, string> = {
+  bkk: "Bangkok",
+  sf: "San Francisco",
+  nyc: "New York",
+  tokyo: "Tokyo",
+  london: "London",
+  sydney: "Sydney",
+  dubai: "Dubai",
+  saopaulo: "São Paulo",
+}
+
+// ป้ายชื่อเมืองใช้ CSS Anchor Positioning: เบราว์เซอร์ที่ไม่รองรับจะไม่แสดงป้าย (ลูกโลกยังทำงานปกติ)
+const CAN_ANCHOR =
+  typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports("anchor-name: --a")
+
 const ARCS: Arc[] = [
   { id: "bkk-tokyo", from: [13.7563, 100.5018], to: [35.6762, 139.6503] },
   { id: "bkk-london", from: [13.7563, 100.5018], to: [51.5074, -0.1278] },
@@ -36,41 +51,31 @@ const THEME = {
   },
   light: {
     dark: 0,
-    baseColor: [1, 1, 1] as RGB,
-    markerColor: [0.3, 0.45, 0.85] as RGB, // น้ำเงิน
-    arcColor: [0.3, 0.45, 0.85] as RGB,
-    glowColor: [0.94, 0.93, 0.91] as RGB,
-    mapBrightness: 10,
+    baseColor: [1, 1, 1] as RGB, // ลูกโลกขาว กลืนไปกับพื้นหลัง
+    markerColor: [0.9, 0.1, 0.1] as RGB, // แดง
+    arcColor: [0.9, 0.1, 0.1] as RGB, // เส้นแดง
+    glowColor: [1, 1, 1] as RGB,
+    mapBrightness: 6,
   },
 }
 
-/* ---------- ตรวจธีมมืด/สว่างของเว็บ (class "dark" หรือ data-theme หรือค่าเครื่อง) ---------- */
-function readIsDark(): boolean {
-  if (typeof document === "undefined") return true
-  const el = document.documentElement
-  if (el.classList.contains("dark")) return true
-  if (el.classList.contains("light")) return false
-  const attr = el.getAttribute("data-theme")
-  if (attr) return attr === "dark"
-  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true
-}
-
-function useIsDark(): boolean {
-  const [isDark, setIsDark] = useState(readIsDark)
+/* ---------- ตรวจธีมจากสีตัวหนังสือจริงของหน้า (ใช้ได้ไม่ว่าเว็บสลับธีมด้วยวิธีไหน) ---------- */
+function useIsDark(ref: React.RefObject<HTMLElement | null>): boolean {
+  const [isDark, setIsDark] = useState(false)
   useEffect(() => {
-    const update = () => setIsDark(readIsDark())
-    const obs = new MutationObserver(update)
-    obs.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class", "data-theme"],
-    })
-    const mq = window.matchMedia?.("(prefers-color-scheme: dark)")
-    mq?.addEventListener?.("change", update)
-    return () => {
-      obs.disconnect()
-      mq?.removeEventListener?.("change", update)
+    const check = () => {
+      const el = ref.current
+      if (!el) return
+      const m = getComputedStyle(el).color.match(/[\d.]+/g)
+      if (!m) return
+      const [r, g, b] = m.slice(0, 3).map(Number)
+      const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+      setIsDark(lum > 0.5) // ตัวหนังสือสว่าง = ธีมมืด
     }
-  }, [])
+    check()
+    const id = setInterval(check, 400)
+    return () => clearInterval(id)
+  }, [ref])
   return isDark
 }
 
@@ -230,15 +235,47 @@ function Globe({ isDark }: { isDark: boolean }) {
           touchAction: "none",
         }}
       />
+      {CAN_ANCHOR &&
+        MARKERS.map((m) => (
+          <div
+            key={m.id}
+            style={
+              {
+                position: "absolute",
+                positionAnchor: `--cobe-${m.id}`,
+                bottom: "anchor(top)",
+                left: "anchor(center)",
+                translate: "-50% 0",
+                marginBottom: 8,
+                padding: "2px 6px",
+                background: isDark ? "#052e22" : "#1a1a2e",
+                color: isDark ? "#6ee7b7" : "#fff",
+                border: isDark ? "1px solid rgba(52,211,153,.4)" : "none",
+                fontFamily: "monospace",
+                fontSize: "0.6rem",
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+                whiteSpace: "nowrap",
+                pointerEvents: "none",
+                opacity: `var(--cobe-visible-${m.id}, 0)`,
+                filter: `blur(calc((1 - var(--cobe-visible-${m.id}, 0)) * 8px))`,
+                transition: "opacity 0.8s, filter 0.8s",
+              } as any
+            }
+          >
+            {LABELS[m.id]}
+          </div>
+        ))}
     </div>
   )
 }
 
 /* ---------- ตัวที่เอาไปใช้ใน Landing ---------- */
 export function GlobeHero() {
-  const isDark = useIsDark()
+  const ref = useRef<HTMLDivElement>(null)
+  const isDark = useIsDark(ref)
   return (
-    <div className="flex w-full items-center justify-center overflow-hidden">
+    <div ref={ref} className="flex w-full items-center justify-center overflow-hidden">
       <div className="w-full max-w-[460px]">
         <Globe key={isDark ? "dark" : "light"} isDark={isDark} />
       </div>
