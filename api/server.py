@@ -815,6 +815,14 @@ def _order_raw_time(order: dict):
 
 SIDE_TH_TO_EN = {"ซื้อ": "BUY", "ขาย": "SELL"}
 
+# Simulated exchange trading fee: 0.25% of executed THB notional.
+ORDER_TRADING_FEE_RATE = 0.0025
+
+def _order_fee_thb(amount) -> float:
+    """Return the simulated trading fee at 0.25%, rounded to satang."""
+    notional = max(0.0, _safe_float(amount, 0.0))
+    return round(notional * ORDER_TRADING_FEE_RATE + 1e-9, 2)
+
 
 def _normalize_side(value) -> str:
     raw = str(value or "").strip()
@@ -1988,11 +1996,16 @@ def order_history(
                     else order.get("quantity"),
                     0.0,
                 )
-                fee = _safe_float(
+                stored_fee = (
                     order.get("ค่าธรรมเนียม")
                     if order.get("ค่าธรรมเนียม") is not None
-                    else order.get("fee_thb"),
-                    0.0,
+                    else order.get("fee_thb")
+                )
+                # Legacy orders did not store a fee; calculate it for display.
+                fee = (
+                    _safe_float(stored_fee, 0.0)
+                    if stored_fee is not None
+                    else _order_fee_thb(amount)
                 )
 
                 rows.append({
@@ -3499,6 +3512,28 @@ def create_order(
                     if idempotency_key:
                         target["idempotency_key_hash"] = _idempotency_key_hash(idempotency_key)
                         target["idempotency_fingerprint"] = idempotency_fingerprint
+
+            # Store the simulated exchange fee on the order and matching ledger row.
+            # Prefer the executed THB notional reported by the engine; fall back to request amount.
+            fee_basis = rec.get("มูลค่า (บาท)")
+            if fee_basis is None:
+                fee_basis = rec.get("amount_thb")
+            if fee_basis is None:
+                fee_basis = amount_thb
+            fee_thb = _order_fee_thb(fee_basis)
+            rec["ค่าธรรมเนียม"] = fee_thb
+            rec["fee_thb"] = fee_thb
+            ledger_orders = sim.get("orders")
+            if isinstance(ledger_orders, list) and ledger_orders:
+                rec_order_id = str(rec.get("Order ID") or rec.get("order_id") or rec.get("id") or "")
+                for ledger_order in reversed(ledger_orders):
+                    if not isinstance(ledger_order, dict):
+                        continue
+                    ledger_id = str(ledger_order.get("Order ID") or ledger_order.get("order_id") or ledger_order.get("id") or "")
+                    if ledger_order is rec or (rec_order_id and ledger_id == rec_order_id):
+                        ledger_order["ค่าธรรมเนียม"] = fee_thb
+                        ledger_order["fee_thb"] = fee_thb
+                        break
 
             result = str(rec.get("ผลด่าน", ""))
 
