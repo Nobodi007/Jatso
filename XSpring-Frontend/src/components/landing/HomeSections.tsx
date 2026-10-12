@@ -5,6 +5,7 @@ import PrivacyPolicy from "./PrivacyPolicy"
 import { useEffect, useState } from "react"
 import { BarChart3, Newspaper, Scale, ShieldCheck, TestTube2, UserPlus } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
+import { useLanguage } from "../../i18n/LanguageContext"
 
 const API_BASE_URL = "https://xspring-api.onrender.com"
 
@@ -19,7 +20,8 @@ type Props = {
   heroArt: React.ReactNode
 }
 
-const fmtPrice = (v: number) => v.toLocaleString("th-TH", { maximumFractionDigits: v < 1 ? 4 : 2 })
+const fmtPrice = (v: number, locale: string) =>
+  v.toLocaleString(locale, { maximumFractionDigits: v < 1 ? 4 : 2 })
 
 function Spark({ data, up }: { data: number[]; up: boolean }) {
   if (data.length < 2) return <span className="text-xs text-muted-foreground">—</span>
@@ -44,34 +46,36 @@ function Spark({ data, up }: { data: number[]; up: boolean }) {
 const WHY: { icon: LucideIcon; title: string; text: string }[] = [
   {
     icon: ShieldCheck,
-    title: "ฝึกโดยไม่เสี่ยงเงินจริง",
-    text: "ทุกการซื้อขายเกิดในบัญชีจำลอง คุณลองผิดลองถูกได้เต็มที่ โดยที่เงินในกระเป๋ายังอยู่ครบ",
+    title: "why.c1Title",
+    text: "why.c1Desc",
   },
   {
     icon: BarChart3,
-    title: "ข้อมูลราคาเป็นบาท",
-    text: "ดูราคาสดจากกระดานไทย พร้อมเทียบต้นทุนซื้อและรายรับขายหลังหักค่าธรรมเนียม ไม่ต้องคำนวณเอง",
+    title: "why.c2Title",
+    text: "why.c2Desc",
   },
   {
     icon: TestTube2,
-    title: "ทดสอบก่อนตัดสินใจ",
-    text: "ลองจำลองการลงทุนย้อนหลังหลายรูปแบบ แล้วดูว่าผลต่างจากการฝากออมทรัพย์แค่ไหน",
+    title: "why.c3Title",
+    text: "why.c3Desc",
   },
 ]
 
 const STEPS: { icon: LucideIcon; title: string; text: string }[] = [
-  { icon: UserPlus, title: "สมัครด้วยบัญชี Google", text: "ใช้เวลาไม่กี่วินาที ไม่ต้องตั้งรหัสผ่านใหม่" },
-  { icon: Scale, title: "ฝึกซื้อขายในบัญชีจำลอง", text: "เริ่มจากเงินจำลอง เรียนรู้จังหวะและต้นทุนจริงของตลาด" },
-  { icon: BarChart3, title: "ทดสอบกลยุทธ์ย้อนหลัง", text: "เทียบผลลัพธ์ก่อนนำไปใช้กับการตัดสินใจของคุณเอง" },
+  { icon: UserPlus, title: "steps.s1Title", text: "steps.s1Desc" },
+  { icon: Scale, title: "steps.s2Title", text: "steps.s2Desc" },
+  { icon: BarChart3, title: "steps.s3Title", text: "steps.s3Desc" },
 ]
 
 const TOOLS: { icon: LucideIcon; title: string; text: string; go: string }[] = [
-  { icon: Newspaper, title: "ข่าวคริปโต", text: "ข่าวล่าสุดที่เกี่ยวกับเหรียญในระบบ", go: "ข่าว" },
-  { icon: Scale, title: "เทียบราคากระดานไทย", text: "ดูว่ากระดานไหนซื้อถูกและขายได้มากกว่า", go: "ตลาด" },
-  { icon: TestTube2, title: "ลองลงทุนย้อนหลัง", text: "ซื้อทีเดียว ทยอยซื้อ หรือตามเทรนด์", go: "ลองลงทุนย้อนหลัง" },
+  { icon: Newspaper, title: "tools.t1Title", text: "tools.t1Desc", go: "ข่าว" },
+  { icon: Scale, title: "tools.t2Title", text: "tools.t2Desc", go: "ตลาด" },
+  { icon: TestTube2, title: "tools.t3Title", text: "tools.t3Desc", go: "ลองลงทุนย้อนหลัง" },
 ]
 
 export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, heroTitle, heroSub, heroArt }: Props) {
+  const { t, lang } = useLanguage()
+  const locale = lang === "th" ? "th-TH" : "en-US"
   const [rows, setRows] = useState<Row[] | null>(null)
   const [sparks, setSparks] = useState<Record<string, number[]>>({})
   const [page, setPage] = useState<"home" | "about" | "guide" | "privacy">("home")
@@ -122,7 +126,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
             onClick={onRegister}
             className="mt-8 rounded-lg bg-emerald-500 px-6 py-3 text-sm font-bold text-black hover:bg-emerald-400"
           >
-            สมัครตอนนี้
+            {t("hero.cta")}
           </button>
         </div>
         <div className="flex justify-center lg:justify-end">{heroArt}</div>
@@ -130,18 +134,18 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
 
       {/* ตลาด */}
       <section className="mx-auto max-w-4xl px-4 py-12">
-        <h2 className="text-center text-3xl font-extrabold tracking-tight">ตลาด</h2>
-        <p className="mt-2 text-center text-sm text-muted-foreground">ราคาสดเป็นสกุลเงินบาท อัปเดตอัตโนมัติ</p>
+        <h2 className="text-center text-3xl font-extrabold tracking-tight">{t("market.title")}</h2>
+        <p className="mt-2 text-center text-sm text-muted-foreground">{t("market.subtitle")}</p>
 
         <div className="mt-8 overflow-hidden rounded-2xl border">
           <div className="grid grid-cols-[1.4fr_1fr_0.8fr_0.8fr] gap-2 bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
-            <span>ชื่อ</span>
-            <span className="text-right">ราคาล่าสุด</span>
-            <span className="text-right">เปลี่ยนแปลง 24 ชม.</span>
-            <span className="text-right">แนวโน้ม 7 วัน</span>
+            <span>{t("market.colName")}</span>
+            <span className="text-right">{t("market.colPrice")}</span>
+            <span className="text-right">{t("market.colChange")}</span>
+            <span className="text-right">{t("market.colTrend")}</span>
           </div>
-          {rows === null && <p className="px-4 py-8 text-center text-sm text-muted-foreground">กำลังโหลด…</p>}
-          {rows?.length === 0 && <p className="px-4 py-8 text-center text-sm text-muted-foreground">โหลดราคาไม่สำเร็จ</p>}
+          {rows === null && <p className="px-4 py-8 text-center text-sm text-muted-foreground">{t("market.loading")}</p>}
+          {rows?.length === 0 && <p className="px-4 py-8 text-center text-sm text-muted-foreground">{t("market.loadFailed")}</p>}
           {rows?.map((r) => {
             const up = r.change >= 0
             const sp = sparks[r.asset] ?? []
@@ -156,7 +160,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
                   <span className="font-semibold">{r.asset}</span>{" "}
                   <span className="text-xs text-muted-foreground">{r.name}</span>
                 </span>
-                <span className="text-right font-semibold">฿{fmtPrice(r.price)}</span>
+                <span className="text-right font-semibold">฿{fmtPrice(r.price, locale)}</span>
                 <span className={`text-right font-semibold ${up ? "text-emerald-500" : "text-red-500"}`}>
                   {up ? "+" : ""}
                   {r.change.toFixed(2)}%
@@ -170,16 +174,16 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
         </div>
         <div className="mt-4 text-center">
           <button type="button" onClick={() => onGo("ตลาด")} className="text-sm text-muted-foreground hover:text-foreground">
-            ดูเพิ่มเติม ›
+            {t("market.viewMore")}
           </button>
         </div>
       </section>
 
       {/* ทำไมต้อง Nobodi */}
       <section className="mx-auto max-w-6xl px-4 py-12">
-        <h2 className="text-center text-3xl font-extrabold tracking-tight">ทำไมต้อง Nobodi?</h2>
+        <h2 className="text-center text-3xl font-extrabold tracking-tight">{t("why.title")}</h2>
         <p className="mt-2 text-center text-sm text-muted-foreground">
-          เริ่มต้นเรียนรู้ตลาดคริปโตได้อย่างเป็นขั้นเป็นตอน โดยไม่ต้องใช้เงินจริง
+          {t("why.subtitle")}
         </p>
         <div className="mt-8 grid gap-4 md:grid-cols-3">
           {WHY.map((w) => {
@@ -189,8 +193,8 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
                 <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-500">
                   <Icon className="h-6 w-6" />
                 </span>
-                <h3 className="mt-4 text-lg font-bold">{w.title}</h3>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">{w.text}</p>
+                <h3 className="mt-4 text-lg font-bold">{t(w.title)}</h3>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">{t(w.text)}</p>
               </div>
             )
           })}
@@ -199,7 +203,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
 
       {/* เริ่มต้นใน 3 ขั้น */}
       <section className="mx-auto max-w-6xl px-4 py-12">
-        <h2 className="text-center text-3xl font-extrabold tracking-tight">เริ่มต้นง่าย ๆ ใน 3 ขั้นตอน</h2>
+        <h2 className="text-center text-3xl font-extrabold tracking-tight">{t("steps.title")}</h2>
         <div className="mt-8 grid items-center gap-8 lg:grid-cols-[1fr_320px]">
           <ol className="space-y-6">
             {STEPS.map((s, i) => {
@@ -211,9 +215,9 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
                   </span>
                   <div>
                     <p className="text-lg font-bold">
-                      {i + 1}. {s.title}
+                      {i + 1}. {t(s.title)}
                     </p>
-                    <p className="mt-1 text-sm text-muted-foreground">{s.text}</p>
+                    <p className="mt-1 text-sm text-muted-foreground">{t(s.text)}</p>
                   </div>
                 </li>
               )
@@ -224,7 +228,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
                 onClick={onRegister}
                 className="rounded-lg bg-emerald-500 px-6 py-3 text-sm font-bold text-black hover:bg-emerald-400"
               >
-                สมัครตอนนี้
+                {t("cta.register")}
               </button>
             </li>
           </ol>
@@ -251,21 +255,21 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
 
       {/* เครื่องมือ */}
       <section className="mx-auto max-w-6xl px-4 py-12">
-        <h2 className="text-center text-3xl font-extrabold tracking-tight">เครื่องมือที่ช่วยให้ตัดสินใจได้ดีขึ้น</h2>
+        <h2 className="text-center text-3xl font-extrabold tracking-tight">{t("tools.title")}</h2>
         <div className="mt-8 grid gap-4 md:grid-cols-3">
-          {TOOLS.map((t) => {
-            const Icon = t.icon
+          {TOOLS.map((tool) => {
+            const Icon = tool.icon
             return (
               <button
-                key={t.title}
+                key={tool.title}
                 type="button"
-                onClick={() => onGo(t.go)}
+                onClick={() => onGo(tool.go)}
                 className="rounded-2xl border p-6 text-left transition-colors hover:bg-accent"
               >
                 <Icon className="h-6 w-6 text-emerald-500" />
-                <h3 className="mt-4 text-lg font-bold">{t.title}</h3>
-                <p className="mt-1 text-sm text-muted-foreground">{t.text}</p>
-                <span className="mt-4 inline-block text-sm text-emerald-500">เปิดดู ›</span>
+                <h3 className="mt-4 text-lg font-bold">{t(tool.title)}</h3>
+                <p className="mt-1 text-sm text-muted-foreground">{t(tool.text)}</p>
+                <span className="mt-4 inline-block text-sm text-emerald-500">{t("tools.open")}</span>
               </button>
             )
           })}
@@ -274,18 +278,18 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
 
             {/* ปิดท้าย */}
       <section className="mx-auto max-w-4xl px-4 py-16 text-center">
-        <h2 className="text-3xl font-extrabold tracking-tight">พร้อมลองแล้วหรือยัง?</h2>
-        <p className="mt-2 text-sm text-muted-foreground">สมัครฟรี ใช้บัญชี Google ของคุณได้เลย</p>
+        <h2 className="text-3xl font-extrabold tracking-tight">{t("cta.title")}</h2>
+        <p className="mt-2 text-sm text-muted-foreground">{t("cta.subtitle")}</p>
         <div className="mt-6 flex justify-center gap-3">
           <button
             type="button"
             onClick={onRegister}
             className="rounded-lg bg-emerald-500 px-6 py-3 text-sm font-bold text-black hover:bg-emerald-400"
           >
-            สมัครตอนนี้
+            {t("cta.register")}
           </button>
           <button type="button" onClick={onLogin} className="rounded-lg border px-6 py-3 text-sm font-semibold hover:bg-accent">
-            เข้าสู่ระบบ
+            {t("cta.login")}
           </button>
         </div>
       </section>
