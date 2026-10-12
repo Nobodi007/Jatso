@@ -9,7 +9,7 @@ const options: { code: Lang; label: string }[] = [
 ];
 
 export default function LanguageSwitcher() {
-  const { lang, setLang } = useLanguage();
+  const { lang, setLang, t } = useLanguage();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -26,7 +26,7 @@ export default function LanguageSwitcher() {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        aria-label="ภาษา"
+        aria-label={t("nav.language")}
         className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
       >
         <Globe className="h-4 w-4" />
