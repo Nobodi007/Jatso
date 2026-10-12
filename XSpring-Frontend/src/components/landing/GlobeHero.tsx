@@ -59,18 +59,33 @@ const THEME = {
   },
 }
 
-/* ---------- ตรวจธีมจากสีตัวหนังสือจริงของหน้า (ใช้ได้ไม่ว่าเว็บสลับธีมด้วยวิธีไหน) ---------- */
+/* ---------- ตรวจธีมจาก "สีพื้นหลังจริง" ของหน้า (เดินขึ้นไปหา element ที่มีสีพื้นหลัง) ---------- */
+function lumOf(rgb: string): { lum: number; alpha: number } | null {
+  const m = rgb.match(/[\d.]+/g)
+  if (!m || m.length < 3) return null
+  const [r, g, b] = m.slice(0, 3).map(Number)
+  const alpha = m.length > 3 ? Number(m[3]) : 1
+  return { lum: (0.299 * r + 0.587 * g + 0.114 * b) / 255, alpha }
+}
+
 function useIsDark(ref: React.RefObject<HTMLElement | null>): boolean {
-  const [isDark, setIsDark] = useState(false)
+  const [isDark, setIsDark] = useState(true)
   useEffect(() => {
     const check = () => {
-      const el = ref.current
-      if (!el) return
-      const m = getComputedStyle(el).color.match(/[\d.]+/g)
-      if (!m) return
-      const [r, g, b] = m.slice(0, 3).map(Number)
-      const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255
-      setIsDark(lum > 0.5) // ตัวหนังสือสว่าง = ธีมมืด
+      let node: HTMLElement | null = ref.current
+      while (node) {
+        const v = lumOf(getComputedStyle(node).backgroundColor)
+        if (v && v.alpha > 0.5) {
+          setIsDark(v.lum < 0.5) // พื้นหลังเข้ม = ธีมมืด
+          return
+        }
+        node = node.parentElement
+      }
+      // ไม่เจอสีพื้นหลังเลย: ใช้สีตัวหนังสือแทน
+      if (ref.current) {
+        const t = lumOf(getComputedStyle(ref.current).color)
+        if (t) setIsDark(t.lum > 0.5)
+      }
     }
     check()
     const id = setInterval(check, 400)
