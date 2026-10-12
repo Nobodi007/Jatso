@@ -1,6 +1,5 @@
-const { t } = useLanguage();
 import { useEffect, useState } from "react"
-import { Globe, Menu, Moon, Sun, X } from "lucide-react"
+import { Menu, Moon, Sun, X } from "lucide-react";
 import MarketSection from "./MarketSection"
 import NewsSection from "./NewsSection"
 import SearchBox from "./SearchBox"
@@ -11,6 +10,7 @@ import TradePage from "../trading/TradePage"
 import HomeSections from "./HomeSections"
 import AboutSection from "./AboutSection"
 import LanguageSwitcher from "../LanguageSwitcher";
+import { useLanguage } from "../../i18n/LanguageContext";
 
 type LandingPageProps = {
   onLogin: () => void
@@ -85,6 +85,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
   const [view, setView] = useState<View>("home")
   const [coin, setCoin] = useState("BTC")
   const [dark, setDark] = useState(initialDark)
+  const { t } = useLanguage();   
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark)
