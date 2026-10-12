@@ -118,6 +118,7 @@ function IconBox({ icon: Icon }: { icon: LucideIcon }) {
 }
 
 function ModCard({ m }: { m: Mod }) {
+  const { t } = useLanguage()
   return (
     <div id={m.id} className="scroll-mt-24 rounded-2xl border p-6">
       <div className="flex items-start gap-4">
