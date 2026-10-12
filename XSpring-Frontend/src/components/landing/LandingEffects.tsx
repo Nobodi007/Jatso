@@ -1,4 +1,6 @@
 import { useState, useEffect } from "react"
+// ถ้าอยู่ใน App.tsx:
+import { fetchMarketTickers, CoinIcon, formatTHB, type MarketTicker } from "../../App"
 /* =========================================================
    วางทั้งก้อนนี้ในไฟล์ App.tsx "ก่อน" ฟังก์ชันหน้า Landing
    (ใช้ useState, useEffect, fetchMarketTickers, CoinIcon, formatTHB
@@ -58,7 +60,7 @@ const NB_CSS = `
 @media (max-width: 768px) { .nb-hero { height: 320px } .nb-globe { width: 280px; height: 280px } .nb-ring { width: 250px; height: 250px } .nb-coin { width: 110px; height: 110px } .nb-face { font-size: 62px } }
 `
 
-function HeroVisual() {
+export function HeroVisual() {
   const layers = [-8, -4, 0, 4, 8]
   return (
     <div className="nb-hero" aria-hidden="true">
@@ -81,7 +83,7 @@ function HeroVisual() {
   )
 }
 
-function PriceTicker() {
+export function PriceTicker() {
   const [rows, setRows] = useState<MarketTicker[]>([])
 
   useEffect(() => {
