@@ -1,3662 +1,6266 @@
-from fastapi import FastAPI, HTTPException, Depends, Header, Request
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from pathlib import Path
-from threading import RLock
-from collections import defaultdict, deque
-from functools import lru_cache
-from typing import Optional
-import hmac
-import hashlib
-import time
-import importlib.util
-import os
-import math
-import json
-import urllib.parse
-import urllib.request
-import asyncio
-import requests
+import TradingViewChart from "./components/trading/TradingViewChart"
+import { AuthGate, AuthProvider, authFetch, authHeaders, useAuth } from "./auth"
+import { useEffect, useRef, useState } from "react"
+import type { ReactNode } from "react"
+import {
+  LayoutDashboard,
+  CandlestickChart,
+  ArrowLeftRight,
+  BookOpen,
+  Wallet,
+  ClipboardList,
+  BarChart3,
+  ShieldAlert,
+  FlaskConical,
+  Newspaper,
+  Settings,
+  Menu,
+  Search,
+  Bell,
+  Moon,
+  Sun,
+  TrendingUp,
+  TrendingDown,
+  LogOut,
+} from "lucide-react"
+import MorphOrb from "./components/ui/ai-thiking-orb-and-input"
+import RiskPage from "./components/risk/RiskPage"
+import { NumberTicker } from "./components/ui/number-ticker"
 
-import jwt
-from google.auth.transport import requests as google_requests
-from google.oauth2 import id_token as google_id_token
+type Page =
+  | "dashboard"
+  | "markets"
+  | "trade"
+  | "orderbook"
+  | "portfolio"
+  | "wallet"
+  | "orders"
+  | "positions"
+  | "risk"
+  | "quant"
+  | "news"
+  | "settings"
 
-import pandas as pd
+type Asset = string
+type OrderSide = "BUY" | "SELL"
+
+type PortfolioHolding = {
+  asset: string
+  qty: number
+  avg_cost: number
+  price: number
+  market_value: number
+  cost_basis: number
+  unrealized_pnl: number
+  allocation_pct: number
+  pnl_pct: number
+}
+
+type PortfolioData = {
+  cash_thb: number
+  market_value_thb: number
+  total_value_thb: number
+  realized_pnl_thb: number
+  unrealized_pnl_thb: number
+  total_pnl_thb: number
+  pnl_pct: number
+  fees_thb: number
+  holdings: PortfolioHolding[]
+}
+
+const API_BASE_URL = "https://xspring-api.onrender.com"
+const DEALER_API_KEY = String(import.meta.env.VITE_DEALER_API_KEY || "").trim()
+
+function formatTHB(value: number) {
+  return `฿${Number(value || 0).toLocaleString("th-TH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+}
+
+function AiAssistantOverlay({ onClose }: { onClose: () => void }) {
+  const historyRef = useRef<{ role: "user" | "assistant"; content: string }[]>([])
+
+  const handleSubmit = async (text: string): Promise<string> => {
+    if (!DEALER_API_KEY) return "ยังไม่ได้ตั้ง VITE_DEALER_API_KEY"
+    try {
+      const response = await authFetch(`${API_BASE_URL}/api/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "X-API-Key": DEALER_API_KEY,
+        },
+        body: JSON.stringify({ message: text, history: historyRef.current }),
+      })
+      const body = await response.json().catch(() => null)
+
+      if (!response.ok) {
+        const detail =
+          typeof body?.detail === "string" ? body.detail : `HTTP ${response.status}`
+        return `ถามไม่สำเร็จ: ${detail}`
+      }
+
+      const answer = String(body?.answer || "").trim() || "ไม่ได้รับคำตอบจาก AI"
+      historyRef.current = [
+        ...historyRef.current,
+        { role: "user" as const, content: text },
+        { role: "assistant" as const, content: answer },
+      ].slice(-6)
+      return answer
+    } catch {
+      return "เชื่อมต่อ Backend ไม่ได้"
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-background">
+      <button
+        onClick={onClose}
+        className="absolute right-4 top-4 z-[60] rounded-lg border px-3 py-1.5 text-sm hover:bg-accent"
+      >
+        ปิด
+      </button>
+      <MorphOrb onSubmit={handleSubmit} minThinkMs={2000} />
+    </div>
+  )
+}
 
 
-# =========================================================
-# APP
-# =========================================================
-
-app = FastAPI(
-    title="Dealer Suite API",
-    version="1.4.0",
-)
+function formatQty(value: number) {
+  return Number(value || 0).toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 8,
+  })
+}
 
 
-# =========================================================
-# CORS
-# =========================================================
-# ใช้ allow_origins=["*"] เพราะ frontend production อาจมี origin
-# ที่เปลี่ยนได้ เช่น deployment/preview URL
-# ไม่เปิด credentials เพราะ API นี้ไม่ได้ใช้ cookie authentication
-# =========================================================
+type NavigationItem = {
+  id: Page
+  label: string
+  icon: typeof LayoutDashboard
+  count?: number
+}
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+const navigation: NavigationItem[] = [
+  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { id: "markets", label: "Markets", icon: CandlestickChart },
+  { id: "trade", label: "Trade", icon: ArrowLeftRight },
+  { id: "orderbook", label: "Order Book", icon: BookOpen },
+  { id: "portfolio", label: "Portfolio", icon: Wallet },
+  { id: "wallet", label: "Wallet", icon: Wallet },
+  { id: "orders", label: "Orders", icon: ClipboardList, count: 3 },
+  { id: "positions", label: "Positions", icon: BarChart3 },
+  { id: "risk", label: "Risk Center", icon: ShieldAlert },
+  { id: "quant", label: "Quant Lab", icon: FlaskConical },
+  { id: "news", label: "News", icon: Newspaper },
+  { id: "settings", label: "Settings", icon: Settings },
+]
 
+const marketData: Record<
+  Asset,
+  {
+    name: string
+    price: number
+    change: number
+    bid: number
+    ask: number
+    high: number
+    low: number
+    volume: number
+  }
+> = {
+  BTC: {
+    name: "Bitcoin",
+    price: 3684250,
+    change: 2.34,
+    bid: 3684000,
+    ask: 3684500,
+    high: 3721000,
+    low: 3598000,
+    volume: 124.52,
+  },
+  ETH: {
+    name: "Ethereum",
+    price: 128450,
+    change: 1.82,
+    bid: 128400,
+    ask: 128500,
+    high: 130200,
+    low: 125800,
+    volume: 2840.31,
+  },
+  SOL: {
+    name: "Solana",
+    price: 6240,
+    change: -0.74,
+    bid: 6238,
+    ask: 6242,
+    high: 6380,
+    low: 6120,
+    volume: 18420.5,
+  },
+  XRP: {
+    name: "XRP",
+    price: 82.45,
+    change: 3.12,
+    bid: 82.42,
+    ask: 82.48,
+    high: 84.2,
+    low: 79.8,
+    volume: 4820000,
+  },
+}
 
-# =========================================================
-# GU.PY
-# =========================================================
+/* =========================================================
+   APP
+========================================================= */
 
-GU_PATH = Path(__file__).resolve().parent.parent / "gu.py"
+function AppInner() {
+  const { user, logout } = useAuth()
+  const [aiOpen, setAiOpen] = useState(false)
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [page, setPage] = useState<Page>("dashboard")
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [portfolio, setPortfolio] = useState<PortfolioData | null>(null)
+  const [portfolioLoading, setPortfolioLoading] = useState(false)
+  const [portfolioError, setPortfolioError] = useState("")
+  const [orderRefreshKey, setOrderRefreshKey] = useState(0)
 
-ORDER_LOCK = RLock()
-# Optional idempotency protection for order retries/double-clicks.
-_IDEMPOTENCY_LOCK = RLock()
-_IDEMPOTENCY_RESULTS = {}
-_IDEMPOTENCY_TTL_SECONDS = 10 * 60
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    try {
+      const saved = localStorage.getItem("theme")
+      if (saved === "light" || saved === "dark") return saved
+    } catch {
+      // ใช้ค่าตามเครื่องแทน
+    }
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+  })
 
-def _cleanup_idempotency_cache(now: float) -> None:
-    expired = [
-        key for key, item in _IDEMPOTENCY_RESULTS.items()
-        if now - item["created_at"] >= _IDEMPOTENCY_TTL_SECONDS
-    ]
-    for key in expired:
-        _IDEMPOTENCY_RESULTS.pop(key, None)
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", theme === "dark")
+    try {
+      localStorage.setItem("theme", theme)
+    } catch {
+      // ไม่เป็นไรถ้าบันทึกไม่ได้
+    }
+  }, [theme])
 
-def _get_idempotent_result(actor: str, key: str, fingerprint: str = ""):
-    if not key:
-        return None
-    now = time.monotonic()
-    cache_key = (str(actor), str(key))
-    with _IDEMPOTENCY_LOCK:
-        _cleanup_idempotency_cache(now)
-        item = _IDEMPOTENCY_RESULTS.get(cache_key)
-        if item and item.get("fingerprint") and fingerprint and item["fingerprint"] != fingerprint:
-            raise HTTPException(
-                status_code=409,
-                detail="Idempotency-Key ถูกใช้กับคำสั่งคนละรายการ",
-            )
-        return item["result"] if item else None
+  const notifyOrderCreated = () => {
+    setOrderRefreshKey((value) => value + 1)
+  }
 
-def _store_idempotent_result(actor: str, key: str, result: dict, fingerprint: str = "") -> None:
-    if not key:
-        return
-    now = time.monotonic()
-    with _IDEMPOTENCY_LOCK:
-        _cleanup_idempotency_cache(now)
-        _IDEMPOTENCY_RESULTS[(str(actor), str(key))] = {
-            "created_at": now,
-            "fingerprint": fingerprint,
-            "result": result,
+  const loadPortfolio = async (silent = false) => {
+  if (!silent) {
+    setPortfolioLoading(true)
+    setPortfolioError("")
+  }
+
+  try {
+      if (!DEALER_API_KEY) {
+        throw new Error("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
+      }
+
+      const response = await authFetch(`${API_BASE_URL}/api/portfolio`, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+        cache: "no-store",
+      })
+
+      const body = await response.json()
+
+      if (!response.ok || body?.status !== "ok" || !body?.portfolio) {
+        const detail = body?.detail
+
+        // Backend diagnostic: keep the original safety message, but expose
+        // the real load failure so we can fix the Supabase/gu.py path.
+        if (detail && typeof detail === "object") {
+          const diagnostic = detail.diagnostic
+          const diagnosticText = diagnostic
+            ? `\n\nDiagnostic:\n${JSON.stringify(diagnostic, null, 2)}`
+            : ""
+
+          throw new Error(
+            `${detail.message || "ไม่สามารถโหลด Portfolio จาก Backend ได้"}${diagnosticText}`
+          )
         }
 
-
-
-# Lightweight in-memory API rate limiter.
-_RATE_LIMIT_LOCK = RLock()
-_RATE_LIMIT_BUCKETS = defaultdict(deque)
-_RATE_LIMIT_WINDOW_SECONDS = 60.0
-_RATE_LIMIT_GENERAL = 120
-_RATE_LIMIT_ORDER = 30
-
-
-def _rate_limit_key(request: Request, x_api_key: str) -> str:
-    host = request.client.host if request.client else "unknown"
-    fingerprint = hashlib.sha256(str(x_api_key).encode("utf-8")).hexdigest()[:16]
-    return f"{host}:{fingerprint}"
-
-
-def _internal_server_error(message: str, exc: Exception, status_code: int = 500) -> HTTPException:
-    """Log technical details server-side without exposing internals to clients."""
-    print(f"[api] {message}: {type(exc).__name__}: {exc}")
-    return HTTPException(status_code=status_code, detail=message)
-
-
-def _idempotency_fingerprint(asset: str, side: str, amount_thb: float) -> str:
-    raw = f"{str(asset).upper().strip()}|{str(side).lower().strip()}|{float(amount_thb):.12g}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def _idempotency_key_hash(key: str) -> str:
-    return hashlib.sha256(str(key).encode("utf-8")).hexdigest()
-
-
-def _check_rate_limit(request: Request, x_api_key: str) -> None:
-    limit = _RATE_LIMIT_ORDER if request.url.path == "/api/order" else _RATE_LIMIT_GENERAL
-    now = time.monotonic()
-    key = _rate_limit_key(request, x_api_key)
-
-    with _RATE_LIMIT_LOCK:
-        bucket = _RATE_LIMIT_BUCKETS[key]
-        cutoff = now - _RATE_LIMIT_WINDOW_SECONDS
-        while bucket and bucket[0] <= cutoff:
-            bucket.popleft()
-
-        if len(bucket) >= limit:
-            retry_after = max(1, int(_RATE_LIMIT_WINDOW_SECONDS - (now - bucket[0])))
-            raise HTTPException(
-                status_code=429,
-                detail={
-                    "message": "คำขอมากเกินไป กรุณารอสักครู่แล้วลองใหม่",
-                    "retry_after_seconds": retry_after,
-                },
-                headers={"Retry-After": str(retry_after)},
-            )
-
-        bucket.append(now)
-
-
-@lru_cache(maxsize=1)
-def load_gu():
-    """
-    Load the existing gu.py engine (cached, โหลดครั้งเดียว).
-
-    IMPORTANT:
-    Do not create a replacement engine or fallback state.
-    """
-    if not GU_PATH.exists():
-        raise FileNotFoundError(f"ไม่พบ gu.py ที่ {GU_PATH}")
-
-    spec = importlib.util.spec_from_file_location("xspring_gu", GU_PATH)
-
-    if spec is None or spec.loader is None:
-        raise ImportError("โหลด gu.py ไม่สำเร็จ")
-
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    return module
-
-
-# =========================================================
-# AUTH
-# =========================================================
-
-def require_api_key(
-    request: Request,
-    x_api_key: str = Header(default=""),
-):
-    expected = os.environ.get("DEALER_API_KEY", "").strip()
-
-    if not expected or not x_api_key or not hmac.compare_digest(x_api_key, expected):
-        raise HTTPException(
-            status_code=401,
-            detail="Unauthorized",
-            headers={"WWW-Authenticate": "ApiKey"},
+        throw new Error(
+          typeof detail === "string"
+            ? detail
+            : "ไม่สามารถโหลด Portfolio จาก Backend ได้"
         )
+      }
 
-    _check_rate_limit(request, x_api_key)
+          setPortfolio(body.portfolio as PortfolioData)
+    setPortfolioError("")
+  } catch (error) {
+    if (!silent) {
+      setPortfolioError(
+        error instanceof Error
+          ? error.message
+          : "ไม่สามารถโหลด Portfolio จาก Backend ได้"
+      )
+    }
+  } finally {
+    if (!silent) setPortfolioLoading(false)
+  }
+}
+
+   const refreshPortfolio = () => loadPortfolio(false)
+  useEffect(() => {
+  loadPortfolio()
+
+  const timer = window.setInterval(() => {
+    if (document.visibilityState === "visible") {
+      loadPortfolio(true)
+    }
+  }, 10000)
+
+  return () => window.clearInterval(timer)
+}, [])
+
+  const currentPage = navigation.find((item) => item.id === page)
+
+  return (
+    <div className="min-h-screen bg-background text-foreground">
+      <div className="flex min-h-screen">
+
+        {/* SIDEBAR */}
+        <aside
+          className={`border-r bg-card transition-all duration-200 ${
+            sidebarOpen ? "w-64" : "w-16"
+          }`}
+        >
+          <div className="flex h-16 items-center border-b px-4">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary font-bold text-primary-foreground">
+              X
+            </div>
+
+            {sidebarOpen && (
+              <div className="ml-3 min-w-0">
+                <div className="truncate text-sm font-semibold">XSpring</div>
+                <div className="truncate text-xs text-muted-foreground">Dealer Suite</div>
+              </div>
+            )}
+          </div>
+
+          <nav className="space-y-1 p-2">
+            {navigation.map((item) => {
+              const Icon = item.icon
+              const active = page === item.id
+
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setPage(item.id)}
+                  className={`group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${
+                    active
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                  }`}
+                >
+                  <Icon className="size-4 shrink-0" />
+
+                  {sidebarOpen && (
+                    <>
+                      <span className="flex-1 truncate">{item.label}</span>
+
+                      {item.count !== undefined && (
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                            active ? "bg-primary-foreground/20" : "bg-muted"
+                          }`}
+                        >
+                          {item.count}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </button>
+              )
+            })}
+          </nav>
+        </aside>
+
+        {/* MAIN */}
+        <div className="flex min-w-0 flex-1 flex-col">
+
+          {/* TOPBAR */}
+          <header className="flex h-16 items-center gap-3 border-b bg-background px-4">
+            <button
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="rounded-lg p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <Menu className="size-5" />
+            </button>
+
+            <div className="flex-1">
+              <h1 className="text-sm font-semibold">{currentPage?.label}</h1>
+            </div>
+
+            <button className="rounded-lg p-2 text-muted-foreground hover:bg-accent" aria-label="Search">
+              <Search className="size-5" />
+            </button>
+
+            <button className="rounded-lg p-2 text-muted-foreground hover:bg-accent" aria-label="Notifications">
+              <Bell className="size-5" />
+            </button>
+
+            <button
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              className="rounded-lg p-2 text-muted-foreground hover:bg-accent"
+              aria-label="Toggle theme"
+            >
+              {theme === "dark" ? <Sun className="size-5" /> : <Moon className="size-5" />}
+            </button>
+
+            <div className="relative ml-2">
+              <button
+                onClick={() => setProfileOpen((v) => !v)}
+                className="flex size-8 items-center justify-center overflow-hidden rounded-full bg-muted text-xs font-semibold"
+                aria-label="Profile"
+              >
+                {user.picture ? (
+                  <img
+                    src={user.picture}
+                    alt=""
+                    referrerPolicy="no-referrer"
+                    className="size-full object-cover"
+                  />
+                ) : (
+                  (user.name || user.email).charAt(0).toUpperCase()
+                )}
+              </button>
+
+              {profileOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setProfileOpen(false)} />
+                  <div className="absolute right-0 z-50 mt-2 w-64 rounded-xl border bg-card p-3 shadow-lg">
+                    <div className="truncate text-sm font-semibold">{user.name || user.email}</div>
+                    <div className="truncate text-xs text-muted-foreground">{user.email}</div>
+                    {user.role && (
+                      <div className="mt-2 inline-block rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase">
+                        {user.role}
+                      </div>
+                    )}
+                    <button
+                      onClick={logout}
+                      className="mt-3 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+                    >
+                      <LogOut className="size-4" />
+                      ออกจากระบบ
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </header>
+
+          {/* CONTENT */}
+          <main className="flex-1 overflow-auto p-6">
+
+            {page === "dashboard" && (
+              <DashboardPage
+                portfolio={portfolio}
+                loading={portfolioLoading}
+                error={portfolioError}
+                onRefresh={refreshPortfolio}
+                onTrade={() => setPage("trade")}
+              />
+            )}
+
+            {page === "markets" && (
+              <MarketsPage
+                portfolio={portfolio}
+                onTrade={(asset) => {
+                  void asset
+                  setPage("trade")
+                }}
+                onOrderBook={() => setPage("orderbook")}
+              />
+            )}
+
+            {page === "trade" && (
+              <TradePage
+                portfolio={portfolio}
+                loading={portfolioLoading}
+                error={portfolioError}
+                onRefresh={refreshPortfolio}
+                onOrderCreated={notifyOrderCreated}
+              />
+            )}
+
+            {page === "orderbook" && <OrderBookPage />}
+
+            {page === "wallet" && (
+              <WalletPage
+                portfolio={portfolio}
+                loading={portfolioLoading}
+                error={portfolioError}
+                onRefresh={refreshPortfolio}
+              />
+            )}
+
+            {page === "portfolio" && (
+              <PortfolioPage
+                portfolio={portfolio}
+                loading={portfolioLoading}
+                error={portfolioError}
+                onRefresh={refreshPortfolio}
+              />
+            )}
+
+            {page === "orders" && <OrdersPage refreshKey={orderRefreshKey} />}
+
+            {page === "positions" && (
+              <PositionsPage
+                portfolio={portfolio}
+                loading={portfolioLoading}
+                error={portfolioError}
+                onRefresh={refreshPortfolio}
+              />
+            )}
+
+          
+            {page === "quant" && (
+              <QuantLabPage
+                portfolio={portfolio}
+                loading={portfolioLoading}
+                error={portfolioError}
+                onRefresh={refreshPortfolio}
+              />
+            )}
+
+            {page === "news" && <NewsPage />}
+            {page === "risk" && <RiskPage />}
+
+            {page !== "dashboard" &&
+              page !== "markets" &&
+              page !== "trade" &&
+              page !== "orderbook" &&
+              page !== "portfolio" &&
+              page !== "wallet" &&
+              page !== "orders" &&
+              page !== "positions" &&
+              page !== "risk" &&
+              page !== "quant" &&
+              page !== "news" && <PlaceholderPage title={currentPage?.label ?? ""} />}
+
+          </main>
+        </div>
+      </div>        
+      <button
+        onClick={() => setAiOpen(true)}
+        className="fixed bottom-6 right-6 z-40 rounded-full border bg-background px-4 py-3 text-sm font-medium shadow-lg hover:bg-accent"
+      >
+        ✨ ถาม AI
+      </button>
+      {aiOpen && <AiAssistantOverlay onClose={() => setAiOpen(false)} />}
+    </div>            
+  )
+}
 
 
-# =========================================================
-# GOOGLE LOGIN / SESSION
-# =========================================================
-# Flow: Frontend ส่ง Google ID token มาที่ POST /api/auth/google
-#       -> verify กับ Google -> เช็ค email ใน user_profiles (allowlist)
-#       -> ออก session JWT ของระบบเอง (HS256)
-# endpoint ที่แตะข้อมูลบัญชี (portfolio/orders/order) บังคับ Bearer token
-# และใช้ email ใน token เป็น actor เท่านั้น
-# =========================================================
+/* =========================================================
+   WALLET
+========================================================= */
 
-AUTH_JWT_TTL_SECONDS = 12 * 3600
+function WalletPage({
+  portfolio,
+  loading,
+  error,
+  onRefresh,
+}: {
+  portfolio: PortfolioData | null
+  loading: boolean
+  error: string
+  onRefresh: () => void
+}) {
+  const holdings = (portfolio?.holdings || [])
+    .filter((item) => Number(item.qty || 0) > 0)
+    .sort((a, b) => Number(b.market_value || 0) - Number(a.market_value || 0))
+
+  const cash = Number(portfolio?.cash_thb || 0)
+  const marketValue = Number(portfolio?.market_value_thb || 0)
+  const totalValue = Number(portfolio?.total_value_thb || 0)
+  const totalPnl = Number(portfolio?.total_pnl_thb || 0)
+  const fees = Number(portfolio?.fees_thb || 0)
+  const cashRatio = totalValue > 0 ? (cash / totalValue) * 100 : 0
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold">Wallet</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            ยอดเงินและสินทรัพย์จาก Portfolio Backend จริง
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading}
+          className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+        >
+          {loading ? "กำลังโหลด..." : "Refresh"}
+        </button>
+      </div>
+
+      {error && (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-500">
+          {error}
+        </div>
+      )}
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard title="Total Equity" value={<THB value={totalValue} />} change="Cash + Market Value" />
+        <StatCard title="Available Cash" value={<THB value={cash} />} change={`${cashRatio.toFixed(2)}% ของพอร์ต`} />
+        <StatCard title="Crypto Value" value={<THB value={marketValue} />} change={`${holdings.length} assets`} />
+        <StatCard title="Total P&L" value={<THB value={totalPnl} sign />} change={`${Number(portfolio?.pnl_pct || 0) >= 0 ? "+" : ""}${Number(portfolio?.pnl_pct || 0).toFixed(2)}%`} />
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-3">
+        <div className="rounded-xl border bg-card p-5 xl:col-span-2">
+          <div className="flex items-center justify-between border-b pb-4">
+            <div>
+              <h3 className="font-semibold">Asset Balances</h3>
+              <p className="mt-1 text-xs text-muted-foreground">สินทรัพย์ที่ถืออยู่จริง</p>
+            </div>
+            <span className="text-xs text-muted-foreground">{holdings.length} assets</span>
+          </div>
+
+          {loading ? (
+            <div className="py-12 text-center text-sm text-muted-foreground">กำลังโหลด Wallet...</div>
+          ) : holdings.length === 0 ? (
+            <div className="py-12 text-center text-sm text-muted-foreground">ยังไม่มีสินทรัพย์ที่ถืออยู่</div>
+          ) : (
+            <div className="divide-y">
+              {holdings.map((item) => {
+                const pnl = Number(item.unrealized_pnl || 0)
+                const positive = pnl >= 0
+                return (
+                  <div key={item.asset} className="flex flex-wrap items-center justify-between gap-4 py-4">
+                    <div className="flex min-w-[120px] items-center gap-3">
+                      <CoinIcon asset={item.asset} />
+                      <div>
+                        <div className="font-semibold">{item.asset}/THB</div>
+                        <div className="mt-1 text-xs text-muted-foreground">{formatQty(Number(item.qty || 0))} units</div>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-medium">{formatTHB(Number(item.market_value || 0))}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">Avg {formatTHB(Number(item.avg_cost || 0))}</div>
+                    </div>
+                    <div className={`text-right text-sm ${positive ? "text-emerald-500" : "text-red-500"}`}>
+                      {positive ? "+" : ""}{formatTHB(pnl)}
+                      <div className="text-xs">{positive ? "+" : ""}{Number(item.pnl_pct || 0).toFixed(2)}%</div>
+                    </div>
+                    <div className="text-right text-xs text-muted-foreground">
+                      {Number(item.allocation_pct || 0).toFixed(2)}%
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-xl border bg-card p-5">
+          <h3 className="font-semibold">Wallet Summary</h3>
+          <div className="mt-5 space-y-4">
+            <MiniStat label="Cash / THB" value={formatTHB(cash)} />
+            <MiniStat label="Crypto Market Value" value={formatTHB(marketValue)} />
+            <MiniStat label="Total Equity" value={formatTHB(totalValue)} />
+            <MiniStat label="Fees Paid" value={formatTHB(fees)} />
+            <MiniStat label="Cash Ratio" value={`${cashRatio.toFixed(2)}%`} />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 
-class GoogleLoginRequest(BaseModel):
-    credential: str = Field(..., min_length=10, max_length=4096)
+/* =========================================================
+   ORDER BOOK — BITKUB PUBLIC DEPTH
+========================================================= */
 
+type OrderBookLevel = {
+  price_thb: number
+  quantity: number
+  total_thb: number
+}
 
-def _jwt_secret() -> str:
-    secret = os.environ.get("AUTH_JWT_SECRET", "").strip()
+type OrderBookResponse = {
+  status?: string
+  asset?: string
+  symbol?: string
+  quote?: string
+  source?: string
+  timestamp?: string
+  best_bid_thb?: number
+  best_ask_thb?: number
+  mid_price_thb?: number
+  spread_thb?: number
+  spread_pct?: number
+  bids?: OrderBookLevel[]
+  asks?: OrderBookLevel[]
+}
 
-    if len(secret) < 32:
-        raise HTTPException(
-            status_code=503,
-            detail="ยังไม่ได้ตั้ง AUTH_JWT_SECRET (อย่างน้อย 32 ตัวอักษร)",
-        )
+const ORDERBOOK_ASSETS = ["BTC", "ETH", "SOL", "DOGE", "ADA", "HBAR", "LINK", "XLM", "XRP"]
 
-    return secret
+function formatOrderBookPrice(value: number) {
+  const n = Number(value || 0)
+  if (!Number.isFinite(n) || n <= 0) return "—"
+  return `฿${n.toLocaleString("th-TH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+}
 
+function formatOrderBookQty(value: number) {
+  const n = Number(value || 0)
+  if (!Number.isFinite(n)) return "—"
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 8,
+  })
+}
 
-def require_user(authorization: str = Header(default="")) -> str:
-    """Strict: ต้องมี Bearer token ที่ถูกต้อง คืนค่า email ของผู้ใช้"""
-    if not authorization.lower().startswith("bearer "):
-        raise HTTPException(
-            status_code=401,
-            detail="กรุณาเข้าสู่ระบบ",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+function OrderBookPage() {
+  const [asset, setAsset] = useState("BTC")
+  const [book, setBook] = useState<OrderBookResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [lastUpdated, setLastUpdated] = useState("")
 
-    token = authorization[7:].strip()
+  useEffect(() => {
+    let cancelled = false
 
-    try:
-        payload = jwt.decode(token, _jwt_secret(), algorithms=["HS256"])
-    except jwt.PyJWTError:
-        raise HTTPException(
-            status_code=401,
-            detail="Session หมดอายุหรือไม่ถูกต้อง",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    const load = async () => {
+      setLoading(true)
+      setError("")
 
-    email = str(payload.get("sub") or "").strip()
-
-    if not email:
-        raise HTTPException(status_code=401, detail="Session ไม่ถูกต้อง")
-
-    return email
-
-
-@app.post("/api/auth/google")
-def auth_google(body: GoogleLoginRequest, request: Request):
-    client_id = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
-
-    if not client_id:
-        raise HTTPException(status_code=503, detail="ยังไม่ได้ตั้ง GOOGLE_CLIENT_ID")
-
-    # กัน brute-force / spam ที่ endpoint นี้ (ไม่มี API key ให้ใช้เป็น key)
-    _check_rate_limit(request, "auth-google")
-
-    try:
-        info = google_id_token.verify_oauth2_token(
-            body.credential,
-            google_requests.Request(),
-            client_id,
-        )
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Google token ไม่ถูกต้อง")
-
-    if not info.get("email_verified"):
-        raise HTTPException(status_code=401, detail="อีเมลยังไม่ได้ยืนยันกับ Google")
-
-    # เก็บ email ตามที่ Google ส่งมา (ตรงกับ st.user.email ที่แอป Streamlit เก่าใช้เป็น actor
-    # ใน sim_state) ส่วนการเทียบสิทธิ์ใช้ตัวพิมพ์เล็ก
-    email = str(info.get("email") or "").strip()
-    email_key = email.lower()
-
-    if not email:
-        raise HTTPException(status_code=401, detail="ไม่พบอีเมลใน Google token")
-
-    # Allowlist: ใช้กติกาเดียวกับ gu.py (require_login)
-    # XSPRING_EMAIL = อีเมลคั่นด้วย comma หรือ "*" ; ไม่ตั้ง = ปิดระบบ
-    allowed_raw = os.environ.get("XSPRING_EMAIL", "").strip().lower()
-
-    if not allowed_raw:
-        raise HTTPException(
-            status_code=503,
-            detail="ยังไม่ได้ตั้ง XSPRING_EMAIL — ระบบจึงปิดไว้ก่อน",
-        )
-
-    allowed_list = {a.strip() for a in allowed_raw.split(",") if a.strip()}
-
-    if allowed_raw != "*" and email_key not in allowed_list:
-        raise HTTPException(
-            status_code=403,
-            detail="อีเมลนี้ยังไม่ได้รับอนุญาตให้ใช้งาน",
-        )
-
-    # Role: ใช้จาก user_profiles ถ้ามี ไม่งั้นเหมือน default_role_for_new_user ใน gu.py
-    # (อยู่ใน XSPRING_ADMIN_EMAILS = admin นอกนั้น viewer)
-    role = None
-
-    try:
-        gu = load_gu()
-        sb = gu._get_supabase()
-
-        if sb is not None:
-            res = (
-                sb.table("user_profiles")
-                .select("email,role")
-                .eq("email", email_key)
-                .limit(1)
-                .execute()
-            )
-
-            if res.data:
-                role = str(res.data[0].get("role") or "").strip().lower()
-    except Exception:
-        role = None  # โหลด role ไม่ได้ -> ตกไปใช้ค่า default (สิทธิ์ต่ำสุด)
-
-    if role not in {"viewer", "trader", "admin"}:
-        admin_emails = {
-            e.strip()
-            for e in os.environ.get("XSPRING_ADMIN_EMAILS", "").lower().split(",")
-            if e.strip()
+      try {
+        if (!DEALER_API_KEY) {
+          throw new Error("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
         }
-        role = "admin" if email_key in admin_emails else "viewer"
 
-    token = jwt.encode(
+        const response = await fetch(
+          `${API_BASE_URL}/api/orderbook?asset=${encodeURIComponent(asset)}&limit=20`,
+          {
+            method: "GET",
+            headers: {
+              Accept: "application/json",
+              ...authHeaders(),
+            },
+            cache: "no-store",
+          }
+        )
+
+        const body = await response.json().catch(() => ({}))
+
+        if (!response.ok || body?.status !== "ok") {
+          const detail = body?.detail
+          throw new Error(
+            typeof detail === "string"
+              ? detail
+              : detail?.message || `โหลด Order Book ไม่สำเร็จ (${response.status})`
+          )
+        }
+
+        if (!cancelled) {
+          setBook(body as OrderBookResponse)
+          setLastUpdated(new Date().toLocaleTimeString("th-TH"))
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "โหลด Order Book ไม่สำเร็จ")
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    load()
+    const timer = window.setInterval(load, 3000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [asset])
+
+  const bids = Array.isArray(book?.bids) ? book!.bids! : []
+  const asks = Array.isArray(book?.asks) ? book!.asks! : []
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold">Order Book</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Live market depth จาก Bitkub Public API
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {ORDERBOOK_ASSETS.map((item) => (
+            <button
+              key={item}
+              type="button"
+              onClick={() => setAsset(item)}
+              className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium ${
+                asset === item ? "bg-primary text-primary-foreground" : "hover:bg-accent"
+              }`}
+            >
+              <CoinIcon asset={item} size={18} />
+              {item}/THB
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {error && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-400">
+          {error}
+        </div>
+      )}
+
+      <div className="grid gap-4 md:grid-cols-4">
+        <div className="rounded-xl border bg-card p-5">
+          <div className="text-sm text-muted-foreground">Best Bid</div>
+          <div className="mt-2 text-xl font-semibold">{formatOrderBookPrice(book?.best_bid_thb || 0)}</div>
+          <div className="mt-1 text-xs text-muted-foreground">{asset}/THB</div>
+        </div>
+
+        <div className="rounded-xl border bg-card p-5">
+          <div className="text-sm text-muted-foreground">Best Ask</div>
+          <div className="mt-2 text-xl font-semibold">{formatOrderBookPrice(book?.best_ask_thb || 0)}</div>
+          <div className="mt-1 text-xs text-muted-foreground">{asset}/THB</div>
+        </div>
+
+        <div className="rounded-xl border bg-card p-5">
+          <div className="text-sm text-muted-foreground">Mid Price</div>
+          <div className="mt-2 text-xl font-semibold">{formatOrderBookPrice(book?.mid_price_thb || 0)}</div>
+          <div className="mt-1 text-xs text-muted-foreground">THB</div>
+        </div>
+
+        <div className="rounded-xl border bg-card p-5">
+          <div className="text-sm text-muted-foreground">Spread</div>
+          <div className="mt-2 text-xl font-semibold">{formatOrderBookPrice(book?.spread_thb || 0)}</div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            {Number(book?.spread_pct || 0).toFixed(4)}%
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-xl border bg-card p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-3">
+            <CoinIcon asset={asset} size={32} />
+            <div>
+              <h3 className="font-semibold">{asset}/THB Market Depth</h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Real-time bids / asks · Auto refresh 3s
+              </p>
+            </div>
+          </div>
+          <div className="text-right text-xs text-muted-foreground">
+            <div>{loading ? "Connecting..." : error ? "Disconnected" : "Connected"}</div>
+            {lastUpdated && <div>Updated · {lastUpdated}</div>}
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-6 lg:grid-cols-2">
+          <div>
+            <div className="mb-2 text-sm font-semibold">Asks</div>
+            <div className="overflow-hidden rounded-lg border">
+              <div className="grid grid-cols-3 border-b px-3 py-2 text-xs font-medium text-muted-foreground">
+                <div>Price</div><div className="text-right">Amount</div><div className="text-right">Total</div>
+              </div>
+              {asks.length === 0 ? (
+                <div className="px-3 py-8 text-center text-sm text-muted-foreground">No asks</div>
+              ) : asks.map((item, index) => (
+                <div key={`ask-${index}`} className="grid grid-cols-3 border-b px-3 py-2 text-sm last:border-b-0">
+                  <div className="font-medium">{formatOrderBookPrice(item.price_thb)}</div>
+                  <div className="text-right">{formatOrderBookQty(item.quantity)}</div>
+                  <div className="text-right">{formatOrderBookPrice(item.total_thb)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-2 text-sm font-semibold">Bids</div>
+            <div className="overflow-hidden rounded-lg border">
+              <div className="grid grid-cols-3 border-b px-3 py-2 text-xs font-medium text-muted-foreground">
+                <div>Price</div><div className="text-right">Amount</div><div className="text-right">Total</div>
+              </div>
+              {bids.length === 0 ? (
+                <div className="px-3 py-8 text-center text-sm text-muted-foreground">No bids</div>
+              ) : bids.map((item, index) => (
+                <div key={`bid-${index}`} className="grid grid-cols-3 border-b px-3 py-2 text-sm last:border-b-0">
+                  <div className="font-medium">{formatOrderBookPrice(item.price_thb)}</div>
+                  <div className="text-right">{formatOrderBookQty(item.quantity)}</div>
+                  <div className="text-right">{formatOrderBookPrice(item.total_thb)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-3 text-sm md:grid-cols-2">
+          <div className="rounded-lg border p-3">
+            <div className="text-xs text-muted-foreground">Source</div>
+            <div className="mt-1 font-medium">{book?.source || "Bitkub Public Order Book"}</div>
+          </div>
+          <div className="rounded-lg border p-3">
+            <div className="text-xs text-muted-foreground">Symbol / Quote</div>
+            <div className="mt-1 font-medium">{book?.symbol || `${asset}_THB`} · {book?.quote || "THB"}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+/* =========================================================
+   MARKETS — MARKET HUB
+========================================================= */
+
+// โลโก้เหรียญ: ลองโหลดจากหลายแหล่งตามลำดับ ถ้าไม่มีเลยแสดงตัวอักษรแทน
+function coinIconSources(asset: string) {
+  const key = asset.toLowerCase()
+  return [
+    `https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/svg/color/${key}.svg`,
+    `https://assets.coincap.io/assets/icons/${key}@2x.png`,
+  ]
+}
+
+export function CoinIcon({ asset, size = 36 }: { asset: string; size?: number }) {
+  const symbol = String(asset || "").trim().toUpperCase()
+  const [sourceIndex, setSourceIndex] = useState(0)
+
+  useEffect(() => {
+    setSourceIndex(0)
+  }, [symbol])
+
+  const sources = coinIconSources(symbol)
+
+  if (!symbol || sourceIndex >= sources.length) {
+    return (
+      <div
+        className={`flex shrink-0 items-center justify-center rounded-full bg-muted font-bold ${
+          size >= 40 ? "text-lg" : size >= 24 ? "text-xs" : "text-[8px]"
+        }`}
+        style={{ width: size, height: size }}
+      >
+        {size >= 40 ? symbol.slice(0, 1) : size >= 24 ? symbol.slice(0, 3) : symbol.slice(0, 1)}
+      </div>
+    )
+  }
+
+  return (
+    <img
+      src={sources[sourceIndex]}
+      alt={symbol}
+      width={size}
+      height={size}
+      loading="lazy"
+      onError={() => setSourceIndex((index) => index + 1)}
+      className="shrink-0 rounded-full bg-muted object-cover"
+      style={{ width: size, height: size }}
+    />
+  )
+}
+
+type MarketTicker = {
+  asset: string
+  name: string
+  price: number
+  change: number
+  high: number
+  low: number
+  volume: number
+  bid: number
+  ask: number
+}
+
+const MARKET_HUB_ASSETS = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "HBAR", "LINK", "XLM"]
+
+const MARKET_HUB_NAMES: Record<string, string> = {
+  BTC: "Bitcoin",
+  ETH: "Ethereum",
+  SOL: "Solana",
+  XRP: "XRP",
+  ADA: "Cardano",
+  DOGE: "Dogecoin",
+  HBAR: "Hedera",
+  LINK: "Chainlink",
+  XLM: "Stellar",
+}
+
+function signedPct(value: number) {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`
+}
+
+// ดึงราคาตลาดครั้งเดียวทุกเหรียญ:
+// 1) ผ่าน Backend /api/markets (ไม่ติด CORS)
+// 2) ถ้า Backend ยังไม่มี endpoint นี้ ลองเรียก Bitkub ตรง 1 request
+async function fetchMarketTickers(): Promise<MarketTicker[]> {
+  try {
+    if (DEALER_API_KEY) {
+      const response = await fetch(`${API_BASE_URL}/api/markets`, {
+        headers: { Accept: "application/json", ...authHeaders() },
+        cache: "no-store",
+      })
+      const body = await response.json().catch(() => null)
+
+      if (response.ok && body?.status === "ok" && Array.isArray(body.markets)) {
+        const rows: MarketTicker[] = body.markets
+          .filter((row: any) => MARKET_HUB_ASSETS.includes(String(row?.asset)))
+          .map((row: any): MarketTicker => ({
+            asset: String(row.asset),
+            name: MARKET_HUB_NAMES[String(row.asset)] || String(row.asset),
+            price: Number(row.last_thb || 0),
+            change: Number(row.change_pct || 0),
+            high: Number(row.high_24h_thb || 0),
+            low: Number(row.low_24h_thb || 0),
+            volume: Number(row.volume_base || 0),
+            bid: Number(row.bid_thb || 0),
+            ask: Number(row.ask_thb || 0),
+          }))
+          .filter((row: MarketTicker) => row.price > 0)
+
+        if (rows.length > 0) return rows
+      }
+    }
+  } catch {
+    // ไปลองเรียก Bitkub ตรงด้านล่าง
+  }
+
+  try {
+    const response = await fetch("https://api.bitkub.com/api/market/ticker", {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    })
+    if (!response.ok) throw new Error(`Bitkub ticker HTTP ${response.status}`)
+
+    const body = await response.json()
+
+    const rows = MARKET_HUB_ASSETS.flatMap((asset): MarketTicker[] => {
+      const t = body?.[`THB_${asset}`] || body?.[`${asset}_THB`]
+      const price = Number(t?.last || 0)
+      if (!t || price <= 0) return []
+
+      return [
         {
-            "sub": email,
-            "role": role,
-            "iat": int(time.time()),
-            "exp": int(time.time()) + AUTH_JWT_TTL_SECONDS,
+          asset,
+          name: MARKET_HUB_NAMES[asset] || asset,
+          price,
+          change: Number(t.percentChange || 0),
+          high: Number(t.high24hr || 0),
+          low: Number(t.low24hr || 0),
+          volume: Number(t.baseVolume || 0),
+          bid: Number(t.highestBid || 0),
+          ask: Number(t.lowestAsk || 0),
         },
-        _jwt_secret(),
-        algorithm="HS256",
-    )
-
-    return {
-        "token": token,
-        "user": {
-            "email": email,
-            "name": info.get("name"),
-            "picture": info.get("picture"),
-            "role": role,
-        },
-    }
-
-
-# =========================================================
-# REQUEST MODEL
-# =========================================================
-
-class OrderRequest(BaseModel):
-    # Validate at the API boundary before the trading engine is touched.
-    asset: str = Field(..., min_length=1, max_length=20)
-    side: str = Field(..., min_length=1, max_length=8)
-    amount_thb: float = Field(..., gt=0, le=1_000_000_000_000)
-    # รับไว้เพื่อไม่ให้ frontend เดิมพัง แต่ server ไม่ใช้ค่านี้
-    quote_thb: Optional[float] = Field(default=None, ge=0, le=1_000_000_000_000)
-
-
-# =========================================================
-# SAFE FLOAT
-# =========================================================
-
-def _safe_float(value, default=0.0):
-    try:
-        value = float(value)
-
-        if math.isfinite(value):
-            return value
-
-        return default
-
-    except (TypeError, ValueError):
-        return default
-
-
-# =========================================================
-# ACTOR
-# =========================================================
-
-def _actor(user_email: str):
-    """
-    Actor = email ของผู้ใช้ที่ล็อกอิน (มาจาก session token ที่ verify แล้ว)
-
-    ไม่ fallback ไป XSPRING_USER อีกต่อไป เพื่อไม่ให้มีทางเข้าบัญชีโดยไม่ล็อกอิน
-    """
-    actor = str(user_email or "").strip()
-
-    if not actor:
-        raise HTTPException(status_code=401, detail="กรุณาเข้าสู่ระบบ")
-
-    return actor
-
-
-def _sync_gu_actor(gu, actor: str) -> None:
-    """Synchronize both actor env vars before gu.py reads persistent state."""
-    actor = str(actor or "").strip()
-
-    if not actor:
-        raise HTTPException(
-            status_code=503,
-            detail="ไม่พบ actor สำหรับโหลด Portfolio",
-        )
-
-    os.environ["XSPRING_USER"] = actor
-    os.environ["XSPRING_REPORT_ACTOR"] = actor
-
-
-# =========================================================
-# ROLE
-# =========================================================
-
-def _set_api_role(gu, actor: str):
-    import streamlit as st
-
-    role = None
-
-    try:
-        sb = gu._get_supabase()
-
-        if sb is not None:
-            res = (
-                sb.table("user_profiles")
-                .select("email,role")
-                .eq("email", actor)
-                .limit(1)
-                .execute()
-            )
-
-            if res.data:
-                role = str(res.data[0].get("role") or "").strip().lower()
-
-    except Exception:
-        role = None
-
-        # viewer เก่า / ค่าว่าง / ค่าแปลก ทั้งหมด -> trader
-    if role not in {"trader", "admin"}:
-        role = str(
-            os.environ.get("XSPRING_API_ROLE", "trader") or ""
-        ).strip().lower()
-
-    if role not in {"trader", "admin"}:
-        role = "trader"
-
-    st.session_state["guest_mode"] = False
-    st.session_state["current_role"] = role
-
-    return role
-
-
-# =========================================================
-# REMOTE CONFIG
-# =========================================================
-
-def _remote_config(gu, actor: str) -> dict:
-    try:
-        sb = gu._get_supabase()
-
-        if sb is None:
-            return {}
-
-        res = (
-            sb.table("dealer_remote_config")
-            .select("config,updated_at")
-            .eq("actor", actor.strip().lower())
-            .limit(1)
-            .execute()
-        )
-
-        if not res.data:
-            return {}
-
-        cfg = res.data[0].get("config") or {}
-
-        return cfg if isinstance(cfg, dict) else {}
-
-    except Exception:
-        return {}
-
-
-# =========================================================
-# API CONFIG
-# =========================================================
-
-def _api_cfg(gu, asset: str, actor: str) -> dict:
-    ui = getattr(gu, "UI_DEFAULTS", {}) or {}
-    fee_map = getattr(gu, "GLOBAL_EXCHANGE_FEE_PRESET", {})
-    exchanges = list(fee_map.keys())
-
-    exchange = exchanges[0] if exchanges else "Binance"
-
-    remote = _remote_config(gu, actor)
-
-    remote_asset = str(remote.get("asset") or asset).upper()
-
-    if remote_asset in getattr(gu, "SUPPORTED_ASSETS", []):
-        asset = remote_asset
-
-    exchange = str(remote.get("exchange") or exchange)
-
-    if exchange not in fee_map:
-        exchange = exchanges[0] if exchanges else exchange
-
-    maker_ratio = _safe_float(remote.get("maker_ratio"), 0.0) / 100.0
-
-    taker_pct = _safe_float(remote.get("hedge_taker"), fee_map.get(exchange, 0.0))
-
-    maker_pct = _safe_float(
-        remote.get("hedge_maker"),
-        gu.default_maker_fee_pct(exchange),
-    )
-
-    hedge_fee = gu.blend_hedge_fee(
-        taker_pct / 100.0,
-        maker_pct / 100.0,
-        maker_ratio,
-    )
-
-    monthly_volume = _safe_float(remote.get("monthly_volume"), 80_000_000.0)
-
-    settlement_days = int(_safe_float(remote.get("lag"), 1))
-
-    confidence = _safe_float(remote.get("confidence"), 99.0)
-
-    z_map = getattr(gu, "Z_SCORE_MAP", {})
-    z_alpha = z_map.get(confidence)
-
-    if z_alpha is None:
-        z_alpha = z_map.get(99, 2.576)
-
-    is_custodian = bool(remote.get("custodian", True))
-
-    fixed_min_nc = (
-        getattr(gu, "NC_FIXED_MIN_CUSTODIAN_THB", 25_000_000.0)
-        if is_custodian
-        else getattr(gu, "NC_FIXED_MIN_NON_CUSTODIAN_THB", 5_000_000.0)
-    )
-
-    cex_margin_asset = str(remote.get("margin_asset", "Stablecoin"))
-
-    if cex_margin_asset not in {"Stablecoin", "เหรียญเดียวกับที่เทรด"}:
-        cex_margin_asset = "Stablecoin"
-
-    hot_wallet_pct = _safe_float(remote.get("hot_wallet"), 30.0) / 100.0
-    cold_domestic_pct = _safe_float(remote.get("cold_domestic"), 80.0) / 100.0
-    cold_foreign_rate = _safe_float(remote.get("cold_foreign"), 1.5) / 100.0
-
-    cfg = {
-        "asset": asset,
-        "global_exchange": exchange,
-        "trade_vol": _safe_float(remote.get("trade_vol"), 100_000.0),
-        "dealer_spread": _safe_float(
-            remote.get("spread", ui.get("dealer_spread_pct", 0.5))
-        ) / 100.0,
-        "hedge_fee": hedge_fee,
-        "hedge_fee_taker": taker_pct / 100.0,
-        "hedge_fee_maker": maker_pct / 100.0,
-        "maker_ratio": maker_ratio,
-        "market_depth_usd": _safe_float(remote.get("depth"), 0.0),
-        "impact_penalty": _safe_float(
-            remote.get("impact_penalty", ui.get("impact_penalty_pct", 0.5))
-        ) / 100.0,
-        "use_fx_proxy": False,
-        "fx_limit_max": _safe_float(
-            remote.get("fx_limit", ui.get("fx_limit_usd", 5_000_000.0))
-        ),
-        "local_premium": _safe_float(
-            remote.get("premium", ui.get("local_premium_pct", 0.1))
-        ) / 100.0,
-        "include_trading_fee_revenue": True,
-        "withdrawal_fee_markup_pct": 0.0,
-        "settlements_per_day": 1,
-        "bank_type": "SCB",
-        "use_ktb_fx": True,
-        "ktb_fx_spread_bps": 15.0,
-        "ktb_wd_fee_thb": 15.0,
-        "peg_target": 1.0,
-        "depeg_capture_pct": 0.80,
-        "carry_apy": 0.04,
-        "slippage_sensitivity": (
-            0.10 if asset not in getattr(gu, "STABLECOINS", set()) else 0.0
-        ),
-        "monthly_volume_thb": monthly_volume,
-        "daily_volume_thb": monthly_volume / 30.0,
-        "net_bias_pct": _safe_float(remote.get("net_bias", 15.0)) / 100.0,
-        "flow_cv_pct": _safe_float(remote.get("flow_cv", 50.0)) / 100.0,
-        "settlement_days": settlement_days,
-        "confidence": confidence,
-        "z_alpha": z_alpha,
-        "total_capital_thb": _safe_float(remote.get("capital", 150_000_000.0)),
-        "cex_margin_thb": _safe_float(remote.get("margin", 30_000_000.0)),
-        "liab_thb": _safe_float(remote.get("liab", 100_000_000.0)),
-        "cex_margin_asset": cex_margin_asset,
-        "cex_counterparty_haircut": _safe_float(
-            remote.get("cp_haircut", 2.0)
-        ) / 100.0,
-        "is_custodian": is_custodian,
-        "fixed_min_nc": fixed_min_nc,
-        "trading_risk_rate": _safe_float(
-            remote.get("trading_risk", 2.0)
-        ) / 100.0,
-        "cold_foreign_rate": cold_foreign_rate,
-        "hot_wallet_pct": hot_wallet_pct,
-        "cold_domestic_split_pct": cold_domestic_pct,
-        "hedge_trigger_pct": _safe_float(
-            remote.get("hedge_trigger", 0.0)
-        ) / 100.0,
-        "hedge_vol_block_pct": _safe_float(
-            remote.get("hedge_vol_block", 0.0)
-        ) / 100.0,
-    }
-
-    cfg["custody_rate_blended"] = gu.blended_custody_rate(
-        cfg["hot_wallet_pct"],
-        cfg["cold_domestic_split_pct"],
-        cfg["cold_foreign_rate"],
-    )
-
-    cfg["hot_wallet_cap_breach"] = (
-        cfg["liab_thb"] < getattr(gu, "HOT_WALLET_CAP_LIAB_THRESHOLD", 1_000_000_000.0)
-        and cfg["hot_wallet_pct"] > getattr(gu, "HOT_WALLET_CAP", 0.50)
-    )
-
-    return cfg
-
-
-# =========================================================
-# MARKET DATA
-# =========================================================
-
-def _load_market_frame(gu, asset: str):
-    end = pd.Timestamp.now().normalize()
-    start = end - pd.Timedelta(days=365)
-
-    data, err = gu.fetch_price_data(
-        asset,
-        start,
-        end,
-        use_fx_proxy=False,
-    )
-
-    if data is None or data.empty:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                f"โหลดข้อมูลตลาดสำหรับ {asset} "
-                f"ไม่สำเร็จ: {err or 'ไม่มีข้อมูล'}"
-            ),
-        )
-
-    return data
-
-
-# =========================================================
-# LOAD EXISTING PORTFOLIO
-# =========================================================
-
-def _load_existing_sim(gu):
-    """Load the existing persisted portfolio without creating a new one."""
-    sim = gu.load_sim_state()
-
-    # SAFETY: never create/fallback/overwrite a portfolio here.
-    if not isinstance(sim, dict):
-        try:
-            session_state = getattr(gu.st, "session_state", {})
-        except Exception:
-            session_state = {}
-
-        def _diag(name: str) -> str:
-            try:
-                return str(session_state.get(name, "") or "")
-            except Exception:
-                return ""
-
-        diagnostic = {
-            "sim_state_load_error": _diag("sim_state_load_error"),
-            "sim_state_rest_error": _diag("sim_state_rest_error"),
-            "sim_state_source": _diag("sim_state_source"),
-            "sim_state_actor": _diag("sim_state_actor"),
-            "x_spring_user": os.environ.get("XSPRING_USER", ""),
-            "x_spring_report_actor": os.environ.get("XSPRING_REPORT_ACTOR", ""),
-            "gu_file": str(getattr(gu, "__file__", "")),
-            "supabase_url_configured": bool(os.environ.get("SUPABASE_URL", "").strip()),
-            "supabase_service_role_configured": bool(
-                os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
-            ),
-        }
-
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "message": (
-                    "ไม่สามารถโหลด Portfolio เดิมจาก Supabase ได้ — "
-                    "ไม่สร้างพอร์ตใหม่เพื่อป้องกันข้อมูลเดิมถูกเขียนทับ"
-                ),
-                "diagnostic": diagnostic,
-            },
-        )
-
-    return sim
-
-
-# =========================================================
-# PORTFOLIO RESPONSE
-# =========================================================
-
-def _fetch_bitkub_ticker_prices(assets: set[str]) -> dict[str, float]:
-    """Fetch current THB prices directly from Bitkub public ticker.
-
-    Prefer one all-market request so a temporary per-symbol response format
-    cannot silently turn a real holding into price=0 (which would look like
-    a -100% portfolio). Fall back to per-symbol requests only when needed.
-    """
-    requested = {
-        str(a).upper().strip()
-        for a in assets
-        if str(a).upper().strip() and str(a).upper().strip() != "THB"
-    }
-    prices: dict[str, float] = {}
-    url = "https://api.bitkub.com/api/market/ticker"
-
-    def _parse_payload(payload):
-        if not isinstance(payload, dict):
-            return
-
-        for key, row in payload.items():
-            if not isinstance(row, dict):
-                continue
-
-            symbol = str(key).upper().strip()
-            if symbol.startswith("THB_"):
-                asset = symbol[4:]
-            elif symbol.endswith("_THB"):
-                asset = symbol[:-4]
-            else:
-                continue
-
-            if asset not in requested:
-                continue
-
-            value = _safe_float(row.get("last"))
-            if value > 0:
-                prices[asset] = value
-
-    # Primary path: Bitkub returns the public ticker map in one request.
-    try:
-        request = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": "Dealer-Suite/1.0",
-                "Accept": "application/json",
-            },
-        )
-        with urllib.request.urlopen(request, timeout=8) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        _parse_payload(payload)
-    except Exception as exc:
-        print(f"[portfolio] Bitkub all-ticker request failed: {exc}")
-
-    # Fallback: request any still-missing asset explicitly.
-    for asset in sorted(requested - set(prices)):
-        try:
-            params = urllib.parse.urlencode({"sym": f"THB_{asset}"})
-            request = urllib.request.Request(
-                f"{url}?{params}",
-                headers={
-                    "User-Agent": "Dealer-Suite/1.0",
-                    "Accept": "application/json",
-                },
-            )
-            with urllib.request.urlopen(request, timeout=8) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-
-            row = payload.get(f"THB_{asset}") or payload.get(f"{asset}_THB")
-            if isinstance(row, dict):
-                value = _safe_float(row.get("last"))
-                if value > 0:
-                    prices[asset] = value
-        except Exception as exc:
-            print(f"[portfolio] Bitkub price failed for {asset}: {exc}")
-
-    return prices
-
-
-
-def _order_raw_time(order: dict):
-    """Pick the best timestamp source of an order record.
-
-    Priority: ISO `timestamp` (has timezone) -> `time` -> `วันที่`+`เวลา`
-    (date AND clock together) -> `เวลา` -> `วันที่`.
-    A clock-only `เวลา` (HH:MM:SS) must never be parsed alone: pandas would
-    attach *today's* date, which shifts old orders to the wrong day.
-    """
-    ts = order.get("timestamp") or order.get("time")
-    if ts:
-        return ts
-    d = str(order.get("วันที่") or "").strip()
-    t = str(order.get("เวลา") or "").strip()
-    if d and t:
-        if "T" in t or len(t) > 8:  # already a full datetime
-            return t
-        return f"{d} {t}"
-    return t or d or ""
-
-
-SIDE_TH_TO_EN = {"ซื้อ": "BUY", "ขาย": "SELL"}
-
-# Simulated exchange trading fee: 0.25% of executed THB notional.
-ORDER_TRADING_FEE_RATE = 0.0025
-
-def _order_fee_thb(amount) -> float:
-    """Return the simulated trading fee at 0.25%, rounded to satang."""
-    notional = max(0.0, _safe_float(amount, 0.0))
-    return round(notional * ORDER_TRADING_FEE_RATE + 1e-9, 2)
-
-
-def _normalize_side(value) -> str:
-    raw = str(value or "").strip()
-    return SIDE_TH_TO_EN.get(raw, raw.upper())
-
-
-def _recompute_realized_pnl_from_orders(sim: dict) -> float:
-    """Recompute realized P&L from the immutable filled-order history.
-
-    Do not trust a stale/corrupted realized_pnl_thb field in an old portfolio
-    ledger. BUY/SELL order history is the source of truth for execution P&L.
-    """
-    orders = sim.get("orders", []) if isinstance(sim, dict) else []
-    if not isinstance(orders, list):
-        return 0.0
-
-    rows = []
-    for idx, order in enumerate(orders):
-        if not isinstance(order, dict):
-            continue
-
-        status = str(
-            order.get("สถานะ")
-            or order.get("status")
-            or "Filled"
-        ).strip().lower()
-        if status not in {"filled", "fill", "completed", "executed", "success", "successful"}:
-            continue
-
-        asset = str(
-            order.get("เหรียญ")
-            or order.get("asset")
-            or order.get("symbol")
-            or ""
-        ).strip().upper()
-        side = str(
-            order.get("ฝั่ง")
-            or order.get("side")
-            or ""
-        ).strip().upper()
-
-        if side in {"ซื้อ", "BUY"}:
-            side = "BUY"
-        elif side in {"ขาย", "SELL"}:
-            side = "SELL"
-        else:
-            continue
-
-        qty = _safe_float(
-            order.get("เหรียญที่ส่งมอบ")
-            if order.get("เหรียญที่ส่งมอบ") is not None
-            else order.get("quantity")
-        )
-        gross = _safe_float(
-            order.get("มูลค่า (บาท)")
-            if order.get("มูลค่า (บาท)") is not None
-            else order.get("amount_thb")
-        )
-        price = _safe_float(
-            order.get("ราคาที่ลูกค้าได้")
-            if order.get("ราคาที่ลูกค้าได้") is not None
-            else order.get("price_thb")
-        )
-
-        if not asset or qty <= 0 or gross <= 0 or price <= 0:
-            continue
-
-        timestamp = _order_raw_time(order)
-        try:
-            ts = pd.to_datetime(timestamp, errors="coerce", utc=True)
-            if pd.isna(ts):
-                ts = pd.Timestamp("1970-01-01", tz="UTC")
-        except Exception:
-            ts = pd.Timestamp("1970-01-01", tz="UTC")
-
-        rows.append((ts, idx, asset, side, qty, gross, price))
-
-    rows.sort(key=lambda x: (x[0], x[1]))
-
-    qty_map: dict[str, float] = {}
-    cost_map: dict[str, float] = {}
-    realized = 0.0
-
-    for _, _, asset, side, qty, gross, price in rows:
-        if side == "BUY":
-            old_qty = qty_map.get(asset, 0.0)
-            old_cost = cost_map.get(asset, 0.0)
-            new_qty = old_qty + qty
-            cost_map[asset] = (
-                (old_qty * old_cost + gross) / new_qty
-                if new_qty > 0
-                else 0.0
-            )
-            qty_map[asset] = new_qty
-        else:
-            old_qty = qty_map.get(asset, 0.0)
-            avg_cost = cost_map.get(asset, 0.0)
-            sold_qty = min(qty, old_qty) if old_qty > 0 else 0.0
-
-            if sold_qty > 0:
-                realized += gross * (sold_qty / qty) - sold_qty * avg_cost
-                qty_map[asset] = max(0.0, old_qty - sold_qty)
-                if qty_map[asset] <= 1e-12:
-                    qty_map[asset] = 0.0
-                    cost_map[asset] = 0.0
-
-    return realized
-
-
-def _portfolio_response(gu, sim, px_row=None):
-    """Build Portfolio using direct Bitkub THB prices; never depend on USD/THB."""
-    held_assets: set[str] = set()
-    selected_asset = str(sim.get("asset") or "").upper().strip()
-    if selected_asset and selected_asset != "THB":
-        held_assets.add(selected_asset)
-
-    for source in (sim.get("customer_coins"), sim.get("inv_coins")):
-        if isinstance(source, dict):
-            for asset, qty in source.items():
-                if _safe_float(qty) > 1e-12:
-                    name = str(asset).upper().strip()
-                    if name and name != "THB":
-                        held_assets.add(name)
-
-    for tx in sim.get("portfolio_ledger", []) or []:
-        if not isinstance(tx, dict):
-            continue
-        asset = str(tx.get("asset") or "").upper().strip()
-        if asset and asset != "THB":
-            held_assets.add(asset)
-
-    price_map = _fetch_bitkub_ticker_prices(held_assets)
-
-    # Never silently value a real holding at zero. That would make the UI
-    # report a fake -100% P/L when Bitkub market data is temporarily unavailable.
-    missing_prices = sorted(asset for asset in held_assets if asset not in price_map)
-    if missing_prices:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "message": "โหลดราคาพอร์ตจาก Bitkub ไม่ครบ — ไม่แสดงค่า -100% ปลอม",
-                "missing_assets": missing_prices,
-                "source": "Bitkub Public Ticker",
-            },
-        )
-
-    snap = gu.portfolio_snapshot(sim, price_map)
-
-    # Recalculate realized P&L from the actual filled-order history.
-    # This repairs legacy ledger rows that can carry an incorrect
-    # realized_pnl_thb (which was producing the spurious -10M figure).
-    realized_pnl = _recompute_realized_pnl_from_orders(sim)
-    unrealized_pnl = _safe_float(snap.get("unrealized_pnl_thb"), 0.0)
-    total_pnl = realized_pnl + unrealized_pnl
-    invested_cost = _safe_float(snap.get("invested_cost_thb"), 0.0)
-    pnl_pct = (total_pnl / invested_cost * 100.0) if invested_cost > 0 else 0.0
-
-    return {
-        "cash_thb": snap["cash_thb"],
-        "market_value_thb": snap["market_value_thb"],
-        "total_value_thb": snap["total_value_thb"],
-        "realized_pnl_thb": realized_pnl,
-        "unrealized_pnl_thb": unrealized_pnl,
-        "total_pnl_thb": total_pnl,
-        "pnl_pct": pnl_pct,
-        "fees_thb": snap["fees_thb"],
-        "holdings": snap["rows"],
-    }
-
-
-# ORDERBOOK — BITKUB PUBLIC MARKET DATA
-# =========================================================
-
-BITKUB_SYMBOL_MAP = {
-    "BTC": "BTC_THB",
-    "ETH": "ETH_THB",
-    "SOL": "SOL_THB",
-    "DOGE": "DOGE_THB",
-    "ADA": "ADA_THB",
-    "HBAR": "HBAR_THB",
-    "LINK": "LINK_THB",
-    "XLM": "XLM_THB",
-    "XRP": "XRP_THB",
-}
-
-
-def _fetch_bitkub_orderbook(symbol: str, limit: int = 20):
-    """Fetch a THB orderbook snapshot from Bitkub's public V3 API."""
-    safe_limit = max(1, min(int(limit), 100))
-    params = urllib.parse.urlencode({
-        "sym": symbol,
-        "lmt": safe_limit,
+      ]
     })
 
-    url = f"https://api.bitkub.com/api/v3/market/depth?{params}"
-
-    request = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "Dealer-Suite/1.0",
-            "Accept": "application/json",
-        },
-    )
-
-    with urllib.request.urlopen(request, timeout=8) as response:
-        raw = response.read().decode("utf-8")
-
-    payload = json.loads(raw)
-
-    if not isinstance(payload, dict):
-        raise ValueError("Bitkub orderbook response ไม่ถูกต้อง")
-
-    if _safe_float(payload.get("error"), 0.0) != 0.0:
-        raise ValueError(
-            f"Bitkub orderbook error={payload.get('error')}"
-        )
-
-    result = payload.get("result") or {}
-    bids = result.get("bids") or []
-    asks = result.get("asks") or []
-
-    if not bids and not asks:
-        raise ValueError("Bitkub ไม่มีข้อมูล bids/asks")
-
-    return bids, asks
-
-
-@app.get("/api/orderbook", dependencies=[Depends(require_api_key)])
-def orderbook(
-    asset: str = "BTC",
-    limit: int = 20,
-):
-    try:
-        asset = str(asset or "BTC").strip().upper()
-
-        if asset not in BITKUB_SYMBOL_MAP:
-            raise HTTPException(
-                status_code=400,
-                detail=f"ไม่รองรับ Orderbook สำหรับ {asset}",
-            )
-
-        symbol = BITKUB_SYMBOL_MAP[asset]
-
-        try:
-            safe_limit = max(1, min(int(limit), 100))
-        except (TypeError, ValueError):
-            safe_limit = 20
-
-        bids_raw, asks_raw = _fetch_bitkub_orderbook(
-            symbol,
-            safe_limit,
-        )
-
-        # Bitkub depth already returns THB prices, so there is no
-        # Binance/USDT/USDTHB conversion in the Orderbook path.
-        def normalize_level(row):
-            if not isinstance(row, (list, tuple)) or len(row) < 2:
-                return None
-
-            price_thb = _safe_float(row[0])
-            quantity = _safe_float(row[1])
-
-            if price_thb <= 0 or quantity <= 0:
-                return None
-
-            return {
-                "price_thb": price_thb,
-                "quantity": quantity,
-                "total_thb": price_thb * quantity,
-            }
-
-        bids = [
-            level
-            for row in bids_raw
-            if (level := normalize_level(row)) is not None
-        ][:safe_limit]
-
-        asks = [
-            level
-            for row in asks_raw
-            if (level := normalize_level(row)) is not None
-        ][:safe_limit]
-
-        # Bitkub's API returns bids/asks as price + size. Keep the
-        # exchange ordering, but calculate the best levels explicitly.
-        best_bid = max(
-            (level["price_thb"] for level in bids),
-            default=0.0,
-        )
-        best_ask = min(
-            (level["price_thb"] for level in asks),
-            default=0.0,
-        )
-
-        spread_thb = (
-            best_ask - best_bid
-            if best_bid > 0 and best_ask > 0
-            else 0.0
-        )
-
-        spread_pct = (
-            spread_thb / best_bid * 100
-            if best_bid > 0
-            else 0.0
-        )
-
-        mid_price_thb = (
-            (best_bid + best_ask) / 2
-            if best_bid > 0 and best_ask > 0
-            else 0.0
-        )
-
-        return {
-            "status": "ok",
-            "asset": asset,
-            "symbol": symbol,
-            "quote": "THB",
-            "source": "Bitkub",
-            "timestamp": pd.Timestamp.now(
-                tz="Asia/Bangkok"
-            ).isoformat(),
-            "best_bid_thb": best_bid,
-            "best_ask_thb": best_ask,
-            "mid_price_thb": mid_price_thb,
-            "spread_thb": spread_thb,
-            "spread_pct": spread_pct,
-            "bids": bids,
-            "asks": asks,
-        }
-
-    except HTTPException:
-        raise
-
-    except Exception as e:
-        raise _internal_server_error(
-            "โหลด Bitkub Orderbook ไม่สำเร็จ",
-            e,
-            status_code=503,
-        )
-# =========================================================
-# MARKETS (Market Hub) — proxy Bitkub ticker ให้ Frontend ไม่ติด CORS
-# =========================================================
-
-MARKET_HUB_ASSETS = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "HBAR", "LINK", "XLM"]
-
-_MARKETS_CACHE_LOCK = RLock()
-_MARKETS_CACHE = {"ts": 0.0, "rows": []}
-_MARKETS_CACHE_TTL_SECONDS = 5
-
-
-def _fetch_bitkub_markets() -> list[dict]:
-    request = urllib.request.Request(
-        "https://api.bitkub.com/api/market/ticker",
-        headers={
-            "User-Agent": "Dealer-Suite/1.0",
-            "Accept": "application/json",
-        },
-    )
-    with urllib.request.urlopen(request, timeout=8) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-
-    if not isinstance(payload, dict):
-        raise ValueError("Bitkub ticker response ไม่ถูกต้อง")
-
-    rows = []
-    for asset in MARKET_HUB_ASSETS:
-        row = payload.get(f"THB_{asset}") or payload.get(f"{asset}_THB")
-        if not isinstance(row, dict):
-            continue
-
-        last = _safe_float(row.get("last"))
-        if last <= 0:
-            continue
-
-        rows.append({
-            "asset": asset,
-            "last_thb": last,
-            "change_pct": _safe_float(row.get("percentChange")),
-            "high_24h_thb": _safe_float(row.get("high24hr")),
-            "low_24h_thb": _safe_float(row.get("low24hr")),
-            "volume_base": _safe_float(row.get("baseVolume")),
-            "bid_thb": _safe_float(row.get("highestBid")),
-            "ask_thb": _safe_float(row.get("lowestAsk")),
-        })
-
-    if not rows:
-        raise ValueError("ไม่พบข้อมูลตลาดจาก Bitkub")
-
+    if (rows.length === 0) throw new Error("ไม่พบข้อมูลตลาดจาก Bitkub")
     return rows
+  } catch (err) {
+    throw new Error(
+      `โหลดข้อมูลตลาดไม่สำเร็จ — Backend ยังไม่มี /api/markets และเรียก Bitkub ตรงไม่ได้ (${
+        err instanceof Error ? err.message : "unknown"
+      })`
+    )
+  }
+}
 
+function MarketsPage({
+  portfolio,
+  onTrade,
+  onOrderBook,
+}: {
+  portfolio: PortfolioData | null
+  onTrade: (asset: string) => void
+  onOrderBook: () => void
+}) {
+  const [tickers, setTickers] = useState<MarketTicker[]>([])
+  const [selectedAsset, setSelectedAsset] = useState("BTC")
+  const [search, setSearch] = useState("")
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [lastUpdated, setLastUpdated] = useState("")
 
-@app.get("/api/markets", dependencies=[Depends(require_api_key)])
-def markets():
-    now = time.monotonic()
+  useEffect(() => {
+    let cancelled = false
 
-    with _MARKETS_CACHE_LOCK:
-        if _MARKETS_CACHE["rows"] and now - _MARKETS_CACHE["ts"] < _MARKETS_CACHE_TTL_SECONDS:
-            return {"status": "ok", "markets": _MARKETS_CACHE["rows"]}
-
-    try:
-        rows = _fetch_bitkub_markets()
-    except Exception as exc:
-        # ถ้า Bitkub ล่มชั่วคราว ให้ใช้ข้อมูลล่าสุดที่แคชไว้ (ถ้ามี)
-        with _MARKETS_CACHE_LOCK:
-            if _MARKETS_CACHE["rows"]:
-                return {"status": "ok", "markets": _MARKETS_CACHE["rows"]}
-        raise _internal_server_error("โหลดข้อมูลตลาดไม่สำเร็จ", exc, 502)
-
-    with _MARKETS_CACHE_LOCK:
-        _MARKETS_CACHE["ts"] = now
-        _MARKETS_CACHE["rows"] = rows
-
-    return {"status": "ok", "markets": rows}
-# =========================================================
-# ROOT / HEALTH
-# =========================================================
-
-@app.get("/")
-def root():
-    return {
-        "service": "Dealer Suite API",
-        "status": "online",
+    const run = async () => {
+      try {
+        const rows = await fetchMarketTickers()
+        if (cancelled) return
+        setTickers(rows)
+        setLastUpdated(new Date().toLocaleTimeString("th-TH"))
+        setError("")
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "โหลด Market Data ไม่สำเร็จ")
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
     }
 
+    void run()
+    const timer = window.setInterval(run, 10000)
 
-@app.get("/api/health")
-def health():
-    return {"status": "ok"}
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [])
 
+  const visible = tickers.filter((item) => {
+    const q = search.trim().toLowerCase()
+    return !q || item.asset.toLowerCase().includes(q) || item.name.toLowerCase().includes(q)
+  })
+  const gainers = tickers
+    .filter((item) => item.change > 0)
+    .sort((a, b) => b.change - a.change)
+    .slice(0, 3)
+  const losers = tickers
+    .filter((item) => item.change < 0)
+    .sort((a, b) => a.change - b.change)
+    .slice(0, 3)
+  const selected = tickers.find((item) => item.asset === selectedAsset) || null
+  const holding = portfolio?.holdings.find(
+    (item) => item.asset.toUpperCase() === selectedAsset
+  )
 
-# =========================================================
-# ENGINE STATUS
-# =========================================================
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold">Markets</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Real-time market overview, movers and market intelligence.
+          </p>
+        </div>
+        <div className="text-xs text-muted-foreground">
+          {loading
+            ? "Updating..."
+            : error
+              ? "Market data unavailable"
+              : `Live · Updated ${lastUpdated}`}
+        </div>
+      </div>
 
-@app.get("/api/engine/status", dependencies=[Depends(require_api_key)])
-def engine_status():
-    try:
-        gu = load_gu()
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-3 size-4 text-muted-foreground" />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search coin"
+          className="w-full rounded-xl border bg-card py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-primary"
+        />
+      </div>
 
-        return {
-            "status": "ok",
-            "gu_loaded": True,
-            "gu_path": str(GU_PATH),
-            "supported_assets": getattr(gu, "SUPPORTED_ASSETS", []),
-            "has_execute_order": callable(getattr(gu, "execute_order", None)),
-            "has_can_trade": callable(getattr(gu, "can_trade", None)),
-        }
+      {error && (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-500">
+          {error}
+        </div>
+      )}
 
-    except Exception as e:
-        raise _internal_server_error(
-            "Engine status ตรวจสอบไม่สำเร็จ",
-            e,
-        )
-
-
-# =========================================================
-# GET PORTFOLIO
-# =========================================================
-
-@app.get("/api/portfolio", dependencies=[Depends(require_api_key)])
-def portfolio(user: str = Depends(require_user)):
-    with ORDER_LOCK:
-        try:
-            gu = load_gu()
-
-            # Resolve the actor from the verified session, then make gu.py use it.
-            actor = _actor(user)
-            _sync_gu_actor(gu, actor)
-
-            # READ ONLY. ห้ามสร้าง wallet / ตั้งค่าเริ่มต้น / save / เขียนทับ
-            sim = _load_existing_sim(gu)
-
-            asset = str(sim.get("asset") or "BTC").upper().strip()
-
-            requested_asset = str(
-                os.environ.get("XSPRING_PORTFOLIO_ASSET", "") or ""
-            ).strip().upper()
-
-            if requested_asset and requested_asset in getattr(
-                gu, "SUPPORTED_ASSETS", []
-            ):
-                asset = requested_asset
-
-# Portfolio valuation uses Bitkub THB prices directly.
-            # It must not depend on Yahoo Finance or USD/THB (THB=X).
-            now_bkk = pd.Timestamp.now(tz=BANGKOK_TZ)
-
-            return {
-                "status": "ok",
-                "actor": actor,
-                "asset": asset,
-                "as_of": now_bkk.isoformat(),
-                "portfolio": _portfolio_response(gu, sim),
-            }
-
-        except HTTPException:
-            raise
-
-        except Exception as e:
-            raise _internal_server_error(
-                "เกิดข้อผิดพลาดภายใน API",
-                e,
-            )
-
-PUBLIC_ASSETS = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "HBAR", "LINK", "XLM"]
-PUBLIC_NAMES = {
-    "BTC": "Bitcoin", "ETH": "Ethereum", "SOL": "Solana", "XRP": "XRP", "ADA": "Cardano",
-    "DOGE": "Dogecoin", "HBAR": "Hedera", "LINK": "Chainlink", "XLM": "Stellar",
-}
-_PUB_CACHE = {"ts": 0.0, "rows": [], "spark_ts": 0.0, "sparks": {}}
-
-
-@app.get("/api/public/markets")
-def public_markets(request: Request):
-    _check_rate_limit(request, "public-markets")
-    c = _PUB_CACHE
-    now = time.time()
-
-    # ราคา: แคช 10 วินาที
-    if not c["rows"] or now - c["ts"] > 10:
-        try:
-            r = requests.get("https://api.bitkub.com/api/market/ticker", timeout=10)
-            r.raise_for_status()
-            body = r.json()
-            rows = []
-            for a in PUBLIC_ASSETS:
-                t = body.get(f"THB_{a}") or body.get(f"{a}_THB")
-                price = float((t or {}).get("last") or 0)
-                if not t or price <= 0:
-                    continue
-                rows.append({
-                    "asset": a,
-                    "name": PUBLIC_NAMES.get(a, a),
-                    "price": price,
-                    "change": float(t.get("percentChange") or 0),
-                    "volume": float(t.get("quoteVolume") or (float(t.get("baseVolume") or 0) * price)),
-                })
-            if rows:
-                c["rows"], c["ts"] = rows, now
-        except Exception as e:
-            if not c["rows"]:
-                raise HTTPException(status_code=502, detail=f"ดึงข้อมูลตลาดไม่สำเร็จ: {e}")
-
-    # กราฟ 7 วัน: แคช 10 นาที
-    if not c["sparks"] or now - c["spark_ts"] > 600:
-        sparks = {}
-        t_now = int(now)
-        for a in PUBLIC_ASSETS:
-            try:
-                r = requests.get(
-                    "https://api.bitkub.com/tradingview/history",
-                    params={"symbol": f"{a}_THB", "resolution": 60,
-                            "from": t_now - 7 * 86400, "to": t_now},
-                    timeout=6,
+      <section>
+        <div className="mb-3">
+          <h3 className="font-semibold">Market Overview</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Live ticker data from Bitkub Public Market API
+          </p>
+        </div>
+        <div className="overflow-x-auto rounded-xl border bg-card">
+          <div className="min-w-[640px]">
+            <div className="grid grid-cols-[1.4fr_1fr_110px_120px] gap-4 border-b px-4 py-3 text-xs font-medium text-muted-foreground">
+              <div>Market</div>
+              <div>Price</div>
+              <div>24h</div>
+              <div className="text-right">Volume</div>
+            </div>
+            {loading && tickers.length === 0 ? (
+              <div className="py-12 text-center text-sm text-muted-foreground">
+                Loading markets...
+              </div>
+            ) : visible.length === 0 ? (
+              <div className="py-12 text-center text-sm text-muted-foreground">
+                No markets found
+              </div>
+            ) : (
+              visible.map((item) => {
+                const positive = item.change >= 0
+                return (
+                  <button
+                    key={item.asset}
+                    type="button"
+                    onClick={() => setSelectedAsset(item.asset)}
+                    className={`grid w-full grid-cols-[1.4fr_1fr_110px_120px] gap-4 border-b px-4 py-3 text-left transition last:border-b-0 hover:bg-accent ${
+                      selectedAsset === item.asset ? "bg-accent/60" : ""
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <CoinIcon asset={item.asset} />
+                      <div>
+                        <div className="font-semibold">{item.asset}/THB</div>
+                        <div className="text-xs text-muted-foreground">{item.name}</div>
+                      </div>
+                    </div>
+                    <div className="font-medium">{formatTHB(item.price)}</div>
+                    <div className={positive ? "text-emerald-500" : "text-red-500"}>
+                      {signedPct(item.change)}
+                    </div>
+                    <div className="text-right text-sm text-muted-foreground">
+                      {item.volume.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+                    </div>
+                  </button>
                 )
-                b = r.json()
-                if b.get("s") == "ok" and isinstance(b.get("c"), list) and b["c"]:
-                    closes = [float(x) for x in b["c"]]
-                    step = max(1, len(closes) // 40)
-                    sparks[a] = closes[::step]
-            except Exception:
-                pass
-        c["sparks"], c["spark_ts"] = sparks, now
+              })
+            )}
+          </div>
+        </div>
+      </section>
 
-    return {"status": "ok", "rows": c["rows"], "sparks": c["sparks"]}
+      <section>
+        <div className="mb-3">
+          <h3 className="font-semibold">Top Movers</h3>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="rounded-xl border bg-card p-5">
+            <div className="mb-3 flex items-center gap-2 font-semibold text-emerald-500">
+              <TrendingUp className="size-4" /> Gainers
+            </div>
+            {gainers.length === 0 ? (
+              <p className="text-sm text-muted-foreground">ไม่มีเหรียญที่ขึ้นใน 24 ชม.</p>
+            ) : (
+              <div className="space-y-2">
+                {gainers.map((item) => (
+                  <button
+                    key={item.asset}
+                    type="button"
+                    onClick={() => setSelectedAsset(item.asset)}
+                    className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left hover:bg-accent"
+                  >
+                    <span className="flex items-center gap-2 font-medium">
+                      <CoinIcon asset={item.asset} size={22} />
+                      {item.asset}
+                    </span>
+                    <span className="text-emerald-500">{signedPct(item.change)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
-# =========================================================
-# PUBLIC NEWS (หน้าข่าวก่อนล็อกอิน) — ดึงจาก gu.fetch_crypto_news
-# =========================================================
+          <div className="rounded-xl border bg-card p-5">
+            <div className="mb-3 flex items-center gap-2 font-semibold text-red-500">
+              <TrendingDown className="size-4" /> Losers
+            </div>
+            {losers.length === 0 ? (
+              <p className="text-sm text-muted-foreground">ไม่มีเหรียญที่ลงใน 24 ชม.</p>
+            ) : (
+              <div className="space-y-2">
+                {losers.map((item) => (
+                  <button
+                    key={item.asset}
+                    type="button"
+                    onClick={() => setSelectedAsset(item.asset)}
+                    className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left hover:bg-accent"
+                  >
+                    <span className="flex items-center gap-2 font-medium">
+                      <CoinIcon asset={item.asset} size={22} />
+                      {item.asset}
+                    </span>
+                    <span className="text-red-500">{signedPct(item.change)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
 
-_NEWS_CACHE = {"ts": 0.0, "items": []}
-_NEWS_TTL_SECONDS = 300
-_NEWS_CACHE_LOCK = RLock()
+      <section>
+        <div className="mb-3">
+          <h3 className="font-semibold">Market Watch</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Select a market to inspect its live chart and portfolio exposure.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {MARKET_HUB_ASSETS.map((asset) => (
+            <button
+              key={asset}
+              type="button"
+              onClick={() => setSelectedAsset(asset)}
+              className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium ${
+                selectedAsset === asset
+                  ? "bg-primary text-primary-foreground"
+                  : "hover:bg-accent"
+              }`}
+            >
+              <CoinIcon asset={asset} size={18} />
+              {asset}
+            </button>
+          ))}
+        </div>
+      </section>
 
+      <section className="rounded-xl border bg-card p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <CoinIcon asset={selectedAsset} size={40} />
+            <div>
+              <h3 className="font-semibold">{selectedAsset} / THB</h3>
+              <p className="mt-1 text-xs text-muted-foreground">Coin Intelligence</p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => onOrderBook()}
+              className="rounded-lg border px-3 py-2 text-sm hover:bg-accent"
+            >
+              Orderbook
+            </button>
+            <button
+              type="button"
+              onClick={() => onTrade(selectedAsset)}
+              className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground"
+            >
+              Trade
+            </button>
+          </div>
+        </div>
 
-def _safe_http_url(value) -> str:
-    url = str(value or "").strip()
-    return url if url.lower().startswith(("http://", "https://")) else ""
+        <div className="mt-4 grid gap-3 md:grid-cols-5">
+          <MarketStat
+            label="Price"
+            value={selected ? formatTHB(selected.price) : "—"}
+            sub={selected ? signedPct(selected.change) : "—"}
+            positive={selected ? selected.change >= 0 : undefined}
+          />
+          <MarketStat label="24h High" value={selected?.high ? formatTHB(selected.high) : "—"} />
+          <MarketStat label="24h Low" value={selected?.low ? formatTHB(selected.low) : "—"} />
+          <MarketStat
+            label="24h Volume"
+            value={
+              selected
+                ? selected.volume.toLocaleString("en-US", { maximumFractionDigits: 2 })
+                : "—"
+            }
+          />
+          <MarketStat
+            label="Spread"
+            value={
+              selected && selected.bid > 0 && selected.ask > 0
+                ? formatTHB(selected.ask - selected.bid)
+                : "—"
+            }
+          />
+        </div>
 
+        <div className="mt-5 overflow-hidden rounded-lg bg-muted/20">
+          <TradingViewChart symbol={`BITKUB:${selectedAsset}THB`} interval="60" height={420} />
+        </div>
 
-def _normalize_news(raw) -> list[dict]:
-    if not isinstance(raw, (list, tuple)):
-        return []
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <div className="rounded-lg border p-4">
+            <div className="text-xs text-muted-foreground">Portfolio holding</div>
+            <div className="mt-1 font-semibold">
+              {holding && Number(holding.qty || 0) > 0
+                ? `${formatQty(holding.qty)} ${selectedAsset}`
+                : `No ${selectedAsset} position`}
+            </div>
+          </div>
+          <div className="rounded-lg border p-4">
+            <div className="text-xs text-muted-foreground">Unrealized P&L</div>
+            <div
+              className={`mt-1 font-semibold ${
+                Number(holding?.unrealized_pnl || 0) >= 0 ? "text-emerald-500" : "text-red-500"
+              }`}
+            >
+              {holding && Number(holding.qty || 0) > 0
+                ? formatTHB(Number(holding.unrealized_pnl || 0))
+                : "—"}
+            </div>
+          </div>
+        </div>
+      </section>
 
-    items = []
-    for r in raw:
-        if not isinstance(r, dict):
-            continue
-        title = str(r.get("title") or "").strip()
-        if not title:
-            continue
+      <section className="rounded-xl border bg-card p-5">
+        <h3 className="font-semibold">Market Intelligence</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Market signals will connect here to Portfolio and AI intelligence. Current page uses live
+          price, movers and your existing portfolio exposure.
+        </p>
+      </section>
+    </div>
+  )
+}
 
-        ts = int(_safe_float(r.get("published_ts"), 0.0))
-        tags = r.get("tags")
-        tags = [str(t).upper() for t in tags][:6] if isinstance(tags, list) else []
+/* =========================================================
+   DASHBOARD
+========================================================= */
 
-        items.append({
-            "title": title[:300],
-            "url": _safe_http_url(r.get("url")),
-            "source": str(r.get("source") or "").strip()[:60],
-            "image_url": _safe_http_url(r.get("image_url")),
-            "published_ts": ts,
-            "tags": tags,
+function DashboardPage({
+  portfolio,
+  loading,
+  error,
+  onRefresh,
+  onTrade,
+}: {
+  portfolio: PortfolioData | null
+  loading: boolean
+  error: string
+  onRefresh: () => void
+  onTrade: () => void
+}) {
+  const [selectedAsset, setSelectedAsset] = useState<Asset>("BTC")
+  const [recentOrders, setRecentOrders] = useState<OrderHistoryRow[]>([])
+  const [ordersLoading, setOrdersLoading] = useState(true)
+
+  const holdings = [...(portfolio?.holdings || [])]
+    .filter((item) => Number(item.qty || 0) > 0)
+    .sort((a, b) => Number(b.market_value || 0) - Number(a.market_value || 0))
+
+  const openPositions = holdings.length
+  const totalValue = Number(portfolio?.total_value_thb || 0)
+  const cash = Number(portfolio?.cash_thb || 0)
+  const marketValue = Number(portfolio?.market_value_thb || 0)
+  const totalPnl = Number(portfolio?.total_pnl_thb || 0)
+  const pnlPct = Number(portfolio?.pnl_pct || 0)
+  const pnlPositive = totalPnl >= 0
+
+  const selectedHolding = holdings.find(
+    (item) => item.asset.toUpperCase() === selectedAsset
+  )
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadRecentOrders = async () => {
+      setOrdersLoading(true)
+
+      try {
+        if (!DEALER_API_KEY) {
+          setRecentOrders([])
+          return
+        }
+
+        const response = await authFetch(`${API_BASE_URL}/api/orders?limit=5`, {
+          headers: {
+            Accept: "application/json",
+          },
+          cache: "no-store",
         })
-    return items[:30]
 
+        const body = await response.json()
 
-@app.get("/api/public/news")
-def public_news(request: Request):
-    _check_rate_limit(request, "public-news")
-    now = time.monotonic()
-
-    with _NEWS_CACHE_LOCK:
-        if _NEWS_CACHE["items"] and now - _NEWS_CACHE["ts"] < _NEWS_TTL_SECONDS:
-            return {"status": "ok", "items": _NEWS_CACHE["items"]}
-
-    try:
-        gu = load_gu()
-        items = _normalize_news(gu.fetch_crypto_news(limit=30))
-    except Exception as exc:
-        with _NEWS_CACHE_LOCK:
-            if _NEWS_CACHE["items"]:
-                return {"status": "ok", "items": _NEWS_CACHE["items"]}
-        raise _internal_server_error("โหลดข่าวไม่สำเร็จ", exc, 502)
-
-    if items:
-        with _NEWS_CACHE_LOCK:
-            _NEWS_CACHE["ts"], _NEWS_CACHE["items"] = now, items
-
-    return {"status": "ok", "items": items}
-
-# =========================================================
-# วางบล็อกนี้ในไฟล์ backend ที่มี `def public_news`
-# วาง "ต่อท้ายฟังก์ชัน public_news" (หลัง return {"status": "ok", "items": items})
-# ใช้ GEMINI_API_KEY ตัวเดิม + gu.ask_ai เหมือน /api/chat
-# ไม่ต้องเพิ่ม import ใหม่ (os, json, BaseModel, Field, Depends, HTTPException มีในไฟล์อยู่แล้ว)
-# =========================================================
-
-_AI_NEWS_CACHE: dict = {}
-
-NEWS_AI_SYSTEM = (
-    "แปลและสรุปข่าวคริปโตเป็นภาษาไทย ตอบเป็น JSON เท่านั้น ห้ามมี markdown หรือข้อความอื่น "
-    'รูปแบบ: {"title_th":"...","summary_th":"สรุป 2-3 ประโยค",'
-    '"sentiment":"bullish|bearish|neutral","note":"ผลต่อ BTC/ETH สั้นๆ"} '
-    "ใช้เฉพาะข้อมูลที่ให้มา ห้ามแต่งเพิ่ม ห้ามแนะนำให้ซื้อหรือขาย"
-)
-
-
-class NewsAiIn(BaseModel):
-    url: str = Field(..., max_length=1000)
-    title: str = Field(..., min_length=1, max_length=300)
-    snippet: str = Field(default="", max_length=1500)
-
-
-def _extract_json(raw: str) -> dict:
-    raw = raw.replace("```json", "").replace("```", "").strip()
-    start, end = raw.find("{"), raw.rfind("}")
-    if start == -1 or end == -1:
-        raise ValueError("AI ไม่ได้ตอบเป็น JSON")
-    return json.loads(raw[start : end + 1])
-
-
-@app.post("/api/news/summarize", dependencies=[Depends(require_api_key)])
-def summarize_news(n: NewsAiIn, user: str = Depends(require_user)):
-    if n.url in _AI_NEWS_CACHE:
-        return _AI_NEWS_CACHE[n.url]
-
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        raise HTTPException(status_code=503, detail="ยังไม่ได้ตั้ง GEMINI_API_KEY บน Backend")
-
-    messages = [{"role": "user", "content": f"Title: {n.title}\nSnippet: {n.snippet}"}]
-
-    try:
-        gu = load_gu()
-        raw = str(gu.ask_ai(messages, api_key, system_override=NEWS_AI_SYSTEM) or "")
-        result = _extract_json(raw)
-    except Exception as e:
-        raise _internal_server_error("สรุปข่าวไม่สำเร็จ", e)
-
-    if len(_AI_NEWS_CACHE) > 500:
-        _AI_NEWS_CACHE.clear()
-    _AI_NEWS_CACHE[n.url] = result
-    return result
-
-# =========================================================
-# PUBLIC EXCHANGES (ตารางเทียบราคากระดานไทย) — ดึงจาก gu.fetch_perp_venues
-# =========================================================
-
-_EX_CACHE: dict = {}
-_EX_CACHE_LOCK = RLock()
-_EX_TTL_SECONDS = 5
-
-
-def _pos_float(value):
-    try:
-        v = float(value)
-        return v if math.isfinite(v) and v > 0 else None
-    except (TypeError, ValueError):
-        return None
-
-
-@app.get("/api/public/exchanges")
-def public_exchanges(request: Request, asset: str = "BTC"):
-    _check_rate_limit(request, "public-exchanges")
-    asset = str(asset or "").strip().upper()
-    if asset not in PUBLIC_ASSETS:
-        raise HTTPException(status_code=400, detail=f"ไม่รองรับเหรียญ {asset or '(ว่าง)'}")
-
-    now = time.monotonic()
-    with _EX_CACHE_LOCK:
-        hit = _EX_CACHE.get(asset)
-        if hit and now - hit[0] < _EX_TTL_SECONDS:
-            return hit[1]
-
-    try:
-        gu = load_gu()
-        df, _ts = gu.fetch_perp_venues(asset, board="thai")
-        fees = getattr(gu, "_THAI_TAKER_FEE_PCT", {}) or {}
-        venues = {v.get("name"): v for v in (getattr(gu, "_THAI_SPOT_VENUES", []) or [])}
-
-        rows = []
-        for _, r in df.iterrows():
-            name = str(r.get("exchange") or "").strip()
-            v = venues.get(name, {})
-            bid = _pos_float(r.get("bid"))
-            ask = _pos_float(r.get("ask"))
-            fee = _pos_float(fees.get(name))
-            ok = bid is not None and ask is not None
-
-            rows.append({
-                "exchange": name,
-                "symbol": str(r.get("symbol") or ""),
-                "url": _safe_http_url(r.get("url")),
-                "logo": _safe_http_url(r.get("logo") or v.get("logo")),
-                "badge": str(v.get("tx") or name[:2]).upper(),
-                "bg": str(v.get("bg") or "#444444"),
-                "fg": str(v.get("fg") or "#ffffff"),
-                "bid": bid,
-                "ask": ask,
-                "spread": (ask - bid) if ok else None,
-                "spread_pct": ((ask - bid) / bid * 100.0) if ok else None,
-                "fee_pct": fee,
-                "net_buy": (ask * (1 + fee / 100.0)) if (ask is not None and fee is not None) else None,
-                "net_sell": (bid * (1 - fee / 100.0)) if (bid is not None and fee is not None) else None,
-                "error": "" if ok else str(r.get("err") or "ข้อมูลไม่พร้อม")[:80],
-            })
-    except Exception as exc:
-        with _EX_CACHE_LOCK:
-            hit = _EX_CACHE.get(asset)
-            if hit:
-                return hit[1]
-        raise _internal_server_error("โหลดตารางกระดานไม่สำเร็จ", exc, 502)
-
-    result = {"status": "ok", "asset": asset, "rows": rows}
-    if any(r["bid"] is not None for r in rows):
-        with _EX_CACHE_LOCK:
-            _EX_CACHE[asset] = (now, result)
-    return result
-
-
-# =========================================================
-# PUBLIC BACKTEST (ลองลงทุนย้อนหลัง) — ใช้ engine จาก gu.mobile_bt_compare
-# =========================================================
-
-_BT_KINDS = {"lump", "dca", "dip", "trend"}
-_BT_FREQS = ("รายสัปดาห์", "รายเดือน")
-_BT_CACHE: dict = {}
-_BT_CACHE_LOCK = RLock()
-_BT_TTL_SECONDS = 600
-_BT_CACHE_MAX = 300
-_BT_MAX_POINTS = 240
-
-
-class PublicBacktestRequest(BaseModel):
-    asset: str = Field(..., min_length=1, max_length=10)
-    kind: str = Field(..., min_length=1, max_length=10)
-    amount: float = Field(..., ge=100, le=1_000_000_000)
-    start: str = Field(..., min_length=10, max_length=10)
-    end: str = Field(..., min_length=10, max_length=10)
-    freq: str = Field(default="รายเดือน", max_length=20)
-
-
-def _bt_pick(series, idx: list) -> list:
-    return [round(_safe_float(series.iloc[i]), 2) for i in idx]
-
-
-@app.post("/api/public/backtest")
-def public_backtest(body: PublicBacktestRequest, request: Request):
-    _check_rate_limit(request, "public-backtest")
-
-    asset = body.asset.strip().upper()
-    kind = body.kind.strip().lower()
-    freq = body.freq.strip()
-    amount = _safe_float(body.amount, -1.0)
-
-    if asset not in PUBLIC_ASSETS:
-        raise HTTPException(status_code=400, detail=f"ไม่รองรับเหรียญ {asset}")
-    if kind not in _BT_KINDS:
-        raise HTTPException(status_code=400, detail="กลยุทธ์ไม่ถูกต้อง")
-    if freq not in _BT_FREQS:
-        raise HTTPException(status_code=400, detail="ความถี่ไม่ถูกต้อง")
-    if amount < 100:
-        raise HTTPException(status_code=400, detail="เงินลงทุนขั้นต่ำ 100 บาท")
-
-    try:
-        start = pd.Timestamp(body.start).normalize()
-        end = pd.Timestamp(body.end).normalize()
-    except Exception:
-        raise HTTPException(status_code=400, detail="รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)")
-
-    today = pd.Timestamp.now().normalize()
-    if end > today:
-        end = today
-    if start < pd.Timestamp("2015-01-01"):
-        start = pd.Timestamp("2015-01-01")
-    if (end - start).days < 14:
-        raise HTTPException(status_code=400, detail="ช่วงเวลาสั้นเกินไป (อย่างน้อย 14 วัน)")
-    if (end - start).days > 365 * 6:
-        raise HTTPException(status_code=400, detail="ช่วงเวลายาวเกินไป (ไม่เกิน 6 ปี)")
-
-    cache_key = (asset, kind, freq, round(amount, 2), str(start.date()), str(end.date()))
-    now = time.monotonic()
-    with _BT_CACHE_LOCK:
-        hit = _BT_CACHE.get(cache_key)
-        if hit and now - hit[0] < _BT_TTL_SECONDS:
-            return hit[1]
-
-    try:
-        gu = load_gu()
-        df, err = gu.fetch_price_data(asset, start, end, use_fx_proxy=False)
-        if df is None or df.empty or len(df) < 10:
-            raise HTTPException(
-                status_code=422,
-                detail=f"ข้อมูลไม่พอสำหรับคำนวณ: {err or 'น้อยกว่า 10 วัน'}",
-            )
-
-        ui = getattr(gu, "UI_DEFAULTS", {}) or {}
-        premium = _safe_float(ui.get("local_premium_pct", 0.1), 0.1) / 100.0
-        spread = _safe_float(ui.get("dealer_spread_pct", 0.5), 0.5) / 100.0
-
-        res = gu.mobile_bt_compare(df, kind, float(amount), premium, spread, freq)
-        s, h, sv = res["strategy"], res["hold"], res["savings"]
-
-        n = len(df)
-        step = max(1, math.ceil(n / _BT_MAX_POINTS))
-        idx = list(range(0, n, step))
-        if idx[-1] != n - 1:
-            idx.append(n - 1)
-
-        s_final = _safe_float(s["final"])
-        h_final = _safe_float(h["final"])
-        sav_final = _safe_float(sv.iloc[-1])
-        fee = _safe_float(getattr(gu, "LOCAL_TRADING_FEE_PCT", 0.0025), 0.0025)
-
-        result = {
-            "status": "ok",
-            "asset": asset,
-            "kind": kind,
-            "freq": freq,
-            "amount": amount,
-            "start": str(df.index.min().date()),
-            "end": str(df.index.max().date()),
-            "fee_pct": fee * 100.0 if fee < 1 else fee,
-            "spread_pct": spread * 100.0,
-            "dates": [df.index[i].strftime("%Y-%m-%d") for i in idx],
-            "strategy": _bt_pick(s["equity"], idx),
-            "hold": _bt_pick(h["equity"], idx),
-            "savings": _bt_pick(sv, idx),
-            "summary": {
-                "final": round(s_final, 2),
-                "profit": round(s_final - amount, 2),
-                "pct": round((s_final / amount - 1) * 100, 2),
-                "hold_final": round(h_final, 2),
-                "hold_pct": round((h_final / amount - 1) * 100, 2),
-                "sav_final": round(sav_final, 2),
-                "sav_pct": round((sav_final / amount - 1) * 100, 2),
-                "max_dd": round(_safe_float(s.get("max_dd")), 2),
-                "hold_max_dd": round(_safe_float(h.get("max_dd")), 2),
-                "trades": int(s.get("trades") or 0),
-                "cash_left": round(_safe_float(s.get("cash_left")), 2),
-            },
+        if (!response.ok || body?.status !== "ok") {
+          throw new Error("Unable to load orders")
         }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _internal_server_error("คำนวณย้อนหลังไม่สำเร็จ", exc, 502)
 
-    with _BT_CACHE_LOCK:
-        if len(_BT_CACHE) >= _BT_CACHE_MAX:
-            _BT_CACHE.pop(next(iter(_BT_CACHE)), None)
-        _BT_CACHE[cache_key] = (now, result)
-    return result
+        const rows = Array.isArray(body?.orders)
+          ? (body.orders as OrderHistoryRow[])
+          : []
 
+        rows.sort((a, b) => {
+          const dateA = parseOrderDate(a.timestamp || a.date)?.getTime() ?? NaN
+          const dateB = parseOrderDate(b.timestamp || b.date)?.getTime() ?? NaN
+          if (Number.isFinite(dateA) && Number.isFinite(dateB)) {
+            return dateB - dateA
+          }
+          return 0
+        })
 
-# =========================================================
-# CHAT (AI ASSISTANT) — read-only, never places orders
-# =========================================================
-
-CHAT_SYSTEM = (
-    "คุณคือผู้ช่วยของ XSpring Dealer Suite ตอบเป็นภาษาไทย "
-    "ตอบสั้นมาก ไม่เกิน 2 ประโยค ไม่เกิน 40 คำ ห้ามใช้ markdown หรือ bullet "
-    "ใช้เฉพาะตัวเลขใน portfolio_context ห้ามเดาหรือสร้างตัวเลขเอง "
-    "ถ้าไม่มีข้อมูลให้บอกว่าไม่มีข้อมูล "
-    "ห้ามแนะนำให้ซื้อหรือขาย และคุณไม่สามารถสั่งซื้อขายแทนผู้ใช้ได้"
-)
-
-
-class ChatTurn(BaseModel):
-    role: str = Field(..., max_length=12)
-    content: str = Field(..., min_length=1, max_length=1000)
-
-
-class ChatRequest(BaseModel):
-    message: str = Field(..., min_length=1, max_length=500)
-    history: list[ChatTurn] = Field(default_factory=list)
-
-
-def _chat_context(user_email: str) -> dict:
-    """Compact portfolio snapshot. Any failure -> empty context, chat still works."""
-    try:
-        with ORDER_LOCK:
-            gu = load_gu()
-            actor = _actor(user_email)
-            _sync_gu_actor(gu, actor)
-            sim = _load_existing_sim(gu)
-            pf = _portfolio_response(gu, sim)
-
-        return {
-            "cash_thb": pf.get("cash_thb"),
-            "total_value_thb": pf.get("total_value_thb"),
-            "total_pnl_thb": pf.get("total_pnl_thb"),
-            "pnl_pct": pf.get("pnl_pct"),
-            "holdings": [
-                {
-                    "asset": h.get("asset"),
-                    "qty": h.get("qty"),
-                    "avg_cost": h.get("avg_cost"),
-                    "price": h.get("price"),
-                    "unrealized_pnl": h.get("unrealized_pnl"),
-                    "allocation_pct": h.get("allocation_pct"),
-                }
-                for h in (pf.get("holdings") or [])
-            ],
+        if (!cancelled) {
+          setRecentOrders(rows.slice(0, 5))
         }
-    except Exception:
-        import traceback
-        traceback.print_exc()
-        return {}
+      } catch {
+        if (!cancelled) {
+          setRecentOrders([])
+        }
+      } finally {
+        if (!cancelled) {
+          setOrdersLoading(false)
+        }
+      }
+    }
 
+    loadRecentOrders()
 
-@app.post("/api/chat", dependencies=[Depends(require_api_key)])
-def chat(req: ChatRequest, user: str = Depends(require_user)):
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="ยังไม่ได้ตั้ง GEMINI_API_KEY บน Backend",
-        )
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
-    # สร้าง context ก่อน (ใช้ lock สั้น ๆ) แล้วค่อยเรียก Gemini นอก lock
-    # เพื่อไม่ให้การรอ AI ไปบล็อกการส่งคำสั่งซื้อขาย
-    context = _chat_context(user)
+  return (
+    <div className="space-y-6">
 
-    messages = []
-    for turn in req.history[-6:]:
-        role = "assistant" if turn.role == "assistant" else "user"
-        messages.append({"role": role, "content": turn.content})
-    messages.append({"role": "user", "content": req.message.strip()})
+      {/* HEADER */}
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold">Dashboard</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            ภาพรวมพอร์ต การซื้อขาย และตลาดของ XSpring Dealer Suite
+          </p>
+        </div>
 
-    system = (
-        CHAT_SYSTEM
-        + "\n\nportfolio_context:\n"
-        + json.dumps(context, ensure_ascii=False)
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading}
+          className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+        >
+          {loading ? "กำลังโหลด..." : "Refresh"}
+        </button>
+      </div>
+
+      {/* ERROR */}
+      {error && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm">
+          <span className="break-words text-red-500">{error}</span>
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="rounded-lg border px-3 py-1.5 text-xs font-medium hover:bg-accent"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* KPI */}
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <StatCard
+    title="Total Equity"
+    value={loading && totalValue === 0 ? "Loading..." : <NumberTicker value={totalValue} currency="THB" />}
+    change="Cash + Crypto"
+  />
+
+  <StatCard
+    title="Available Cash"
+    value={loading && totalValue === 0 ? "Loading..." : <NumberTicker value={cash} currency="THB" />}
+    change={
+      totalValue > 0
+        ? `${((cash / totalValue) * 100).toFixed(1)}% of equity`
+        : "THB"
+    }
+  />
+
+  <StatCard
+    title="Crypto Value"
+    value={loading && totalValue === 0 ? "Loading..." : <THB value={marketValue} />}
+    change={`${openPositions} open positions`}
+  />
+
+  <StatCard
+    title="Total P&L"
+    value={loading && totalValue === 0 ? "Loading..." : <NumberTicker value={totalPnl} currency="THB" showSign />}
+    change={loading ? "—" : `${pnlPositive ? "+" : ""}${pnlPct.toFixed(2)}%`}
+  />
+
+      </div>
+
+      {/* MARKET + QUICK TRADE */}
+      <div className="grid gap-4 xl:grid-cols-3">
+
+        <div className="rounded-xl border bg-card p-5 xl:col-span-2">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="font-semibold">Market Overview</h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                TradingView market view
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {(["BTC", "ETH", "SOL", "XRP"] as Asset[]).map((symbol) => (
+                <button
+                  key={symbol}
+                  type="button"
+                  onClick={() => setSelectedAsset(symbol)}
+                  className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                    selectedAsset === symbol
+                      ? "bg-primary text-primary-foreground"
+                      : "border hover:bg-accent"
+                  }`}
+                >
+                  <CoinIcon asset={symbol} size={16} />
+                  {symbol}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-lg bg-muted/20">
+            <TradingViewChart
+              symbol={`BITKUB:${selectedAsset}THB`}
+              interval="60"
+              height={330}
+            />
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>{selectedAsset}/THB · 1H</span>
+            <span>
+              {selectedHolding
+                ? `Current ${formatTHB(selectedHolding.price)}`
+                : "No position"}
+            </span>
+          </div>
+        </div>
+
+        <div className="rounded-xl border bg-card p-5">
+          <div className="mb-4">
+            <h3 className="font-semibold">Quick Trade</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              เข้าหน้า Trade พร้อมเลือกสินทรัพย์
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            {(["BTC", "ETH", "SOL", "XRP"] as Asset[]).map((symbol) => {
+              const holding = holdings.find(
+                (item) => item.asset.toUpperCase() === symbol
+              )
+
+              return (
+                <button
+                  key={symbol}
+                  type="button"
+                  onClick={() => setSelectedAsset(symbol)}
+                  className="flex w-full items-center justify-between rounded-lg border px-3 py-3 text-left hover:bg-accent"
+                >
+                  <div className="flex items-center gap-3">
+                    <CoinIcon asset={symbol} size={32} />
+                    <div>
+                      <div className="font-medium">{symbol}/THB</div>
+                      <div className="text-xs text-muted-foreground">
+                        {holding
+                          ? `${formatQty(holding.qty)} ${symbol}`
+                          : "No position"}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-right">
+                    <div className="text-sm">
+                      {holding ? formatTHB(holding.price) : "—"}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {holding
+                        ? `${Number(holding.allocation_pct || 0).toFixed(1)}% allocation`
+                        : "Available"}
+                    </div>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={onTrade}
+              className="rounded-lg bg-primary px-3 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
+            >
+              Trade
+            </button>
+
+            <button
+              type="button"
+              onClick={onRefresh}
+              className="rounded-lg border px-3 py-2.5 text-sm font-medium hover:bg-accent"
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* HOLDINGS + RECENT ORDERS */}
+      <div className="grid gap-4 xl:grid-cols-2">
+
+        <div className="rounded-xl border bg-card p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold">Top Holdings</h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                สินทรัพย์ตามมูลค่าในพอร์ต
+              </p>
+            </div>
+
+            <span className="rounded-full bg-muted px-2.5 py-1 text-[10px]">
+              {holdings.length} Assets
+            </span>
+          </div>
+
+          {loading ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">
+              กำลังโหลดพอร์ต...
+            </div>
+          ) : holdings.length === 0 ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">
+              ยังไม่มีสินทรัพย์ในพอร์ต
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {holdings.slice(0, 5).map((holding) => {
+                const positive = Number(holding.unrealized_pnl || 0) >= 0
+
+                return (
+                  <button
+                    key={holding.asset}
+                    type="button"
+                    onClick={() =>
+                      setSelectedAsset(holding.asset.toUpperCase() as Asset)
+                    }
+                    className="flex w-full items-center justify-between rounded-lg px-3 py-3 text-left hover:bg-accent"
+                  >
+                    <div className="flex items-center gap-3">
+                      <CoinIcon asset={holding.asset} />
+
+                      <div>
+                        <div className="font-medium">{holding.asset}/THB</div>
+                        <div className="text-xs text-muted-foreground">
+                          {formatQty(holding.qty)} units
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="text-right">
+                      <div className="text-sm font-medium">
+                        {formatTHB(holding.market_value)}
+                      </div>
+                      <div
+                        className={`flex items-center justify-end gap-1 text-xs ${
+                          positive ? "text-emerald-500" : "text-red-500"
+                        }`}
+                      >
+                        {positive ? (
+                          <TrendingUp className="size-3" />
+                        ) : (
+                          <TrendingDown className="size-3" />
+                        )}
+                        {positive ? "+" : ""}
+                        {Number(holding.pnl_pct || 0).toFixed(2)}%
+                      </div>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-xl border bg-card p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold">Recent Orders</h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                รายการซื้อขายล่าสุดจาก Backend
+              </p>
+            </div>
+
+            <span className="rounded-full bg-muted px-2.5 py-1 text-[10px]">
+              Last 5
+            </span>
+          </div>
+
+          {ordersLoading ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">
+              กำลังโหลด Orders...
+            </div>
+          ) : recentOrders.length === 0 ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">
+              ยังไม่มีรายการซื้อขาย
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {recentOrders.map((order, index) => {
+                const side = String(order.side || "").toUpperCase()
+                const isBuy = side === "BUY"
+
+                return (
+                  <div
+                    key={order.order_id || `${order.timestamp}-${index}`}
+                    className="flex items-center justify-between rounded-lg px-3 py-3 hover:bg-accent"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`flex size-8 items-center justify-center rounded-full ${
+                          isBuy
+                            ? "bg-emerald-500/10 text-emerald-500"
+                            : "bg-red-500/10 text-red-500"
+                        }`}
+                      >
+                        {isBuy ? (
+                          <TrendingUp className="size-4" />
+                        ) : (
+                          <TrendingDown className="size-4" />
+                        )}
+                      </div>
+
+                      <div>
+                        <div className="flex items-center gap-1.5 text-sm font-medium">
+                          {side || "ORDER"}
+                          {order.asset && <CoinIcon asset={order.asset} size={16} />}
+                          {order.asset || "—"}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {formatOrderDate(order.timestamp || order.date)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="text-right">
+                      <div className="text-sm font-medium">
+                        {formatTHB(Number(order.amount_thb || order.quote_thb || 0))}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {order.status || "filled"}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* FOOTER SUMMARY */}
+      <div className="grid gap-4 md:grid-cols-3">
+        <div className="rounded-xl border bg-card p-4">
+          <div className="text-xs text-muted-foreground">Realized P&L</div>
+          <div className="mt-1 text-lg font-semibold">
+            {formatTHB(Number(portfolio?.realized_pnl_thb || 0))}
+          </div>
+        </div>
+
+        <div className="rounded-xl border bg-card p-4">
+          <div className="text-xs text-muted-foreground">Unrealized P&L</div>
+          <div className="mt-1 text-lg font-semibold">
+            {formatTHB(Number(portfolio?.unrealized_pnl_thb || 0))}
+          </div>
+        </div>
+
+        <div className="rounded-xl border bg-card p-4">
+          <div className="text-xs text-muted-foreground">Trading Fees</div>
+          <div className="mt-1 text-lg font-semibold">
+            {formatTHB(Number(portfolio?.fees_thb || 0))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* =========================================================
+   TRADE PAGE
+========================================================= */
+
+function TradePage({
+  portfolio,
+  loading,
+  error,
+  onRefresh,
+  onOrderCreated,
+}: {
+  portfolio: PortfolioData | null
+  loading: boolean
+  error: string
+  onRefresh: () => void
+  onOrderCreated: () => void
+}) {
+  const [asset, setAsset] = useState<Asset>("BTC")
+  const [side, setSide] = useState<OrderSide>("BUY")
+  const [amount, setAmount] = useState("")
+  const [orderType, setOrderType] = useState<"MARKET" | "LIMIT">("MARKET")
+  const [limitPrice, setLimitPrice] = useState("")
+  const [submitting, setSubmitting] = useState(false)
+  const [orderMessage, setOrderMessage] = useState("")
+  const [tickers, setTickers] = useState<MarketTicker[]>([])
+
+  useEffect(() => {
+    let alive = true
+    const loadTickers = async () => {
+      try {
+        const rows = await fetchMarketTickers()
+        if (alive) setTickers(rows)
+      } catch {
+        // ถ้าโหลดราคาไม่ได้ ปุ่มจะยังถูก disable ตามเดิม
+      }
+    }
+    loadTickers()
+    const timer = setInterval(loadTickers, 15000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [])
+  
+  const holding = portfolio?.holdings.find(
+    (item) => item.asset.toUpperCase() === asset
+  )
+
+    const liveTicker = tickers.find(
+    (t) => t.asset.toUpperCase() === asset.toUpperCase()
+  )
+  const currentPrice = Number(holding?.price || liveTicker?.price || 0)
+  const availableThb =
+    side === "BUY"
+      ? Number(portfolio?.cash_thb || 0)
+      : Number(holding?.market_value || 0)
+
+  const execPrice = orderType === "LIMIT" ? Number(limitPrice || 0) : currentPrice
+  const amountThb = Number(amount || 0)
+  const estimatedQty = execPrice > 0 && amountThb > 0 ? amountThb / execPrice : 0
+
+  const tradeReady =
+    !loading && !error && !!portfolio &&
+    currentPrice > 0 && execPrice > 0 &&
+    Number.isFinite(amountThb) && amountThb >= 50 &&
+    amountThb <= availableThb && !submitting
+
+  const submitOrder = async () => {
+    setOrderMessage("")
+
+    if (submitting) return
+
+    if (!portfolio || loading || error) {
+      setOrderMessage("ยังส่งคำสั่งไม่ได้: Portfolio ต้องโหลดสำเร็จก่อน")
+      return
+    }
+
+    const cleanAmount = Number(amount)
+
+    if (!Number.isFinite(cleanAmount) || cleanAmount <= 0) {
+      setOrderMessage("กรุณาระบุมูลค่าคำสั่งให้ถูกต้อง")
+      return
+    }
+
+    if (cleanAmount < 50) {
+      setOrderMessage("ยอดขั้นต่ำคือ ฿50.00")
+      return
+    }
+
+    if (currentPrice <= 0) {
+      setOrderMessage("ไม่พบราคาปัจจุบันของเหรียญนี้")
+      return
+    }
+
+    if (orderType === "LIMIT" && !(Number(limitPrice) > 0)) {
+      setOrderMessage("กรุณาระบุราคา Limit ให้ถูกต้อง")
+      return
+    }
+
+    if (cleanAmount > availableThb + 1e-9) {
+      setOrderMessage(
+        `${side === "BUY" ? "ยอดเงินที่ใช้ซื้อ" : "จำนวนที่ขาย"}เกินยอดที่ทำรายการได้`
+      )
+      return
+    }
+
+    if (side === "SELL" && (!holding || Number(holding.qty || 0) <= 0)) {
+      setOrderMessage(`ไม่มี ${asset} ให้ขาย`)
+      return
+    }
+
+    if (!DEALER_API_KEY) {
+      setOrderMessage("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
+      return
+    }
+
+    const confirmed = window.confirm(
+      `${side === "BUY" ? "ยืนยันการซื้อ" : "ยืนยันการขาย"} ${asset} มูลค่า ${formatTHB(cleanAmount)} (${orderType === "LIMIT" ? `Limit @ ${formatTHB(Number(limitPrice))}` : "Market"}) ?\n\n...`
     )
 
-    try:
-        gu = load_gu()
-        answer = str(gu.ask_ai(messages, api_key, system_override=system) or "").strip()
-    except Exception as e:
-        raise _internal_server_error("เรียก AI ไม่สำเร็จ", e)
+    if (!confirmed) return
 
-    if len(answer) > 240:
-        answer = answer[:237].rstrip() + "…"
+    setSubmitting(true)
 
-    return {"status": "ok", "answer": answer or "ไม่ได้รับคำตอบจาก AI"}
-def _num(x, default=0.0) -> float:
-    try:
-        return float(x)
-    except (TypeError, ValueError):
-        return default
+    try {
+      const response = await authFetch(`${API_BASE_URL}/api/order`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          asset: asset.toUpperCase(),
+          side: side.toLowerCase(),
+          amount_thb: cleanAmount,
+          order_type: orderType.toLowerCase(),
+          ...(orderType === "LIMIT" && { limit_price: Number(limitPrice) }),
+        }),
+      })
 
-RISK_THRESHOLDS = {
-    "volatility": (30, 60, False),
-    "max_drawdown": (10, 20, False),
-    "concentration": (50, 70, False),
-    "btc_exposure": (50, 70, False),
-    "cash": (20, 10, True),
+      const rawText = await response.text()
+
+      let body: any = null
+      try {
+        body = rawText ? JSON.parse(rawText) : null
+      } catch {
+        body = null
+      }
+
+      if (!response.ok) {
+        const detail =
+          typeof body?.detail === "string"
+            ? body.detail
+            : body?.detail?.message ||
+              rawText ||
+              `Backend ตอบ HTTP ${response.status}`
+
+        throw new Error(
+          `ส่งคำสั่งไม่สำเร็จ (HTTP ${response.status}): ${detail}`
+        )
+      }
+
+      if (body?.status === "rejected") {
+        const reason =
+          body?.order?.["ผลด่าน"] ||
+          body?.detail?.message ||
+          "Engine ปฏิเสธคำสั่ง"
+
+        setOrderMessage(`Engine ปฏิเสธคำสั่ง: ${reason}`)
+        return
+      }
+
+            const isPending = ["open", "pending", "placed"].includes(body?.status)
+      if (orderType === "LIMIT" && isPending) {
+        setOrderMessage(
+          `วางคำสั่ง Limit สำเร็จ: ${side === "BUY" ? "ซื้อ" : "ขาย"} ${asset} @ ${formatTHB(Number(limitPrice))} (รอจับคู่)`
+        )
+        setAmount("")
+        setLimitPrice("")
+        await onRefresh()
+        onOrderCreated()
+        return
+      }
+
+      if (body?.status !== "filled") {
+        throw new Error(
+          body?.detail?.message || "Backend ไม่ได้ยืนยันคำสั่งเป็น filled"
+        )
+      }
+
+      const executedQty = Number(body?.quantity || 0)
+      const executedQuote = Number(body?.quote_thb || cleanAmount)
+
+      setOrderMessage(
+        `สำเร็จ: ${side === "BUY" ? "ซื้อ" : "ขาย"} ${asset} ${formatTHB(executedQuote)}${executedQty > 0 ? ` · ${formatQty(executedQty)} ${asset}` : ""}`
+      )
+
+      setAmount("")
+
+      // Refresh Portfolio first, then tell Order History to fetch the
+      // latest backend orders. Both happen only after status=filled.
+      await onRefresh()
+      onOrderCreated()
+    } catch (err) {
+      setOrderMessage(err instanceof Error ? err.message : "ส่งคำสั่งไม่สำเร็จ")
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const market = {
+  name: liveTicker?.name || marketData[asset]?.name || asset,
+  price: currentPrice,
+  change: liveTicker?.change ?? 0,
+  bid: liveTicker?.bid || currentPrice,
+  ask: liveTicker?.ask || currentPrice,
+  high: liveTicker?.high || currentPrice,
+  low: liveTicker?.low || currentPrice,
+  volume: liveTicker?.volume ?? 0,
+  }
+
+  const tradeAssets = Array.from(
+    new Set(
+      (portfolio?.holdings || [])
+        .map((item) => item.asset.toUpperCase())
+        .concat(["BTC", "ETH", "SOL", "XRP"])
+    )
+  )
+
+  return (
+    <div className="space-y-5">
+
+      {/* MARKET SELECTOR */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <CoinIcon asset={asset} size={44} />
+
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-bold">{asset}/THB</h2>
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px]">Bitkub</span>
+            </div>
+            <p className="text-xs text-muted-foreground">{market.name}</p>
+          </div>
+        </div>
+
+        {/* ASSET SELECT */}
+        <div className="flex flex-wrap gap-2">
+          {tradeAssets.map((symbol) => (
+            <button
+              key={symbol}
+              type="button"
+              onClick={() => setAsset(symbol)}
+              className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium ${
+                asset === symbol
+                  ? "bg-primary text-primary-foreground"
+                  : "hover:bg-accent"
+              }`}
+            >
+              <CoinIcon asset={symbol} size={18} />
+              {symbol}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* MARKET DATA */}
+      <div className="grid gap-3 md:grid-cols-4">
+        <MarketStat
+          label="ราคาปัจจุบัน"
+          value={currentPrice > 0 ? formatTHB(currentPrice) : "—"}
+          sub="Portfolio Backend"
+        />
+        <MarketStat
+          label="ถืออยู่"
+          value={holding ? formatQty(holding.qty) : "0"}
+          sub={asset}
+        />
+        <MarketStat
+          label="มูลค่าที่ถือ"
+          value={holding ? formatTHB(holding.market_value) : "฿0.00"}
+        />
+        <MarketStat
+          label="ต้นทุนเฉลี่ย"
+          value={holding ? formatTHB(holding.avg_cost) : "—"}
+        />
+      </div>
+
+      {/* MAIN TRADE GRID */}
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+
+        {/* CHART */}
+        <div className="rounded-xl border bg-card p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold">กราฟตลาด · Bitkub</h3>
+              <p className="text-xs text-muted-foreground">{asset}/THB · 1H</p>
+            </div>
+
+            <div className="flex gap-1">
+              {["1m", "5m", "1H", "4H", "1D"].map((timeframe) => (
+                <button
+                  key={timeframe}
+                  className={`rounded-md px-2 py-1 text-[11px] ${
+                    timeframe === "1H"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-accent"
+                  }`}
+                >
+                  {timeframe}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="relative overflow-hidden rounded-lg">
+            <TradingViewChart
+              symbol={`BITKUB:${asset}THB`}
+              interval="60"
+              height={480}
+            />
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4">
+            <MiniStat label="สูงสุด 24H" value={`฿${market.high.toLocaleString()}`} />
+            <MiniStat label="ต่ำสุด 24H" value={`฿${market.low.toLocaleString()}`} />
+            <MiniStat label={`Volume (${asset})`} value={market.volume.toLocaleString()} />
+            <MiniStat label="Spread" value={`฿${(market.ask - market.bid).toLocaleString()}`} />
+          </div>
+        </div>
+
+        {/* ORDER TICKET */}
+        <div className="rounded-xl border bg-card p-5">
+          <div className="mb-5">
+            <h3 className="font-semibold">Order</h3>
+            <p className="text-xs text-muted-foreground">Spot Trading · {asset}/THB</p>
+          </div>
+
+          {/* BUY / SELL */}
+          <div className="grid grid-cols-2 rounded-lg bg-muted p-1">
+            <button
+              type="button"
+              disabled={submitting}
+              onClick={() => setSide("BUY")}
+              className={`rounded-md py-2 text-sm font-semibold transition ${
+                side === "BUY"
+                  ? "bg-emerald-500 text-white shadow"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              ซื้อ
+            </button>
+
+            <button
+              type="button"
+              disabled={submitting}
+              onClick={() => setSide("SELL")}
+              className={`rounded-md py-2 text-sm font-semibold transition ${
+                side === "SELL"
+                  ? "bg-red-500 text-white shadow"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              ขาย
+            </button>
+          </div>
+
+          {/* ORDER TYPE */}
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            {(["MARKET", "LIMIT"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                disabled={submitting}
+                onClick={() => {
+                  setOrderType(t)
+                  if (t === "LIMIT" && !limitPrice && currentPrice > 0)
+                    setLimitPrice(String(currentPrice))
+                }}
+                className={`rounded-md border py-1.5 text-xs font-medium ${
+                  orderType === t
+                    ? "border-primary bg-primary/10 text-foreground"
+                    : "text-muted-foreground hover:bg-accent"
+                }`}
+              >
+                {t === "MARKET" ? "Market" : "Limit"}
+              </button>
+            ))}
+          </div>
+
+          {/* BALANCE */}
+          <div className="mt-5 flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">Available</span>
+            <span className="font-medium">{formatTHB(availableThb)}</span>
+          </div>
+
+          {/* PRICE */}
+          <div className="mt-4">
+            <label className="mb-2 block text-xs text-muted-foreground">
+              {orderType === "LIMIT" ? "ราคา Limit" : "ราคา (ราคาตลาด)"}
+            </label>
+            <div className="flex items-center rounded-lg border bg-background">
+              <input
+                value={orderType === "LIMIT" ? limitPrice : currentPrice > 0 ? currentPrice : ""}
+                readOnly={orderType === "MARKET"}
+                onChange={(e) => setLimitPrice(e.target.value)}
+                inputMode="decimal"
+                placeholder="0.00"
+                className={`min-w-0 flex-1 bg-transparent px-3 py-3 text-sm outline-none ${
+                  orderType === "MARKET" ? "text-muted-foreground" : ""
+                }`}
+              />
+              <span className="px-3 text-xs text-muted-foreground">THB</span>
+            </div>
+          </div>
+
+          {/* AMOUNT */}
+          <div className="mt-4">
+            <label className="mb-2 block text-xs text-muted-foreground">
+              มูลค่าคำสั่ง (THB)
+            </label>
+            <div className="flex items-center rounded-lg border bg-background">
+              <input
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="0.00"
+                className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm outline-none"
+              />
+              <span className="px-3 text-xs text-muted-foreground">THB</span>
+            </div>
+          </div>
+
+          {/* QUICK AMOUNT */}
+          <div className="mt-3 grid grid-cols-4 gap-2">
+            {[0.25, 0.5, 0.75, 1].map((ratio) => {
+              const percent = `${ratio * 100}%`
+              return (
+                <button
+                  key={percent}
+                  type="button"
+                  onClick={() => setAmount((availableThb * ratio).toFixed(2))}
+                  disabled={availableThb <= 0 || submitting}
+                  className="rounded-md border py-1.5 text-[11px] text-muted-foreground hover:bg-accent disabled:opacity-50"
+                >
+                  {percent}
+                </button>
+              )
+            })}
+          </div>
+
+          {/* TOTAL */}
+          <div className="mt-5 space-y-2 rounded-lg bg-muted/50 p-3">
+            <div className="flex justify-between text-xs">
+              <span className="text-muted-foreground">Estimated Total</span>
+              <span>{amountThb > 0 ? formatTHB(amountThb) : "฿0.00"}</span>
+            </div>
+
+            <div className="flex justify-between text-xs">
+              <span className="text-muted-foreground">Estimated Quantity</span>
+              <span>
+                {estimatedQty > 0 ? `${formatQty(estimatedQty)} ${asset}` : "—"}
+              </span>
+            </div>
+
+            <div className="flex justify-between text-xs">
+              <span className="text-muted-foreground">Fee</span>
+              <span>คำนวณโดย Engine</span>
+            </div>
+          </div>
+
+          {/* SUBMIT */}
+          <button
+            type="button"
+            onClick={submitOrder}
+            disabled={!tradeReady}
+            className={`mt-5 w-full rounded-lg py-3 text-sm font-semibold text-white ${
+              side === "BUY" ? "bg-emerald-500" : "bg-red-500"
+            } disabled:cursor-not-allowed disabled:opacity-40`}
+          >
+            {submitting
+              ? "กำลังส่งคำสั่ง..."
+              : `${side === "BUY" ? "ซื้อ" : "ขาย"} ${asset}${orderType === "LIMIT" ? " (Limit)" : ""}`}
+              
+          </button>
+
+          {orderMessage && (
+            <p className="mt-3 rounded-lg border px-3 py-2 text-center text-xs">
+              {orderMessage}
+            </p>
+          )}
+
+          <p className="mt-3 text-center text-[10px] text-muted-foreground">
+            Safety Check: Portfolio + ราคา + Balance + Engine
+          </p>
+        </div>
+      </div>
+
+          <DcaCard onRefresh={onRefresh} />
+          <MomentumCard />
+      </div>        
+    )
+  }
+      type MarketTab = "fav" | "volume" | "up" | "down"
+
+const MARKET_TABS: { key: MarketTab; label: string }[] = [
+  { key: "fav", label: "⭐ รายการโปรด" },
+  { key: "volume", label: "ปริมาณ" },
+  { key: "up", label: "▲ เพิ่ม" },
+  { key: "down", label: "▼ ลด" },
+]
+
+const FAV_STORAGE_KEY = "xspring_favorite_assets"
+
+function MarketOverviewCard() {
+  const [tickers, setTickers] = useState<MarketTicker[]>([])
+  const [loading, setLoading] = useState(true)
+  const [tab, setTab] = useState<MarketTab>("volume")
+  const [favs, setFavs] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(FAV_STORAGE_KEY)
+      const parsed = raw ? JSON.parse(raw) : []
+      return Array.isArray(parsed) ? parsed.map(String) : []
+    } catch {
+      return []
+    }
+  })
+
+  useEffect(() => {
+    let alive = true
+    const load = async () => {
+      try {
+        const rows = await fetchMarketTickers()
+        if (alive) setTickers(rows)
+      } catch {
+        // ถ้าโหลดไม่ได้ จะแสดงว่าไม่มีข้อมูล
+      } finally {
+        if (alive) setLoading(false)
+      }
+    }
+    load()
+    const timer = setInterval(load, 15000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [])
+
+  const toggleFav = (asset: string) => {
+    setFavs((prev) => {
+      const next = prev.includes(asset) ? prev.filter((a) => a !== asset) : [...prev, asset]
+      try {
+        localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(next))
+      } catch {
+        // เก็บไม่ได้ก็ใช้ได้ในหน้านี้ต่อ
+      }
+      return next
+    })
+  }
+
+  const rows = (() => {
+    const base = [...tickers]
+    if (tab === "fav") return base.filter((r) => favs.includes(r.asset))
+    if (tab === "up") return base.filter((r) => r.change > 0).sort((a, b) => b.change - a.change)
+    if (tab === "down") return base.filter((r) => r.change < 0).sort((a, b) => a.change - b.change)
+    return base.sort((a, b) => b.volume * b.price - a.volume * a.price)
+  })()
+
+  const emptyText =
+    tab === "fav" ? "ยังไม่มีรายการโปรด กดดาวที่เหรียญเพื่อเพิ่ม" : "ไม่มีข้อมูล"
+
+  return (
+    <div className="rounded-xl border bg-card p-4">
+      <div className="mb-4 flex items-center justify-between">
+        <div>
+          <h3 className="font-semibold">ภาพรวมตลาด</h3>
+          <p className="text-xs text-muted-foreground">THB · อัปเดตทุก 15 วินาที</p>
+        </div>
+        <span className="rounded-full bg-muted px-2 py-1 text-[10px]">Live</span>
+      </div>
+
+      <div className="mb-3 flex gap-1.5 overflow-x-auto pb-1">
+        {MARKET_TABS.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] ${
+              tab === t.key
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground hover:bg-accent"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <p className="py-6 text-center text-sm text-muted-foreground">Loading...</p>
+      ) : rows.length === 0 ? (
+        <p className="py-6 text-center text-sm text-muted-foreground">{emptyText}</p>
+      ) : (
+        <div className="divide-y">
+          {rows.map((row) => {
+            const isFav = favs.includes(row.asset)
+            return (
+              <div
+                key={row.asset}
+                className="grid grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-2.5 py-2.5"
+              >
+                <button
+                  onClick={() => toggleFav(row.asset)}
+                  aria-label={isFav ? "เอาออกจากรายการโปรด" : "เพิ่มในรายการโปรด"}
+                  className={`text-base leading-none ${
+                    isFav ? "text-yellow-400" : "text-muted-foreground hover:text-yellow-400"
+                  }`}
+                >
+                  {isFav ? "★" : "☆"}
+                </button>
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <div className="shrink-0">
+                    <CoinIcon asset={row.asset} size={28} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold leading-tight">{row.asset}</p>
+                    <p className="truncate text-[11px] leading-tight text-muted-foreground">
+                      {row.name}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="whitespace-nowrap text-sm font-medium leading-tight tabular-nums">
+                    {formatTHB(row.price)}
+                  </p>
+                  <p
+                    className={`text-xs font-medium leading-tight tabular-nums ${
+                      row.change >= 0 ? "text-emerald-500" : "text-red-500"
+                    }`}
+                  >
+                    {row.change >= 0 ? "+" : ""}
+                    {row.change.toFixed(2)}%
+                  </p>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
 }
 
 
-def _risk_status(value, watch, high, below=False) -> str:
-    if value is None:
-        return "na"
-    if below:
-        return "high" if value < high else "watch" if value < watch else "ok"
-    return "high" if value > high else "watch" if value > watch else "ok"
+/* =========================================================
+   AUTO DCA
+========================================================= */
 
-import time as _time
+type DcaPlan = {
+  id: string
+  asset: string
+  amount_thb: number
+  freq: string
+  hour: number
+  minute: number
+  next_run_at?: string | null
+  last_status?: string | null
+  last_order_id?: string | null
+  last_price_thb?: number | null
+  last_qty?: number | null
+}
 
-_RISK_HIST_CACHE: dict = {}
-_RISK_HIST_TTL = 600  # วินาที: ราคาย้อนหลังรายวัน ไม่ต้องดึงใหม่ทุกครั้งที่กด Refresh
+type CoinReturn = { y1: number | null; m6: number | null }
+
+const DCA_FREQS = ["รายวัน", "รายสัปดาห์", "รายเดือน"]
+const DCA_QUICK_AMOUNTS = [500, 1000, 5000, 10000]
+const DCA_ASSETS = ["BTC", "ETH", "SOL", "DOGE", "ADA", "XRP", "HBAR", "LINK", "XLM"]
+const DCA_COIN_NAMES: Record<string, string> = {
+  BTC: "Bitcoin", ETH: "Ethereum", SOL: "Solana", DOGE: "Dogecoin", ADA: "Cardano",
+  XRP: "XRP", HBAR: "Hedera", LINK: "Chainlink", XLM: "Stellar",
+}
+
+async function dcaErrorText(response: Response) {
+  const body: any = await response.json().catch(() => null)
+  const detail = body?.detail
+  if (typeof detail === "string") return detail
+  if (detail?.message) return String(detail.message)
+  return `HTTP ${response.status}`
+}
+
+// ผลตอบแทนราคาย้อนหลังจากกราฟรายวันของ Bitkub (เปลี่ยนของราคา ไม่ใช่ผลของ DCA)
+async function fetchCoinReturn(asset: string): Promise<CoinReturn> {
+  const now = Math.floor(Date.now() / 1000)
+  const from = now - 380 * 86400
+  const response = await fetch(
+    `https://api.bitkub.com/tradingview/history?symbol=${asset}_THB&resolution=1D&from=${from}&to=${now}`,
+    { headers: { Accept: "application/json" }, cache: "no-store" }
+  )
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  const body = await response.json()
+  if (body?.s !== "ok" || !Array.isArray(body.c) || !Array.isArray(body.t) || body.c.length < 2) {
+    throw new Error("no data")
+  }
+  const closes: number[] = body.c.map(Number)
+  const times: number[] = body.t.map(Number)
+  const last = closes[closes.length - 1]
+
+  const returnSince = (days: number): number | null => {
+    const target = now - days * 86400
+    if (times[0] > target + 5 * 86400) return null // เหรียญเพิ่งเข้าตลาด ข้อมูลไม่ถึง
+    const idx = times.findIndex((t) => t >= target)
+    const base = closes[idx >= 0 ? idx : 0]
+    return base > 0 ? ((last - base) / base) * 100 : null
+  }
+  return { y1: returnSince(365), m6: returnSince(182) }
+}
+
+function ReturnBadge({ value }: { value: number | null | undefined }) {
+  if (value === null || value === undefined) {
+    return <span className="rounded bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">—</span>
+  }
+  const positive = value >= 0
+  return (
+    <span
+      className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
+        positive ? "bg-emerald-500/15 text-emerald-500" : "bg-red-500/15 text-red-500"
+      }`}
+    >
+      {positive ? "+" : ""}{value.toFixed(2)}%
+    </span>
+  )
+}
+
+function DcaCard(_props: { onRefresh: () => void }) {
+  const [plans, setPlans] = useState<DcaPlan[]>([])
+  const [plansLoading, setPlansLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState("")
+  const [asset, setAsset] = useState("BTC")
+  const [amount, setAmount] = useState("")
+  const [freq, setFreq] = useState("รายวัน")
+  const [hour, setHour] = useState(9)
+  const [minute, setMinute] = useState(0)
+  const [returns, setReturns] = useState<Record<string, CoinReturn | null>>({})
+  const [returnsLoading, setReturnsLoading] = useState(true)
+
+  const loadPlans = async () => {
+    setPlansLoading(true)
+    try {
+      const response = await authFetch(`${API_BASE_URL}/api/dca`, {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      })
+      if (!response.ok) throw new Error(await dcaErrorText(response))
+      const body = await response.json()
+      setPlans(Array.isArray(body?.plans) ? body.plans : [])
+    } catch (err) {
+      setMessage(err instanceof Error ? `โหลดแผนไม่สำเร็จ: ${err.message}` : "โหลดแผนไม่สำเร็จ")
+    } finally {
+      setPlansLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadPlans()
+  }, [])
+
+  useEffect(() => {
+    let alive = true
+    const run = async () => {
+      const results = await Promise.allSettled(DCA_ASSETS.map((a) => fetchCoinReturn(a)))
+      if (!alive) return
+      const next: Record<string, CoinReturn | null> = {}
+      DCA_ASSETS.forEach((a, i) => {
+        const r = results[i]
+        next[a] = r.status === "fulfilled" ? r.value : null
+      })
+      setReturns(next)
+      setReturnsLoading(false)
+    }
+    run()
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const createPlan = async () => {
+    setMessage("")
+    const amountThb = Number(amount.replace(/,/g, ""))
+    if (!Number.isFinite(amountThb) || amountThb < 50) {
+      setMessage("ยอดขั้นต่ำคือ ฿50")
+      return
+    }
+    setSaving(true)
+    try {
+      const response = await authFetch(`${API_BASE_URL}/api/dca`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ asset, amount_thb: amountThb, freq, hour, minute }),
+      })
+      if (!response.ok) throw new Error(await dcaErrorText(response))
+      setAmount("")
+      setMessage("เริ่ม Auto DCA สำเร็จ")
+      await loadPlans()
+    } catch (err) {
+      setMessage(err instanceof Error ? `ตั้งแผนไม่สำเร็จ: ${err.message}` : "ตั้งแผนไม่สำเร็จ")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const cancelPlan = async (plan: DcaPlan) => {
+    if (!window.confirm(`ยกเลิกแผน DCA ${plan.asset} ${formatTHB(plan.amount_thb)} ${plan.freq} ?`)) return
+    setMessage("")
+    try {
+      const response = await authFetch(`${API_BASE_URL}/api/dca/${encodeURIComponent(plan.id)}`, {
+        method: "DELETE",
+        headers: { Accept: "application/json" },
+      })
+      if (!response.ok) throw new Error(await dcaErrorText(response))
+      setMessage("ยกเลิกแผนแล้ว")
+      await loadPlans()
+    } catch (err) {
+      setMessage(err instanceof Error ? `ยกเลิกไม่สำเร็จ: ${err.message}` : "ยกเลิกไม่สำเร็จ")
+    }
+  }
+
+  const pad = (v: number) => String(v ?? 0).padStart(2, "0")
+  const selectCls = "w-full rounded-lg border bg-background px-3 py-2.5 text-sm outline-none"
+
+  return (
+    <div className="space-y-6">
+      {/* แถวบน: ภาพรวมตลาด 30% / ฟอร์ม + รายละเอียด 70% */}
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[3fr_7fr]">
+        <div className="order-2 lg:order-1">
+          <MarketOverviewCard />
+        </div>
+
+        <div className="order-1 space-y-4 lg:order-2">
+          {/* HEADER */}
+          <div>
+            <h3 className="text-xl font-bold">Auto DCA</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              ซื้อสะสมอัตโนมัติตามเวลาที่คุณกำหนด จนกว่าจะยกเลิก
+            </p>
+          </div>
+
+        {/* FORM */}
+        <div className="rounded-xl border bg-card p-5">
+          <h4 className="font-semibold">สร้างคำสั่ง Auto DCA</h4>
+
+          <p className="mt-5 text-sm font-medium">1. เลือกเหรียญและกรอกจำนวนเงิน</p>
+          <label className="mb-1 mt-3 block text-xs text-muted-foreground">เหรียญ</label>
+          <select value={asset} onChange={(e) => setAsset(e.target.value)} className={selectCls}>
+            {DCA_ASSETS.map((a) => (
+              <option key={a} value={a}>{a}</option>
+            ))}
+          </select>
+
+          <label className="mb-1 mt-3 block text-xs text-muted-foreground">จำนวนเงินต่อรอบ (THB)</label>
+          <input
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            inputMode="decimal"
+            placeholder="1,000"
+            className={selectCls}
+          />
+          <div className="mt-2 grid grid-cols-4 gap-2">
+            {DCA_QUICK_AMOUNTS.map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setAmount(String(v))}
+                className={`rounded-md border px-2 py-1.5 text-xs ${
+                  Number(amount.replace(/,/g, "")) === v
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-accent"
+                }`}
+              >
+                ฿{v.toLocaleString("th-TH")}
+              </button>
+            ))}
+          </div>
+
+          <p className="mt-6 text-sm font-medium">2. กำหนดรอบการทำรายการ</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {DCA_FREQS.map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setFreq(f)}
+                className={`rounded-full border px-4 py-1.5 text-xs font-medium ${
+                  freq === f ? "bg-primary text-primary-foreground" : "hover:bg-accent"
+                }`}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">เวลา (ชั่วโมง)</label>
+              <select value={hour} onChange={(e) => setHour(Number(e.target.value))} className={selectCls}>
+                {Array.from({ length: 24 }, (_, i) => (
+                  <option key={i} value={i}>{pad(i)}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">เวลา (นาที)</label>
+              <select value={minute} onChange={(e) => setMinute(Number(e.target.value))} className={selectCls}>
+                {Array.from({ length: 60 }, (_, i) => (
+                  <option key={i} value={i}>{pad(i)}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-lg border bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground">
+            เมื่อถึงเวลา ระบบจะใช้ <b className="text-foreground">ราคาตลาดปัจจุบัน</b> หัก THB จาก Wallet
+            แล้วเพิ่มเหรียญเข้า Portfolio ให้อัตโนมัติ
+          </div>
+
+          <div className="mt-4 rounded-lg border p-3 text-xs">
+            สรุป: ซื้อ <b>{asset}</b> ครั้งละ{" "}
+            <b>{formatTHB(Number(amount.replace(/,/g, "")) || 0)}</b> {freq} เวลา {pad(hour)}:{pad(minute)} น.
+          </div>
+
+          <button
+            type="button"
+            onClick={createPlan}
+            disabled={saving}
+            className="mt-4 w-full rounded-lg bg-red-500 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+          >
+            {saving ? "กำลังบันทึก..." : "เริ่ม Auto DCA"}
+          </button>
+
+          {message && (
+            <p className="mt-3 rounded-lg border px-3 py-2 text-center text-xs">{message}</p>
+          )}
+        </div>
+
+        {/* DETAILS */}
+        <div className="h-fit rounded-xl border bg-card p-5">
+          <h4 className="font-semibold">รายละเอียดคำสั่ง Auto DCA</h4>
+          <div className="mt-3 divide-y text-sm">
+            {[
+              ["ประเภทคำสั่ง", "Market Order"],
+              ["ราคา", "ราคาตลาดปัจจุบัน"],
+              ["เงิน", "หักจาก Customer THB Wallet"],
+              ["เหรียญ", "เพิ่มเข้า Customer Portfolio"],
+              ["Ledger", "BUY transaction + Order"],
+            ].map(([k, v]) => (
+              <div key={k} className="flex items-center justify-between gap-3 py-2.5">
+                <span className="text-xs text-muted-foreground">{k}</span>
+                <span className="text-right text-xs font-semibold">{v}</span>
+              </div>
+            ))}
+            <div className="flex items-center justify-between gap-3 py-2.5">
+              <span className="text-xs text-muted-foreground">สถานะ</span>
+              <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-500">
+                ทำงานจนกว่าจะ Cancel
+              </span>
+            </div>
+          </div>
+          <div className="mt-3 rounded-lg border bg-muted/30 p-3 text-xs leading-5 text-muted-foreground">
+            <b className="text-foreground">ระบบจำลอง</b> Auto DCA จะไม่ส่งคำสั่งซื้อเงินจริงไปยัง Exchange
+            ภายนอก แต่จะ Execute ภายในระบบจำลอง และใช้ Portfolio Ledger เดียวกับหน้า Trade
+          </div>
+        </div>
+        </div>
+      </div>
+
+      {/* MY PLANS */}
+      <div>
+        <h3 className="mb-3 text-xl font-bold">แผน Auto DCA ของฉัน</h3>
+        {plansLoading ? (
+          <p className="rounded-xl border bg-card py-6 text-center text-sm text-muted-foreground">Loading...</p>
+        ) : plans.length === 0 ? (
+          <p className="rounded-xl border bg-card py-6 text-center text-sm text-muted-foreground">
+            ยังไม่มีแผน Auto DCA
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {plans.map((plan) => (
+              <div
+                key={plan.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card px-4 py-3"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 text-sm font-semibold">
+                    <span className="size-2 rounded-full bg-emerald-500" />
+                    ทำงาน · {plan.asset} · {formatTHB(plan.amount_thb)} THB/{plan.freq}
+                  </div>
+                  <div className="mt-1 break-words text-xs text-muted-foreground">
+                    รอบถัดไป: <span className="font-mono">{formatOrderDate(plan.next_run_at || "")}</span>
+                    {plan.last_status && (
+                      <>
+                        {" "}· ล่าสุด: <span className="font-mono uppercase">{plan.last_status}</span>
+                        {plan.last_qty ? ` · ${formatQty(Number(plan.last_qty))} ${plan.asset}` : ""}
+                      </>
+                    )}
+                    {" "}· ID <span className="font-mono">{plan.id}</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => cancelPlan(plan)}
+                  className="rounded-lg border px-4 py-1.5 text-xs font-medium hover:bg-accent"
+                >
+                  ยกเลิก
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* SUPPORTED COINS */}
+      <div>
+        <div className="mb-3 inline-block rounded-md border border-emerald-500/40 bg-emerald-500/5 px-3 py-1 text-xs font-semibold">
+          เหรียญที่รองรับ Auto DCA
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {DCA_ASSETS.map((a) => {
+            const r = returns[a]
+            return (
+              <button
+                key={a}
+                type="button"
+                onClick={() => setAsset(a)}
+                className={`rounded-xl border bg-card p-4 text-left transition hover:bg-accent/40 ${
+                  asset === a ? "ring-2 ring-primary" : ""
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <CoinIcon asset={a} size={24} />
+                  <div>
+                    <div className="text-sm font-semibold">{a}</div>
+                    <div className="text-[10px] text-muted-foreground">{DCA_COIN_NAMES[a]}</div>
+                  </div>
+                </div>
+                <div className="mt-3 text-[10px] text-muted-foreground">ผลตอบแทนย้อนหลัง 1 ปี</div>
+                <div className="mt-1">
+                  <ReturnBadge value={returnsLoading ? undefined : r?.y1} />
+                </div>
+                <div className="mt-2 text-[10px] text-muted-foreground">ผลตอบแทนย้อนหลัง 6 เดือน</div>
+                <div className="mt-1">
+                  <ReturnBadge value={returnsLoading ? undefined : r?.m6} />
+                </div>
+              </button>
+            )
+          })}
+        </div>
+        <p className="mt-2 text-[10px] text-muted-foreground">
+          เป็นการเปลี่ยนแปลงของราคาจากกราฟรายวัน Bitkub เพื่อประกอบการตัดสินใจเท่านั้น ไม่รับประกันผลในอนาคต
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/* =========================================================
+   MOMENTUM BOT (แอดมินเท่านั้น)
+========================================================= */
+
+const MOMENTUM_ADMIN_EMAIL = "teerapat30204@gmail.com"
+
+type MomField = { key: string; label: string; unit: string }
+
+const MOM_GROUPS: { title: string; hint: string; fields: MomField[] }[] = [
+  {
+    title: "ขนาดไม้และความเสี่ยง",
+    hint: "ควบคุมเงินต่อไม้และจุดตัดกำไร/ขาดทุน",
+    fields: [
+      { key: "bet_thb", label: "ไม้ละ", unit: "THB" },
+      { key: "tp_pct", label: "Take Profit", unit: "%" },
+      { key: "sl_pct", label: "Stop Loss", unit: "%" },
+      { key: "max_weight_pct", label: "เพดานต่อเหรียญ", unit: "%" },
+    ],
+  },
+  {
+    title: "สัญญาณและการพัก",
+    hint: "เลือกเหรียญจาก momentum และกันซื้อกลับทันที",
+    fields: [
+      { key: "top_n", label: "จำนวนเหรียญ Top N", unit: "เหรียญ" },
+      { key: "lookback", label: "Lookback", unit: "วัน" },
+      { key: "cooldown_hours", label: "พักหลัง SL/Rebalance", unit: "ชม." },
+    ],
+  },
+]
+
+const MOM_FIELDS: MomField[] = MOM_GROUPS.flatMap((g) => g.fields)
+
+const momForm = (c: any): Record<string, string> =>
+  Object.fromEntries(MOM_FIELDS.map((f) => [f.key, String(c?.[f.key] ?? "")]))
+
+function MomentumCard() {
+  const { user } = useAuth()
+  if (String(user?.email || "").toLowerCase() !== MOMENTUM_ADMIN_EMAIL) return null
+  return <MomentumPanel />
+}
+
+function MomentumPanel() {
+  const [s, setS] = useState<any>(null)
+  const [form, setForm] = useState<Record<string, string>>({})
+  const [msg, setMsg] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(true)
+
+  const load = async () => {
+    try {
+      const r = await authFetch(`${API_BASE_URL}/api/momentum`, {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      })
+      if (!r.ok) throw new Error(await dcaErrorText(r))
+      const b = await r.json()
+      setS(b)
+      setForm((prev) => (Object.keys(prev).length > 0 ? prev : momForm(b.config)))
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "โหลดไม่สำเร็จ")
+    }
+  }
+
+  useEffect(() => {
+    load()
+    const t = setInterval(load, 15000)
+    return () => clearInterval(t)
+  }, [])
+
+  const send = async (updates: Record<string, unknown>, confirmText?: string) => {
+    if (confirmText && !window.confirm(confirmText)) return
+    setBusy(true)
+    setMsg("")
+    try {
+      const r = await authFetch(`${API_BASE_URL}/api/momentum/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(updates),
+      })
+      if (!r.ok) throw new Error(await dcaErrorText(r))
+      const b = await r.json()
+      setS(b)
+      setForm(momForm(b.config))
+      setMsg("บันทึกแล้ว")
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "บันทึกไม่สำเร็จ")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const saveConfig = () =>
+    send(Object.fromEntries(MOM_FIELDS.map((f) => [f.key, Number(form[f.key])])))
+
+  const cfg = s?.config
+  const rt = s?.runtime
+  const enabled = !!cfg?.enabled
+  const live = enabled && !cfg?.dry_run
+  const dry = enabled && !!cfg?.dry_run
+  const dirty =
+    !!cfg && MOM_FIELDS.some((f) => String(form[f.key] ?? "") !== String(cfg[f.key] ?? ""))
+
+  const ranking: any[] = s?.ranking || []
+  const maxAbs = Math.max(1, ...ranking.map((r) => Math.abs(Number(r.momentum_pct || 0))))
+  const cooldowns: Record<string, string> = s?.cooldowns || {}
+
+  const statusPill = live
+    ? { text: "LIVE", cls: "bg-emerald-500/15 text-emerald-500", dot: "bg-emerald-500" }
+    : dry
+      ? { text: "ทดลอง", cls: "bg-yellow-500/15 text-yellow-500", dot: "bg-yellow-500" }
+      : { text: "ปิด", cls: "bg-muted text-muted-foreground", dot: "bg-muted-foreground" }
+
+  const modeBtn = (active: boolean, tone: "off" | "dry" | "live") =>
+    `flex-1 rounded-md px-3 py-2 text-sm font-semibold transition disabled:opacity-50 ${
+      active
+        ? tone === "live"
+          ? "bg-emerald-500 text-white shadow"
+          : tone === "dry"
+            ? "bg-yellow-500 text-black shadow"
+            : "bg-background text-foreground shadow"
+        : "text-muted-foreground hover:text-foreground"
+    }`
+
+  return (
+    <div className="space-y-5">
+      {/* HEADER */}
+      <div className="rounded-xl border bg-card p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <TrendingUp className="size-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-xl font-bold">Momentum Auto-Trade</h3>
+                <span
+                  className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[10px] font-semibold ${statusPill.cls}`}
+                >
+                  <span
+                    className={`size-1.5 rounded-full ${statusPill.dot} ${enabled ? "animate-pulse" : ""}`}
+                  />
+                  {statusPill.text}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                ซื้อเหรียญ momentum สูง · TP/SL · Rebalance · เฉพาะบัญชีแอดมิน
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex w-full rounded-lg bg-muted p-1 sm:w-auto sm:min-w-[300px]">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => send({ enabled: false })}
+                className={modeBtn(!enabled, "off")}
+              >
+                ปิด
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => send({ enabled: true, dry_run: true })}
+                className={modeBtn(dry, "dry")}
+              >
+                ทดลอง
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  send(
+                    { enabled: true, dry_run: false },
+                    "เปิดโหมดจริง? ระบบจะซื้อ/ขายในพอร์ตอัตโนมัติทุกนาทีตามเงื่อนไข"
+                  )
+                }
+                className={modeBtn(live, "live")}
+              >
+                LIVE
+              </button>
+            </div>
+            {enabled && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => send({ enabled: false })}
+                className="flex items-center gap-1.5 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm font-semibold text-red-500 hover:bg-red-500/20 disabled:opacity-50"
+              >
+                <ShieldAlert className="size-4" />
+                หยุดฉุกเฉิน
+              </button>
+            )}
+          </div>
+        </div>
+
+        {live && (
+          <div className="mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-4 py-2.5 text-xs text-emerald-500">
+            โหมด LIVE กำลังส่งคำสั่งซื้อขายในพอร์ตอัตโนมัติ ตรวจทุก 60 วินาที
+          </div>
+        )}
+      </div>
+
+      {/* SUMMARY */}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <MarketStat
+          label="ไม้ละ"
+          value={cfg ? formatTHB(Number(cfg.bet_thb || 0)) : "—"}
+          sub={cfg ? `Top ${cfg.top_n} · ${cfg.lookback} วัน` : undefined}
+        />
+        <MarketStat
+          label="Take Profit"
+          value={cfg ? `+${cfg.tp_pct}%` : "—"}
+          sub="ขายเมื่อกำไรถึง"
+          positive={cfg ? true : undefined}
+        />
+        <MarketStat
+          label="Stop Loss"
+          value={cfg ? `-${cfg.sl_pct}%` : "—"}
+          sub={cfg ? `พัก ${cfg.cooldown_hours} ชม.หลังตัด` : undefined}
+          positive={cfg ? false : undefined}
+        />
+        <MarketStat
+          label="เพดานต่อเหรียญ"
+          value={cfg ? `${cfg.max_weight_pct}%` : "—"}
+          sub="Rebalance ส่วนเกิน"
+        />
+      </div>
+
+      {/* SETTINGS */}
+      <div className="rounded-xl border bg-card">
+        <button
+          type="button"
+          onClick={() => setSettingsOpen((v) => !v)}
+          className="flex w-full items-center justify-between px-5 py-4 text-left"
+        >
+          <div>
+            <h4 className="font-semibold">ตั้งค่ากลยุทธ์</h4>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {dirty ? "มีการแก้ไขที่ยังไม่ได้บันทึก" : "ค่าปัจจุบันถูกบันทึกแล้ว"}
+            </p>
+          </div>
+          <span className="text-xs text-muted-foreground">{settingsOpen ? "ซ่อน ▲" : "แสดง ▼"}</span>
+        </button>
+
+        {settingsOpen && (
+          <div className="border-t px-5 pb-5 pt-4">
+            <div className="grid gap-5 lg:grid-cols-2">
+              {MOM_GROUPS.map((g) => (
+                <div key={g.title} className="rounded-lg border bg-muted/20 p-4">
+                  <div className="text-sm font-semibold">{g.title}</div>
+                  <div className="mb-3 text-[11px] text-muted-foreground">{g.hint}</div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {g.fields.map((f) => (
+                      <div key={f.key}>
+                        <label className="mb-1 block text-xs text-muted-foreground">{f.label}</label>
+                        <div className="flex items-center rounded-lg border bg-background focus-within:ring-2 focus-within:ring-primary">
+                          <input
+                            value={form[f.key] ?? ""}
+                            onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
+                            inputMode="decimal"
+                            className="min-w-0 flex-1 bg-transparent px-3 py-2.5 text-sm outline-none"
+                          />
+                          <span className="px-3 text-xs text-muted-foreground">{f.unit}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-muted-foreground">
+                {msg || "แก้ค่าแล้วกดบันทึก มีผลในรอบถัดไป (ภายใน 1 นาที)"}
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={!dirty || busy}
+                  onClick={() => setForm(momForm(cfg))}
+                  className="rounded-lg border px-4 py-2 text-sm hover:bg-accent disabled:opacity-40"
+                >
+                  รีเซ็ต
+                </button>
+                <button
+                  type="button"
+                  disabled={!dirty || busy}
+                  onClick={saveConfig}
+                  className="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-40"
+                >
+                  บันทึกค่า
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* RANKING + HISTORY */}
+      <div className="grid gap-5 xl:grid-cols-2">
+        <div className="rounded-xl border bg-card p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h4 className="font-semibold">อันดับ Momentum</h4>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                ผลตอบแทนสะสม {cfg?.lookback ?? "—"} วัน · เขียว = อยู่ใน Top {cfg?.top_n ?? "—"}
+              </p>
+            </div>
+            {s?.ranking_age_sec != null && (
+              <span className="rounded-full bg-muted px-2.5 py-1 text-[10px]">
+                อัปเดต {Math.floor(s.ranking_age_sec / 60)} นาทีก่อน
+              </span>
+            )}
+          </div>
+
+          {ranking.length ? (
+            <div className="space-y-1.5">
+              {ranking.map((r: any, i: number) => {
+                const v = Number(r.momentum_pct || 0)
+                const picked = i < Number(cfg?.top_n ?? 0) && v > 0
+                const pct = Math.min(100, (Math.abs(v) / maxAbs) * 100)
+                return (
+                  <div
+                    key={r.asset}
+                    className={`relative overflow-hidden rounded-lg border px-3 py-2 ${
+                      picked ? "border-emerald-500/40" : ""
+                    }`}
+                  >
+                    <div
+                      className={`absolute inset-y-0 left-0 ${
+                        v >= 0 ? "bg-emerald-500/10" : "bg-red-500/10"
+                      }`}
+                      style={{ width: `${pct}%` }}
+                    />
+                    <div className="relative flex items-center justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <span className="w-4 text-xs text-muted-foreground">{i + 1}</span>
+                        <CoinIcon asset={r.asset} size={22} />
+                        <span className="text-sm font-medium">{r.asset}</span>
+                        {picked && (
+                          <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-500">
+                            เป้าซื้อ
+                          </span>
+                        )}
+                        {cooldowns[r.asset] && (
+                          <span className="rounded bg-yellow-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-yellow-500">
+                            พัก
+                          </span>
+                        )}
+                      </div>
+                      <span
+                        className={`text-sm font-semibold tabular-nums ${
+                          v >= 0 ? "text-emerald-500" : "text-red-500"
+                        }`}
+                      >
+                        {v >= 0 ? "+" : ""}
+                        {v.toFixed(2)}%
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              ยังไม่มีข้อมูล (คำนวณเมื่อเปิดใช้งานรอบแรก)
+            </p>
+          )}
+
+          {s?.ranking_skipped?.length > 0 && (
+            <p className="mt-3 text-[10px] text-muted-foreground">
+              ข้าม: {s.ranking_skipped.join(" · ")}
+            </p>
+          )}
+        </div>
+
+        <div className="rounded-xl border bg-card p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h4 className="font-semibold">ประวัติการทำงาน</h4>
+              <p className="mt-0.5 text-xs text-muted-foreground">คำสั่งที่บอตส่งล่าสุด</p>
+            </div>
+            <span className="rounded-full bg-muted px-2.5 py-1 text-[10px]">
+              {(s?.log || []).length} รายการ
+            </span>
+          </div>
+
+          {s?.log?.length ? (
+            <div className="max-h-[460px] space-y-1 overflow-y-auto pr-1">
+              {s.log.map((l: any, i: number) => {
+                const isBuy = l.side === "buy"
+                return (
+                  <div
+                    key={i}
+                    className="flex items-center justify-between gap-3 rounded-lg px-2 py-2.5 hover:bg-accent"
+                  >
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div
+                        className={`flex size-8 shrink-0 items-center justify-center rounded-full ${
+                          isBuy ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500"
+                        }`}
+                      >
+                        {isBuy ? <TrendingUp className="size-4" /> : <TrendingDown className="size-4" />}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 text-sm font-medium">
+                          {isBuy ? "ซื้อ" : "ขาย"}
+                          <CoinIcon asset={l.asset} size={16} />
+                          {l.asset}
+                        </div>
+                        <div className="truncate text-[11px] text-muted-foreground">
+                          {l.reason} · {formatOrderDate(l.time)}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right text-sm font-medium tabular-nums">
+                      {formatTHB(Number(l.amount_thb || 0))}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <p className="py-8 text-center text-sm text-muted-foreground">ยังไม่มีรายการ</p>
+          )}
+        </div>
+      </div>
+
+      {/* COOLDOWNS / DRY / ERRORS */}
+      {(Object.keys(cooldowns).length > 0 || rt?.dry?.length > 0 || rt?.errors?.length > 0) && (
+        <div className="grid gap-5 xl:grid-cols-2">
+          {Object.keys(cooldowns).length > 0 && (
+            <div className="rounded-xl border bg-card p-5">
+              <h4 className="mb-3 font-semibold">เหรียญที่กำลังพัก</h4>
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(cooldowns).map(([a, until]) => (
+                  <span
+                    key={a}
+                    className="flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs"
+                  >
+                    <CoinIcon asset={a} size={16} />
+                    {a}
+                    <span className="text-muted-foreground">ถึง {formatOrderDate(until)}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {rt?.dry?.length > 0 && (
+            <div className="rounded-xl border bg-card p-5">
+              <h4 className="mb-3 font-semibold text-yellow-500">สัญญาณโหมดทดลอง</h4>
+              <div className="space-y-1.5">
+                {rt.dry.map((d: any, i: number) => (
+                  <div key={i} className="text-xs">
+                    {d.text}
+                    <span className="ml-2 text-[10px] text-muted-foreground">
+                      {formatOrderDate(d.time)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {rt?.errors?.length > 0 && (
+            <div className="rounded-xl border border-red-500/30 bg-red-500/5 p-5">
+              <h4 className="mb-3 font-semibold text-red-500">ข้อผิดพลาดล่าสุด</h4>
+              <div className="space-y-1.5">
+                {rt.errors.map((d: any, i: number) => (
+                  <div key={i} className="break-words text-xs">
+                    {d.text}
+                    <span className="ml-2 text-[10px] text-muted-foreground">
+                      {formatOrderDate(d.time)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {s && (
+        <p className="text-[10px] text-muted-foreground">
+          รอบล่าสุด {rt?.last_tick ? formatOrderDate(rt.last_tick) : "—"} · actor {s.actor}
+          {!rt?.notify_ready && " · Telegram ยังไม่ได้ตั้งบน Render"}
+        </p>
+      )}
+    </div>
+  )
+}
 
 
-def _risk_history_metrics(gu, user, pf) -> dict:
-    """Volatility / Max Drawdown จาก gu._portfolio_risk_metrics (ตัวเลขเดียวกับ Streamlit)"""
-    now = _time.time()
-    hit = _RISK_HIST_CACHE.get(user)
-    if hit and now - hit[0] < _RISK_HIST_TTL:
-        return hit[1]
+/* =========================================================
+   PORTFOLIO PAGE
+========================================================= */
 
-    rows = []
-    for h in pf.get("holdings") or []:
-        mv = h.get("market_value")
-        if mv is None:
-            mv = _num(h.get("qty")) * _num(h.get("price"))
-        rows.append({**h, "market_value": mv})
+function PortfolioPage({
+  portfolio,
+  loading,
+  error,
+  onRefresh,
+}: {
+  portfolio: PortfolioData | null
+  loading: boolean
+  error: string
+  onRefresh: () => void
+}) {
+  const pnlPositive = (portfolio?.total_pnl_thb ?? 0) >= 0
 
-    snap = {
-        "total_value_thb": _num(pf.get("total_value_thb")),
-        "cash_thb": _num(pf.get("cash_thb")),
-        "rows": rows,
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold">Portfolio</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            ข้อมูลพอร์ตจริงจาก Backend
+          </p>
+        </div>
+
+        <button
+          onClick={onRefresh}
+          disabled={loading}
+          className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {loading ? "กำลังโหลด..." : "Refresh"}
+        </button>
+      </div>
+
+      {error && (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4">
+          <p className="text-sm font-medium text-red-500">โหลด Portfolio ไม่สำเร็จ</p>
+          <p className="mt-1 text-xs text-muted-foreground">{error}</p>
+        </div>
+      )}
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <StatCard
+    title="Total Portfolio"
+    value={portfolio ? <NumberTicker value={portfolio.total_value_thb} currency="THB" /> : "—"}
+    change={portfolio ? "มูลค่ารวมของพอร์ต" : "กำลังโหลด"}
+  />
+  <StatCard
+    title="Cash Balance"
+    value={portfolio ? <THB value={portfolio.cash_thb} /> : "—"}
+    change="THB Available"
+  />
+  <StatCard
+    title="Market Value"
+    value={portfolio ? <THB value={portfolio.market_value_thb} /> : "—"}
+    change="มูลค่าสินทรัพย์"
+  />
+  <StatCard
+    title="Total P&L"
+    value={portfolio ? <NumberTicker value={portfolio.total_pnl_thb} currency="THB" showSign /> : "—"}
+    change={
+      portfolio
+        ? `${pnlPositive ? "+" : ""}${portfolio.pnl_pct.toFixed(2)}%`
+        : "—"
+    }
+  />
+      </div>
+
+      <div className="rounded-xl border bg-card p-5">
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <div>
+            <h3 className="font-semibold">Holdings</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              สินทรัพย์ทั้งหมดใน Portfolio
+            </p>
+          </div>
+
+          {portfolio && (
+            <span className="rounded-full bg-muted px-2.5 py-1 text-[10px]">
+              {portfolio.holdings.length} Assets
+            </span>
+          )}
+        </div>
+
+        {loading && !portfolio ? (
+          <div className="flex min-h-[220px] items-center justify-center">
+            <p className="text-sm text-muted-foreground">
+              กำลังโหลด Portfolio จาก Backend...
+            </p>
+          </div>
+        ) : portfolio?.holdings?.length ? (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[900px] text-sm">
+              <thead>
+                <tr className="border-b text-left text-xs text-muted-foreground">
+                  <th className="px-3 py-3 font-medium">Asset</th>
+                  <th className="px-3 py-3 text-right font-medium">Quantity</th>
+                  <th className="px-3 py-3 text-right font-medium">Avg Cost</th>
+                  <th className="px-3 py-3 text-right font-medium">Price</th>
+                  <th className="px-3 py-3 text-right font-medium">Market Value</th>
+                  <th className="px-3 py-3 text-right font-medium">P&L</th>
+                  <th className="px-3 py-3 text-right font-medium">P&L %</th>
+                  <th className="px-3 py-3 text-right font-medium">Allocation</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {portfolio.holdings.map((holding) => {
+                  const positive = holding.unrealized_pnl >= 0
+
+                  return (
+                    <tr
+                      key={holding.asset}
+                      className="border-b last:border-0 hover:bg-accent/40"
+                    >
+                      <td className="px-3 py-4">
+                        <div className="flex items-center gap-3">
+                          <CoinIcon asset={holding.asset} size={28} />
+                          <div>
+                            <span className="font-semibold">{holding.asset}</span>
+                            <span className="ml-2 text-xs text-muted-foreground">/THB</span>
+                          </div>
+                        </div>
+                      </td>
+
+                      <td className="px-3 py-4 text-right">{formatQty(holding.qty)}</td>
+
+                      <td className="px-3 py-4 text-right">{formatTHB(holding.avg_cost)}</td>
+
+                      <td className="px-3 py-4 text-right font-medium">{formatTHB(holding.price)}</td>
+
+                      <td className="px-3 py-4 text-right font-medium">{formatTHB(holding.market_value)}</td>
+
+                      <td
+                        className={`px-3 py-4 text-right font-medium ${
+                          positive ? "text-emerald-500" : "text-red-500"
+                        }`}
+                      >
+                        {positive ? "+" : ""}
+                        {formatTHB(holding.unrealized_pnl)}
+                      </td>
+
+                      <td
+                        className={`px-3 py-4 text-right ${
+                          positive ? "text-emerald-500" : "text-red-500"
+                        }`}
+                      >
+                        {positive ? "+" : ""}
+                        {holding.pnl_pct.toFixed(2)}%
+                      </td>
+
+                      <td className="px-3 py-4 text-right">
+                        {holding.allocation_pct.toFixed(2)}%
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="flex min-h-[220px] items-center justify-center">
+            <p className="text-sm text-muted-foreground">ยังไม่มีข้อมูล Holdings</p>
+          </div>
+        )}
+      </div>
+
+      {portfolio && (
+        <div className="grid gap-4 md:grid-cols-3">
+          <MiniStat label="Realized P&L" value={formatTHB(portfolio.realized_pnl_thb)} />
+          <MiniStat label="Unrealized P&L" value={formatTHB(portfolio.unrealized_pnl_thb)} />
+          <MiniStat label="Fees" value={formatTHB(portfolio.fees_thb)} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* =========================================================
+   POSITIONS
+========================================================= */
+
+function PositionsPage({
+  portfolio,
+  loading,
+  error,
+  onRefresh,
+}: {
+  portfolio: PortfolioData | null
+  loading: boolean
+  error: string
+  onRefresh: () => void
+}) {
+  const positions = (portfolio?.holdings || []).filter(
+    (holding) => Number(holding.qty || 0) > 0
+  )
+
+  const totalMarketValue = positions.reduce(
+    (sum, holding) => sum + Number(holding.market_value || 0),
+    0
+  )
+
+  const totalUnrealizedPnl = positions.reduce(
+    (sum, holding) => sum + Number(holding.unrealized_pnl || 0),
+    0
+  )
+
+  const pnlPositive = totalUnrealizedPnl >= 0
+
+  return (
+    <div className="space-y-6">
+      {/* HEADER */}
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold">Positions</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            สถานะการถือครองจาก Portfolio จริง
+          </p>
+        </div>
+
+        <button
+          onClick={onRefresh}
+          disabled={loading}
+          className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {loading ? "กำลังโหลด..." : "Refresh"}
+        </button>
+      </div>
+
+      {/* ERROR */}
+      {error && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm">
+          <span className="text-red-500">{error}</span>
+          <button
+            onClick={onRefresh}
+            className="rounded-lg border px-3 py-1.5 text-xs font-medium hover:bg-accent"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* SUMMARY */}
+      <div className="grid gap-4 md:grid-cols-3">
+        <StatCard
+          title="Open Positions"
+          value={loading ? "Loading..." : String(positions.length)}
+          change={`${positions.length} assets`}
+        />
+
+        <StatCard
+          title="Market Value"
+          value={loading ? "Loading..." : <THB value={totalMarketValue} />}
+          change="มูลค่าตลาดของสินทรัพย์ที่ถือ"
+        />
+
+        <StatCard
+          title="Unrealized P&L"
+          value={loading ? "Loading..." : <THB value={totalUnrealizedPnl} sign />}
+          change={
+            loading
+              ? "—"
+              : pnlPositive
+                ? "กำไรจาก Position"
+                : "ขาดทุนจาก Position"
+          }
+        />
+      </div>
+
+      {/* POSITIONS TABLE */}
+      <div className="rounded-xl border bg-card">
+        <div className="flex items-center justify-between border-b px-5 py-4">
+          <div>
+            <h3 className="font-semibold">Open Positions</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              คำนวณจาก holdings ที่ Backend ส่งมาจาก Portfolio
+            </p>
+          </div>
+
+          {portfolio && (
+            <div className="text-right">
+              <p className="text-[10px] text-muted-foreground">Portfolio Value</p>
+              <p className="text-sm font-semibold">{formatTHB(portfolio.total_value_thb)}</p>
+            </div>
+          )}
+        </div>
+
+        {loading ? (
+          <div className="flex min-h-[220px] items-center justify-center">
+            <p className="text-sm text-muted-foreground">กำลังโหลด Positions...</p>
+          </div>
+        ) : positions.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[980px] text-sm">
+              <thead>
+                <tr className="border-b text-xs text-muted-foreground">
+                  <th className="px-4 py-3 text-left font-medium">Asset</th>
+                  <th className="px-4 py-3 text-right font-medium">Quantity</th>
+                  <th className="px-4 py-3 text-right font-medium">Avg Cost</th>
+                  <th className="px-4 py-3 text-right font-medium">Current Price</th>
+                  <th className="px-4 py-3 text-right font-medium">Market Value</th>
+                  <th className="px-4 py-3 text-right font-medium">P&L</th>
+                  <th className="px-4 py-3 text-right font-medium">P&L %</th>
+                  <th className="px-4 py-3 text-right font-medium">Allocation</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {positions.map((holding) => {
+                  const pnl = Number(holding.unrealized_pnl || 0)
+                  const positive = pnl >= 0
+
+                  return (
+                    <tr
+                      key={holding.asset}
+                      className="border-b last:border-0 hover:bg-accent/40"
+                    >
+                      <td className="px-4 py-4">
+                        <div className="flex items-center gap-3">
+                          <CoinIcon asset={holding.asset} size={32} />
+                          <div>
+                            <div className="font-semibold">{holding.asset}</div>
+                            <div className="text-xs text-muted-foreground">{holding.asset}/THB</div>
+                          </div>
+                        </div>
+                      </td>
+
+                      <td className="px-4 py-4 text-right font-medium">{formatQty(holding.qty)}</td>
+
+                      <td className="px-4 py-4 text-right">{formatTHB(holding.avg_cost)}</td>
+
+                      <td className="px-4 py-4 text-right font-medium">{formatTHB(holding.price)}</td>
+
+                      <td className="px-4 py-4 text-right font-medium">{formatTHB(holding.market_value)}</td>
+
+                      <td
+                        className={`px-4 py-4 text-right font-medium ${
+                          positive ? "text-emerald-500" : "text-red-500"
+                        }`}
+                      >
+                        {positive ? "+" : ""}
+                        {formatTHB(pnl)}
+                      </td>
+
+                      <td
+                        className={`px-4 py-4 text-right ${
+                          positive ? "text-emerald-500" : "text-red-500"
+                        }`}
+                      >
+                        {positive ? "+" : ""}
+                        {Number(holding.pnl_pct || 0).toFixed(2)}%
+                      </td>
+
+                      <td className="px-4 py-4 text-right">
+                        {Number(holding.allocation_pct || 0).toFixed(2)}%
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="flex min-h-[260px] items-center justify-center px-6">
+            <div className="text-center">
+              <p className="font-medium">ยังไม่มี Open Positions</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                เมื่อ Portfolio มีสินทรัพย์ที่ถืออยู่ จะแสดงในหน้านี้อัตโนมัติ
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* =========================================================
+   ORDER HISTORY
+========================================================= */
+
+type OrderHistoryRow = {
+  order_id?: string
+  timestamp?: string
+  date?: string
+  asset?: string
+  side?: string
+  status?: string
+  type?: string
+  amount_thb?: number
+  quote_thb?: number
+  quantity?: number
+  fee_thb?: number
+  exchange?: string
+  source?: string
+}
+
+function parseOrderDate(value?: string) {
+  if (!value) return null
+
+  const raw = String(value).trim()
+  if (!raw) return null
+
+  // Date-only values are handled separately so they do not shift across
+  // midnight when converted through the JavaScript Date constructor.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [year, month, day] = raw.split("-").map(Number)
+    return new Date(Date.UTC(year, month - 1, day))
+  }
+
+  // Timestamps without an explicit timezone are legacy Bangkok clock values.
+  // Treat them as Asia/Bangkok instead of UTC to avoid the old +7h shift.
+  let normalized = raw.replace(" ", "T")
+  const hasTimezone = /Z$/i.test(normalized) || /[+-]\d{2}:\d{2}$/.test(normalized)
+
+  if (!hasTimezone) {
+    normalized += "+07:00"
+  }
+
+  const date = new Date(normalized)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function formatOrderDate(value?: string) {
+  if (!value) return "—"
+
+  const raw = String(value).trim()
+
+  // Legacy orders may contain only YYYY-MM-DD. Keep the stored calendar date.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [year, month, day] = raw.split("-")
+    return `${day}/${month}/${Number(year) + 543}`
+  }
+
+  const d = parseOrderDate(raw)
+  if (!d) return raw
+
+  return d.toLocaleString("th-TH", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  })
+}
+
+function formatNumber(value?: number, digits = 8) {
+  const n = Number(value ?? 0)
+  if (!Number.isFinite(n)) return "—"
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: digits,
+  })
+}
+
+function OrdersPage({ refreshKey }: { refreshKey: number }) {
+  const [orders, setOrders] = useState<OrderHistoryRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [lastLoaded, setLastLoaded] = useState("")
+  const [selectedOrder, setSelectedOrder] = useState<OrderHistoryRow | null>(null)
+
+  const loadOrders = async (silent = false) => {
+  if (!silent) {
+    setLoading(true)
+    setError("")
+  }
+
+    try {
+      if (!DEALER_API_KEY) {
+        throw new Error("ยังไม่ได้ตั้ง VITE_DEALER_API_KEY ใน Frontend (.env)")
+      }
+
+      const response = await authFetch(`${API_BASE_URL}/api/orders?limit=100`, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+        cache: "no-store",
+      })
+
+      const rawText = await response.text()
+      let body: any = null
+
+      try {
+        body = rawText ? JSON.parse(rawText) : null
+      } catch {
+        body = null
+      }
+
+      if (!response.ok) {
+        const detail =
+          typeof body?.detail === "string"
+            ? body.detail
+            : body?.detail?.message ||
+              rawText ||
+              `Backend ตอบ HTTP ${response.status}`
+
+        throw new Error(
+          `โหลด Order History ไม่สำเร็จ (HTTP ${response.status}): ${detail}`
+        )
+      }
+
+      if (body?.status !== "ok") {
+        throw new Error(body?.detail || "Backend ไม่ได้ตอบ status=ok")
+      }
+
+      const rows = Array.isArray(body?.orders)
+        ? (body.orders as OrderHistoryRow[])
+        : []
+
+      const sortedOrders = [...rows].sort((a, b) => {
+        const dateA = parseOrderDate(a.timestamp || a.date)?.getTime() ?? NaN
+        const dateB = parseOrderDate(b.timestamp || b.date)?.getTime() ?? NaN
+
+        // ล่าสุด → เก่าสุด
+        if (Number.isFinite(dateA) && Number.isFinite(dateB)) {
+          return dateB - dateA
+        }
+
+        // ถ้ารายการหนึ่งมีวันที่อ่านได้ ให้อยู่ก่อน
+        if (Number.isFinite(dateB)) return 1
+        if (Number.isFinite(dateA)) return -1
+
+        return 0
+      })
+
+      setOrders(sortedOrders)
+      setLastLoaded(
+        new Date().toLocaleTimeString("th-TH", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        })
+      )
+    } catch (err) {
+      if (!silent) {
+        setOrders([])
+        setError(err instanceof Error ? err.message : "ไม่สามารถโหลด Order History ได้")
+      }
+    } finally {
+      if (!silent) setLoading(false)
+    }
+  }
+
+     useEffect(() => {
+    loadOrders()
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") loadOrders(true)
+    }, 10000)
+    return () => window.clearInterval(timer)
+  }, [refreshKey])
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold">Order History</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            ประวัติคำสั่งซื้อขายจาก Backend / Portfolio จริง
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => loadOrders()}
+          disabled={loading}
+          className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {loading ? "กำลังโหลด..." : "Refresh"}
+        </button>
+      </div>
+
+      {error && (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4">
+          <p className="text-sm font-semibold text-red-500">
+            ไม่สามารถโหลด Order History ได้
+          </p>
+          <p className="mt-1 whitespace-pre-wrap break-words text-xs text-muted-foreground">
+            {error}
+          </p>
+          <button
+            type="button"
+            onClick={() => loadOrders()}
+            className="mt-3 rounded-lg border px-3 py-1.5 text-xs font-medium hover:bg-accent"
+          >
+            ลองใหม่
+          </button>
+        </div>
+      )}
+
+      <div className="grid gap-4 md:grid-cols-3">
+        <StatCard
+          title="Orders"
+          value={loading ? "—" : String(orders.length)}
+          change="รายการที่โหลดจาก Backend"
+        />
+        <StatCard
+          title="Latest Side"
+          value={orders[0]?.side?.toUpperCase() || "—"}
+          change={orders[0]?.asset ? `${orders[0].asset}/THB` : "ยังไม่มีรายการ"}
+        />
+        <StatCard
+          title="Last Updated"
+          value={lastLoaded || "—"}
+          change="เวลาที่โหลดข้อมูลล่าสุด"
+        />
+      </div>
+
+      <div className="rounded-xl border bg-card p-5">
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <div>
+            <h3 className="font-semibold">Transactions</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              เรียงจากคำสั่งล่าสุดไปเก่าสุด
+            </p>
+          </div>
+
+          <span className="rounded-full bg-muted px-2.5 py-1 text-[10px]">
+            {orders.length} Orders
+          </span>
+        </div>
+
+        {loading ? (
+          <div className="flex min-h-[260px] items-center justify-center">
+            <p className="text-sm text-muted-foreground">
+              กำลังโหลด Order History จาก Backend...
+            </p>
+          </div>
+        ) : orders.length === 0 ? (
+          <div className="flex min-h-[260px] items-center justify-center rounded-lg border border-dashed">
+            <div className="text-center">
+              <ClipboardList className="mx-auto size-8 text-muted-foreground" />
+              <p className="mt-3 text-sm font-medium">ยังไม่มี Order History</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                เมื่อส่ง BUY/SELL สำเร็จ รายการจะปรากฏที่นี่
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1100px] text-sm">
+              <thead>
+                <tr className="border-b text-left text-xs text-muted-foreground">
+                  <th className="px-3 py-3 font-medium">Date / Time</th>
+                  <th className="px-3 py-3 font-medium">Side</th>
+                  <th className="px-3 py-3 font-medium">Asset</th>
+                  <th className="px-3 py-3 text-right font-medium">Amount</th>
+                  <th className="px-3 py-3 text-right font-medium">Price</th>
+                  <th className="px-3 py-3 text-right font-medium">Quantity</th>
+                  <th className="px-3 py-3 text-right font-medium">Fee</th>
+                  <th className="px-3 py-3 font-medium">Status</th>
+                  <th className="px-3 py-3 font-medium">Exchange</th>
+                  <th className="px-3 py-3 font-medium">Order ID</th>
+                  <th className="px-3 py-3 text-right font-medium">Detail</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {orders.map((order, index) => {
+                  const row: any = order as any
+                  const side = String(
+                    row.side || row.Side || row["ฝั่ง"] || ""
+                  ).toUpperCase()
+                  const status = String(
+                    row.status || row.Status || row["สถานะ"] || ""
+                  ).toLowerCase()
+                  const timestamp =
+                    row.timestamp || row.time || row.execution_time || row.date
+                  const orderId =
+                    row.order_id || row.orderId || row["Order ID"] || row.id || ""
+                  const exchange =
+                    row.exchange || row.Exchange || row.exchange_name || "Bitkub"
+                  const key = orderId || `${timestamp || "order"}-${index}`
+
+                  return (
+                    <tr
+                      key={key}
+                      className="border-b last:border-0 hover:bg-accent/40"
+                    >
+                      <td className="whitespace-nowrap px-3 py-4 text-xs">
+                        {formatOrderDate(timestamp)}
+                      </td>
+
+                      <td className="px-3 py-4">
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold ${
+                            side === "BUY"
+                              ? "bg-emerald-500/10 text-emerald-500"
+                              : side === "SELL"
+                                ? "bg-red-500/10 text-red-500"
+                                : "bg-muted text-muted-foreground"
+                          }`}
+                        >
+                          {side || "—"}
+                        </span>
+                      </td>
+
+                      <td className="px-3 py-4 font-semibold">
+                        <div className="flex items-center gap-2">
+                          {order.asset && <CoinIcon asset={order.asset} size={22} />}
+                          {order.asset || "—"}
+                        </div>
+                      </td>
+
+                      <td className="px-3 py-4 text-right font-medium">
+                        {formatTHB(Number(order.amount_thb || 0))}
+                      </td>
+
+                      <td className="px-3 py-4 text-right">
+                        {order.quote_thb != null
+                          ? formatTHB(Number(order.quote_thb))
+                          : "—"}
+                      </td>
+
+                      <td className="px-3 py-4 text-right">
+                        {order.quantity != null
+                          ? formatNumber(Number(order.quantity), 8)
+                          : "—"}
+                      </td>
+
+                      <td className="px-3 py-4 text-right">
+                        {order.fee_thb != null
+                          ? formatTHB(Number(order.fee_thb))
+                          : "—"}
+                      </td>
+
+                      <td className="px-3 py-4">
+                        <span
+                          className={`text-xs font-medium ${
+                            status === "filled" || status === "success"
+                              ? "text-emerald-500"
+                              : status === "rejected" || status === "failed"
+                                ? "text-red-500"
+                                : "text-muted-foreground"
+                          }`}
+                        >
+                          {order.status || "—"}
+                        </span>
+                      </td>
+
+                      <td className="px-3 py-4 text-xs">
+                        {exchange || row.source || "—"}
+                      </td>
+
+                      <td className="max-w-[180px] truncate px-3 py-4 font-mono text-[10px] text-muted-foreground">
+                        {orderId || "—"}
+                      </td>
+
+                      <td className="px-3 py-4 text-right">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedOrder(order)}
+                          className="rounded-md border px-2.5 py-1.5 text-[10px] font-medium hover:bg-accent"
+                        >
+                          View
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {selectedOrder && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          onClick={() => setSelectedOrder(null)}
+        >
+          <div
+            className="w-full max-w-2xl rounded-2xl border bg-card p-6 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b pb-4">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Order Detail
+                </p>
+                <h3 className="mt-1 flex items-center gap-2 text-xl font-bold">
+                  {selectedOrder.asset && (
+                    <CoinIcon asset={selectedOrder.asset} size={28} />
+                  )}
+                  {String(selectedOrder.side || "ORDER").toUpperCase()}{" "}
+                  {selectedOrder.asset || "—"}
+                </h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {formatOrderDate(selectedOrder.timestamp || selectedOrder.date)}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSelectedOrder(null)}
+                className="rounded-lg border px-3 py-1.5 text-sm hover:bg-accent"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-xl border bg-muted/20 p-4">
+                <p className="text-xs text-muted-foreground">Status</p>
+                <p
+                  className={`mt-1 text-lg font-semibold ${
+                    ["filled", "success"].includes(
+                      String(selectedOrder.status || "").toLowerCase()
+                    )
+                      ? "text-emerald-500"
+                      : ["rejected", "failed"].includes(
+                            String(selectedOrder.status || "").toLowerCase()
+                          )
+                        ? "text-red-500"
+                        : ""
+                  }`}
+                >
+                  {selectedOrder.status || "—"}
+                </p>
+              </div>
+
+              <div className="rounded-xl border bg-muted/20 p-4">
+                <p className="text-xs text-muted-foreground">Order ID</p>
+                <p className="mt-1 break-all font-mono text-sm">
+                  {selectedOrder.order_id || "—"}
+                </p>
+              </div>
+
+              <div className="rounded-xl border p-4">
+                <p className="text-xs text-muted-foreground">Amount</p>
+                <p className="mt-1 text-lg font-semibold">
+                  {formatTHB(Number(selectedOrder.amount_thb || 0))}
+                </p>
+              </div>
+
+              <div className="rounded-xl border p-4">
+                <p className="text-xs text-muted-foreground">Executed Price</p>
+                <p className="mt-1 text-lg font-semibold">
+                  {selectedOrder.quote_thb != null
+                    ? formatTHB(Number(selectedOrder.quote_thb))
+                    : "—"}
+                </p>
+              </div>
+
+              <div className="rounded-xl border p-4">
+                <p className="text-xs text-muted-foreground">Quantity</p>
+                <p className="mt-1 text-lg font-semibold">
+                  {selectedOrder.quantity != null
+                    ? formatNumber(Number(selectedOrder.quantity), 8)
+                    : "—"}
+                </p>
+              </div>
+
+              <div className="rounded-xl border p-4">
+                <p className="text-xs text-muted-foreground">Trading Fee</p>
+                <p className="mt-1 text-lg font-semibold">
+                  {selectedOrder.fee_thb != null
+                    ? formatTHB(Number(selectedOrder.fee_thb))
+                    : "—"}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-xl border px-4 py-3">
+                <p className="text-xs text-muted-foreground">Order Type</p>
+                <p className="mt-1 text-sm font-medium">{selectedOrder.type || "—"}</p>
+              </div>
+
+              <div className="rounded-xl border px-4 py-3">
+                <p className="text-xs text-muted-foreground">Exchange / Source</p>
+                <p className="mt-1 text-sm font-medium">
+                  {selectedOrder.exchange || selectedOrder.source || "—"}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedOrder(null)}
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* =========================================================
+   MARKET STAT
+========================================================= */
+
+function MarketStat({
+  label,
+  value,
+  sub,
+  positive,
+}: {
+  label: string
+  value: string
+  sub?: string
+  positive?: boolean
+}) {
+  return (
+    <div className="rounded-xl border bg-card p-4">
+      <p className="text-xs text-muted-foreground">{label}</p>
+
+      <div className="mt-2 text-lg font-bold">{value}</div>
+
+      {sub && (
+        <div
+          className={`mt-1 flex items-center gap-1 text-xs ${
+            positive === undefined
+              ? "text-muted-foreground"
+              : positive
+                ? "text-emerald-500"
+                : "text-red-500"
+          }`}
+        >
+          {positive !== undefined &&
+            (positive ? (
+              <TrendingUp className="size-3" />
+            ) : (
+              <TrendingDown className="size-3" />
+            ))}
+
+          {sub}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+/* =========================================================
+   MINI STAT
+========================================================= */
+
+function MiniStat({
+  label,
+  value,
+}: {
+  label: string
+  value: string
+}) {
+  return (
+    <div>
+      <p className="text-[10px] text-muted-foreground">{label}</p>
+      <p className="mt-1 text-xs font-medium">{value}</p>
+    </div>
+  )
+}
+
+function THB({ value, sign = false }: { value: number; sign?: boolean }) {
+  return <NumberTicker value={Number(value) || 0} currency="THB" showSign={sign} />
+}
+
+/* =========================================================
+   STAT CARD
+========================================================= */
+
+function StatCard({
+  title,
+  value,
+  change,
+  icon,
+}: {
+  title: string
+  value: ReactNode
+  change: string
+  icon?: ReactNode
+}) {
+  return (
+    <div className="rounded-xl border bg-card p-5">
+      <p className="text-sm text-muted-foreground">{title}</p>
+
+      <div className="mt-3 flex items-center gap-2 text-2xl font-bold">
+        {icon}
+        {value}
+      </div>
+
+      <p className="mt-1 text-xs text-muted-foreground">{change}</p>
+    </div>
+  )
+}
+
+
+/* =========================================================
+   NEWS
+========================================================= */
+
+type NewsItem = {
+  title: string
+  link: string
+  pubDate: string
+  description?: string
+  source: string
+}
+
+const NEWS_FEEDS = [
+  {
+    name: "CoinDesk",
+    url: "https://www.coindesk.com/arc/outboundfeeds/rss/",
+  },
+  {
+    name: "Cointelegraph",
+    url: "https://cointelegraph.com/rss",
+  },
+]
+
+.counter {
+  font-size: 16px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  color: var(--accent);
+  background: var(--accent-bg);
+  border: 2px solid transparent;
+  transition: border-color 0.3s;
+  margin-bottom: 24px;
+
+  &:hover {
+    border-color: var(--accent-border);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+.hero {
+  position: relative;
+
+  .base,
+  .framework,
+  .vite {
+    inset-inline: 0;
+    margin: 0 auto;
+  }
+
+  .base {
+    width: 170px;
+    position: relative;
+    z-index: 0;
+  }
+
+  .framework,
+  .vite {
+    position: absolute;
+  }
+
+  .framework {
+    z-index: 1;
+    top: 34px;
+    height: 28px;
+    transform: perspective(2000px) rotateZ(300deg) rotateX(44deg) rotateY(39deg)
+      scale(1.4);
+  }
+
+  .vite {
+    z-index: 0;
+    top: 107px;
+    height: 26px;
+    width: auto;
+    transform: perspective(2000px) rotateZ(300deg) rotateX(40deg) rotateY(39deg)
+      scale(0.8);
+  }
+}
+
+#center {
+  display: flex;
+  flex-direction: column;
+  gap: 25px;
+  place-content: center;
+  place-items: center;
+  flex-grow: 1;
+
+  @media (max-width: 1024px) {
+    padding: 32px 20px 24px;
+    gap: 18px;
+  }
+}
+
+#next-steps {
+  display: flex;
+  border-top: 1px solid var(--border);
+  text-align: left;
+
+  & > div {
+    flex: 1 1 0;
+    padding: 32px;
+    @media (max-width: 1024px) {
+      padding: 24px 20px;
+    }
+  }
+
+  .icon {
+    margin-bottom: 16px;
+    width: 22px;
+    height: 22px;
+  }
+
+  @media (max-width: 1024px) {
+    flex-direction: column;
+    text-align: center;
+  }
+}
+
+#docs {
+  border-right: 1px solid var(--border);
+
+  @media (max-width: 1024px) {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+#next-steps ul {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  gap: 8px;
+  margin: 32px 0 0;
+
+  .logo {
+    height: 18px;
+  }
+
+  a {
+    color: var(--text-h);
+    font-size: 16px;
+    border-radius: 6px;
+    background: var(--social-bg);
+    display: flex;
+    padding: 6px 12px;
+    align-items: center;
+    gap: 8px;
+    text-decoration: none;
+    transition: box-shadow 0.3s;
+
+    &:hover {
+      box-shadow: var(--shadow);
+    }
+    .button-icon {
+      height: 18px;
+      width: 18px;
+    }
+  }
+
+  @media (max-width: 1024px) {
+    margin-top: 20px;
+    flex-wrap: wrap;
+    justify-content: center;
+
+    li {
+      flex: 1 1 calc(50% - 8px);
     }
 
-    try:
-        import pandas as pd
-        m = gu._portfolio_risk_metrics(snap, pd.Timestamp.now().normalize())
-    except Exception:
-        import traceback
-        traceback.print_exc()
-        return {"vol": None, "dd": None}
-
-    ok = bool(m.get("history_available")) and int(m.get("history_days") or 0) > 0
-    out = {
-        "vol": round(_num(m.get("volatility_pct")), 2) if ok else None,
-        "dd": round(abs(_num(m.get("max_drawdown_pct"))), 2) if ok else None,
+    a {
+      width: 100%;
+      justify-content: center;
+      box-sizing: border-box;
     }
-    if ok:
-        _RISK_HIST_CACHE[user] = (now, out)
-    return out
+  }
+}
 
-@app.get("/api/risk", dependencies=[Depends(require_api_key)])
-def risk(user: str = Depends(require_user)):
-    with ORDER_LOCK:
-        try:
-            gu = load_gu()
-            actor = _actor(user)
-            _sync_gu_actor(gu, actor)
-            sim = _load_existing_sim(gu)
-            pf = _portfolio_response(gu, sim)
-        except Exception as e:
-            raise _internal_server_error("โหลดข้อมูลความเสี่ยงไม่สำเร็จ", e)
+#spacer {
+  height: 88px;
+  border-top: 1px solid var(--border);
+  @media (max-width: 1024px) {
+    height: 48px;
+  }
+}
 
-    equity = _num(pf.get("total_value_thb"))
-    cash = _num(pf.get("cash_thb"))
+.ticks {
+  position: relative;
+  width: 100%;
 
-    def pct(v):
-        return round(v / equity * 100, 2) if equity else 0.0
+  &::before,
+  &::after {
+    content: '';
+    position: absolute;
+    top: -4.5px;
+    border: 5px solid transparent;
+  }
 
-    holdings = []
-    for h in pf.get("holdings") or []:
-        value = _num(h.get("qty")) * _num(h.get("price"))
-        holdings.append({"asset": str(h.get("asset") or ""), "value_thb": round(value, 2), "pct": pct(value)})
-    holdings.sort(key=lambda x: x["value_thb"], reverse=True)
+  &::before {
+    left: 0;
+    border-left-color: var(--border);
+  }
+  &::after {
+    right: 0;
+    border-right-color: var(--border);
+  }
+}
 
-    allocation = [{"asset": "THB", "name": "Thai Baht", "value_thb": round(cash, 2), "pct": pct(cash)}] + holdings
+function NewsAiButton({
+  url,
+  title,
+  snippet,
+}: {
+  url: string
+  title: string
+  snippet: string
+}) {
+  const [data, setData] = useState<any>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState("")
 
-    btc = next((h["pct"] for h in holdings if h["asset"].upper() == "BTC"), 0.0)
-    hist = _risk_history_metrics(gu, user, pf)
-    values = {
-        "volatility": hist["vol"],
-        "max_drawdown": hist["dd"],
-        "concentration": max((h["pct"] for h in holdings), default=0.0),
-        "btc_exposure": btc,
-        "cash": pct(cash),
+  const run = async () => {
+    setBusy(true)
+    setErr("")
+    try {
+      const res = await authFetch(`${API_BASE_URL}/api/news/summarize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, title, snippet }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setData(await res.json())
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "สรุปไม่สำเร็จ")
+    } finally {
+      setBusy(false)
     }
+  }
 
-    metrics = []
-    for key, v in values.items():
-        watch, high, below = RISK_THRESHOLDS[key]
-        metrics.append({
-            "key": key,
-            "value_pct": v,
-            "watch": watch,
-            "high": high,
-            "below": below,
-            "status": _risk_status(v, watch, high, below),
+  const color =
+    data?.sentiment === "bullish"
+      ? "text-emerald-500"
+      : data?.sentiment === "bearish"
+        ? "text-red-500"
+        : "text-muted-foreground"
+
+  return (
+    <div className="mt-3">
+      {!data && (
+        <button
+          type="button"
+          onClick={run}
+          disabled={busy}
+          className="rounded-md border px-3 py-1.5 text-xs hover:bg-accent disabled:opacity-50"
+        >
+          {busy ? "กำลังแปล..." : "✨ แปล/สรุปไทย"}
+        </button>
+      )}
+      {err && <p className="mt-2 text-xs text-red-500">{err}</p>}
+      {data && (
+        <div className="space-y-1.5 rounded-lg bg-muted/50 p-3 text-xs">
+          <p className="font-semibold">{data.title_th}</p>
+          <p>{data.summary_th}</p>
+          <p className={color}>
+            {data.sentiment === "bullish"
+              ? "▲ บวก"
+              : data.sentiment === "bearish"
+                ? "▼ ลบ"
+                : "● กลาง"}
+            {data.note ? ` · ${data.note}` : ""}
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function NewsPage() {
+  const [items, setItems] = useState<NewsItem[]>([])
+  const [newsLoading, setNewsLoading] = useState(true)
+  const [newsError, setNewsError] = useState("")
+  const [activeSource, setActiveSource] = useState("All")
+  const [tickers, setTickers] = useState<MarketTicker[]>([])
+
+useEffect(() => {
+  let alive = true
+  const run = async () => {
+    try {
+      const rows = await fetchMarketTickers()
+      if (alive) setTickers(rows)
+    } catch {
+      // ใช้ค่าเดิม
+    }
+  }
+  run()
+  const t = setInterval(run, 10000)
+  return () => {
+    alive = false
+    clearInterval(t)
+  }
+}, [])
+
+const btcChange = tickers.find((t) => t.asset === "BTC")?.change
+const ethChange = tickers.find((t) => t.asset === "ETH")?.change
+
+  const loadNews = async () => {
+    setNewsLoading(true)
+    setNewsError("")
+
+    try {
+      const responses = await Promise.all(
+        NEWS_FEEDS.map(async (feed) => {
+          const endpoint = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feed.url)}`
+          const response = await fetch(endpoint, { cache: "no-store" })
+          if (!response.ok) throw new Error(`${feed.name}: HTTP ${response.status}`)
+
+          const body = await response.json()
+          const feedItems = Array.isArray(body?.items) ? body.items : []
+
+          return feedItems.slice(0, 12).map((item: any) => ({
+            title: String(item?.title || "Untitled"),
+            link: String(item?.link || ""),
+            pubDate: String(item?.pubDate || ""),
+            description: String(item?.description || "")
+              .replace(/<[^>]*>/g, " ")
+              .replace(/\s+/g, " ")
+              .trim(),
+            source: feed.name,
+          })) as NewsItem[]
+        })
+      )
+
+      const merged = responses
+        .flat()
+        .filter((item) => item.title && item.link)
+        .sort((a, b) => {
+          const aTime = new Date(a.pubDate).getTime()
+          const bTime = new Date(b.pubDate).getTime()
+          if (Number.isFinite(aTime) && Number.isFinite(bTime)) return bTime - aTime
+          return 0
         })
 
-    return {
-        "status": "ok",
-        "metrics": metrics,
-        "active": sum(1 for m in metrics if m["status"] in ("watch", "high")),
-        "high_count": sum(1 for m in metrics if m["status"] == "high"),
-        "watch_count": sum(1 for m in metrics if m["status"] == "watch"),
-        "allocation": allocation,
+      setItems(merged)
+      if (merged.length === 0) setNewsError("ยังไม่มีข่าวที่โหลดได้จากแหล่งข่าว")
+    } catch (err) {
+      setNewsError(err instanceof Error ? err.message : "ไม่สามารถโหลดข่าวได้")
+    } finally {
+      setNewsLoading(false)
     }
+  }
+
+  useEffect(() => {
+    loadNews()
+  }, [])
+
+  const visibleItems = activeSource === "All"
+    ? items
+    : items.filter((item) => item.source === activeSource)
+
+  const formatNewsDate = (value: string) => {
+    if (!value) return ""
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return value
+    return date.toLocaleString("th-TH", {
+      timeZone: "Asia/Bangkok",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold">News</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            ข่าวคริปโตล่าสุดจากแหล่งข่าวภายนอก สำหรับใช้ประกอบการติดตามตลาด
+          </p>
+        </div>
+        <button
+          onClick={loadNews}
+          disabled={newsLoading}
+          className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {newsLoading ? "กำลังโหลด..." : "Refresh"}
+        </button>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-4">
+        <StatCard
+          title="News"
+          value={newsLoading ? "Loading..." : String(items.length)}
+          change="ข่าวที่โหลดได้"
+        />
+        <StatCard
+          title="Sources"
+          value={String(NEWS_FEEDS.length)}
+          change="แหล่งข่าว"
+        />
+        <StatCard
+          title="BTC"
+          value={btcChange === undefined ? "—" : `${btcChange >= 0 ? "+" : ""}${btcChange.toFixed(2)}%`}
+          change="24h change"
+        />
+      <StatCard
+        title="ETH"
+        value={ethChange === undefined ? "—" : `${ethChange >= 0 ? "+" : ""}${ethChange.toFixed(2)}%`}
+        change="24h change"
+      />
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {["All", ...NEWS_FEEDS.map((feed) => feed.name)].map((source) => (
+          <button
+            key={source}
+            onClick={() => setActiveSource(source)}
+            className={`rounded-full border px-4 py-2 text-sm transition-colors ${
+              activeSource === source
+                ? "bg-primary text-primary-foreground"
+                : "hover:bg-accent"
+            }`}
+          >
+            {source}
+          </button>
+        ))}
+      </div>
+
+      {newsError && (
+        <div className="rounded-xl border border-yellow-500/30 bg-yellow-500/5 px-4 py-3 text-sm">
+          {newsError}
+        </div>
+      )}
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        {visibleItems.map((item, index) => (
+          <article
+            key={`${item.source}-${item.link}-${index}`}
+            className="rounded-xl border bg-card p-5 transition-colors hover:bg-accent/30"
+          >
+            <div className="mb-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+              <span className="rounded-full bg-muted px-2.5 py-1 font-medium">
+                {item.source}
+              </span>
+              <span>{formatNewsDate(item.pubDate)}</span>
+            </div>
+            <h3 className="text-base font-semibold leading-6">
+              <a
+                href={item.link}
+                target="_blank"
+                rel="noreferrer"
+                className="hover:underline"
+              >
+                {item.title}
+              </a>
+            </h3>
+            {item.description && (
+              <p className="mt-2 line-clamp-3 text-sm leading-6 text-muted-foreground">
+                {item.description}
+              </p>
+            )}
+            <a
+              href={item.link}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-4 inline-flex text-sm font-medium text-primary hover:underline"
+                         >
+                อ่านข่าวเต็ม →
+              </a>
+            <NewsAiButton
+              url={item.link}
+              title={item.title}
+              snippet={item.description || ""}
+            />
+          </article>
+        ))}
+      </div>
+
+      {!newsLoading && visibleItems.length === 0 && !newsError && (
+        <div className="flex min-h-[260px] items-center justify-center rounded-xl border bg-card text-sm text-muted-foreground">
+          ยังไม่มีข่าวในหมวดนี้
+        </div>
+      )}
+
+      <div className="rounded-xl border bg-card px-5 py-4 text-xs leading-5 text-muted-foreground">
+        News เป็นข้อมูลจากแหล่งข่าวภายนอกและใช้เพื่อการติดตามตลาดเท่านั้น ยังไม่ถูกนำไปใช้สั่งซื้อขายอัตโนมัติ
+      </div>
+    </div>
+  )
+}
+
+type TrendBar = { t: number; c: number }
+type MonthPoint = { key: string; close: number }
+type TrendAssetData = { asset: string; months: MonthPoint[] }
+
+type TrendStats = {
+  total: number
+  cagr: number
+  vol: number
+  sharpe: number
+  maxDD: number
+}
+
+type TrendResult = {
+  keys: string[]
+  timing: number[]
+  hold: number[]
+  timingStats: TrendStats
+  holdStats: TrendStats
+  avgInvested: number
+  months: number
+  timingRets: number[]
+  holdRets: number[]
+  invested: number[]
+}
+
+type TrendSignalRow = {
+  asset: string
+  price: number
+  sma: number | null
+  distPct: number | null
+  hold: boolean | null
+  months: number
+}
+
+const TREND_ASSETS = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "HBAR", "LINK", "XLM"]
+const TREND_SMA_OPTIONS = [3, 6, 9, 10, 12]
+const TREND_FEE_OPTIONS = [0, 0.25]
+const TREND_CHUNK_DAYS = 380
+const TREND_START_UNIX = 1514764800 // 2018-01-01
+
+async function fetchDailyCloses(asset: string): Promise<TrendBar[]> {
+  const now = Math.floor(Date.now() / 1000)
+  const step = TREND_CHUNK_DAYS * 86400
+  const ranges: [number, number][] = []
+  for (let from = TREND_START_UNIX; from < now; from += step) {
+    ranges.push([from, Math.min(from + step, now)])
+  }
+
+  const chunks = await Promise.all(
+    ranges.map(async ([from, to]): Promise<TrendBar[]> => {
+      const response = await fetch(
+        `https://api.bitkub.com/tradingview/history?symbol=${asset}_THB&resolution=1D&from=${from}&to=${to}`,
+        { headers: { Accept: "application/json" }, cache: "no-store" }
+      )
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const body = await response.json()
+      // ช่วงที่เหรียญยังไม่เข้าตลาดจะได้ no_data ให้ข้ามไป
+      if (body?.s !== "ok" || !Array.isArray(body.t) || !Array.isArray(body.c)) return []
+      return body.t.map((t: unknown, i: number) => ({ t: Number(t), c: Number(body.c[i]) }))
+    })
+  )
+
+  const unique = new Map<number, number>()
+  for (const chunk of chunks) {
+    for (const bar of chunk) {
+      if (Number.isFinite(bar.t) && bar.c > 0) unique.set(bar.t, bar.c)
+    }
+  }
+  return Array.from(unique.entries())
+    .map(([t, c]) => ({ t, c }))
+    .sort((a, b) => a.t - b.t)
+}
+
+// ปิดรายเดือน = ราคาปิดของวันสุดท้ายที่มีข้อมูลในเดือนนั้น (เวลาไทย)
+function toMonthly(bars: TrendBar[]): MonthPoint[] {
+  const out: MonthPoint[] = []
+  for (const bar of bars) {
+    const d = new Date((bar.t + 7 * 3600) * 1000)
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`
+    const last = out[out.length - 1]
+    if (last && last.key === key) last.close = bar.c
+    else out.push({ key, close: bar.c })
+  }
+  return out
+}
+
+function smaAt(closes: number[], i: number, n: number): number | null {
+  if (i + 1 < n) return null
+  let sum = 0
+  for (let k = i - n + 1; k <= i; k++) sum += closes[k]
+  return sum / n
+}
+
+function trendStats(rets: number[], equity: number[]): TrendStats {
+  const months = rets.length
+  const first = equity[0]
+  const last = equity[equity.length - 1]
+  const mean = rets.reduce((a, b) => a + b, 0) / months
+  const variance =
+    months > 1 ? rets.reduce((a, b) => a + (b - mean) ** 2, 0) / (months - 1) : 0
+  const vol = Math.sqrt(variance) * Math.sqrt(12)
+  let peak = equity[0]
+  let maxDD = 0
+  for (const v of equity) {
+    if (v > peak) peak = v
+    const dd = v / peak - 1
+    if (dd < maxDD) maxDD = dd
+  }
+  return {
+    total: last / first - 1,
+    cagr: Math.pow(last / first, 12 / months) - 1,
+    vol,
+    sharpe: vol > 0 ? (mean * 12) / vol : 0,
+    maxDD,
+  }
+}
+
+// กฎ: สิ้นเดือน ถ้าราคาปิด > SMA(n เดือน) ถือเหรียญนั้นตลอดเดือนถัดไป ไม่งั้นถือเงินสด (ผลตอบแทน 0)
+// น้ำหนักเท่ากันทุกเหรียญ ปรับสมดุลทุกเดือน
+function runTrendBacktest(data: TrendAssetData[], n: number, feePct: number): TrendResult | null {
+  const keySet = new Set<string>()
+  data.forEach((d) => d.months.forEach((m) => keySet.add(m.key)))
+  const keys = Array.from(keySet).sort()
+  if (keys.length < n + 3) return null
+
+  const idx = new Map<string, number>()
+  keys.forEach((k, i) => idx.set(k, i))
+  const fee = feePct / 100
+
+  const sig: (0 | 1 | null)[][] = []
+  const ret: (number | null)[][] = []
+
+  for (const d of data) {
+    const s: (0 | 1 | null)[] = Array(keys.length).fill(null)
+    const r: (number | null)[] = Array(keys.length).fill(null)
+    const closes = d.months.map((m) => m.close)
+    d.months.forEach((m, j) => {
+      const i = idx.get(m.key)
+      if (i === undefined) return
+      const sma = smaAt(closes, j, n)
+      s[i] = sma === null ? null : m.close > sma ? 1 : 0
+      if (j > 0 && idx.get(d.months[j - 1].key) === i - 1) {
+        r[i] = m.close / closes[j - 1] - 1
+      }
+    })
+    sig.push(s)
+    ret.push(r)
+  }
+
+  const outKeys: string[] = []
+  const timingRets: number[] = []
+  const holdRets: number[] = []
+  const investedFrac: number[] = []
+
+  for (let i = 1; i < keys.length; i++) {
+    let count = 0
+    let tSum = 0
+    let hSum = 0
+    let posSum = 0
+    for (let a = 0; a < data.length; a++) {
+      const pos = sig[a][i - 1]
+      const r = ret[a][i]
+      if (pos === null || r === null) continue
+      const prevRaw = i >= 2 ? sig[a][i - 2] : null
+      const prevPos = prevRaw === null ? 0 : prevRaw
+      tSum += pos * r - fee * Math.abs(pos - prevPos)
+      hSum += r
+      posSum += pos
+      count++
+    }
+    if (count === 0) continue
+    outKeys.push(keys[i])
+    timingRets.push(tSum / count)
+    holdRets.push(hSum / count)
+    investedFrac.push(posSum / count)
+  }
+
+  if (timingRets.length < 6) return null
+
+  const timing = [100]
+  const hold = [100]
+  timingRets.forEach((r, i) => {
+    timing.push(timing[i] * (1 + r))
+    hold.push(hold[i] * (1 + holdRets[i]))
+  })
+
+  return {
+    keys: outKeys,
+    timing,
+    hold,
+    timingStats: trendStats(timingRets, timing),
+    holdStats: trendStats(holdRets, hold),
+    avgInvested: investedFrac.reduce((a, b) => a + b, 0) / investedFrac.length,
+    months: timingRets.length,
+    timingRets,
+    holdRets,
+    invested: investedFrac,
+  }
+  }
+
+function currentTrendSignals(data: TrendAssetData[], n: number): TrendSignalRow[] {
+  return data.map((d) => {
+    const closes = d.months.map((m) => m.close)
+    const last = closes.length - 1
+    const price = closes[last] ?? 0
+    const sma = last >= 0 ? smaAt(closes, last, n) : null
+    return {
+      asset: d.asset,
+      price,
+      sma,
+      distPct: sma ? (price / sma - 1) * 100 : null,
+      hold: sma === null ? null : price > sma,
+      months: closes.length,
+    }
+  })
+}
+
+// ---------- Trend extras: drawdown / รายปี / เทียบ SMA / Volatility clustering ----------
+
+const monthIndex = (key: string) => Number(key.slice(0, 4)) * 12 + Number(key.slice(5, 7))
+
+function trendDrawdowns(equity: number[]): number[] {
+  let peak = equity[0]
+  return equity.map((v) => {
+    if (v > peak) peak = v
+    return v / peak - 1
+  })
+}
+
+type YearRow = { year: string; timing: number; hold: number; months: number }
+
+function yearlyTrendReturns(keys: string[], timingRets: number[], holdRets: number[]): YearRow[] {
+  const map = new Map<string, YearRow>()
+  keys.forEach((k, i) => {
+    const year = k.slice(0, 4)
+    const row = map.get(year) ?? { year, timing: 1, hold: 1, months: 0 }
+    row.timing *= 1 + timingRets[i]
+    row.hold *= 1 + holdRets[i]
+    row.months += 1
+    map.set(year, row)
+  })
+  return Array.from(map.values()).map((r) => ({ ...r, timing: r.timing - 1, hold: r.hold - 1 }))
+}
+
+type SmaCompareRow = {
+  n: number
+  timing: TrendStats
+  hold: TrendStats
+  avgInvested: number
+  months: number
+}
+
+function compareSmaLengths(data: TrendAssetData[], feePct: number): SmaCompareRow[] {
+  const rows: SmaCompareRow[] = []
+  for (const n of TREND_SMA_OPTIONS) {
+    const r = runTrendBacktest(data, n, feePct)
+    if (r) {
+      rows.push({ n, timing: r.timingStats, hold: r.holdStats, avgInvested: r.avgInvested, months: r.months })
+    }
+  }
+  return rows
+}
+
+type ClusterSide = { ret: number; vol: number }
+type ClusterRow = { asset: string; pctAbove: number; above: ClusterSide | null; below: ClusterSide | null }
+
+function clusterSide(rets: number[]): ClusterSide | null {
+  if (rets.length < 6) return null
+  const mean = rets.reduce((a, b) => a + b, 0) / rets.length
+  const variance = rets.reduce((a, b) => a + (b - mean) ** 2, 0) / (rets.length - 1)
+  return { ret: mean, vol: Math.sqrt(variance) * Math.sqrt(12) }
+}
+
+// แยกผลตอบแทนรายเดือนตามสัญญาณ ณ สิ้นเดือนก่อนหน้า (ราคา > SMA หรือ ไม่) เหมือน Figure 18 ในงานวิจัย
+function volatilityClustering(data: TrendAssetData[], n: number): ClusterRow[] {
+  const rows: ClusterRow[] = []
+  for (const d of data) {
+    const closes = d.months.map((m) => m.close)
+    const above: number[] = []
+    const below: number[] = []
+    for (let j = n - 1; j < closes.length - 1; j++) {
+      if (monthIndex(d.months[j + 1].key) !== monthIndex(d.months[j].key) + 1) continue
+      const sma = smaAt(closes, j, n)
+      if (sma === null) continue
+      const r = closes[j + 1] / closes[j] - 1
+      if (closes[j] > sma) above.push(r)
+      else below.push(r)
+    }
+    const total = above.length + below.length
+    if (total === 0) continue
+    rows.push({
+      asset: d.asset,
+      pctAbove: above.length / total,
+      above: clusterSide(above),
+      below: clusterSide(below),
+    })
+  }
+  return rows
+}
+
+function DrawdownChart({ timing, hold }: { timing: number[]; hold: number[] }) {
+  const W = 640
+  const H = 150
+  const P = 10
+  const dt = trendDrawdowns(timing)
+  const dh = trendDrawdowns(hold)
+  const minT = Math.min(...dt)
+  const minH = Math.min(...dh)
+  const lo = Math.min(minT, minH, -0.01)
+  const x = (i: number) => P + (i / Math.max(1, dt.length - 1)) * (W - 2 * P)
+  const y = (v: number) => P + (v / lo) * (H - 2 * P)
+  const line = (arr: number[]) =>
+    arr.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ")
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full">
+        <line x1={P} x2={W - P} y1={P} y2={P} stroke="#71717a" strokeOpacity={0.4} />
+        <path d={line(dh)} fill="none" stroke="#a1a1aa" strokeWidth={2} />
+        <path d={line(dt)} fill="none" stroke="#10b981" strokeWidth={2.5} />
+      </svg>
+      <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
+        <span>0%</span>
+        <span>
+          ลึกสุด: Timing {trendPct(minT, 1)} · Buy &amp; Hold {trendPct(minH, 1)}
+        </span>
+        <span>{trendPct(lo, 0)}</span>
+      </div>
+    </div>
+  )
+}
+
+function TrendExtras({
+  data,
+  result,
+  smaLen,
+  feePct,
+  onPickSma,
+}: {
+  data: TrendAssetData[]
+  result: TrendResult | null
+  smaLen: number
+  feePct: number
+  onPickSma: (n: number) => void
+}) {
+  const compare = compareSmaLengths(data, feePct)
+  const cluster = volatilityClustering(data, smaLen)
+  const years = result ? yearlyTrendReturns(result.keys, result.timingRets, result.holdRets) : []
+  const sign = (v: number) => (v >= 0 ? "text-emerald-500" : "text-red-500")
+
+  const buckets: [string, (v: number) => boolean][] = [
+    ["0%", (v) => v === 0],
+    ["1–25%", (v) => v > 0 && v <= 0.25],
+    ["26–50%", (v) => v > 0.25 && v <= 0.5],
+    ["51–75%", (v) => v > 0.5 && v <= 0.75],
+    ["76–100%", (v) => v > 0.75],
+  ]
+  const bucketRows = result
+    ? buckets.map(([label, test]) => ({
+        label,
+        pct: result.invested.filter(test).length / result.invested.length,
+      }))
+    : []
+
+  const avgSide = (pick: (r: ClusterRow) => ClusterSide | null): ClusterSide | null => {
+    const xs = cluster.map(pick).filter((v): v is ClusterSide => v !== null)
+    if (xs.length === 0) return null
+    return {
+      ret: xs.reduce((a, b) => a + b.ret, 0) / xs.length,
+      vol: xs.reduce((a, b) => a + b.vol, 0) / xs.length,
+    }
+  }
+  const avgAbove = avgSide((r) => r.above)
+  const avgBelow = avgSide((r) => r.below)
+  const both = cluster.filter((r) => r.above && r.below)
+  const lowerRet = both.filter((r) => (r.below as ClusterSide).ret < (r.above as ClusterSide).ret).length
+  const higherVol = both.filter((r) => (r.below as ClusterSide).vol > (r.above as ClusterSide).vol).length
+
+  const cell = (s: ClusterSide | null, k: "ret" | "vol") =>
+    s === null ? "—" : trendPct(s[k], 1)
+
+  return (
+    <div className="space-y-6 border-t pt-5">
+      {/* 1) กราฟเพิ่ม */}
+      {result && (
+        <div className="grid gap-5 lg:grid-cols-2">
+          <div>
+            <h4 className="mb-2 text-sm font-semibold">Drawdown (ตกจากจุดสูงสุด)</h4>
+            <DrawdownChart timing={result.timing} hold={result.hold} />
+          </div>
+          <div>
+            <h4 className="mb-2 text-sm font-semibold">
+              % เวลาที่ลงทุนอยู่ (เฉลี่ย {trendPct(result.avgInvested, 0)})
+            </h4>
+            <div className="space-y-1.5">
+              {bucketRows.map((b) => (
+                <div key={b.label} className="flex items-center gap-2 text-xs">
+                  <span className="w-16 text-muted-foreground">{b.label}</span>
+                  <div className="h-3 flex-1 rounded bg-muted">
+                    <div
+                      className="h-3 rounded bg-emerald-500"
+                      style={{ width: `${(b.pct * 100).toFixed(1)}%` }}
+                    />
+                  </div>
+                  <span className="w-12 text-right tabular-nums">{trendPct(b.pct, 0)}</span>
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 text-[10px] text-muted-foreground">
+              สัดส่วนของเดือนที่ถือเหรียญอยู่กี่ % ของพอร์ต (ที่เหลือเป็นเงินสด)
+            </p>
+          </div>
+        </div>
+      )}
+
+      {result && (
+        <div>
+          <h4 className="mb-2 text-sm font-semibold">ผลตอบแทนรายปี</h4>
+          <div className="max-h-64 overflow-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-xs text-muted-foreground">
+                  <th className="px-2 py-2 text-left font-medium">ปี</th>
+                  <th className="px-2 py-2 text-right font-medium">Timing</th>
+                  <th className="px-2 py-2 text-right font-medium">Buy &amp; Hold</th>
+                  <th className="px-2 py-2 text-right font-medium">เดือนที่มีข้อมูล</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {years.map((y) => (
+                  <tr key={y.year}>
+                    <td className="px-2 py-1.5">{y.year}</td>
+                    <td className={`px-2 py-1.5 text-right font-medium tabular-nums ${sign(y.timing)}`}>
+                      {trendPct(y.timing, 1)}
+                    </td>
+                    <td className={`px-2 py-1.5 text-right tabular-nums ${sign(y.hold)}`}>
+                      {trendPct(y.hold, 1)}
+                    </td>
+                    <td className="px-2 py-1.5 text-right text-xs text-muted-foreground">{y.months}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            ปีแรกและปีล่าสุดอาจไม่เต็ม 12 เดือน (ดูคอลัมน์สุดท้าย)
+          </p>
+        </div>
+      )}
+
+      {/* 2) ตารางเทียบ SMA */}
+      <div>
+        <h4 className="mb-2 text-sm font-semibold">เทียบทุกค่า SMA ในที่เดียว</h4>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-xs text-muted-foreground">
+                <th className="px-2 py-2 text-left font-medium">SMA</th>
+                <th className="px-2 py-2 text-right font-medium">CAGR (T / B&amp;H)</th>
+                <th className="px-2 py-2 text-right font-medium">Sharpe (T / B&amp;H)</th>
+                <th className="px-2 py-2 text-right font-medium">Max DD (T / B&amp;H)</th>
+                <th className="px-2 py-2 text-right font-medium">ลงทุนเฉลี่ย</th>
+                <th className="px-2 py-2 text-right font-medium">เดือน</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {compare.map((r) => (
+                <tr
+                  key={r.n}
+                  onClick={() => onPickSma(r.n)}
+                  className={`cursor-pointer hover:bg-accent/50 ${r.n === smaLen ? "bg-accent/40" : ""}`}
+                >
+                  <td className="px-2 py-1.5 font-medium">{r.n} เดือน</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">
+                    {trendPct(r.timing.cagr, 0)} / {trendPct(r.hold.cagr, 0)}
+                  </td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">
+                    {r.timing.sharpe.toFixed(2)} / {r.hold.sharpe.toFixed(2)}
+                  </td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">
+                    {trendPct(r.timing.maxDD, 0)} / {trendPct(r.hold.maxDD, 0)}
+                  </td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{trendPct(r.avgInvested, 0)}</td>
+                  <td className="px-2 py-1.5 text-right text-xs text-muted-foreground">{r.months}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+          กดแถวเพื่อสลับ SMA ด้านบน SMA ยิ่งยาวยิ่งเริ่มคำนวณช้า ช่วงเวลาแต่ละแถวจึงไม่เท่ากัน
+          ให้เทียบ Timing กับ Buy &amp; Hold ในแถวเดียวกัน ถ้าตัวเลขต่างกันมากตามค่า SMA แปลว่าผลพึ่งพาพารามิเตอร์
+          (งานวิจัยใช้ตารางแบบนี้ยืนยันว่าผลไม่ได้อยู่ที่ค่าใดค่าหนึ่ง)
+        </p>
+      </div>
+
+      {/* 3) ทำไมถึงได้ผล */}
+      <div>
+        <h4 className="mb-2 text-sm font-semibold">ทำไมถึงได้ผล: ตอนอยู่ใต้ SMA {smaLen} เดือน</h4>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-xs text-muted-foreground">
+                <th className="px-2 py-2 text-left font-medium">เหรียญ</th>
+                <th className="px-2 py-2 text-right font-medium">% เวลาเหนือ SMA</th>
+                <th className="px-2 py-2 text-right font-medium">ผลตอบแทน/เดือน (เหนือ)</th>
+                <th className="px-2 py-2 text-right font-medium">ผลตอบแทน/เดือน (ใต้)</th>
+                <th className="px-2 py-2 text-right font-medium">Vol/ปี (เหนือ)</th>
+                <th className="px-2 py-2 text-right font-medium">Vol/ปี (ใต้)</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {cluster.map((r) => (
+                <tr key={r.asset}>
+                  <td className="px-2 py-1.5 font-medium">{r.asset}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{trendPct(r.pctAbove, 0)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{cell(r.above, "ret")}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{cell(r.below, "ret")}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{cell(r.above, "vol")}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{cell(r.below, "vol")}</td>
+                </tr>
+              ))}
+              <tr className="font-semibold">
+                <td className="px-2 py-1.5">เฉลี่ย</td>
+                <td className="px-2 py-1.5" />
+                <td className="px-2 py-1.5 text-right tabular-nums">{cell(avgAbove, "ret")}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums">{cell(avgBelow, "ret")}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums">{cell(avgAbove, "vol")}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums">{cell(avgBelow, "vol")}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p className="mt-2 text-xs leading-5 text-muted-foreground">
+          {both.length > 0 ? (
+            <>
+              จาก {both.length} เหรียญที่ข้อมูลพอ (ฝั่งละ ≥ 6 เดือน) มี <b className="text-foreground">{lowerRet}</b>{" "}
+              เหรียญที่ผลตอบแทนเดือนถัดไปต่ำกว่าเมื่ออยู่ใต้ SMA และ{" "}
+              <b className="text-foreground">{higherVol}</b> เหรียญที่ผันผวนสูงกว่า
+              งานวิจัยพบว่าหุ้นเป็นแบบนี้ (ผลตอบแทนต่ำลงราว 60% ผันผวนสูงขึ้นราว 30%) ถ้าตัวเลขของคริปโตไม่เป็นไปตามนั้น
+              แปลว่ากลยุทธ์นี้อาจได้ผลจากเหตุผลอื่น
+            </>
+          ) : (
+            "ข้อมูลยังไม่พอสำหรับเทียบ (ต้องมีอย่างน้อย 6 เดือนทั้งสองฝั่ง)"
+          )}
+        </p>
+        <p className="mt-1 text-[10px] text-muted-foreground">
+          ผลตอบแทน/เดือน = ค่าเฉลี่ยผลตอบแทนรายเดือนของเดือนถัดจากสัญญาณ, Vol = ส่วนเบี่ยงเบนมาตรฐานรายเดือน × √12
+        </p>
+      </div>
+    </div>
+  )
+}
+
+let trendCache: TrendAssetData[] | null = null
+
+function trendPct(value: number, digits = 2) {
+  return `${(value * 100).toFixed(digits)}%`
+}
+
+function TrendChart({ keys, timing, hold }: { keys: string[]; timing: number[]; hold: number[] }) {
+  const W = 640
+  const H = 220
+  const P = 10
+  const all = [...timing, ...hold]
+  const lo = Math.log(Math.min(...all))
+  const hi = Math.log(Math.max(...all))
+  const x = (i: number) => P + (i / Math.max(1, timing.length - 1)) * (W - 2 * P)
+  const y = (v: number) => H - P - ((Math.log(v) - lo) / Math.max(1e-9, hi - lo)) * (H - 2 * P)
+  const line = (arr: number[]) =>
+    arr.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ")
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full">
+        <path d={line(hold)} fill="none" stroke="#a1a1aa" strokeWidth={2} />
+        <path d={line(timing)} fill="none" stroke="#10b981" strokeWidth={2.5} />
+      </svg>
+      <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
+        <span>{keys[0]}</span>
+        <span className="flex items-center gap-3">
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-0.5 w-4 bg-emerald-500" /> Trend Timing
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-0.5 w-4 bg-zinc-400" /> Buy &amp; Hold
+          </span>
+        </span>
+        <span>{keys[keys.length - 1]}</span>
+      </div>
+    </div>
+  )
+}
+
+type TrendPlanItem = {
+  side: "buy" | "sell"
+  asset: string
+  amount_thb: number
+  reason: string
+}
+
+type TrendPreview = {
+  plan: TrendPlanItem[]
+  action_keys: string[]
+  warnings: string[]
+  summary: {
+    n_universe: number
+    n_hold: number
+    budget_thb: number
+    target_per_coin_thb: number
+    cash_thb: number
+  }
+}
+
+type TrendExecResult = {
+  side: string
+  asset: string
+  ok: boolean
+  message: string
+  amount_thb: number
+}
+
+function TrendFollowPanel({
+  signals,
+  smaLen,
+  onDone,
+}: {
+  signals: TrendSignalRow[]
+  smaLen: number
+  onDone?: () => void
+}) {
+  const [budget, setBudget] = useState("")
+  const [preview, setPreview] = useState<TrendPreview | null>(null)
+  const [results, setResults] = useState<TrendExecResult[] | null>(null)
+  const [resultStatus, setResultStatus] = useState("")
+  const [busy, setBusy] = useState<"" | "preview" | "confirm">("")
+  const [message, setMessage] = useState("")
+
+  const ready = signals.filter((s) => s.hold !== null)
+  const universe = ready.map((s) => s.asset)
+  const hold = ready.filter((s) => s.hold === true).map((s) => s.asset)
+  const signalKey = `${smaLen}|${universe.join(",")}|${hold.join(",")}|${budget}`
+
+  // สัญญาณ ค่า SMA หรืองบเปลี่ยน รายการที่ดูไว้จะไม่ตรงอีกต่อไป
+  useEffect(() => {
+    setPreview(null)
+  }, [signalKey])
+
+  const parseBudget = (): number | null | "invalid" => {
+    const raw = budget.replace(/,/g, "").trim()
+    if (!raw) return null
+    const v = Number(raw)
+    return Number.isFinite(v) && v > 0 ? v : "invalid"
+  }
+
+  const call = async (confirm: boolean) => {
+    const b = parseBudget()
+    if (b === "invalid") throw new Error("งบต้องเป็นตัวเลขที่มากกว่า 0")
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    }
+    if (confirm) {
+      headers["Idempotency-Key"] =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    }
+    const response = await authFetch(`${API_BASE_URL}/api/trend/rebalance`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        universe,
+        hold,
+        budget_thb: b,
+        sma_months: smaLen,
+        confirm,
+        expected: confirm ? preview?.action_keys ?? [] : undefined,
+      }),
+    })
+    if (!response.ok) throw new Error(await dcaErrorText(response))
+    return response.json()
+  }
+
+  const loadPreview = async () => {
+    setMessage("")
+    setResults(null)
+    setBusy("preview")
+    try {
+      const body = await call(false)
+      setPreview(body as TrendPreview)
+    } catch (err) {
+      setPreview(null)
+      setMessage(err instanceof Error ? err.message : "ดูรายการไม่สำเร็จ")
+    } finally {
+      setBusy("")
+    }
+  }
+
+  const confirmOrders = async () => {
+    if (!preview || preview.plan.length === 0) return
+    setMessage("")
+    setBusy("confirm")
+    try {
+      const body = await call(true)
+      setResults(Array.isArray(body?.results) ? (body.results as TrendExecResult[]) : [])
+      setResultStatus(String(body?.status || ""))
+      setPreview(null)
+      onDone?.()
+    } catch (err) {
+      const text = err instanceof Error ? err.message : "ส่งคำสั่งไม่สำเร็จ"
+      setMessage(text)
+      // 409 = รายการเปลี่ยนไปจากที่ดูไว้ ให้ดูใหม่
+      if (text.includes("กดดูรายการใหม่")) setPreview(null)
+    } finally {
+      setBusy("")
+    }
+  }
+
+  const sells = preview?.plan.filter((p) => p.side === "sell") ?? []
+  const buys = preview?.plan.filter((p) => p.side === "buy") ?? []
+
+  return (
+    <div className="rounded-xl border bg-muted/20 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h4 className="text-sm font-semibold">ทำตามสัญญาณ</h4>
+          <p className="mt-1 max-w-xl text-[11px] leading-5 text-muted-foreground">
+            เทียบพอร์ตจำลองของคุณกับสัญญาณตอนนี้ เหรียญที่ออกจะถูกขายเป็นเงินสด เหรียญที่ถือจะซื้อเพิ่มให้ได้น้ำหนักเท่ากัน
+            ดูรายการก่อน แล้วค่อยกดยืนยัน ระบบจำลอง ไม่ส่งคำสั่งจริงไป Exchange
+          </p>
+        </div>
+        <div className="flex flex-wrap items-end gap-2">
+          <div>
+            <label className="mb-1 block text-[10px] text-muted-foreground">
+              งบ THB (ว่าง = ใช้ทั้งหมด)
+            </label>
+            <input
+              value={budget}
+              onChange={(e) => setBudget(e.target.value)}
+              inputMode="decimal"
+              placeholder="ทั้งหมด"
+              className="w-36 rounded-lg border bg-background px-3 py-1.5 text-sm outline-none"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={loadPreview}
+            disabled={busy !== "" || universe.length === 0}
+            className="rounded-lg bg-primary px-4 py-1.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
+          >
+            {busy === "preview" ? "กำลังคำนวณ..." : "ดูรายการซื้อ/ขาย"}
+          </button>
+        </div>
+      </div>
+
+      {message && (
+        <p className="mt-3 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-500">
+          {message}
+        </p>
+      )}
+
+      {preview && (
+        <div className="mt-4 space-y-3">
+          <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+            {[
+              ["งบกลยุทธ์", formatTHB(preview.summary.budget_thb)],
+              ["เป้าต่อเหรียญ", formatTHB(preview.summary.target_per_coin_thb)],
+              ["เงินสดตอนนี้", formatTHB(preview.summary.cash_thb)],
+              ["ถือ / ทั้งหมด", `${preview.summary.n_hold} / ${preview.summary.n_universe} เหรียญ`],
+            ].map(([k, v]) => (
+              <div key={k} className="rounded-lg border bg-card px-3 py-2">
+                <div className="text-[10px] text-muted-foreground">{k}</div>
+                <div className="mt-0.5 font-semibold tabular-nums">{v}</div>
+              </div>
+            ))}
+          </div>
+
+          {preview.plan.length === 0 ? (
+            <p className="rounded-lg border bg-card px-3 py-3 text-center text-sm text-muted-foreground">
+              พอร์ตของคุณตรงกับสัญญาณแล้ว ไม่มีรายการที่ต้องซื้อหรือขาย
+            </p>
+          ) : (
+            <div className="overflow-x-auto rounded-lg border bg-card">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-xs text-muted-foreground">
+                    <th className="px-3 py-2 text-left font-medium">คำสั่ง</th>
+                    <th className="px-3 py-2 text-left font-medium">เหรียญ</th>
+                    <th className="px-3 py-2 text-right font-medium">ประมาณการ</th>
+                    <th className="px-3 py-2 text-left font-medium">เหตุผล</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {[...sells, ...buys].map((p) => (
+                    <tr key={`${p.side}-${p.asset}`}>
+                      <td className="px-3 py-2">
+                        <span
+                          className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
+                            p.side === "buy"
+                              ? "bg-emerald-500/15 text-emerald-500"
+                              : "bg-red-500/15 text-red-500"
+                          }`}
+                        >
+                          {p.side === "buy" ? "ซื้อ" : "ขาย"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className="flex items-center gap-2 font-medium">
+                          <CoinIcon asset={p.asset} size={18} />
+                          {p.asset}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums">{formatTHB(p.amount_thb)}</td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">{p.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {preview.warnings.length > 0 && (
+            <ul className="space-y-1 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-[11px] text-yellow-600 dark:text-yellow-400">
+              {preview.warnings.map((w) => (
+                <li key={w}>• {w}</li>
+              ))}
+            </ul>
+          )}
+
+          <p className="text-[10px] text-muted-foreground">
+            ยอดเป็นประมาณการ ราคาจริงและค่าธรรมเนียมจะถูกกำหนดโดย Backend / Engine ตอนส่งคำสั่ง
+            ระบบขายก่อนแล้วจึงซื้อ
+          </p>
+
+          {preview.plan.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={confirmOrders}
+                disabled={busy !== ""}
+                className="rounded-lg bg-red-500 px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {busy === "confirm" ? "กำลังส่งคำสั่ง..." : `ยืนยันส่ง ${preview.plan.length} คำสั่ง`}
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreview(null)}
+                disabled={busy !== ""}
+                className="rounded-lg border px-4 py-2 text-sm hover:bg-accent disabled:opacity-50"
+              >
+                ยกเลิก
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {results && (
+        <div className="mt-4 space-y-2">
+          <p className="text-xs font-semibold">
+            {resultStatus === "done"
+              ? "ส่งคำสั่งสำเร็จทั้งหมด"
+              : resultStatus === "partial"
+                ? "สำเร็จบางรายการ"
+                : resultStatus === "nothing"
+                  ? "ไม่มีรายการที่ต้องส่ง"
+                  : "ส่งคำสั่งไม่สำเร็จ"}
+          </p>
+          <ul className="space-y-1">
+            {results.map((r) => (
+              <li
+                key={`${r.side}-${r.asset}`}
+                className={`rounded-lg border px-3 py-2 text-xs ${
+                  r.ok ? "border-emerald-500/30 text-emerald-500" : "border-red-500/30 text-red-500"
+                }`}
+              >
+                {r.ok ? "✓" : "✗"} {r.side === "buy" ? "ซื้อ" : "ขาย"} {r.asset} — {r.message}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TrendTimingCard({ onRefresh }: { onRefresh?: () => void }) {
+  const [data, setData] = useState<TrendAssetData[] | null>(trendCache)
+  const [loading, setLoading] = useState(trendCache === null)
+  const [error, setError] = useState("")
+  const [smaLen, setSmaLen] = useState(10)
+  const [feePct, setFeePct] = useState(0.25)
+
+  useEffect(() => {
+    if (trendCache) return
+    let alive = true
+    const run = async () => {
+      const results = await Promise.allSettled(
+        TREND_ASSETS.map(async (asset) => ({
+          asset,
+          months: toMonthly(await fetchDailyCloses(asset)),
+        }))
+      )
+      if (!alive) return
+      const ok: TrendAssetData[] = []
+      for (const r of results) {
+        if (r.status === "fulfilled" && r.value.months.length >= 2) ok.push(r.value)
+      }
+      if (ok.length === 0) {
+        setError("โหลดข้อมูลราคาย้อนหลังจาก Bitkub ไม่สำเร็จ")
+      } else {
+        trendCache = ok
+        setData(ok)
+      }
+      setLoading(false)
+    }
+    run()
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const result = data ? runTrendBacktest(data, smaLen, feePct) : null
+  const signals = data ? currentTrendSignals(data, smaLen) : []
+  const holdCount = signals.filter((s) => s.hold === true).length
+  const readyCount = signals.filter((s) => s.hold !== null).length
+
+  const statRows: [string, string, string][] = result
+    ? [
+        ["ผลตอบแทนรวม", trendPct(result.timingStats.total, 1), trendPct(result.holdStats.total, 1)],
+        ["CAGR (ต่อปี)", trendPct(result.timingStats.cagr), trendPct(result.holdStats.cagr)],
+        ["Volatility", trendPct(result.timingStats.vol), trendPct(result.holdStats.vol)],
+        ["Sharpe (rf = 0)", result.timingStats.sharpe.toFixed(2), result.holdStats.sharpe.toFixed(2)],
+        ["Max Drawdown", trendPct(result.timingStats.maxDD), trendPct(result.holdStats.maxDD)],
+        ["ลงทุนเฉลี่ย", trendPct(result.avgInvested, 0), "100%"],
+      ]
+    : []
+
+  return (
+    <div className="space-y-5 rounded-xl border bg-card p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-bold">Trend Timing (GTAA-style)</h3>
+          <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
+            อิงงานวิจัย “A Quantitative Approach to Tactical Asset Allocation” (Faber) สิ้นเดือน
+            ถ้าราคาปิด &gt; ค่าเฉลี่ย {smaLen} เดือน ถือเหรียญนั้นต่อ ไม่งั้นออกเป็นเงินสด
+            น้ำหนักเท่ากันทุกเหรียญ ปรับสมดุลรายเดือน
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <div>
+            <label className="mb-1 block text-[10px] text-muted-foreground">SMA (เดือน)</label>
+            <div className="flex gap-1">
+              {TREND_SMA_OPTIONS.map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setSmaLen(n)}
+                  className={`rounded-md border px-2.5 py-1 text-xs ${
+                    smaLen === n ? "bg-primary text-primary-foreground" : "hover:bg-accent"
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] text-muted-foreground">ค่าธรรมเนียม/ครั้ง</label>
+            <div className="flex gap-1">
+              {TREND_FEE_OPTIONS.map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setFeePct(f)}
+                  className={`rounded-md border px-2.5 py-1 text-xs ${
+                    feePct === f ? "bg-primary text-primary-foreground" : "hover:bg-accent"
+                  }`}
+                >
+                  {f}%
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {loading && (
+        <p className="py-8 text-center text-sm text-muted-foreground">
+          กำลังโหลดราคาย้อนหลังจาก Bitkub (ครั้งแรกอาจใช้เวลาสักครู่)...
+        </p>
+      )}
+
+      {error && (
+        <p className="rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-sm text-red-500">
+          {error}
+        </p>
+      )}
+
+      {data && (
+        <>
+          {/* SIGNALS */}
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <h4 className="text-sm font-semibold">สัญญาณปัจจุบัน</h4>
+              <span className="text-xs text-muted-foreground">
+                ถือ {holdCount} / {readyCount} เหรียญ
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-xs text-muted-foreground">
+                    <th className="px-2 py-2 text-left font-medium">เหรียญ</th>
+                    <th className="px-2 py-2 text-right font-medium">ราคาล่าสุด</th>
+                    <th className="px-2 py-2 text-right font-medium">SMA {smaLen} เดือน</th>
+                    <th className="px-2 py-2 text-right font-medium">ห่างจาก SMA</th>
+                    <th className="px-2 py-2 text-right font-medium">สัญญาณ</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {signals.map((s) => (
+                    <tr key={s.asset}>
+                      <td className="px-2 py-2">
+                        <span className="flex items-center gap-2 font-medium">
+                          <CoinIcon asset={s.asset} size={20} />
+                          {s.asset}
+                        </span>
+                      </td>
+                      <td className="px-2 py-2 text-right tabular-nums">{formatTHB(s.price)}</td>
+                      <td className="px-2 py-2 text-right tabular-nums">
+                        {s.sma === null ? "—" : formatTHB(s.sma)}
+                      </td>
+                      <td
+                        className={`px-2 py-2 text-right tabular-nums ${
+                          s.distPct === null
+                            ? "text-muted-foreground"
+                            : s.distPct >= 0
+                              ? "text-emerald-500"
+                              : "text-red-500"
+                        }`}
+                      >
+                        {s.distPct === null ? "—" : `${s.distPct >= 0 ? "+" : ""}${s.distPct.toFixed(2)}%`}
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        {s.hold === null ? (
+                          <span className="rounded bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                            ข้อมูลไม่พอ ({s.months} เดือน)
+                          </span>
+                        ) : s.hold ? (
+                          <span className="rounded bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-500">
+                            ถือ
+                          </span>
+                        ) : (
+                          <span className="rounded bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-500">
+                            ออกเป็นเงินสด
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-[10px] text-muted-foreground">
+              ตามกฎต้นฉบับ สัญญาณจะอัปเดตเฉพาะวันสุดท้ายของเดือน แถวนี้ใช้ราคาล่าสุดของเดือนที่ยังไม่จบ
+              จึงอาจเปลี่ยนก่อนสิ้นเดือน
+            </p>
+          </div>
+
+          {/* FOLLOW SIGNALS */}
+          <TrendFollowPanel signals={signals} smaLen={smaLen} onDone={onRefresh} />
+
+          {/* BACKTEST */}
+          {result ? (
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,6fr)_minmax(0,4fr)]">
+              <div>
+                <h4 className="mb-2 text-sm font-semibold">
+                  Backtest ({result.keys[0]} ถึง {result.keys[result.keys.length - 1]} · {result.months} เดือน)
+                </h4>
+                <TrendChart keys={result.keys} timing={result.timing} hold={result.hold} />
+              </div>
+              <div>
+                <h4 className="mb-2 text-sm font-semibold">เทียบสถิติ</h4>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b text-xs text-muted-foreground">
+                      <th className="px-2 py-2 text-left font-medium" />
+                      <th className="px-2 py-2 text-right font-medium">Timing</th>
+                      <th className="px-2 py-2 text-right font-medium">Buy &amp; Hold</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {statRows.map(([label, a, b]) => (
+                      <tr key={label}>
+                        <td className="px-2 py-2 text-xs text-muted-foreground">{label}</td>
+                        <td className="px-2 py-2 text-right font-medium tabular-nums">{a}</td>
+                        <td className="px-2 py-2 text-right tabular-nums">{b}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <p className="rounded-lg border px-3 py-2 text-xs text-muted-foreground">
+              ข้อมูลยังไม่พอสำหรับ Backtest ด้วย SMA {smaLen} เดือน ลองเลือกค่าที่สั้นลง
+            </p>
+          )}
+          <TrendExtras
+            data={data}
+            result={result}
+            smaLen={smaLen}
+            feePct={feePct}
+            onPickSma={setSmaLen}
+          />
+        </>
+      )}
+
+      <div className="rounded-lg border bg-muted/30 p-3 text-[11px] leading-5 text-muted-foreground">
+        <b className="text-foreground">ข้อควรรู้</b> งานวิจัยทดสอบกับสินทรัพย์ดั้งเดิมช่วงปี 1973–2012
+        ส่วนคริปโตมีประวัติสั้นและผันผวนกว่ามาก ผลย้อนหลังนี้จึงไม่ควรคาดหวังให้ใกล้เคียงตัวเลขในงานวิจัย
+        Backtest ไม่รวม slippage/spread เงินสดให้ผลตอบแทน 0% และผลในอดีตไม่รับประกันอนาคต
+        ใช้เพื่อการศึกษา ไม่ใช่คำแนะนำการลงทุน
+      </div>
+    </div>
+  )
+}
 
 
-# =========================================================
-# ORDER TIMESTAMP NORMALIZATION
-# =========================================================
+/* =========================================================
+   QUANT LAB
+========================================================= */
 
-BANGKOK_TZ = "Asia/Bangkok"
+function QuantLabPage({
+  portfolio,
+  loading,
+  error,
+  onRefresh,
+}: {
+  portfolio: PortfolioData | null
+  loading: boolean
+  error: string
+  onRefresh: () => void
+}) {
+  const holdings = (portfolio?.holdings || [])
+    .filter((holding) => Number(holding.qty || 0) > 0)
+    .sort((a, b) => Number(b.market_value || 0) - Number(a.market_value || 0))
 
-def _display_order_timestamp(value):
-    """Return an order timestamp in Bangkok time.
+  const totalValue = Number(portfolio?.total_value_thb || 0)
+  const investedValue = holdings.reduce(
+    (sum, holding) => sum + Number(holding.cost_basis || 0),
+    0
+  )
+  const marketValue = holdings.reduce(
+    (sum, holding) => sum + Number(holding.market_value || 0),
+    0
+  )
+  const unrealized = holdings.reduce(
+    (sum, holding) => sum + Number(holding.unrealized_pnl || 0),
+    0
+  )
+  const largestAllocation = Number(holdings[0]?.allocation_pct || 0)
+  const diversificationScore = holdings.length === 0
+    ? 0
+    : Math.max(0, Math.min(100, 100 - largestAllocation * 0.7))
 
-    New records contain an explicit timezone and are left untouched.
-    Legacy records in this ledger may have been written with a +2 hour
-    clock error; only timestamps that are implausibly in the future are
-    shifted back two hours for display. This also handles midnight rollover.
-    """
-    if value in (None, ""):
-        return ""
-    raw = str(value).strip()
-    try:
-        ts = pd.to_datetime(raw, errors="coerce")
-        if pd.isna(ts):
-            return raw
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold">Quant Lab</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            วิเคราะห์โครงสร้างพอร์ตจากข้อมูล Portfolio จริง
+          </p>
+        </div>
+        <button
+          onClick={onRefresh}
+          disabled={loading}
+          className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {loading ? "กำลังโหลด..." : "Refresh"}
+        </button>
+      </div>
 
-        now = pd.Timestamp.now(tz=BANGKOK_TZ)
+      {error && (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-500">
+          {error}
+        </div>
+      )}
 
-        if getattr(ts, "tzinfo", None) is None:
-            # Naive legacy timestamps are interpreted as Bangkok local time.
-            ts = ts.tz_localize(BANGKOK_TZ)
-        else:
-            ts = ts.tz_convert(BANGKOK_TZ)
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          title="Assets"
+          value={loading ? "Loading..." : String(holdings.length)}
+          change="สินทรัพย์ที่มี Quantity > 0"
+        />
+        <StatCard
+          title="Market Value"
+          value={loading ? "Loading..." : formatTHB(marketValue)}
+          change="มูลค่าตลาดจาก Holdings"
+        />
+        <StatCard
+          title="Unrealized P/L"
+          value={loading ? "Loading..." : formatTHB(unrealized)}
+          change="คำนวณจาก Portfolio"
+        />
+        <StatCard
+          title="Diversification"
+          value={loading ? "Loading..." : `${diversificationScore.toFixed(0)}/100`}
+          change="คะแนนเชิงโครงสร้าง ไม่ใช่คำแนะนำลงทุน"
+        />
+      </div>
 
-        # The affected legacy rows are exactly two hours ahead of the real
-        # Bangkok clock. Do not touch valid current/past timestamps.
-        if ts > now + pd.Timedelta(minutes=5) and ts - pd.Timedelta(hours=2) <= now + pd.Timedelta(minutes=5):
-            ts = ts - pd.Timedelta(hours=2)
+      <TrendTimingCard onRefresh={onRefresh} />
+      
+      <div className="grid gap-6 xl:grid-cols-2">
+        <div className="rounded-xl border bg-card">
+          <div className="border-b px-5 py-4">
+            <h3 className="font-semibold">Portfolio Metrics</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              ตัวเลขทั้งหมดอ่านจาก Backend ล่าสุด
+            </p>
+          </div>
+          <div className="divide-y">
+            <div className="flex justify-between px-5 py-4 text-sm">
+              <span className="text-muted-foreground">Total Value</span>
+              <span className="font-medium">{formatTHB(totalValue)}</span>
+            </div>
+            <div className="flex justify-between px-5 py-4 text-sm">
+              <span className="text-muted-foreground">Cost Basis</span>
+              <span className="font-medium">{formatTHB(investedValue)}</span>
+            </div>
+            <div className="flex justify-between px-5 py-4 text-sm">
+              <span className="text-muted-foreground">Largest Allocation</span>
+              <span className="flex items-center gap-2 font-medium">
+                {holdings[0] && <CoinIcon asset={holdings[0].asset} size={20} />}
+                {holdings[0]?.asset || "—"} {largestAllocation.toFixed(2)}%
+              </span>
+            </div>
+            <div className="flex justify-between px-5 py-4 text-sm">
+              <span className="text-muted-foreground">Cash</span>
+              <span className="font-medium">{formatTHB(portfolio?.cash_thb || 0)}</span>
+            </div>
+          </div>
+        </div>
 
-        return ts.isoformat()
-    except Exception:
-        return raw
-
-
-# =========================================================
-# ORDER HISTORY
-# =========================================================
-
-@app.get("/api/orders", dependencies=[Depends(require_api_key)])
-def order_history(
-    limit: int = 100,
-    asset: str = "",
-    user: str = Depends(require_user),
-):
-    with ORDER_LOCK:
-        try:
-            gu = load_gu()
-            actor = _actor(user)
-            _sync_gu_actor(gu, actor)
-            sim = _load_existing_sim(gu)
-
-            raw_orders = sim.get("orders", [])
-            if not isinstance(raw_orders, list):
-                raw_orders = []
-
-            asset_filter = str(asset or "").strip().upper()
-            rows = []
-
-            for idx, order in enumerate(raw_orders):
-                if not isinstance(order, dict):
-                    continue
-
-                row_asset = str(
-                    order.get("เหรียญ")
-                    or order.get("asset")
-                    or order.get("symbol")
-                    or ""
-                ).strip().upper()
-
-                if asset_filter and row_asset != asset_filter:
-                    continue
-
-                side = _normalize_side(
-                    order.get("ฝั่ง")
-                    or order.get("side")
-                    or ""
-                )
-
-                status = str(
-                    order.get("สถานะ")
-                    or order.get("status")
-                    or "Filled"
-                ).strip()
-
-                order_id = str(
-                    order.get("Order ID")
-                    or order.get("order_id")
-                    or order.get("id")
-                    or f"ORDER-{idx + 1:06d}"
-                )
-
-                timestamp = _display_order_timestamp(_order_raw_time(order))
-
-                amount = _safe_float(
-                    order.get("มูลค่า (บาท)")
-                    if order.get("มูลค่า (บาท)") is not None
-                    else order.get("amount_thb"),
-                    0.0,
-                )
-                quote = _safe_float(
-                    order.get("ราคาที่ลูกค้าได้")
-                    if order.get("ราคาที่ลูกค้าได้") is not None
-                    else order.get("price_thb"),
-                    0.0,
-                )
-                quantity = _safe_float(
-                    order.get("เหรียญที่ส่งมอบ")
-                    if order.get("เหรียญที่ส่งมอบ") is not None
-                    else order.get("quantity"),
-                    0.0,
-                )
-                stored_fee = (
-                    order.get("ค่าธรรมเนียม")
-                    if order.get("ค่าธรรมเนียม") is not None
-                    else order.get("fee_thb")
-                )
-                # Legacy orders did not store a fee; calculate it for display.
-                fee = (
-                    _safe_float(stored_fee, 0.0)
-                    if stored_fee is not None
-                    else _order_fee_thb(amount)
-                )
-
-                rows.append({
-                    "order_id": order_id,
-                    "timestamp": timestamp,
-                    "date": order.get("วันที่") or "",
-                    "asset": row_asset,
-                    "side": side,
-                    "status": status,
-                    "type": str(order.get("ประเภท") or order.get("type") or "MARKET"),
-                    "amount_thb": amount,
-                    "quote_thb": quote,
-                    "quantity": quantity,
-                    "fee_thb": fee,
-                    "exchange": str(order.get("Exchange") or order.get("exchange") or "—"),
-                    "source": str(order.get("Source") or order.get("source") or "Web"),
-                })
-
-            # Normalize every timestamp to UTC before sorting.
-            # This prevents: Cannot compare tz-naive and tz-aware timestamps.
-            def sort_key(item):
-                # Use the actual ledger index as a tie-breaker.
-                # gu.execute_order() records a date-only value for some orders,
-                # so multiple orders can legitimately have the same timestamp
-                # after normalization. The newest appended ledger row must still
-                # appear first in Order History.
-                row, original_index = item
-
-                try:
-                    value = row.get("timestamp") or row.get("date") or ""
-                    if not value:
-                        ts = pd.Timestamp("1970-01-01", tz="UTC")
-                    else:
-                        ts = pd.to_datetime(
-                            value,
-                            errors="coerce",
-                            utc=True,
-                        )
-
-                        if pd.isna(ts):
-                            ts = pd.Timestamp("1970-01-01", tz="UTC")
-
-                    return (ts, original_index)
-                except Exception:
+        <div className="rounded-xl border bg-card">
+          <div className="border-b px-5 py-4">
+            <h3 className="font-semibold">Holdings Analysis</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              เรียงตาม Market Value สูงสุด
+            </p>
+          </div>
+          {holdings.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-xs text-muted-foreground">
+                    <th className="px-5 py-3 text-left font-medium">Asset</th>
+                    <th className="px-5 py-3 text-right font-medium">Weight</th>
+                    <th className="px-5 py-3 text-right font-medium">P/L</th>
+                    <th className="px-5 py-3 text-right font-medium">P/L %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {holdings.map((holding) => {
+                    const pnl = Number(holding.unrealized_pnl || 0)
+                    const positive = pnl >= 0
                     return (
-                        pd.Timestamp("1970-01-01", tz="UTC"),
-                        original_index,
+                      <tr key={holding.asset} className="border-b last:border-0">
+                        <td className="px-5 py-3 font-medium">
+                          <div className="flex items-center gap-2">
+                            <CoinIcon asset={holding.asset} size={24} />
+                            {holding.asset}
+                          </div>
+                        </td>
+                        <td className="px-5 py-3 text-right">
+                          {Number(holding.allocation_pct || 0).toFixed(2)}%
+                        </td>
+                        <td className={`px-5 py-3 text-right ${positive ? "text-emerald-500" : "text-red-500"}`}>
+                          {positive ? "+" : ""}{formatTHB(pnl)}
+                        </td>
+                        <td className={`px-5 py-3 text-right ${positive ? "text-emerald-500" : "text-red-500"}`}>
+                          {positive ? "+" : ""}{Number(holding.pnl_pct || 0).toFixed(2)}%
+                        </td>
+                      </tr>
                     )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="flex min-h-[220px] items-center justify-center text-sm text-muted-foreground">
+              ยังไม่มีข้อมูล Holdings
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
 
-            # Keep original ledger position so a newly appended order wins
-            # when several records have the same date / missing time.
-            rows_with_index = list(zip(rows, range(len(rows))))
-            rows_with_index.sort(key=sort_key, reverse=True)
-            rows = [row for row, _ in rows_with_index]
+/* =========================================================
+   PLACEHOLDER
+========================================================= */
 
-            try:
-                safe_limit = max(1, min(int(limit), 500))
-            except (TypeError, ValueError):
-                safe_limit = 100
+function PlaceholderPage({
+  title,
+}: {
+  title: string
+}) {
+  return (
+    <div>
+      <h2 className="text-2xl font-bold">{title}</h2>
 
-            rows = rows[:safe_limit]
-
-            return {
-                "status": "ok",
-                "actor": actor,
-                "count": len(rows),
-                "orders": rows,
-            }
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise _internal_server_error(
-                "เกิดข้อผิดพลาดภายใน API",
-                e,
-            )
-
-# =========================================================
-# AUTO DCA
-# =========================================================
-
-DCA_LOOP_SECONDS = 60
-DCA_FREQS_API = ("รายวัน", "รายสัปดาห์", "รายเดือน")
-
-
-DCA_MAX_ACTIVE_PLANS = 20
-
-
-class DcaCreateRequest(BaseModel):
-    asset: str = Field(..., min_length=1, max_length=20)
-    amount_thb: float
-    freq: str = Field(..., min_length=1, max_length=20)
-    hour: int = 9
-    minute: int = 0
-
-
-def _dca_public(plan: dict) -> dict:
-    keys = (
-        "id", "asset", "amount_thb", "freq", "hour", "minute",
-        "next_run_at", "last_status", "last_order_id",
-        "last_price_thb", "last_qty",
-    )
-    return {k: plan.get(k) for k in keys}
-
-
-def _dca_open_session(user: str):
-    """โหลด gu + ตั้ง actor/role ให้เหมือน create_order (เรียกใน ORDER_LOCK เท่านั้น)"""
-    gu = load_gu()
-    actor = _actor(user)
-    _sync_gu_actor(gu, actor)
-    role = _set_api_role(gu, actor)
-    return gu, actor, role
-
-
-def _dca_save_checked(gu, sim) -> None:
-    """บันทึก sim_state แล้วเช็กว่าสำเร็จจริง ไม่งั้นตอบ 503 (กันหน้าเว็บขึ้นว่าสำเร็จทั้งที่ไม่ได้เก็บ)"""
-    gu.st.session_state.pop("sim_state_save_error", None)
-    gu.save_sim_state(sim)
-    save_error = getattr(gu.st, "session_state", {}).get("sim_state_save_error")
-    if save_error:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "message": "บันทึกแผน Auto DCA ลงฐานข้อมูลไม่สำเร็จ",
-                "retryable": True,
-            },
-        )
-
-
-@app.post("/api/dca", dependencies=[Depends(require_api_key)])
-def create_dca(req: DcaCreateRequest, user: str = Depends(require_user)):
-    with ORDER_LOCK:
-        try:
-            gu, actor, role = _dca_open_session(user)
-
-            asset = req.asset.upper().strip()
-            freq = req.freq.strip()
-            amount_thb = _safe_float(req.amount_thb, -1.0)
-
-            if asset not in gu.SUPPORTED_ASSETS:
-                raise HTTPException(status_code=400, detail=f"ไม่รองรับเหรียญ {asset}")
-            if freq not in DCA_FREQS_API:
-                raise HTTPException(status_code=400, detail="ความถี่ไม่ถูกต้อง")
-            if not (0 <= int(req.hour) <= 23 and 0 <= int(req.minute) <= 59):
-                raise HTTPException(status_code=400, detail="เวลาไม่ถูกต้อง")
-            min_trade = float(getattr(gu, "MIN_TRADE_THB", 50))
-            if not math.isfinite(amount_thb) or amount_thb < min_trade:
-                raise HTTPException(status_code=400, detail=f"ยอดขั้นต่ำคือ {min_trade:g} บาท")
-            if not gu.can_trade():
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"บัญชี {actor} ไม่มีสิทธิ์ Trader (role={role})",
-                )
-
-            sim = _load_existing_sim(gu)
-            active = [
-                p for p in (sim.get("dca_plans") or [])
-                if isinstance(p, dict) and p.get("enabled")
-            ]
-            if len(active) >= DCA_MAX_ACTIVE_PLANS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"มีแผน Auto DCA ครบ {DCA_MAX_ACTIVE_PLANS} แผนแล้ว กรุณายกเลิกบางแผนก่อน",
-                )
-            plan = gu._dca_create_plan(
-                sim, asset, amount_thb, freq, int(req.hour), int(req.minute)
-            )
-            _dca_save_checked(gu, sim)
-            return {"status": "ok", "plan": _dca_public(plan)}
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"สร้างแผน DCA ไม่สำเร็จ: {e}")
-
-
-@app.get("/api/dca", dependencies=[Depends(require_api_key)])
-def list_dca(user: str = Depends(require_user)):
-    with ORDER_LOCK:
-        try:
-            gu, actor, role = _dca_open_session(user)
-            sim = _load_existing_sim(gu)
-            plans = [
-                _dca_public(p)
-                for p in sim.get("dca_plans", [])
-                if isinstance(p, dict) and p.get("enabled")
-            ]
-            return {"status": "ok", "plans": plans}
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"โหลดแผน DCA ไม่สำเร็จ: {e}")
-
-
-@app.delete("/api/dca/{plan_id}", dependencies=[Depends(require_api_key)])
-def cancel_dca(plan_id: str, user: str = Depends(require_user)):
-    with ORDER_LOCK:
-        try:
-            gu, actor, role = _dca_open_session(user)
-            if not gu.can_trade():
-                raise HTTPException(status_code=403, detail="ไม่มีสิทธิ์ Trader")
-            sim = _load_existing_sim(gu)
-            if not gu._dca_cancel_plan(sim, plan_id):
-                raise HTTPException(status_code=404, detail="ไม่พบแผนนี้")
-            _dca_save_checked(gu, sim)
-            return {"status": "ok"}
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"ยกเลิกแผน DCA ไม่สำเร็จ: {e}")
-
-
-# ---------- background runner ----------
-
-def _dca_list_actors() -> list:
-    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    key = (
-        os.environ.get("SUPABASE_SERVICE_KEY")
-        or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-        or os.environ.get("SUPABASE_KEY")
-        or ""
-    )
-    if not url or not key:
-        return []
-    r = requests.get(
-        f"{url}/rest/v1/sim_state?select=actor",
-        headers={"apikey": key, "Authorization": f"Bearer {key}"},
-        timeout=10,
-    )
-    r.raise_for_status()
-    return [row["actor"] for row in r.json() if row.get("actor")]
-
-
-import copy as _copy
-
-_DCA_STATE = {
-    "loop_started_at": None,
-    "last_tick_at": None,
-    "last_executed": 0,
-    "total_executed": 0,
-    "last_error": "",
+      <div className="mt-6 flex min-h-[400px] items-center justify-center rounded-xl border bg-card">
+        <div className="text-center">
+          <p className="font-medium">{title}</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            กำลังเชื่อมระบบจาก gu.py
+          </p>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 
-def _dca_find_plan(sim: dict, plan_id: str):
-    for plan in sim.get("dca_plans", []) or []:
-        if isinstance(plan, dict) and str(plan.get("id")) == str(plan_id):
-            return plan
-    return None
+/* =========================================================
+   EXPORT
+========================================================= */
 
-
-def _dca_stamp_order(sim: dict, rec: dict, plan: dict, now) -> None:
-    """execute_order() ใน gu.py ไม่เขียนเวลา จึงใส่เวลา execution จริง + ที่มา Auto DCA ให้เอง"""
-    execution_iso = now.isoformat()
-    day = now.strftime("%Y-%m-%d")
-    plan_id = str(plan.get("id", ""))
-
-    def stamp(order):
-        order["เวลา"] = execution_iso
-        order["timestamp"] = execution_iso
-        order["วันที่"] = day
-        order["Source"] = "Auto DCA"
-        order["Order Source"] = "Auto DCA"
-        order["DCA Plan ID"] = plan_id
-
-    stamp(rec)
-
-    ledger = sim.get("orders")
-    if isinstance(ledger, list) and ledger:
-        rec_id = str(rec.get("Order ID") or rec.get("order_id") or rec.get("id") or "")
-        target = None
-        if rec_id:
-            for item in reversed(ledger):
-                if isinstance(item, dict) and str(
-                    item.get("Order ID") or item.get("order_id") or item.get("id") or ""
-                ) == rec_id:
-                    target = item
-                    break
-        if target is None and isinstance(ledger[-1], dict):
-            target = ledger[-1]
-        if target is not None and target is not rec:
-            stamp(target)
-
-
-def _dca_run_for_actor(gu, actor: str) -> int:
-    """
-    รันแผนที่ถึงเวลาของบัญชีเดียว (เรียกภายใน ORDER_LOCK)
-    คืนจำนวนออเดอร์ที่ซื้อสำเร็จ
-
-    - ทุกแผนที่ถึงเวลาถูกประมวลผลแล้วบันทึกครั้งเดียว ถ้าบันทึกไม่สำเร็จ จะไม่มีอะไรเปลี่ยน
-      รอบหน้าโหลดจากฐานข้อมูลใหม่ จึงไม่ซื้อซ้ำ
-    - ถ้า engine ปฏิเสธ/พัง จะคืนพอร์ตของแผนนั้นกลับ แล้วข้ามไปรอบถัดไป ไม่ retry ทุกรอบ
-    """
-    _sync_gu_actor(gu, actor)
-    _set_api_role(gu, actor)
-    if not gu.can_trade():
-        return 0
-
-    # อ่านของเดิมเท่านั้น ห้ามสร้างพอร์ตใหม่
-    sim = gu.load_sim_state()
-    if not isinstance(sim, dict):
-        raise RuntimeError("โหลด sim_state ไม่สำเร็จ ข้าม DCA รอบนี้")
-
-    # กันอ่านผิดบัญชี: แถวที่โหลดมาต้องเป็นของ actor นี้จริง
-    loaded_actor = str(getattr(gu.st, "session_state", {}).get("sim_state_actor", "") or "")
-    if loaded_actor and loaded_actor.strip().lower() != actor.strip().lower():
-        raise RuntimeError(f"sim_state ไม่ตรงบัญชี ({loaded_actor} != {actor}) ข้ามเพื่อความปลอดภัย")
-
-    plans = sim.get("dca_plans")
-    if not isinstance(plans, list) or not plans:
-        return 0
-
-    now = gu._dca_now()
-    min_trade = float(getattr(gu, "MIN_TRADE_THB", 50))
-    due_ids = []
-
-    for plan in plans:
-        if not isinstance(plan, dict) or not plan.get("enabled", False):
-            continue
-        next_run = gu._dca_parse_ts(plan.get("next_run_at"))
-        if next_run is None:
-            next_run = gu._dca_next_run(plan, now - pd.Timedelta(seconds=1))
-            plan["next_run_at"] = gu._dca_iso(next_run)
-        if now >= next_run:
-            due_ids.append(str(plan.get("id")))
-
-    if not due_ids:
-        return 0
-
-    executed = 0
-
-    for plan_id in due_ids:
-        plan = _dca_find_plan(sim, plan_id)
-        if plan is None:
-            continue
-
-        def finish(status: str, target_plan=None) -> None:
-            p = target_plan if target_plan is not None else plan
-            p["last_status"] = status
-            p["last_attempt_at"] = gu._dca_iso(now)
-            p["next_run_at"] = gu._dca_iso(gu._dca_next_run(p, now))
-
-        asset = str(plan.get("asset", "")).upper().strip()
-        amount = _safe_float(plan.get("amount_thb"), 0.0)
-
-        if not asset or asset not in gu.SUPPORTED_ASSETS or amount < min_trade:
-            finish(f"INVALID: เหรียญหรือยอดไม่ถูกต้อง (ขั้นต่ำ {min_trade:g} THB)")
-            continue
-
-        cash = _safe_float(sim.get("customer_thb"), 0.0)
-        if amount > cash + 1e-9:
-            finish(f"SKIPPED — เงินสดไม่พอ ({cash:,.2f} THB)")
-            continue
-
-        live_row = gu._dca_live_market_row(asset)
-        if live_row is None:
-            finish("SKIPPED — ดึงราคาตลาดไม่ได้")
-            continue
-
-        try:
-            cfg = _api_cfg(gu, asset, actor)
-        except Exception as exc:
-            print(f"[DCA] {actor} cfg failed {asset}: {exc}")
-            finish("SKIPPED — โหลด config ไม่ได้")
-            continue
-
-        built = gu._dca_build_context(asset, cfg, live_row)
-        if built is None:
-            finish("SKIPPED — สร้าง execution context ไม่ได้")
-            continue
-        ctx, target = built
-
-        snapshot = _copy.deepcopy(sim)
-        saved_asset = sim.get("asset")
-        saved_target = sim.get("target_thb")
-        failed = None
-        rec = None
-        try:
-            sim["asset"] = asset
-            sim["target_thb"] = float(target)
-            gu.ensure_portfolio_ledger(sim)
-            _steps, rec = gu.execute_order(
-                sim, "buy", amount, now, live_row, ctx, affect_wallet=True,
-            )
-        except Exception as exc:
-            failed = exc
-        finally:
-            if saved_asset is not None:
-                sim["asset"] = saved_asset
-            else:
-                sim.pop("asset", None)
-            if saved_target is not None:
-                sim["target_thb"] = saved_target
-            else:
-                sim.pop("target_thb", None)
-
-        result = str(rec.get("ผลด่าน", "")) if isinstance(rec, dict) else ""
-
-        if failed is not None or rec is None or result.lower().startswith("reject"):
-            # คืนพอร์ตกลับก่อนออเดอร์ของแผนนี้ แล้วข้ามรอบ
-            sim.clear()
-            sim.update(snapshot)
-            restored = _dca_find_plan(sim, plan_id)
-            if failed is not None:
-                print(f"[DCA] {actor} execute failed {plan_id}: {failed!r}")
-                finish(f"FAILED — {type(failed).__name__}", restored)
-            elif rec is None:
-                finish("FAILED — คำสั่งไม่ถูก execute", restored)
-            else:
-                finish("REJECTED — " + result[:80], restored)
-            continue
-
-        _dca_stamp_order(sim, rec, plan, now)
-        plan["last_attempt_at"] = gu._dca_iso(now)
-        plan["next_run_at"] = gu._dca_iso(gu._dca_next_run(plan, now))
-        plan["last_order_id"] = str(rec.get("Order ID", ""))
-        plan["last_status"] = "EXECUTED"
-        plan["last_price_thb"] = _safe_float(rec.get("ราคาที่ลูกค้าได้"), 0.0)
-        plan["last_qty"] = _safe_float(rec.get("เหรียญที่ส่งมอบ"), 0.0)
-        executed += 1
-
-    _dca_save_checked(gu, sim)
-    return executed
-
-
-def _dca_tick() -> int:
-    total = 0
-    try:
-        actors = _dca_list_actors()
-    except Exception as e:
-        _DCA_STATE["last_error"] = f"list actors: {type(e).__name__}: {e}"[:500]
-        print(f"[DCA] list actors error: {e}")
-        return 0
-
-    errors = []
-    for actor in actors:
-        # ล็อกทีละบัญชี ไม่ถือ ORDER_LOCK ค้างตลอดทั้งรอบ เพื่อไม่ให้ขวางการสั่งซื้อขายปกติ
-        with ORDER_LOCK:
-            try:
-                gu = load_gu()
-                n = _dca_run_for_actor(gu, actor)
-                if n:
-                    total += n
-                    print(f"[DCA] {actor}: executed {n} plan(s)")
-            except HTTPException as e:
-                errors.append(f"{actor}: HTTP {e.status_code}")
-                print(f"[DCA] {actor} error: HTTP {e.status_code} {e.detail}")
-            except Exception as e:
-                errors.append(f"{actor}: {type(e).__name__}: {e}")
-                print(f"[DCA] {actor} error: {e}")
-
-    _DCA_STATE["last_tick_at"] = pd.Timestamp.now(tz=BANGKOK_TZ).isoformat()
-    _DCA_STATE["last_executed"] = total
-    _DCA_STATE["total_executed"] += total
-    _DCA_STATE["last_error"] = "; ".join(errors)[:500]
-    return total
-
-
-async def _dca_loop():
-    while True:
-        await asyncio.sleep(DCA_LOOP_SECONDS)
-        try:
-            await asyncio.to_thread(_dca_tick)
-        except Exception as e:
-            _DCA_STATE["last_error"] = f"loop: {type(e).__name__}: {e}"[:500]
-            print(f"[DCA] loop error: {e}")
-
-
-@app.on_event("startup")
-async def _start_dca_loop():
-    if os.environ.get("DCA_SCHEDULER_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
-        print("[DCA] scheduler disabled (DCA_SCHEDULER_ENABLED=0)")
-        return
-    _DCA_STATE["loop_started_at"] = pd.Timestamp.now(tz="Asia/Bangkok").isoformat()
-    asyncio.create_task(_dca_loop())
-
-
-@app.get("/api/dca/status", dependencies=[Depends(require_api_key)])
-def dca_status():
-    return {"status": "ok", "run_every_sec": DCA_LOOP_SECONDS, **_DCA_STATE}
-
-
-# =========================================================
-# MOMENTUM AUTO-TRADE (เฉพาะบัญชีแอดมิน)
-# =========================================================
-
-MOMENTUM_ADMIN_EMAIL = "teerapat30204@gmail.com"
-MOMENTUM_LOOP_SECONDS = 60
-MOMENTUM_EXCLUDE = {"USDT", "USDC", "THB"}
-MOMENTUM_MIN_REBALANCE_THB = 10_000.0
-MOMENTUM_RANK_TTL = 1800
-MOMENTUM_BACKOFF_SECONDS = 600
-
-MOMENTUM_DEFAULTS = {
-    "enabled": False,
-    "dry_run": True,
-    "lookback": 126,
-    "top_n": 3,
-    "bet_thb": 1_000_000.0,
-    "tp_pct": 10.0,
-    "sl_pct": 5.0,
-    "max_weight_pct": 40.0,
-    "cooldown_hours": 24.0,
-    "exit_on_signal": True,
+function App() {
+  return (
+    <AuthProvider>
+      <AuthGate>
+        <AppInner />
+      </AuthGate>
+    </AuthProvider>
+  )
 }
 
-_MOM_LIMITS = {
-    "bet_thb": (50.0, 100_000_000.0),
-    "tp_pct": (0.5, 1000.0),
-    "sl_pct": (0.5, 100.0),
-    "max_weight_pct": (5.0, 100.0),
-    "top_n": (1, 10),
-    "lookback": (20, 365),
-    "cooldown_hours": (0.0, 720.0),
-}
-
-_MOM_RANK_CACHE = {"ts": 0.0, "lookback": 0, "rows": [], "skipped": []}
-_MOM_RUNTIME = {"last_tick": "", "errors": [], "dry": [], "backoff": {}, "seen": set()}
-_MOM_TASKS = []
-
-
-class MomentumConfigRequest(BaseModel):
-    enabled: Optional[bool] = None
-    dry_run: Optional[bool] = None
-    exit_on_signal: Optional[bool] = None
-    bet_thb: Optional[float] = None
-    tp_pct: Optional[float] = None
-    sl_pct: Optional[float] = None
-    max_weight_pct: Optional[float] = None
-    top_n: Optional[int] = None
-    lookback: Optional[int] = None
-    cooldown_hours: Optional[float] = None
-
-
-def _mom_admin_only(user: str):
-    if str(user or "").strip().lower() != MOMENTUM_ADMIN_EMAIL:
-        raise HTTPException(status_code=403, detail="ฟังก์ชันนี้ใช้ได้เฉพาะบัญชีแอดมิน")
-
-
-def _mom_now():
-    return pd.Timestamp.now(tz="Asia/Bangkok")
-
-
-def _mom_push(lst: list, text: str, keep: int = 20):
-    lst.append({"time": _mom_now().isoformat(), "text": text})
-    del lst[:-keep]
-
-
-def _mom_notify(text: str):
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    if not token or not chat:
-        return
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat, "text": text},
-            timeout=10,
-        )
-    except Exception as e:
-        print(f"[MOMENTUM] telegram error: {e}")
-
-
-def _mom_state(sim: dict) -> dict:
-    st = sim.get("momentum_bot")
-    if not isinstance(st, dict):
-        st = {}
-    cfg = dict(MOMENTUM_DEFAULTS)
-    if isinstance(st.get("config"), dict):
-        cfg.update(st["config"])
-    st["config"] = cfg
-    if not isinstance(st.get("cooldowns"), dict):
-        st["cooldowns"] = {}
-    if not isinstance(st.get("log"), list):
-        st["log"] = []
-    sim["momentum_bot"] = st
-    return st
-
-
-def _mom_cooling(st: dict, asset: str) -> bool:
-    until = (st.get("cooldowns") or {}).get(asset)
-    if not until:
-        return False
-    try:
-        return _mom_now() < pd.Timestamp(until)
-    except Exception:
-        return False
-
-
-def _mom_rank(gu, lookback: int) -> list:
-    """จัดอันดับ momentum = ผลรวมผลตอบแทนรายวันย้อนหลัง lookback วัน (แคช 30 นาที)"""
-    c = _MOM_RANK_CACHE
-    if c["rows"] and c["lookback"] == lookback and time.time() - c["ts"] < MOMENTUM_RANK_TTL:
-        return c["rows"]
-    rows, skipped = [], []
-    for asset in sorted(gu.SUPPORTED_ASSETS):
-        if asset in MOMENTUM_EXCLUDE:
-            continue
-        try:
-            data = _load_market_frame(gu, asset)
-            close = (data["Global_USD"].astype(float) * data["USDTHB"].astype(float)).dropna()
-            if len(close) < lookback + 1:
-                skipped.append(f"{asset}: ข้อมูล {len(close)} แถว ไม่ถึง {lookback + 1}")
-                continue
-            mom = float(close.pct_change().dropna().tail(lookback).sum()) * 100
-            rows.append({"asset": asset, "momentum_pct": round(mom, 2)})
-        except Exception as e:
-            skipped.append(f"{asset}: {e}")
-    rows.sort(key=lambda r: r["momentum_pct"], reverse=True)
-    c.update({"ts": time.time(), "lookback": lookback, "rows": rows, "skipped": skipped})
-    return rows
-
-
-def _mom_decide(cfg: dict, st: dict, pf: dict, rank: list) -> list:
-    """คืนรายการ (side, asset, amount_thb, sell_all, reason, cooldown_hours)"""
-    cash = float(pf.get("cash_thb") or 0)
-    total = float(pf.get("total_value_thb") or 0)
-    cap = float(cfg["max_weight_pct"]) / 100.0
-    cd = float(cfg["cooldown_hours"])
-    mom = {r["asset"]: r["momentum_pct"] for r in rank}
-
-    held = {}
-    for h in pf.get("holdings") or []:
-        a = str(h.get("asset", "")).upper()
-        if a in MOMENTUM_EXCLUDE or float(h.get("qty") or 0) <= 1e-12:
-            continue
-        held[a] = h
-
-    actions, exited = [], set()
-
-    # 1) ออก: TP / SL / สัญญาณกลับเป็นลบ
-    for a, h in held.items():
-        pnl = float(h.get("pnl_pct") or 0)
-        if pnl >= float(cfg["tp_pct"]):
-            actions.append(("sell", a, 0.0, True, f"TP {pnl:+.2f}%", 0.0))
-        elif pnl <= -float(cfg["sl_pct"]):
-            actions.append(("sell", a, 0.0, True, f"SL {pnl:+.2f}%", cd))
-        elif cfg.get("exit_on_signal") and a in mom and mom[a] <= 0:
-            actions.append(("sell", a, 0.0, True, f"Signal momentum {mom[a]:+.2f}%", 0.0))
-        else:
-            continue
-        exited.add(a)
-
-    # 2) Rebalance: ขายส่วนเกินที่เกินเพดาน
-    if total > 0:
-        for a, h in held.items():
-            if a in exited:
-                continue
-            val = float(h.get("market_value") or 0)
-            excess = val - total * cap
-            if excess >= MOMENTUM_MIN_REBALANCE_THB:
-                actions.append((
-                    "sell", a, excess, False,
-                    f"Rebalance {val / total * 100:.1f}% > {cap * 100:.0f}%", cd,
-                ))
-
-    # 3) เข้า: Top N ที่ momentum เป็นบวก
-    bet = float(cfg["bet_thb"])
-    free_cash = cash
-    for r in rank[: int(cfg["top_n"])]:
-        a = r["asset"]
-        if r["momentum_pct"] <= 0 or a in held or _mom_cooling(st, a):
-            continue
-        if total > 0 and bet / total > cap:
-            continue
-        if free_cash < bet:
-            break
-        actions.append(("buy", a, bet, False, f"Momentum {r['momentum_pct']:+.2f}%", 0.0))
-        free_cash -= bet
-
-    return actions
-
-
-def _mom_execute(gu, actor, side, asset, amount_thb, sell_all, reason, cooldown_hours):
-    """ส่งคำสั่งผ่าน engine เดียวกับ /api/order (เรียกใน ORDER_LOCK เท่านั้น) คืน (ok, ข้อความ)"""
-    data = _load_market_frame(gu, asset)
-    order_date = pd.Timestamp(data.index[-1])
-    px_row = data.loc[order_date]
-
-    cfg = _api_cfg(gu, asset, actor)
-    built = gu.build_dealer_ctx(cfg, data)
-    if built is None:
-        return False, "สร้าง Dealer context ไม่สำเร็จ"
-    ctx, target_stock_thb = built
-
-    sim = _load_existing_sim(gu)
-    bot = _mom_state(sim)
-    sim = gu.sim_normalize_state(
-        sim, asset, order_date,
-        float(px_row["Global_USD"]), float(px_row["USDTHB"]), float(target_stock_thb),
-    )
-    sim["momentum_bot"] = bot
-    sim["asset"] = asset
-    sim["target_thb"] = float(target_stock_thb)
-    gu.ensure_portfolio_ledger(sim)
-
-    customer_thb = _safe_float(sim.get("customer_thb"), 0.0)
-    held_qty = _safe_float(sim.setdefault("customer_coins", {}).get(asset), 0.0)
-    price = _safe_float(px_row["Global_USD"]) * _safe_float(px_row["USDTHB"])
-    min_trade = float(getattr(gu, "MIN_TRADE_THB", 50))
-
-    amount = float(amount_thb)
-    if side == "sell":
-        if held_qty <= 0 or price <= 0:
-            return False, f"ไม่มี {asset} ให้ขาย"
-        held_value = held_qty * price
-        amount = held_value if sell_all else min(amount, held_value)
-    elif amount > customer_thb + 1e-9:
-        return False, f"เงินสดไม่พอ (มี {customer_thb:,.2f})"
-    if amount < min_trade:
-        return False, f"ยอด {amount:,.2f} ต่ำกว่าขั้นต่ำ"
-
-    execution_time = _mom_now()
-    steps, rec = gu.execute_order(
-        sim, side, amount, order_date, px_row, ctx,
-        affect_wallet=True, forced_quote=None,
-    )
-    if rec is None:
-        return False, "คำสั่งไม่ผ่าน engine"
-
-    iso = execution_time.isoformat()
-    for target in (rec, (sim.get("orders") or [None])[-1]):
-        if isinstance(target, dict):
-            target["เวลา"] = iso
-            target["timestamp"] = iso
-            target["วันที่"] = execution_time.strftime("%Y-%m-%d")
-            target["strategy"] = "momentum_bot"
-
-    result = str(rec.get("ผลด่าน", ""))
-    if result.lower().startswith("reject"):
-        return False, f"Engine ปฏิเสธ: {result}"
-
-    bot = _mom_state(sim)
-    bot["log"].append({
-        "time": iso, "side": side, "asset": asset, "amount_thb": round(amount, 2),
-        "reason": reason, "qty": rec.get("เหรียญที่ส่งมอบ"),
-        "quote_thb": rec.get("ราคาที่ลูกค้าได้"),
-    })
-    del bot["log"][:-100]
-    if cooldown_hours > 0:
-        bot["cooldowns"][asset] = (execution_time + pd.Timedelta(hours=cooldown_hours)).isoformat()
-
-    gu.st.session_state.pop("sim_state_save_error", None)
-    gu.save_sim_state(sim)
-    if getattr(gu.st, "session_state", {}).get("sim_state_save_error"):
-        return False, "Engine ประมวลผลแล้วแต่บันทึก Portfolio ไม่สำเร็จ"
-
-    return True, f"{amount:,.2f} บาท · qty {rec.get('เหรียญที่ส่งมอบ')}"
-
-
-def _momentum_tick():
-    gu = load_gu()
-    actor = _actor(MOMENTUM_ADMIN_EMAIL)
-
-    # รอบสั้น: อ่านค่าตั้ง
-    with ORDER_LOCK:
-        _sync_gu_actor(gu, actor)
-        _set_api_role(gu, actor)
-        if not gu.can_trade():
-            _mom_push(_MOM_RUNTIME["errors"], f"บัญชี {actor} ไม่มีสิทธิ์ Trader")
-            return
-        cfg = dict(_mom_state(_load_existing_sim(gu))["config"])
-
-    _MOM_RUNTIME["last_tick"] = _mom_now().isoformat()
-    if not cfg["enabled"]:
-        return
-
-    # คำนวณอันดับนอก lock (ช้า ไม่ให้บล็อกคำสั่งอื่น)
-    rank = _mom_rank(gu, int(cfg["lookback"]))
-
-    with ORDER_LOCK:
-        _sync_gu_actor(gu, actor)
-        _set_api_role(gu, actor)
-        sim = _load_existing_sim(gu)
-        st = _mom_state(sim)
-        cfg = st["config"]
-        if not cfg["enabled"]:
-            return
-
-        pf = _portfolio_response(gu, sim)
-        actions = _mom_decide(cfg, st, pf, rank)
-
-        today = _mom_now().strftime("%Y-%m-%d")
-        seen = _MOM_RUNTIME["seen"]
-        seen.intersection_update({k for k in seen if k[0] == today})
-
-        for side, asset, amount, sell_all, reason, cd in actions:
-            if time.time() < _MOM_RUNTIME["backoff"].get(asset, 0):
-                continue
-            label = f"{'ซื้อ' if side == 'buy' else 'ขาย'} {asset} — {reason}"
-
-            if cfg["dry_run"]:
-                key = (today, side, asset, reason.split(" ")[0])
-                if key not in seen:
-                    seen.add(key)
-                    _mom_push(_MOM_RUNTIME["dry"], label)
-                    _mom_notify(f"🧪 [ทดลอง ไม่ได้ส่งคำสั่ง] {label}")
-                continue
-
-            try:
-                ok, msg = _mom_execute(gu, actor, side, asset, amount, sell_all, reason, cd)
-            except HTTPException as e:
-                ok, msg = False, str(e.detail)
-            except Exception as e:
-                ok, msg = False, str(e)
-
-            if ok:
-                print(f"[MOMENTUM] {label} | {msg}")
-                _mom_notify(f"✅ Momentum Bot\n{label}\n{msg}")
-            else:
-                _MOM_RUNTIME["backoff"][asset] = time.time() + MOMENTUM_BACKOFF_SECONDS
-                _mom_push(_MOM_RUNTIME["errors"], f"{label} ไม่สำเร็จ: {msg}")
-                key = (today, "fail", asset, msg[:40])
-                if key not in seen:
-                    seen.add(key)
-                    _mom_notify(f"⚠️ Momentum Bot\n{label}\nไม่สำเร็จ: {msg}")
-
-
-async def _momentum_loop():
-    await asyncio.sleep(30)
-    while True:
-        try:
-            await asyncio.to_thread(_momentum_tick)
-        except Exception as e:
-            print(f"[MOMENTUM] loop error: {e}")
-            _mom_push(_MOM_RUNTIME["errors"], f"loop error: {e}")
-        await asyncio.sleep(MOMENTUM_LOOP_SECONDS)
-
-
-@app.on_event("startup")
-async def _start_momentum_loop():
-    _MOM_TASKS.append(asyncio.create_task(_momentum_loop()))
-
-
-def _mom_payload(actor: str, st: dict) -> dict:
-    now = _mom_now()
-    cooldowns = {}
-    for a, until in (st.get("cooldowns") or {}).items():
-        try:
-            if now < pd.Timestamp(until):
-                cooldowns[a] = until
-        except Exception:
-            pass
-    c = _MOM_RANK_CACHE
-    return {
-        "status": "ok",
-        "actor": actor,
-        "config": st["config"],
-        "cooldowns": cooldowns,
-        "log": list(reversed(st["log"][-30:])),
-        "ranking": c["rows"],
-        "ranking_skipped": c["skipped"],
-        "ranking_age_sec": int(time.time() - c["ts"]) if c["ts"] else None,
-        "runtime": {
-            "last_tick": _MOM_RUNTIME["last_tick"],
-            "errors": list(reversed(_MOM_RUNTIME["errors"][-10:])),
-            "dry": list(reversed(_MOM_RUNTIME["dry"][-10:])),
-            "notify_ready": bool(
-                os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-                and os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-            ),
-        },
-    }
-
-
-@app.get("/api/momentum", dependencies=[Depends(require_api_key)])
-def momentum_status(user: str = Depends(require_user)):
-    _mom_admin_only(user)
-    with ORDER_LOCK:
-        try:
-            gu, actor, role = _dca_open_session(user)
-            st = _mom_state(_load_existing_sim(gu))
-            return _mom_payload(actor, st)
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"โหลดสถานะไม่สำเร็จ: {e}")
-
-
-@app.post("/api/momentum/config", dependencies=[Depends(require_api_key)])
-def momentum_config(req: MomentumConfigRequest, user: str = Depends(require_user)):
-    _mom_admin_only(user)
-    with ORDER_LOCK:
-        try:
-            gu, actor, role = _dca_open_session(user)
-            if not gu.can_trade():
-                raise HTTPException(status_code=403, detail=f"ไม่มีสิทธิ์ Trader (role={role})")
-
-            updates = req.dict(exclude_none=True)
-            for k, (lo, hi) in _MOM_LIMITS.items():
-                if k in updates:
-                    v = float(updates[k])
-                    if not math.isfinite(v) or v < lo or v > hi:
-                        raise HTTPException(status_code=400, detail=f"{k} ต้องอยู่ระหว่าง {lo:g}-{hi:g}")
-
-            sim = _load_existing_sim(gu)
-            st = _mom_state(sim)
-            st["config"].update(updates)
-            if updates.get("enabled"):
-                _MOM_RUNTIME["backoff"].clear()
-                _MOM_RUNTIME["seen"].clear()
-            gu.save_sim_state(sim)
-            return _mom_payload(actor, st)
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"บันทึกค่าไม่สำเร็จ: {e}")
-
-
-# =========================================================
-# TREND REBALANCE — ปุ่ม "ทำตามสัญญาณ" ในการ์ด Trend Timing
-# =========================================================
-# หน้าเว็บคำนวณสัญญาณ SMA (ถือ/ออก) แล้วส่งมาที่นี่ ฝั่ง server เทียบกับพอร์ตจำลองจริง
-# แล้วสร้างรายการซื้อ/ขาย:
-#   - เหรียญที่สัญญาณบอกให้ออก = ขายทั้งหมด (ไปเป็นเงินสด)
-#   - เหรียญที่ควรถือ = ซื้อเพิ่มให้ถึงน้ำหนักเท่ากัน (งบ / จำนวนเหรียญในกลยุทธ์)
-#   - ไม่ขายส่วนเกินของเหรียญที่ถืออยู่ (ลดจำนวนครั้งที่ซื้อขาย)
-# ขั้นแรก (confirm=false) แค่ดูรายการ ไม่แตะพอร์ต
-# ขั้นสอง (confirm=true) ส่งคำสั่งผ่าน engine เดียวกับ /api/order ใน ORDER_LOCK
-# สัญญาณมาจาก client เหมือนที่ client ส่ง /api/order ได้เองอยู่แล้ว (เป็นระบบจำลอง)
-# =========================================================
-
-TREND_UNIVERSE = ("BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "HBAR", "LINK", "XLM")
-TREND_BAND_PCT = 10.0  # ไม่เติมถ้าขาดน้อยกว่า 10% ของเป้าต่อเหรียญ (กันซื้อเศษ ๆ)
-
-
-class TrendRebalanceRequest(BaseModel):
-    universe: list[str] = Field(..., min_length=1, max_length=20)
-    hold: list[str] = Field(default_factory=list, max_length=20)
-    budget_thb: Optional[float] = None
-    sma_months: int = Field(default=10, ge=1, le=36)
-    confirm: bool = False
-    expected: Optional[list[str]] = Field(default=None, max_length=40)
-
-
-def _trend_clean_assets(gu, items, label: str) -> list:
-    out = []
-    for raw in items or []:
-        a = str(raw).upper().strip()
-        if a not in TREND_UNIVERSE or a not in gu.SUPPORTED_ASSETS:
-            raise HTTPException(status_code=400, detail=f"{label}: ไม่รองรับเหรียญ {a or '(ว่าง)'}")
-        if a not in out:
-            out.append(a)
-    return out
-
-
-def _trend_build_plan(universe, hold, values, cash, budget_req, min_trade):
-    """
-    ฟังก์ชันคำนวณล้วน ไม่แตะ engine
-    values = {asset: มูลค่าที่ถืออยู่ (THB)}  คืน (plan, summary, warnings)
-    """
-    warnings = []
-    n = len(universe)
-    held_total = sum(float(values.get(a, 0.0)) for a in universe)
-    max_budget = float(cash) + held_total
-
-    if budget_req is None:
-        budget = max_budget
-    else:
-        budget = min(float(budget_req), max_budget)
-        if float(budget_req) > max_budget + 1e-9:
-            warnings.append(f"งบที่ระบุเกินเงินสดรวมมูลค่าเหรียญในกลยุทธ์ ใช้ {max_budget:,.2f} บาทแทน")
-
-    target = budget / n if n else 0.0
-    band = max(float(min_trade), target * TREND_BAND_PCT / 100.0)
-
-    sells, buys = [], []
-    for a in universe:
-        val = float(values.get(a, 0.0))
-        if a in hold:
-            diff = target - val
-            if diff >= band:
-                buys.append({
-                    "side": "buy", "asset": a, "amount_thb": diff, "sell_all": False,
-                    "reason": f"สัญญาณถือ — เติมให้ถึงเป้า {target:,.0f} บาท (ตอนนี้ {val:,.0f})",
-                })
-        elif val >= float(min_trade):
-            sells.append({
-                "side": "sell", "asset": a, "amount_thb": val, "sell_all": True,
-                "reason": "สัญญาณออก (ราคาต่ำกว่า SMA) — ขายทั้งหมดเป็นเงินสด",
-            })
-        elif val > 0:
-            warnings.append(f"{a} เหลือเศษ {val:,.2f} บาท ต่ำกว่าขั้นต่ำ ไม่ขาย")
-
-    est_cash = float(cash) + sum(s["amount_thb"] for s in sells)
-    need = sum(b["amount_thb"] for b in buys)
-    if need > est_cash + 1e-9:
-        scale = (est_cash / need) if need > 0 else 0.0
-        kept = []
-        for b in buys:
-            amt = b["amount_thb"] * scale
-            if amt >= float(min_trade):
-                b["amount_thb"] = amt
-                kept.append(b)
-        warnings.append("เงินสดไม่พอสำหรับทุกคำสั่ง ลดยอดซื้อตามสัดส่วน")
-        buys = kept
-
-    plan = sells + buys
-    for p in plan:
-        p["amount_thb"] = round(float(p["amount_thb"]), 2)
-
-    summary = {
-        "n_universe": n,
-        "n_hold": len([a for a in universe if a in hold]),
-        "budget_thb": round(budget, 2),
-        "target_per_coin_thb": round(target, 2),
-        "cash_thb": round(float(cash), 2),
-        "est_cash_after_sells_thb": round(est_cash, 2),
-    }
-    return plan, summary, warnings
-
-
-def _trend_execute_one(gu, actor, side, asset, amount_thb, sell_all, reason):
-    """
-    ส่ง 1 คำสั่งผ่าน engine เดียวกับ /api/order (เรียกใน ORDER_LOCK เท่านั้น)
-    โหลด sim ใหม่ทุกคำสั่ง และบันทึกเฉพาะเมื่อสำเร็จ  คืน (ok, ข้อความ, ยอดที่ส่งจริง)
-    """
-    data = _load_market_frame(gu, asset)
-    order_date = pd.Timestamp(data.index[-1])
-    px_row = data.loc[order_date]
-
-    cfg = _api_cfg(gu, asset, actor)
-    built = gu.build_dealer_ctx(cfg, data)
-    if built is None:
-        return False, "สร้าง Dealer context ไม่สำเร็จ", 0.0
-    ctx, target_stock_thb = built
-
-    sim = _load_existing_sim(gu)
-    sim = gu.sim_normalize_state(
-        sim, asset, order_date,
-        float(px_row["Global_USD"]), float(px_row["USDTHB"]), float(target_stock_thb),
-    )
-    sim["asset"] = asset
-    sim["target_thb"] = float(target_stock_thb)
-    gu.ensure_portfolio_ledger(sim)
-
-    customer_thb = _safe_float(sim.get("customer_thb"), 0.0)
-    held_qty = _safe_float(sim.setdefault("customer_coins", {}).get(asset), 0.0)
-    price = _safe_float(px_row["Global_USD"]) * _safe_float(px_row["USDTHB"])
-    min_trade = float(getattr(gu, "MIN_TRADE_THB", 50))
-
-    amount = float(amount_thb)
-    note = ""
-    if side == "sell":
-        if held_qty <= 0 or price <= 0:
-            return False, f"ไม่มี {asset} ให้ขาย", 0.0
-        held_value = held_qty * price
-        amount = held_value if sell_all else min(amount, held_value)
-    elif amount > customer_thb + 1e-9:
-        # ขายแล้วได้เงินน้อยกว่าที่ประมาณ (spread/fee) ลดยอดซื้อเท่าที่มี
-        amount = customer_thb
-        note = f" (ลดยอดเหลือ {customer_thb:,.2f} เพราะเงินสดไม่พอ)"
-    if amount < min_trade:
-        return False, f"ยอด {amount:,.2f} ต่ำกว่าขั้นต่ำ {min_trade:g} บาท", 0.0
-
-    execution_time = pd.Timestamp.now(tz="Asia/Bangkok")
-    steps, rec = gu.execute_order(
-        sim, side, amount, order_date, px_row, ctx,
-        affect_wallet=True, forced_quote=None,
-    )
-    if rec is None:
-        return False, "คำสั่งไม่ผ่าน engine", 0.0
-
-    result = str(rec.get("ผลด่าน", ""))
-    if result.lower().startswith("reject"):
-        # ไม่บันทึก sim ที่เปลี่ยนในหน่วยความจำ
-        return False, f"Engine ปฏิเสธ: {result}", 0.0
-
-    iso = execution_time.isoformat()
-    ledger = sim.get("orders")
-    for target in (rec, ledger[-1] if isinstance(ledger, list) and ledger else None):
-        if isinstance(target, dict):
-            target["เวลา"] = iso
-            target["timestamp"] = iso
-            target["วันที่"] = execution_time.strftime("%Y-%m-%d")
-            target["Source"] = "Trend Signal"
-            target["strategy"] = "trend_gtaa"
-            target["strategy_reason"] = reason[:120]
-
-    gu.st.session_state.pop("sim_state_save_error", None)
-    gu.save_sim_state(sim)
-    if getattr(gu.st, "session_state", {}).get("sim_state_save_error"):
-        return False, "Engine ประมวลผลแล้วแต่บันทึก Portfolio ไม่สำเร็จ", 0.0
-
-    return True, f"{amount:,.2f} บาท · qty {rec.get('เหรียญที่ส่งมอบ')}{note}", amount
-
-
-@app.post("/api/trend/rebalance", dependencies=[Depends(require_api_key)])
-def trend_rebalance(
-    req: TrendRebalanceRequest,
-    user: str = Depends(require_user),
-    idempotency_key: str = Header(default="", alias="Idempotency-Key"),
-):
-    with ORDER_LOCK:
-        try:
-            gu, actor, role = _dca_open_session(user)
-
-            universe = _trend_clean_assets(gu, req.universe, "universe")
-            hold = _trend_clean_assets(gu, req.hold, "hold")
-            if not universe:
-                raise HTTPException(status_code=400, detail="ไม่มีเหรียญในกลยุทธ์")
-            if any(a not in universe for a in hold):
-                raise HTTPException(status_code=400, detail="hold ต้องเป็นส่วนหนึ่งของ universe")
-
-            budget_req = None
-            if req.budget_thb is not None:
-                budget_req = _safe_float(req.budget_thb, -1.0)
-                if not math.isfinite(budget_req) or budget_req <= 0 or budget_req > 100_000_000_000:
-                    raise HTTPException(status_code=400, detail="งบต้องเป็นตัวเลขที่มากกว่า 0")
-
-            if not gu.can_trade():
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"บัญชี {actor} ไม่มีสิทธิ์ Trader (role={role})",
-                )
-
-            idempotency_key = str(idempotency_key or "").strip()
-            if len(idempotency_key) > 200:
-                raise HTTPException(status_code=400, detail="Idempotency-Key ยาวเกินกำหนด")
-            fingerprint = hashlib.sha256(
-                (
-                    "|".join(sorted(universe)) + "#" + "|".join(sorted(hold)) + "#"
-                    + f"{budget_req!r}" + "#" + "|".join(sorted(req.expected or []))
-                ).encode("utf-8")
-            ).hexdigest()
-            if req.confirm:
-                cached = _get_idempotent_result(actor, idempotency_key, fingerprint)
-                if cached is not None:
-                    return cached
-
-            sim = _load_existing_sim(gu)
-            pf = _portfolio_response(gu, sim)
-            values = {
-                str(h.get("asset", "")).upper(): _safe_float(h.get("market_value"), 0.0)
-                for h in (pf.get("holdings") or [])
-                if isinstance(h, dict)
-            }
-            min_trade = float(getattr(gu, "MIN_TRADE_THB", 50))
-            plan, summary, warnings = _trend_build_plan(
-                universe, hold, values, _safe_float(pf.get("cash_thb"), 0.0), budget_req, min_trade,
-            )
-            action_keys = [f"{p['side']}:{p['asset']}" for p in plan]
-
-            if not req.confirm:
-                return {
-                    "status": "preview", "actor": actor, "sma_months": req.sma_months,
-                    "plan": plan, "summary": summary, "warnings": warnings,
-                    "action_keys": action_keys,
-                }
-
-            # ---------- CONFIRM ----------
-            if req.expected is None:
-                raise HTTPException(status_code=400, detail="ต้องกดดูรายการก่อนยืนยัน")
-            if sorted(req.expected) != sorted(action_keys):
-                raise HTTPException(
-                    status_code=409,
-                    detail="รายการเปลี่ยนไปจากที่ดูไว้ (ราคาหรือพอร์ตเปลี่ยน) กรุณากดดูรายการใหม่",
-                )
-            if not plan:
-                response = {"status": "nothing", "results": [], "summary": summary, "warnings": warnings}
-                _store_idempotent_result(actor, idempotency_key, response, fingerprint)
-                return response
-
-            results = []
-            for p in plan:
-                try:
-                    ok, msg, sent = _trend_execute_one(
-                        gu, actor, p["side"], p["asset"], p["amount_thb"], p["sell_all"], p["reason"],
-                    )
-                except HTTPException as e:
-                    ok, msg, sent = False, str(e.detail), 0.0
-                except Exception as e:
-                    print(f"[TREND] {actor} {p['side']} {p['asset']} error: {type(e).__name__}: {e}")
-                    ok, msg, sent = False, f"ผิดพลาดภายใน ({type(e).__name__})", 0.0
-                results.append({
-                    "side": p["side"], "asset": p["asset"], "ok": ok,
-                    "message": msg, "amount_thb": round(sent, 2),
-                })
-
-            n_ok = sum(1 for r in results if r["ok"])
-            status = "done" if n_ok == len(results) else ("partial" if n_ok else "failed")
-            response = {
-                "status": status, "results": results, "summary": summary, "warnings": warnings,
-            }
-            try:
-                response["portfolio"] = _portfolio_response(gu, _load_existing_sim(gu))
-            except Exception:
-                pass
-            _store_idempotent_result(actor, idempotency_key, response, fingerprint)
-            return response
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise _internal_server_error("เกิดข้อผิดพลาดภายใน API", e)
-
-
-# =========================================================
-# CREATE ORDER
-# =========================================================
-
-@app.post("/api/order", dependencies=[Depends(require_api_key)])
-def create_order(
-    order: OrderRequest,
-    idempotency_key: str = Header(default="", alias="Idempotency-Key"),
-    user: str = Depends(require_user),
-):
-    with ORDER_LOCK:
-        try:
-            gu = load_gu()
-
-            actor = _actor(user)
-            _sync_gu_actor(gu, actor)
-
-            idempotency_key = str(idempotency_key or "").strip()
-            if len(idempotency_key) > 200:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Idempotency-Key ยาวเกินกำหนด",
-                )
-
-            role = _set_api_role(gu, actor)
-
-            asset = order.asset.upper().strip()
-            side = order.side.lower().strip()
-            amount_thb = _safe_float(order.amount_thb, -1.0)
-            idempotency_fingerprint = _idempotency_fingerprint(asset, side, amount_thb)
-
-            cached_result = _get_idempotent_result(
-                actor,
-                idempotency_key,
-                idempotency_fingerprint,
-            )
-            if cached_result is not None:
-                return cached_result
-
-            # -------------------------------------------------
-            # VALIDATION
-            # -------------------------------------------------
-
-            if not asset or len(asset) > 20:
-                raise HTTPException(
-                    status_code=400,
-                    detail="asset ไม่ถูกต้อง",
-                )
-
-            if side not in ("buy", "sell"):
-                raise HTTPException(
-                    status_code=400,
-                    detail="side ต้องเป็น buy หรือ sell",
-                )
-
-            if not math.isfinite(amount_thb) or amount_thb <= 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail="amount_thb ต้องเป็นตัวเลขที่มากกว่า 0",
-                )
-
-            if asset not in gu.SUPPORTED_ASSETS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"ไม่รองรับเหรียญ {asset}",
-                )
-
-            if side not in ("buy", "sell"):
-                raise HTTPException(
-                    status_code=400,
-                    detail="side ต้องเป็น buy หรือ sell",
-                )
-
-            min_trade = float(getattr(gu, "MIN_TRADE_THB", 50))
-
-            if amount_thb < min_trade:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"ยอดขั้นต่ำคือ {min_trade:g} บาท",
-                )
-
-            if not gu.can_trade():
-                raise HTTPException(
-                    status_code=403,
-                    detail=(
-                        f"บัญชี {actor} ไม่มีสิทธิ์ Trader "
-                        f"(role={role})"
-                    ),
-                )
-
-            # -------------------------------------------------
-            # MARKET DATA
-            # -------------------------------------------------
-
-            data = _load_market_frame(gu, asset)
-
-            order_date = pd.Timestamp(data.index[-1])
-            px_row = data.loc[order_date]
-
-            # -------------------------------------------------
-            # DEALER CONFIG
-            # -------------------------------------------------
-
-            cfg = _api_cfg(gu, asset, actor)
-
-            built = gu.build_dealer_ctx(cfg, data)
-
-            if built is None:
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        "สร้าง Dealer context "
-                        "จาก market history ไม่สำเร็จ"
-                    ),
-                )
-
-            ctx, target_stock_thb = built
-
-            # -------------------------------------------------
-            # LOAD EXISTING PORTFOLIO (never create a new wallet)
-            # -------------------------------------------------
-
-            sim = _load_existing_sim(gu)
-
-            # Persistent idempotency guard: if a previous request was saved
-            # successfully but the server restarted before the in-memory cache
-            # could be reused, do not execute the same order twice.
-            if idempotency_key:
-                key_hash = _idempotency_key_hash(idempotency_key)
-                existing_orders = sim.get("orders", [])
-                if isinstance(existing_orders, list):
-                    for existing_order in reversed(existing_orders):
-                        if not isinstance(existing_order, dict):
-                            continue
-                        if str(existing_order.get("idempotency_key_hash") or "") != key_hash:
-                            continue
-                        if str(existing_order.get("idempotency_fingerprint") or "") != idempotency_fingerprint:
-                            raise HTTPException(
-                                status_code=409,
-                                detail="Idempotency-Key ถูกใช้กับคำสั่งคนละรายการ",
-                            )
-                        existing_asset = str(
-                            existing_order.get("เหรียญ")
-                            or existing_order.get("asset")
-                            or asset
-                        ).upper()
-                        existing_side = str(
-                            existing_order.get("side")
-                            or existing_order.get("ด้าน")
-                            or side
-                        ).lower()
-                        existing_qty = existing_order.get("เหรียญที่ส่งมอบ")
-                        existing_quote = existing_order.get("ราคาที่ลูกค้าได้")
-                        existing_response = {
-                            "status": "filled",
-                            "actor": actor,
-                            "asset": existing_asset,
-                            "side": existing_side,
-                            "amount_thb": amount_thb,
-                            "quote_thb": existing_quote,
-                            "quantity": existing_qty,
-                            "order": existing_order,
-                            "steps": [],
-                            "portfolio": _portfolio_response(gu, sim),
-                        }
-                        _store_idempotent_result(
-                            actor,
-                            idempotency_key,
-                            existing_response,
-                            idempotency_fingerprint,
-                        )
-                        return existing_response
-
-            sim = gu.sim_normalize_state(
-                sim,
-                asset,
-                order_date,
-                float(px_row["Global_USD"]),
-                float(px_row["USDTHB"]),
-                float(target_stock_thb),
-            )
-
-            sim["asset"] = asset
-            sim["target_thb"] = float(target_stock_thb)
-
-            gu.ensure_portfolio_ledger(sim)
-
-            # -------------------------------------------------
-            # WALLET CHECKS
-            # -------------------------------------------------
-
-            customer_thb = _safe_float(sim.get("customer_thb"), 0.0)
-
-            customer_coins = sim.setdefault("customer_coins", {})
-
-            held_qty = _safe_float(customer_coins.get(asset), 0.0)
-
-            market_price_thb = (
-                _safe_float(px_row["Global_USD"])
-                * _safe_float(px_row["USDTHB"])
-            )
-
-            if side == "buy" and amount_thb > customer_thb + 1e-9:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"ยอด THB ใน Wallet ไม่พอ: "
-                        f"มี {customer_thb:,.2f} บาท"
-                    ),
-                )
-
-            if side == "sell" and held_qty <= 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Wallet ไม่มี {asset} สำหรับขาย",
-                )
-
-            if side == "sell" and market_price_thb > 0:
-                held_value_thb = held_qty * market_price_thb
-
-                if amount_thb > held_value_thb + 1e-9:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            f"ยอดขายเกินจำนวน {asset} ที่ถืออยู่: "
-                            f"มูลค่าปัจจุบันประมาณ "
-                            f"{held_value_thb:,.2f} บาท"
-                        ),
-                    )
-
-            # -------------------------------------------------
-            # FORCED QUOTE
-            # -------------------------------------------------
-
-            forced_quote = None  # ไม่รับราคาจาก client
-
-            # -------------------------------------------------
-            # EXECUTE
-            # -------------------------------------------------
-
-            # Keep order_date for market/portfolio calculations.
-            # execution_time is the REAL time this API accepted the order.
-            execution_time = pd.Timestamp.now(tz="Asia/Bangkok")
-
-            steps, rec = gu.execute_order(
-                sim,
-                side,
-                amount_thb,
-                order_date,
-                px_row,
-                ctx,
-                affect_wallet=True,
-                forced_quote=forced_quote,
-            )
-
-            if rec is None:
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "message": "คำสั่งไม่ผ่าน engine",
-                        "steps": steps,
-                    },
-                )
-
-            # gu.execute_order() ใช้ order_date เป็นวันที่ของ market data
-            # ซึ่งเป็น date-only จึงไม่ควรเอาไปแสดงเป็นเวลา execution
-            # (เช่น 2026-10-05 จะถูก browser แปลงเป็น 07:00 ในไทย)
-            # เก็บเวลา execution จริงลงทั้ง rec และรายการที่ engine append
-            # เข้า sim["orders"] โดยตรง เพื่อให้ /api/orders อ่านค่าจริงได้แน่นอน
-            execution_iso = execution_time.isoformat()
-            rec["เวลา"] = execution_iso
-            rec["timestamp"] = execution_iso
-            rec["วันที่"] = execution_time.strftime("%Y-%m-%d")
-            if idempotency_key:
-                rec["idempotency_key_hash"] = _idempotency_key_hash(idempotency_key)
-                rec["idempotency_fingerprint"] = idempotency_fingerprint
-
-            # execute_order() บางเวอร์ชันอาจ append สำเนา rec เข้า ledger
-            # ดังนั้นแก้ entry ใน sim["orders"] โดยตรงด้วย
-            ledger_orders = sim.get("orders")
-            if isinstance(ledger_orders, list) and ledger_orders:
-                rec_order_id = str(
-                    rec.get("Order ID")
-                    or rec.get("order_id")
-                    or rec.get("id")
-                    or ""
-                )
-                target = None
-                if rec_order_id:
-                    for ledger_order in reversed(ledger_orders):
-                        if isinstance(ledger_order, dict):
-                            ledger_id = str(
-                                ledger_order.get("Order ID")
-                                or ledger_order.get("order_id")
-                                or ledger_order.get("id")
-                                or ""
-                            )
-                            if ledger_id == rec_order_id:
-                                target = ledger_order
-                                break
-                if target is None and isinstance(ledger_orders[-1], dict):
-                    target = ledger_orders[-1]
-
-                if target is not None:
-                    target["เวลา"] = execution_iso
-                    target["timestamp"] = execution_iso
-                    target["วันที่"] = execution_time.strftime("%Y-%m-%d")
-                    if idempotency_key:
-                        target["idempotency_key_hash"] = _idempotency_key_hash(idempotency_key)
-                        target["idempotency_fingerprint"] = idempotency_fingerprint
-
-            # Store the simulated exchange fee on the order and matching ledger row.
-            # Prefer the executed THB notional reported by the engine; fall back to request amount.
-            fee_basis = rec.get("มูลค่า (บาท)")
-            if fee_basis is None:
-                fee_basis = rec.get("amount_thb")
-            if fee_basis is None:
-                fee_basis = amount_thb
-            fee_thb = _order_fee_thb(fee_basis)
-            rec["ค่าธรรมเนียม"] = fee_thb
-            rec["fee_thb"] = fee_thb
-            ledger_orders = sim.get("orders")
-            if isinstance(ledger_orders, list) and ledger_orders:
-                rec_order_id = str(rec.get("Order ID") or rec.get("order_id") or rec.get("id") or "")
-                for ledger_order in reversed(ledger_orders):
-                    if not isinstance(ledger_order, dict):
-                        continue
-                    ledger_id = str(ledger_order.get("Order ID") or ledger_order.get("order_id") or ledger_order.get("id") or "")
-                    if ledger_order is rec or (rec_order_id and ledger_id == rec_order_id):
-                        ledger_order["ค่าธรรมเนียม"] = fee_thb
-                        ledger_order["fee_thb"] = fee_thb
-                        break
-
-            result = str(rec.get("ผลด่าน", ""))
-
-            # -------------------------------------------------
-            # REJECT
-            # -------------------------------------------------
-
-            if result.lower().startswith("reject"):
-                rejected_response = {
-                    "status": "rejected",
-                    "asset": asset,
-                    "side": side,
-                    "amount_thb": amount_thb,
-                    "order": rec,
-                    "steps": steps,
-                }
-                _store_idempotent_result(actor, idempotency_key, rejected_response, idempotency_fingerprint)
-                return rejected_response
-
-            # -------------------------------------------------
-            # SAVE ONLY AFTER SUCCESS
-            # -------------------------------------------------
-
-            # ล้าง error เก่าก่อน เพราะ gu ถูก cache ข้าม request
-            gu.st.session_state.pop("sim_state_save_error", None)
-
-            gu.save_sim_state(sim)
-
-            save_error = getattr(gu.st, "session_state", {}).get(
-                "sim_state_save_error"
-            )
-
-            if save_error:
-                raise HTTPException(
-                    status_code=503,
-                    detail={
-                        "message": (
-                            "Engine ประมวลผลแล้ว "
-                            "แต่บันทึก Portfolio "
-                            "ถาวรไม่สำเร็จ"
-                        ),
-                        "retryable": True,
-                        "order": rec,
-                    },
-                )
-
-            # -------------------------------------------------
-            # SUCCESS
-            # -------------------------------------------------
-
-            filled_response = {
-                "status": "filled",
-                "actor": actor,
-                "asset": asset,
-                "side": side,
-                "amount_thb": amount_thb,
-                "quote_thb": rec.get("ราคาที่ลูกค้าได้"),
-                "quantity": rec.get("เหรียญที่ส่งมอบ"),
-                "order": rec,
-                "steps": steps,
-                "portfolio": _portfolio_response(gu, sim, px_row),
-            }
-            _store_idempotent_result(actor, idempotency_key, filled_response, idempotency_fingerprint)
-            return filled_response
-
-        except HTTPException:
-            raise
-
-        except Exception as e:
-            raise _internal_server_error(
-                "เกิดข้อผิดพลาดภายใน API",
-                e,
-            )
+export default App
