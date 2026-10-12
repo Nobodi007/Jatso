@@ -1454,6 +1454,59 @@ def public_news(request: Request):
 
     return {"status": "ok", "items": items}
 
+# =========================================================
+# วางบล็อกนี้ในไฟล์ backend ที่มี `def public_news`
+# วาง "ต่อท้ายฟังก์ชัน public_news" (หลัง return {"status": "ok", "items": items})
+# ใช้ GEMINI_API_KEY ตัวเดิม + gu.ask_ai เหมือน /api/chat
+# ไม่ต้องเพิ่ม import ใหม่ (os, json, BaseModel, Field, Depends, HTTPException มีในไฟล์อยู่แล้ว)
+# =========================================================
+
+_AI_NEWS_CACHE: dict = {}
+
+NEWS_AI_SYSTEM = (
+    "แปลและสรุปข่าวคริปโตเป็นภาษาไทย ตอบเป็น JSON เท่านั้น ห้ามมี markdown หรือข้อความอื่น "
+    'รูปแบบ: {"title_th":"...","summary_th":"สรุป 2-3 ประโยค",'
+    '"sentiment":"bullish|bearish|neutral","note":"ผลต่อ BTC/ETH สั้นๆ"} '
+    "ใช้เฉพาะข้อมูลที่ให้มา ห้ามแต่งเพิ่ม ห้ามแนะนำให้ซื้อหรือขาย"
+)
+
+
+class NewsAiIn(BaseModel):
+    url: str = Field(..., max_length=1000)
+    title: str = Field(..., min_length=1, max_length=300)
+    snippet: str = Field(default="", max_length=1500)
+
+
+def _extract_json(raw: str) -> dict:
+    raw = raw.replace("```json", "").replace("```", "").strip()
+    start, end = raw.find("{"), raw.rfind("}")
+    if start == -1 or end == -1:
+        raise ValueError("AI ไม่ได้ตอบเป็น JSON")
+    return json.loads(raw[start : end + 1])
+
+
+@app.post("/api/news/summarize", dependencies=[Depends(require_api_key)])
+def summarize_news(n: NewsAiIn, user: str = Depends(require_user)):
+    if n.url in _AI_NEWS_CACHE:
+        return _AI_NEWS_CACHE[n.url]
+
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="ยังไม่ได้ตั้ง GEMINI_API_KEY บน Backend")
+
+    messages = [{"role": "user", "content": f"Title: {n.title}\nSnippet: {n.snippet}"}]
+
+    try:
+        gu = load_gu()
+        raw = str(gu.ask_ai(messages, api_key, system_override=NEWS_AI_SYSTEM) or "")
+        result = _extract_json(raw)
+    except Exception as e:
+        raise _internal_server_error("สรุปข่าวไม่สำเร็จ", e)
+
+    if len(_AI_NEWS_CACHE) > 500:
+        _AI_NEWS_CACHE.clear()
+    _AI_NEWS_CACHE[n.url] = result
+    return result
 
 # =========================================================
 # PUBLIC EXCHANGES (ตารางเทียบราคากระดานไทย) — ดึงจาก gu.fetch_perp_venues
