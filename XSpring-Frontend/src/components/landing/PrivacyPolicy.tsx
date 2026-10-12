@@ -5,7 +5,6 @@ import {
 } from "lucide-react"
 import { useLanguage } from "../../i18n/LanguageContext"
 
-type Item = { icon: LucideIcon; title: string; text: string }
 
 const SUMMARY_ICONS = [ShieldCheck, User, Ban]
 const DATA_ICONS = [User, Database, Bot, Monitor]
