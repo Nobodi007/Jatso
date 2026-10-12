@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react"
-import { useLanguage } from "../i18n/LanguageContext"
+import { useLanguage } from "../../i18n/LanguageContext"
 import type { PointerEvent } from "react"
 import { CalendarClock, Check, Loader2, TrendingDown, TrendingUp, Wallet } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
