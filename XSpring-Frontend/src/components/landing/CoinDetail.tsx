@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { useLanguage } from "../../i18n/LanguageContext"
 import TradingViewChart from "./TradingViewChart"
 import ExchangeTable from "./ExchangeTable"
 
@@ -14,8 +15,8 @@ type Props = {
   onRegister: () => void
 }
 
-const fmtPrice = (v: number) =>
-  v.toLocaleString("th-TH", { maximumFractionDigits: v < 1 ? 4 : 2 })
+const fmtPrice = (v: number, locale: string) =>
+  v.toLocaleString(locale, { maximumFractionDigits: v < 1 ? 4 : 2 })
 
 const compact = (v: number) => {
   if (v >= 1e9) return `฿${(v / 1e9).toFixed(2)}B`
@@ -24,15 +25,17 @@ const compact = (v: number) => {
   return `฿${v.toFixed(0)}`
 }
 
-function timeAgo(ts: number) {
+function timeAgo(ts: number, t: (key: string, vars?: Record<string, string | number>) => string) {
   if (!ts) return ""
   const secs = Math.max(0, Date.now() / 1000 - ts)
-  if (secs < 3600) return `${Math.floor(secs / 60)} นาทีที่แล้ว`
-  if (secs < 86400) return `${Math.floor(secs / 3600)} ชั่วโมงที่แล้ว`
-  return `${Math.floor(secs / 86400)} วันที่แล้ว`
+  if (secs < 3600) return t("coinDetail.minutesAgo", { count: Math.floor(secs / 60) })
+  if (secs < 86400) return t("coinDetail.hoursAgo", { count: Math.floor(secs / 3600) })
+  return t("coinDetail.daysAgo", { count: Math.floor(secs / 86400) })
 }
 
 export default function CoinDetail({ asset, onBack, onLogin, onRegister }: Props) {
+  const { t: tr, lang } = useLanguage()
+  const locale = lang === "en" ? "en-US" : "th-TH"
   const [row, setRow] = useState<Row | null>(null)
   const [news, setNews] = useState<NewsItem[]>([])
   const [error, setError] = useState("")
@@ -47,9 +50,9 @@ export default function CoinDetail({ asset, onBack, onLogin, onRegister }: Props
           if (!alive) return
           const found = ((d.rows ?? []) as Row[]).find((r) => r.asset === asset) ?? null
           setRow(found)
-          setError(found ? "" : "ไม่พบข้อมูลเหรียญนี้")
+          setError(found ? "" : tr("coinDetail.notFound"))
         })
-        .catch(() => alive && setError("โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง"))
+        .catch(() => alive && setError(tr("coinDetail.loadError")))
     setRow(null)
     setError("")
     load()
@@ -78,11 +81,11 @@ export default function CoinDetail({ asset, onBack, onLogin, onRegister }: Props
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">
       <button type="button" onClick={onBack} className="text-sm text-muted-foreground hover:text-foreground">
-        ← กลับ
+        ← {tr("coinDetail.back")}
       </button>
 
       {error && <p className="mt-6 text-sm text-red-500">{error}</p>}
-      {!error && !row && <p className="mt-6 text-sm text-muted-foreground">กำลังโหลด…</p>}
+      {!error && !row && <p className="mt-6 text-sm text-muted-foreground">{tr("coinDetail.loading")}…</p>}
 
       {row && (
         <>
@@ -91,10 +94,10 @@ export default function CoinDetail({ asset, onBack, onLogin, onRegister }: Props
               <h1 className="text-2xl font-extrabold tracking-tight">
                 {row.name} <span className="text-base font-medium text-muted-foreground">{row.asset}</span>
               </h1>
-              <p className="mt-2 text-4xl font-extrabold">฿{fmtPrice(row.price)}</p>
+              <p className="mt-2 text-4xl font-extrabold">฿{fmtPrice(row.price, locale)}</p>
               <p className={`mt-1 text-sm font-semibold ${up ? "text-emerald-500" : "text-red-500"}`}>
                 {up ? "▲ +" : "▼ "}
-                {row.change.toFixed(2)}% (24 ชม.)
+                {row.change.toFixed(2)}% ({tr("coinDetail.hours24")})
               </p>
             </div>
             <div className="flex gap-2">
@@ -103,14 +106,14 @@ export default function CoinDetail({ asset, onBack, onLogin, onRegister }: Props
                 onClick={onLogin}
                 className="rounded-lg border px-5 py-2.5 text-sm font-semibold hover:bg-accent"
               >
-                ซื้อขาย {row.asset}
+                {tr("coinDetail.trade")} {row.asset}
               </button>
               <button
                 type="button"
                 onClick={onRegister}
                 className="rounded-lg bg-emerald-500 px-5 py-2.5 text-sm font-bold text-black hover:bg-emerald-400"
               >
-                สมัครตอนนี้
+                {tr("coinDetail.signUpNow")}
               </button>
             </div>
           </div>
@@ -121,27 +124,27 @@ export default function CoinDetail({ asset, onBack, onLogin, onRegister }: Props
 
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
             <div className="rounded-xl border p-4">
-              <p className="text-xs text-muted-foreground">มูลค่าซื้อขาย 24 ชม.</p>
+              <p className="text-xs text-muted-foreground">{tr("coinDetail.volume24h")}</p>
               <p className="mt-1 text-lg font-bold">{compact(row.volume)}</p>
             </div>
             <div className="rounded-xl border p-4">
-              <p className="text-xs text-muted-foreground">เปลี่ยนแปลง 24 ชม.</p>
+              <p className="text-xs text-muted-foreground">{tr("coinDetail.change24h")}</p>
               <p className={`mt-1 text-lg font-bold ${up ? "text-emerald-500" : "text-red-500"}`}>
                 {up ? "+" : ""}
                 {row.change.toFixed(2)}%
               </p>
             </div>
             <div className="rounded-xl border p-4">
-              <p className="text-xs text-muted-foreground">แหล่งราคา</p>
+              <p className="text-xs text-muted-foreground">{tr("coinDetail.priceSource")}</p>
               <p className="mt-1 text-lg font-bold">Bitkub</p>
             </div>
           </div>
 
           <ExchangeTable asset={asset} />
 
-          <h2 className="mt-10 text-xl font-bold">ข่าว {row.asset}</h2>
+          <h2 className="mt-10 text-xl font-bold">{tr("coinDetail.newsTitle", { asset: row.asset })}</h2>
           {news.length === 0 ? (
-            <p className="mt-3 text-sm text-muted-foreground">ยังไม่มีข่าวของเหรียญนี้ในขณะนี้</p>
+            <p className="mt-3 text-sm text-muted-foreground">{tr("coinDetail.noNews")}</p>
           ) : (
             <ul className="mt-3 divide-y">
               {news.map((n, i) => (
@@ -154,7 +157,7 @@ export default function CoinDetail({ asset, onBack, onLogin, onRegister }: Props
                   >
                     <p className="font-semibold leading-snug">{n.title}</p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {[n.source, timeAgo(n.published_ts)].filter(Boolean).join(" • ")}
+                      {[n.source, timeAgo(n.published_ts, tr)].filter(Boolean).join(" • ")}
                     </p>
                   </a>
                 </li>
