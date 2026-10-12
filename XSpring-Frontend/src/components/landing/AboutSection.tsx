@@ -9,14 +9,6 @@ const rich = (s: string) => s.split("**").map((p, i) => (i % 2 ? <b key={i}>{p}<
 
 const BODY = "mt-5 text-base leading-8 text-foreground/90"
 
-const LOOP = ["ทำผิดก็แก้", "ไม่เข้าใจก็ลองใหม่", "ทำไม่ได้ก็หาวิธีใหม่"]
-
-const CHAIN = [
-  "เมื่อมีไอเดีย ก็อยากลองทำ",
-  "เมื่อทำสำเร็จ ก็อยากลองต่อ",
-  "และเมื่อเห็นว่าสิ่งหนึ่งสามารถพัฒนาได้ ก็เริ่มอยากรู้ว่ามันจะไปได้ไกลกว่านั้นอีกแค่ไหน",
-]
-
 function PullQuote({ children }: { children: ReactNode }) {
   return (
     <blockquote className="my-8 rounded-r-xl border-l-4 border-emerald-500 bg-emerald-500/5 py-4 pl-5 pr-4 text-lg font-semibold leading-8">
