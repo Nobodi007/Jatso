@@ -165,13 +165,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
             >
               {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
-            <button
-              type="button"
-              aria-label="ภาษา"
-              className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
-            >
-              <Globe className="h-4 w-4" />
-            </button>
+           
             <LanguageSwitcher />  
             <button
               type="button"
