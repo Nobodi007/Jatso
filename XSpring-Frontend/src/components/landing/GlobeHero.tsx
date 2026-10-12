@@ -60,12 +60,19 @@ const THEME = {
 }
 
 /* ---------- ตรวจธีมจาก "สีพื้นหลังจริง" ของหน้า (เดินขึ้นไปหา element ที่มีสีพื้นหลัง) ---------- */
-function lumOf(rgb: string): { lum: number; alpha: number } | null {
-  const m = rgb.match(/[\d.]+/g)
-  if (!m || m.length < 3) return null
-  const [r, g, b] = m.slice(0, 3).map(Number)
-  const alpha = m.length > 3 ? Number(m[3]) : 1
-  return { lum: (0.299 * r + 0.587 * g + 0.114 * b) / 255, alpha }
+// แปลงสี CSS ทุกรูปแบบ (รวม oklch/lab ที่ Tailwind v4 ใช้) เป็น RGB ผ่าน canvas
+let _ctx: CanvasRenderingContext2D | null = null
+function lumOf(color: string): { lum: number; alpha: number } | null {
+  if (!_ctx) {
+    _ctx = document.createElement("canvas").getContext("2d", { willReadFrequently: true })
+  }
+  if (!_ctx) return null
+  _ctx.clearRect(0, 0, 1, 1)
+  _ctx.fillStyle = "#000"
+  _ctx.fillStyle = color
+  _ctx.fillRect(0, 0, 1, 1)
+  const [r, g, b, a] = _ctx.getImageData(0, 0, 1, 1).data
+  return { lum: (0.299 * r + 0.587 * g + 0.114 * b) / 255, alpha: a / 255 }
 }
 
 function useIsDark(ref: React.RefObject<HTMLElement | null>): boolean {
