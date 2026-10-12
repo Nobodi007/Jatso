@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Search, Menu, X } from "lucide-react"
-import { chapters, type Block } from "./notes-data"
+import { chapters as sourceChapters, type Block, type Chapter } from "./notes-data"
 import { useLanguage } from "../../../i18n/LanguageContext"
 
 
@@ -29,6 +29,71 @@ const sectionTitlesEn: Record<string, string> = {
 }
 function chapterTitle(id: string, title: string, lang: string) { return lang === "en" ? chapterTitlesEn[id] ?? title : title }
 function sectionTitle(id: string, title: string, lang: string) { return lang === "en" ? sectionTitlesEn[id] ?? title : title }
+
+const THAI_RE = /[\u0E00-\u0E7F]/
+const CACHE_PREFIX = "learn-note-en-v1:"
+
+async function translateText(text: string): Promise<string> {
+  if (!THAI_RE.test(text)) return text
+  try {
+    const key = CACHE_PREFIX + text
+    const cached = localStorage.getItem(key)
+    if (cached) return cached
+    const url = new URL("https://translate.googleapis.com/translate_a/single")
+    url.searchParams.set("client", "gtx")
+    url.searchParams.set("sl", "th")
+    url.searchParams.set("tl", "en")
+    url.searchParams.set("dt", "t")
+    url.searchParams.set("q", text)
+    const response = await fetch(url.toString())
+    if (!response.ok) return text
+    const data = await response.json()
+    const result = (data?.[0] ?? []).map((part: unknown[]) => String(part?.[0] ?? "")).join("")
+    if (result) {
+      try { localStorage.setItem(key, result) } catch { /* cache is optional */ }
+      return result
+    }
+  } catch { /* Keep the original text if translation is unavailable. */ }
+  return text
+}
+
+async function translateValue(value: unknown): Promise<unknown> {
+  if (typeof value === "string") return translateText(value)
+  if (Array.isArray(value)) return Promise.all(value.map(translateValue))
+  if (value && typeof value === "object") {
+    const entries = await Promise.all(Object.entries(value).map(async ([key, item]) => [key, await translateValue(item)] as const))
+    return Object.fromEntries(entries)
+  }
+  return value
+}
+
+async function translateChapters(): Promise<Chapter[]> {
+  const unique = new Set<string>()
+  const collect = (value: unknown) => {
+    if (typeof value === "string") { if (THAI_RE.test(value)) unique.add(value); return }
+    if (Array.isArray(value)) { value.forEach(collect); return }
+    if (value && typeof value === "object") Object.values(value).forEach(collect)
+  }
+  collect(sourceChapters)
+  const queue = [...unique]
+  const translated = new Map<string, string>()
+  let cursor = 0
+  const worker = async () => {
+    while (cursor < queue.length) {
+      const index = cursor++
+      const original = queue[index]
+      translated.set(original, await translateText(original))
+    }
+  }
+  await Promise.all(Array.from({ length: 4 }, () => worker()))
+  const rebuild = (value: unknown): unknown => {
+    if (typeof value === "string") return translated.get(value) ?? value
+    if (Array.isArray(value)) return value.map(rebuild)
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, rebuild(item)]))
+    return value
+  }
+  return rebuild(sourceChapters) as Chapter[]
+}
 
 function BlockView({ block }: { block: Block }) {
   switch (block.t) {
@@ -94,6 +159,20 @@ function BlockView({ block }: { block: Block }) {
 export default function ChapterNotes() {
   const { t: tr, lang } = useLanguage()
   const [query, setQuery] = useState("")
+  const [englishChapters, setEnglishChapters] = useState<Chapter[] | null>(null)
+  const [translationLoading, setTranslationLoading] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    if (lang !== "en") { setEnglishChapters(null); setTranslationLoading(false); return }
+    setTranslationLoading(true)
+    translateChapters().then((result) => {
+      if (!cancelled) setEnglishChapters(result)
+    }).finally(() => { if (!cancelled) setTranslationLoading(false) })
+    return () => { cancelled = true }
+  }, [lang])
+
+  const chapters = lang === "en" && englishChapters ? englishChapters : sourceChapters
   const [activeId, setActiveId] = useState<string>(chapters[0]?.sections[0]?.id ?? "")
   const [navOpen, setNavOpen] = useState(false)
   const sectionRefs = useRef<Record<string, HTMLElement | null>>({})
@@ -182,6 +261,9 @@ export default function ChapterNotes() {
 
       {/* เนื้อหา */}
       <div className="space-y-10">
+        {lang === "en" && translationLoading && !englishChapters && (
+          <p className="rounded-lg border bg-card px-4 py-3 text-sm text-muted-foreground">Translating lesson content into English… This may take a moment the first time.</p>
+        )}
         {chapters.map((ch) => (
           <div key={ch.id}>
             <div className="mb-4 flex items-baseline gap-3 border-l-4 pl-3" style={{ borderColor: ch.color }}>
