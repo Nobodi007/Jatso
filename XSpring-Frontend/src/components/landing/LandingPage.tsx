@@ -1,3 +1,4 @@
+const { t } = useLanguage();
 import { useEffect, useState } from "react"
 import { Globe, Menu, Moon, Sun, X } from "lucide-react"
 import MarketSection from "./MarketSection"
