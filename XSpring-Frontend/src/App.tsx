@@ -71,7 +71,7 @@ type PortfolioData = {
 const API_BASE_URL = "https://xspring-api.onrender.com"
 const DEALER_API_KEY = String(import.meta.env.VITE_DEALER_API_KEY || "").trim()
 
-function formatTHB(value: number) {
+export function formatTHB(value: number) {
   return `฿${Number(value || 0).toLocaleString("th-TH", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -979,7 +979,7 @@ export function CoinIcon({ asset, size = 36 }: { asset: string; size?: number })
   )
 }
 
-type MarketTicker = {
+export type MarketTicker = {
   asset: string
   name: string
   price: number
@@ -1012,7 +1012,7 @@ function signedPct(value: number) {
 // ดึงราคาตลาดครั้งเดียวทุกเหรียญ:
 // 1) ผ่าน Backend /api/markets (ไม่ติด CORS)
 // 2) ถ้า Backend ยังไม่มี endpoint นี้ ลองเรียก Bitkub ตรง 1 request
-async function fetchMarketTickers(): Promise<MarketTicker[]> {
+export async function fetchMarketTickers(): Promise<MarketTicker[]> {
   try {
     if (DEALER_API_KEY) {
       const response = await fetch(`${API_BASE_URL}/api/markets`, {
