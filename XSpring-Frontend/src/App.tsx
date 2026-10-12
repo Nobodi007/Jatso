@@ -1893,6 +1893,8 @@ function TradePage({
   const [asset, setAsset] = useState<Asset>("BTC")
   const [side, setSide] = useState<OrderSide>("BUY")
   const [amount, setAmount] = useState("")
+  const [orderType, setOrderType] = useState<"MARKET" | "LIMIT">("MARKET")
+  const [limitPrice, setLimitPrice] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [orderMessage, setOrderMessage] = useState("")
   const [tickers, setTickers] = useState<MarketTicker[]>([])
@@ -1928,19 +1930,15 @@ function TradePage({
       ? Number(portfolio?.cash_thb || 0)
       : Number(holding?.market_value || 0)
 
+  const execPrice = orderType === "LIMIT" ? Number(limitPrice || 0) : currentPrice
   const amountThb = Number(amount || 0)
-  const estimatedQty =
-    currentPrice > 0 && amountThb > 0 ? amountThb / currentPrice : 0
+  const estimatedQty = execPrice > 0 && amountThb > 0 ? amountThb / execPrice : 0
 
   const tradeReady =
-    !loading &&
-    !error &&
-    !!portfolio &&
-    currentPrice > 0 &&
-    Number.isFinite(amountThb) &&
-    amountThb >= 50 &&
-    amountThb <= availableThb &&
-    !submitting
+    !loading && !error && !!portfolio &&
+    currentPrice > 0 && execPrice > 0 &&
+    Number.isFinite(amountThb) && amountThb >= 50 &&
+    amountThb <= availableThb && !submitting
 
   const submitOrder = async () => {
     setOrderMessage("")
@@ -1969,6 +1967,11 @@ function TradePage({
       return
     }
 
+    if (orderType === "LIMIT" && !(Number(limitPrice) > 0)) {
+      setOrderMessage("กรุณาระบุราคา Limit ให้ถูกต้อง")
+      return
+    }
+
     if (cleanAmount > availableThb + 1e-9) {
       setOrderMessage(
         `${side === "BUY" ? "ยอดเงินที่ใช้ซื้อ" : "จำนวนที่ขาย"}เกินยอดที่ทำรายการได้`
@@ -1987,7 +1990,7 @@ function TradePage({
     }
 
     const confirmed = window.confirm(
-      `${side === "BUY" ? "ยืนยันการซื้อ" : "ยืนยันการขาย"} ${asset} มูลค่า ${formatTHB(cleanAmount)} ?\n\nราคาจะถูกตรวจและกำหนดโดย Backend / Engine`
+      `${side === "BUY" ? "ยืนยันการซื้อ" : "ยืนยันการขาย"} ${asset} มูลค่า ${formatTHB(cleanAmount)} (${orderType === "LIMIT" ? `Limit @ ${formatTHB(Number(limitPrice))}` : "Market"}) ?\n\n...`
     )
 
     if (!confirmed) return
@@ -2005,6 +2008,8 @@ function TradePage({
           asset: asset.toUpperCase(),
           side: side.toLowerCase(),
           amount_thb: cleanAmount,
+          order_type: orderType.toLowerCase(),
+          ...(orderType === "LIMIT" && { limit_price: Number(limitPrice) }),
         }),
       })
 
@@ -2037,6 +2042,18 @@ function TradePage({
           "Engine ปฏิเสธคำสั่ง"
 
         setOrderMessage(`Engine ปฏิเสธคำสั่ง: ${reason}`)
+        return
+      }
+
+            const isPending = ["open", "pending", "placed"].includes(body?.status)
+      if (orderType === "LIMIT" && isPending) {
+        setOrderMessage(
+          `วางคำสั่ง Limit สำเร็จ: ${side === "BUY" ? "ซื้อ" : "ขาย"} ${asset} @ ${formatTHB(Number(limitPrice))} (รอจับคู่)`
+        )
+        setAmount("")
+        setLimitPrice("")
+        await onRefresh()
+        onOrderCreated()
         return
       }
 
@@ -2223,6 +2240,29 @@ function TradePage({
             </button>
           </div>
 
+          {/* ORDER TYPE */}
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            {(["MARKET", "LIMIT"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                disabled={submitting}
+                onClick={() => {
+                  setOrderType(t)
+                  if (t === "LIMIT" && !limitPrice && currentPrice > 0)
+                    setLimitPrice(String(currentPrice))
+                }}
+                className={`rounded-md border py-1.5 text-xs font-medium ${
+                  orderType === t
+                    ? "border-primary bg-primary/10 text-foreground"
+                    : "text-muted-foreground hover:bg-accent"
+                }`}
+              >
+                {t === "MARKET" ? "Market" : "Limit"}
+              </button>
+            ))}
+          </div>
+
           {/* BALANCE */}
           <div className="mt-5 flex items-center justify-between text-xs">
             <span className="text-muted-foreground">Available</span>
@@ -2231,12 +2271,19 @@ function TradePage({
 
           {/* PRICE */}
           <div className="mt-4">
-            <label className="mb-2 block text-xs text-muted-foreground">ราคา</label>
+            <label className="mb-2 block text-xs text-muted-foreground">
+              {orderType === "LIMIT" ? "ราคา Limit" : "ราคา (ราคาตลาด)"}
+            </label>
             <div className="flex items-center rounded-lg border bg-background">
               <input
-                value={currentPrice > 0 ? currentPrice : ""}
-                readOnly
-                className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm outline-none"
+                value={orderType === "LIMIT" ? limitPrice : currentPrice > 0 ? currentPrice : ""}
+                readOnly={orderType === "MARKET"}
+                onChange={(e) => setLimitPrice(e.target.value)}
+                inputMode="decimal"
+                placeholder="0.00"
+                className={`min-w-0 flex-1 bg-transparent px-3 py-3 text-sm outline-none ${
+                  orderType === "MARKET" ? "text-muted-foreground" : ""
+                }`}
               />
               <span className="px-3 text-xs text-muted-foreground">THB</span>
             </div>
@@ -2307,9 +2354,8 @@ function TradePage({
           >
             {submitting
               ? "กำลังส่งคำสั่ง..."
-              : side === "BUY"
-                ? `ซื้อ ${asset}`
-                : `ขาย ${asset}`}
+              : `${side === "BUY" ? "ซื้อ" : "ขาย"} ${asset}${orderType === "LIMIT" ? " (Limit)" : ""}`}
+              
           </button>
 
           {orderMessage && (
