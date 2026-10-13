@@ -120,7 +120,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
   return (
     <>
       {/* HERO */}
-      <section className="mx-auto grid max-w-7xl items-center gap-10 px-4 py-6 lg:grid-cols-2 lg:py-8">
+      <section id="tour-hero" className="mx-auto grid max-w-7xl items-center gap-10 px-4 py-16 lg:grid-cols-2 lg:py-24">
         <div>
           <h1 className="text-4xl font-extrabold leading-tight tracking-tight sm:text-5xl">{heroTitle}</h1>
           <p className="mt-5 max-w-xl text-base leading-7 text-muted-foreground">{heroSub}</p>
@@ -136,7 +136,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
       </section>
 
       {/* ตลาด */}
-      <section className="mx-auto max-w-4xl px-4 py-12">
+      <section id="tour-market" className="mx-auto max-w-4xl px-4 py-12">
         <h2 className="text-center text-3xl font-extrabold tracking-tight">{t("market.title")}</h2>
         <p className="mt-2 text-center text-sm text-muted-foreground">{t("market.subtitle")}</p>
 
@@ -183,7 +183,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
       </section>
 
       {/* ทำไมต้อง Nobodi */}
-      <section className="mx-auto max-w-6xl px-4 py-12">
+      <section id="tour-why" className="mx-auto max-w-6xl px-4 py-12">
         <h2 className="text-center text-3xl font-extrabold tracking-tight">{t("why.title")}</h2>
         <p className="mt-2 text-center text-sm text-muted-foreground">
           {t("why.subtitle")}
@@ -205,7 +205,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
       </section>
 
       {/* เริ่มต้นใน 3 ขั้น */}
-      <section className="mx-auto max-w-6xl px-4 py-12">
+      <section id="tour-steps" className="mx-auto max-w-6xl px-4 py-12">
         <h2 className="text-center text-3xl font-extrabold tracking-tight">{t("steps.title")}</h2>
         <div className="mt-8 grid items-center gap-8 lg:grid-cols-[1fr_320px]">
           <ol className="space-y-6">
@@ -257,7 +257,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
       </section>
 
       {/* เครื่องมือ */}
-      <section className="mx-auto max-w-6xl px-4 py-12">
+      <section id="tour-tools" className="mx-auto max-w-6xl px-4 py-12">
         <h2 className="text-center text-3xl font-extrabold tracking-tight">{t("tools.title")}</h2>
         <div className="mt-8 grid gap-4 md:grid-cols-3">
           {TOOLS.map((tool) => {
@@ -280,7 +280,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
       </section>
 
             {/* ปิดท้าย */}
-      <section className="mx-auto max-w-4xl px-4 py-16 text-center">
+      <section id="tour-cta" className="mx-auto max-w-4xl px-4 py-16 text-center">
         <h2 className="text-3xl font-extrabold tracking-tight">{t("cta.title")}</h2>
         <p className="mt-2 text-sm text-muted-foreground">{t("cta.subtitle")}</p>
         <div className="mt-6 flex justify-center gap-3">
