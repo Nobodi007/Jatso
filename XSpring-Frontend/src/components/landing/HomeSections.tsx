@@ -120,7 +120,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
   return (
     <>
       {/* HERO */}
-      <section id="tour-hero" className="mx-auto grid max-w-7xl items-center gap-10 px-4 py-16 lg:grid-cols-2 lg:py-24">
+      <section id="tour-hero" className="mx-auto grid max-w-7xl items-center gap-10 px-4 py-6 lg:grid-cols-2 lg:py-8">
         <div>
           <h1 className="text-4xl font-extrabold leading-tight tracking-tight sm:text-5xl">{heroTitle}</h1>
           <p className="mt-5 max-w-xl text-base leading-7 text-muted-foreground">{heroSub}</p>
