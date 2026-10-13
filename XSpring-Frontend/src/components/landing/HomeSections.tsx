@@ -79,9 +79,10 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
   const locale = lang === "th" ? "th-TH" : "en-US"
   const [rows, setRows] = useState<Row[] | null>(null)
   const [sparks, setSparks] = useState<Record<string, number[]>>({})
-  const [page, setPage] = useState<"home" | "about" | "guide" | "privacy">("home")
+  const [page, setPage] = useState<
+  "home" | "about" | "guide" | "privacy" | "disclosure">("home")
   const openPage = (p: string) => {
-    if (p === "about" || p === "guide" || p === "privacy") setPage(p)
+    if (p === "about" || p === "guide" p === "disclosure" ) setPage(p)
   }
 
 
