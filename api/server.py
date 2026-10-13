@@ -23,7 +23,6 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 import bot_rules as br
 
-import pandas as pd
 
 
 # =========================================================
