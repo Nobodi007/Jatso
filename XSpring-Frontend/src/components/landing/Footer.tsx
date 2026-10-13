@@ -7,7 +7,7 @@ const ABOUT: FooterLink[] = [
   { label: "footer.system", page: "about" },
   { label: "footer.guide", page: "guide" },
   { label: "footer.privacy", page: "privacy" },
-  { label: "footer.disclosure" },
+  { label: "footer.disclosure", page: "disclosure" },
   { label: "footer.news", go: "ข่าว" },
   { label: "footer.contact", highlight: true, href: "https://www.linkedin.com/in/thiraphat-niyom-11044727b" },
 ]
