@@ -13,6 +13,8 @@ import LanguageSwitcher from "../LanguageSwitcher";
 import { useLanguage } from "../../i18n/LanguageContext";
 import { PriceTicker } from "./LandingEffects"
 import { GlobeHero } from "./GlobeHero"
+import { Menu, Moon, Sparkles, Sun, X } from "lucide-react";   // เพิ่ม Sparkles
+import TourGuide from "./TourGuide";
 
 type LandingPageProps = {
   onLogin: () => void
@@ -61,6 +63,19 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
   const [coin, setCoin] = useState("BTC")
   const [dark, setDark] = useState(initialDark)
   const { t } = useLanguage()
+  const [tour, setTour] = useState(false)
+
+// ออกจากหน้าแรก = ปิดทัวร์
+useEffect(() => {
+  if (view !== "home") setTour(false)
+}, [view])
+
+const startTour = () => {
+  setMenuOpen(false)
+  setView("home")
+  window.scrollTo({ top: 0 })
+  setTour(true)
+}
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark)
@@ -93,9 +108,9 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
     window.scrollTo({ top: 0 })
   }
 
-  return (
+    return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-10 border-b bg-background/90 backdrop-blur">
+      <header id="tour-nav" className="sticky top-0 z-10 border-b bg-background/90 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-7xl items-center gap-6 px-4">
           <button type="button" onClick={() => setView("home")} className="text-xl font-extrabold tracking-tight">
             {BRAND}
@@ -118,15 +133,24 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
             ))}
           </nav>
 
-          <div className="ml-auto flex items-center gap-2">
-            <SearchBox onSelect={openCoin} />
-            <button
-              type="button"
-              onClick={onLogin}
-              className="hidden rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent sm:block"
-            >
-              {t("nav.login")}
-            </button>
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            onClick={startTour}
+            aria-label={t("tour.start")}
+            className="flex items-center gap-1.5 rounded-md border border-emerald-500/40 px-2.5 py-1.5 text-sm font-medium text-emerald-500 hover:bg-emerald-500/10"
+          >
+            <Sparkles className="h-4 w-4" />
+            <span className="hidden sm:inline">{t("tour.start")}</span>
+          </button>
+          <SearchBox onSelect={openCoin} />
+          <button
+            type="button"
+            onClick={onLogin}
+            className="hidden rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent sm:block"
+          >
+            {t("nav.login")}
+          </button>
             <button
               type="button"
               onClick={onRegister}
@@ -207,6 +231,15 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
             <PriceTicker />
           </>
         )}
+    {tour && view === "home" && (
+        <TourGuide
+          onClose={() => setTour(false)}
+          onRegister={() => {
+            setTour(false)
+            onRegister()
+          }}
+        />
+      )}
     </div>
   )
 }
