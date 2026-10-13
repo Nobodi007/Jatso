@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { ChevronLeft, ChevronRight, Pause, Play, X } from "lucide-react"
+import { ChevronLeft, ChevronRight, Pause, Play, Volume2, VolumeX, X } from "lucide-react"
 import { useLanguage } from "../../i18n/LanguageContext"
 
 // title / text เป็น key ใน translations.ts (ไม่ใช่ข้อความจริง)
@@ -18,6 +18,7 @@ export const HOME_TOUR: TourStep[] = [
 
 const HEADER_OFFSET = 80 // เว้นที่ให้แถบเมนูด้านบน
 const PAD = 8 // ระยะขอบของกรอบไฮไลต์
+const CAN_SPEAK = typeof window !== "undefined" && "speechSynthesis" in window
 
 type Props = {
   steps?: TourStep[]
@@ -33,6 +34,8 @@ export default function TourGuide({ steps = HOME_TOUR, onClose, onRegister }: Pr
   const [idx, setIdx] = useState(0)
   const [playing, setPlaying] = useState(true)
   const hlRef = useRef<HTMLDivElement>(null)
+  const [voice, setVoice] = useState(CAN_SPEAK)
+  const [spoken, setSpoken] = useState(false) // พูดจบขั้นนี้แล้วหรือยัง
 
   const step = list[idx]
   const last = idx === list.length - 1
@@ -70,20 +73,36 @@ export default function TourGuide({ steps = HOME_TOUR, onClose, onRegister }: Pr
     tick()
     return () => cancelAnimationFrame(raf)
   }, [step])
-
-  // เล่นอัตโนมัติ: เวลาอ่านขึ้นกับความยาวข้อความ
+  
+  // อ่านออกเสียงขั้นปัจจุบัน (หยุดชั่วคราว = หยุดพูด, เล่นต่อ = พูดใหม่ตั้งแต่ต้นขั้น)
+  useEffect(() => {
+    setSpoken(false)
+    if (!CAN_SPEAK || !voice || !playing || !step) return
+    let cancelled = false
+    const synth = window.speechSynthesis
+    synth.cancel()
+    const u = new SpeechSynthesisUtterance(`${t(step.title)}. ${t(step.text)}`)
+    u.lang = lang === "th" ? "th-TH" : "en-US"
+    u.onend = () => !cancelled && setSpoken(true)
+    u.onerror = () => !cancelled && setSpoken(true)
+    synth.speak(u)
+    return () => {
+      cancelled = true
+      synth.cancel()
+    }
+  }, [voice, playing, step, lang, t])
+  
+   // เล่นอัตโนมัติ: เปิดเสียง = รอพูดจบแล้วเว้น 1.2 วิ / ปิดเสียง = รอขั้นละ 5 วิ
   useEffect(() => {
     if (!playing || !step) return
-    const ms = Math.max(5000, t(step.text).length * (lang === "th" ? 80 : 55))
+    const speaking = CAN_SPEAK && voice
+    if (speaking && !spoken) return
     const id = setTimeout(() => {
       if (last) setPlaying(false)
       else setIdx((i) => i + 1)
-    }, ms)
+    }, speaking ? 1200 : 5000)
     return () => clearTimeout(id)
-  }, [playing, step, last, lang, t])
-
-  const next = () => setIdx((i) => Math.min(i + 1, list.length - 1))
-  const prev = () => setIdx((i) => Math.max(i - 1, 0))
+  }, [playing, step, last, voice, spoken])
 
   // คีย์ลัด: Esc ปิด, ลูกศรซ้าย/ขวาเปลี่ยนขั้น
   useEffect(() => {
@@ -155,6 +174,16 @@ export default function TourGuide({ steps = HOME_TOUR, onClose, onRegister }: Pr
             >
               {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
             </button>
+            {CAN_SPEAK && (
+              <button
+                type="button"
+                onClick={() => setVoice((v) => !v)}
+                aria-label={voice ? t("tour.mute") : t("tour.unmute")}
+                className={btn}
+              >
+                {voice ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+              </button>
+            )}
             {last ? (
               <button
                 type="button"
