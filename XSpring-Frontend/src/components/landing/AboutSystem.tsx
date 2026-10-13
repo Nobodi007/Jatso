@@ -57,7 +57,7 @@ export default function AboutSystem({ onBack }: { onBack: () => void }) {
           {t("sys.badge")}
         </span>
         <h1 className="mt-4 text-4xl font-extrabold leading-tight tracking-tight sm:text-5xl">
-          XSpring Dealer Suite
+          Nobodi
         </h1>
         <p className="mt-4 max-w-2xl text-base leading-7 text-muted-foreground">{t("sys.intro")}</p>
         <div className="mt-8 grid gap-3 sm:grid-cols-3">
