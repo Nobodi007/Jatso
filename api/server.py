@@ -21,10 +21,7 @@ import requests
 import jwt
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
-try:
-    from . import bot_rules as br   # รันแบบ uvicorn api.server:app (แบบที่ Render ใช้)
-except ImportError:
-    import bot_rules as br          # รันตรงๆ ในเครื่องจากโฟลเดอร์ api/
+from api import bot_rules as br
 
 import pandas as pd
 
