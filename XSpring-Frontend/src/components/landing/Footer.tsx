@@ -1,6 +1,6 @@
 import { useLanguage } from "../../i18n/LanguageContext"
 
-type FooterLink = { label: string; go?: string; asset?: string; page?: string; highlight?: boolean }
+type FooterLink = { label: string; go?: string; asset?: string; page?: string; highlight?: boolean; href?: string }
 
 const ABOUT: FooterLink[] = [
   { label: "footer.history", go: "ประวัติความเป็นมา" },
@@ -9,7 +9,7 @@ const ABOUT: FooterLink[] = [
   { label: "footer.privacy", page: "privacy" },
   { label: "footer.disclosure" },
   { label: "footer.news", go: "ข่าว" },
-  { label: "footer.contact", highlight: true },
+  { label: "footer.contact", highlight: true, href: "https://www.linkedin.com/in/thiraphat-niyom-11044727b" },
 ]
 
 const SERVICES: FooterLink[] = [
@@ -41,17 +41,30 @@ export default function Footer({ onGo, onOpenCoin, onPage }: Props) {
       <p className="font-semibold">{title}</p>
       <ul className="mt-3 space-y-2">
         {links.map((l) => (
-          <li key={l.label}>
-            <button
-              type="button"
-              onClick={() => click(l)}
-              className={`text-left ${
-                l.highlight ? "text-sky-500 hover:text-sky-400" : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {t(l.label)}
-            </button>
-          </li>
+              <li key={l.label}>
+                {l.href ? (
+                  <a
+                    href={l.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`text-left ${
+                      l.highlight ? "text-sky-500 hover:text-sky-400" : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {t(l.label)}
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => click(l)}
+                    className={`text-left ${
+                      l.highlight ? "text-sky-500 hover:text-sky-400" : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {t(l.label)}
+                  </button>
+                )}
+            </li>
         ))}
       </ul>
     </div>
