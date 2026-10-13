@@ -8,7 +8,7 @@ const AUTH_POINTS = [
 ]
 
 function AuthShell({
-  title = "XSpring Dealer Suite",
+  title = "Nobodi",
   subtitle = "เข้าสู่ระบบด้วยบัญชี Google",
   onBack,
   children,
