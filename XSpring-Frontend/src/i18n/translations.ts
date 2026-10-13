@@ -115,6 +115,8 @@ const th = {
     play: "เล่นต่อ",
     close: "ปิดทัวร์",
     signup: "สมัครตอนนี้",
+    mute: "ปิดเสียง",
+    unmute: "เปิดเสียง",
     nav: {
       title: "เมนูหลัก",
       text: "แถบด้านบนพาคุณไปหน้าตลาด การซื้อขาย เรียนรู้ ข่าว และลองลงทุนย้อนหลัง ทางขวามีช่องค้นหาเหรียญ ปุ่มสลับโหมดสว่างหรือมืด และปุ่มเปลี่ยนภาษา",
@@ -585,6 +587,8 @@ const en: Translations = {
     play: "Resume",
     close: "Close tour",
     signup: "Sign up now",
+    mute: "Mute",
+    unmute: "Unmute",
     nav: {
       title: "Main menu",
       text: "The top bar takes you to Market, Trade, Learn, News and Backtest. On the right you'll find coin search, the light/dark switch and the language button.",
