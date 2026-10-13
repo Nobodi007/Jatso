@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Menu, Moon, Sun, X } from "lucide-react";
+import { Menu, Moon, Sparkles, Sun, X } from "lucide-react"
 import MarketSection from "./MarketSection"
 import NewsSection from "./NewsSection"
 import SearchBox from "./SearchBox"
