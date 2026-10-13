@@ -111,6 +111,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
         {page === "privacy" && <PrivacyPolicy onBack={() => setPage("home")} />}
         {page === "about" && <AboutSystem onBack={() => setPage("home")} />}
         {page === "guide" && <UserGuide onBack={() => setPage("home")} />}
+        {page === "disclosure" && <Disclosure onBack={() => setPage("home")} />}
         <Footer onGo={onGo} onOpenCoin={onOpenCoin} onPage={openPage} />
       </>
     )
