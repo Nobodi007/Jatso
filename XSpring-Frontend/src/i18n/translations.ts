@@ -105,6 +105,45 @@ const th = {
     bannerSub: "สมัครบัญชีจำลองฟรี ฝึกซื้อขายด้วยราคาตลาดจริง",
     bannerBtn: "สมัครบัญชีจำลองฟรี",
   },
+  // AI พาทัวร์
+  tour: {
+    start: "AI พาทัวร์",
+    stepOf: "ขั้นที่ {n} จาก {total}",
+    prev: "ย้อนกลับ",
+    next: "ถัดไป",
+    pause: "หยุดชั่วคราว",
+    play: "เล่นต่อ",
+    close: "ปิดทัวร์",
+    signup: "สมัครตอนนี้",
+    nav: {
+      title: "เมนูหลัก",
+      text: "แถบด้านบนพาคุณไปหน้าตลาด การซื้อขาย เรียนรู้ ข่าว และลองลงทุนย้อนหลัง ทางขวามีช่องค้นหาเหรียญ ปุ่มสลับโหมดสว่างหรือมืด และปุ่มเปลี่ยนภาษา",
+    },
+    hero: {
+      title: "ยินดีต้อนรับสู่ Nobodi",
+      text: "Nobodi คือที่ฝึกลงทุนคริปโตด้วยบัญชีจำลอง ดูราคาสด ทดสอบกลยุทธ์ย้อนหลัง และฝึกซื้อขายก่อนใช้เงินจริง ทุกอย่างอยู่ในที่เดียว",
+    },
+    market: {
+      title: "ตลาดแบบสด",
+      text: "ตารางนี้แสดงราคาเหรียญเป็นเงินบาท อัปเดตอัตโนมัติทุก 15 วินาที พร้อมกราฟแนวโน้ม 7 วัน กดที่เหรียญเพื่อดูรายละเอียด",
+    },
+    why: {
+      title: "ทำไมต้อง Nobodi",
+      text: "คุณฝึกซื้อขายได้โดยไม่เสี่ยงเงินจริง ดูราคาเป็นบาทพร้อมต้นทุนหลังหักค่าธรรมเนียม และทดสอบย้อนหลังก่อนตัดสินใจ",
+    },
+    steps: {
+      title: "เริ่มต้นใน 3 ขั้นตอน",
+      text: "สมัครด้วยบัญชี Google ฝึกซื้อขายในบัญชีจำลอง แล้วทดสอบกลยุทธ์ย้อนหลังเทียบกันได้เลย",
+    },
+    tools: {
+      title: "เครื่องมือช่วยตัดสินใจ",
+      text: "มีข่าวคริปโต เทียบราคากระดานไทย และลองลงทุนย้อนหลัง กดที่การ์ดแต่ละใบเพื่อเข้าไปดูได้ทันที",
+    },
+    cta: {
+      title: "พร้อมลองแล้วใช่ไหม",
+      text: "สมัครฟรีด้วยบัญชี Google แล้วเริ่มฝึกในบัญชีจำลองได้เลย",
+    },
+  },
   // Footer
   footer: {
     tagline: "แพลตฟอร์มฝึกลงทุนคริปโตด้วยบัญชีจำลอง",
@@ -536,6 +575,44 @@ const en: Translations = {
     bannerTitle: "Want to try trading before using real money?",
     bannerSub: "Sign up for a free demo account and practice with real market prices",
     bannerBtn: "Get a free demo account",
+  },
+  tour: {
+    start: "AI Tour",
+    stepOf: "Step {n} of {total}",
+    prev: "Previous",
+    next: "Next",
+    pause: "Pause",
+    play: "Resume",
+    close: "Close tour",
+    signup: "Sign up now",
+    nav: {
+      title: "Main menu",
+      text: "The top bar takes you to Market, Trade, Learn, News and Backtest. On the right you'll find coin search, the light/dark switch and the language button.",
+    },
+    hero: {
+      title: "Welcome to Nobodi",
+      text: "Nobodi is a place to practice crypto investing with a demo account. Watch live prices, backtest strategies and practice trading before using real money, all in one place.",
+    },
+    market: {
+      title: "Live market",
+      text: "This table shows coin prices in Thai baht, refreshed automatically every 15 seconds, with a 7-day trend chart. Click a coin to see its details.",
+    },
+    why: {
+      title: "Why Nobodi",
+      text: "Practice trading without risking real money, see prices in baht with costs after fees, and backtest before you decide.",
+    },
+    steps: {
+      title: "Get started in 3 steps",
+      text: "Sign up with Google, practice in the demo account, then backtest your strategies and compare the results.",
+    },
+    tools: {
+      title: "Decision tools",
+      text: "Crypto news, a Thai exchange price comparison and backtesting. Click any card to jump straight in.",
+    },
+    cta: {
+      title: "Ready to try?",
+      text: "Sign up free with your Google account and start practicing in the demo account.",
+    },
   },
   footer: {
     tagline: "A platform for practicing crypto investing with a demo account",
