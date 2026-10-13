@@ -13,7 +13,6 @@ import LanguageSwitcher from "../LanguageSwitcher";
 import { useLanguage } from "../../i18n/LanguageContext";
 import { PriceTicker } from "./LandingEffects"
 import { GlobeHero } from "./GlobeHero"
-import { Menu, Moon, Sparkles, Sun, X } from "lucide-react";   // เพิ่ม Sparkles
 import TourGuide from "./TourGuide";
 
 type LandingPageProps = {
