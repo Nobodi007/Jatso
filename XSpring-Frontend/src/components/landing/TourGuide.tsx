@@ -104,6 +104,9 @@ export default function TourGuide({ steps = HOME_TOUR, onClose, onRegister }: Pr
     return () => clearTimeout(id)
   }, [playing, step, last, voice, spoken])
 
+  const next = () => setIdx((i) => Math.min(i + 1, list.length - 1))
+  const prev = () => setIdx((i) => Math.max(i - 1, 0))
+
   // คีย์ลัด: Esc ปิด, ลูกศรซ้าย/ขวาเปลี่ยนขั้น
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
