@@ -341,8 +341,7 @@ function AppInner() {
 
             {sidebarOpen && (
               <div className="ml-3 min-w-0">
-                <div className="truncate text-sm font-semibold">XSpring</div>
-                <div className="truncate text-xs text-muted-foreground">Dealer Suite</div>
+                <div className="truncate text-sm font-semibold">Nobodi</div>
               </div>
             )}
           </div>
@@ -1518,7 +1517,7 @@ function DashboardPage({
         <div>
           <h2 className="text-2xl font-bold">Dashboard</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            ภาพรวมพอร์ต การซื้อขาย และตลาดของ XSpring Dealer Suite
+            ภาพรวมพอร์ต การซื้อขาย และตลาดของ Nobodi
           </p>
         </div>
 
