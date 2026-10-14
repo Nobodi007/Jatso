@@ -3966,8 +3966,7 @@ def bots_update(bot_id: str, body: BotPatchIn, user: str = Depends(require_user)
         if not patch:
             raise HTTPException(status_code=400, detail="ไม่มีข้อมูลที่จะแก้ไข")
         patch["dry_run"] = True  # ย้ำทุกครั้ง: ขั้นที่ 2 ไม่มีทางเป็นโหมดจริง
-        patch["updated_at"] = pd.Timestamp.now(tz="UTC").isoformat()
-
+        
         sb = _bot_sb(load_gu())
         res = (
             sb.table("bot_strategies").update(patch)
@@ -4043,12 +4042,13 @@ def bots_tick(x_tick_secret: str = Header(default="")):
         sb = _bot_sb(gu)
         bots = sb.table("bot_strategies").select("*").eq("enabled", True).execute().data or []
         frames: dict = {}
+        live_on = os.environ.get("BOTS_LIVE_ENABLED", "").strip().lower() == "true"
         out = {"status": "ok", "checked": len(bots), "acted": 0, "skipped": 0, "errors": []}
 
         for b in bots:
             try:
-                if not b.get("dry_run", True):
-                    out["skipped"] += 1  # โหมดจริงยังไม่เปิดใช้
+                if not b.get("dry_run", True) and not live_on:
+                    out["skipped"] += 1  # โหมดจริงถูกปิดทั้งระบบ
                     continue
                 spec = br.validate_spec(b["spec"])
                 asset, actor = spec["asset"], b["actor"]
@@ -4081,6 +4081,119 @@ def bots_tick(x_tick_secret: str = Header(default="")):
                 )
                 if not claimed:
                     out["skipped"] += 1
+                    continue
+                if not b.get("dry_run", True):
+                    _bot_tick_live(gu, sb, b, spec, mid, cfg, bar)
+                    out["acted"] += 1
+                    continue
+
+                pos = b.get("position") if isinstance(b.get("position"), dict) else {}
+                cash = float(pos.get("cash", BOT_PAPER_CAPITAL) or 0.0)
+                coins = float(pos.get("coins", 0.0) or 0.0)
+                cost = float(pos.get("cost_thb", 0.0) or 0.0)
+                spread, fee = float(cfg["dealer_spread"]), float(ORDER_TRADING_FEE_RATE)
+
+                d = br.live_decision(mid, spec, {"coins": coins, "cost_thb": cost}, spread, fee)
+                px = float(mid.iloc[-1])
+
+                if d["action"] == "buy":
+                    amt = br.order_size(spec, cash)
+                    if amt > 0:
+                        coins = amt * (1.0 - fee) / (px * (1.0 + spread))
+                        cash -= amt
+                        cost = amt
+                    else:
+                        d["action"], d["reason"] = "hold", "เงินสดจำลองไม่พอ"
+                elif d["action"] == "sell":
+                    cash += coins * px * (1.0 - spread) * (1.0 - fee)
+                    coins, cost = 0.0, 0.0
+
+                sb.table("bot_runs").insert({
+                    "bot_id": b["id"], "actor": actor, "bar": bar,
+                    "action": d["action"], "reason": d["reason"],
+                    "pnl_pct": _fnum(d.get("pnl_pct"), 2), "dry_run": True,
+                }).execute()
+                sb.table("bot_strategies").update(
+                    {"position": {"cash": round(cash, 2), "coins": coins, "cost_thb": cost}}
+                ).eq("id", b["id"]).execute()
+                out["acted"] += 1
+            except Exception as e:
+                out["errors"].append({"bot": str(b.get("id")), "error": str(e)[:200]})
+        return out
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _internal_server_error("tick ไม่สำเร็จ", e, status_code=503)
+    finally:
+        _TICK_LOCK.release()
+
+# =========================================================
+# BOTS TICK (โหมดทดลอง) — วางต่อท้ายบล็อก bots เดิมใน api/server.py
+# เรียกโดย cron ภายนอกทุก 5 นาที ไม่แตะ Wallet / sim_state
+# =========================================================
+import hmac as _hmac
+
+_TICK_LOCK = _threading.Lock()
+BOT_PAPER_CAPITAL = 100_000.0  # เงินสดจำลองต่อบอท (โหมดทดลอง)
+
+
+@app.post("/api/bots/tick")
+def bots_tick(x_tick_secret: str = Header(default="")):
+    secret = os.environ.get("BOTS_TICK_SECRET", "").strip()
+    if not secret:
+        raise HTTPException(status_code=503, detail="ยังไม่ได้ตั้ง BOTS_TICK_SECRET")
+    if not _hmac.compare_digest(x_tick_secret.encode(), secret.encode()):
+        raise HTTPException(status_code=403, detail="forbidden")
+    if not _TICK_LOCK.acquire(blocking=False):
+        return {"status": "busy"}
+    try:
+        gu = load_gu()
+        sb = _bot_sb(gu)
+        bots = sb.table("bot_strategies").select("*").eq("enabled", True).execute().data or []
+        frames: dict = {}
+        live_on = os.environ.get("BOTS_LIVE_ENABLED", "").strip().lower() == "true"
+        out = {"status": "ok", "checked": len(bots), "acted": 0, "skipped": 0, "errors": []}
+
+        for b in bots:
+            try:
+                if not b.get("dry_run", True) and not live_on:
+                    out["skipped"] += 1  # โหมดจริงถูกปิดทั้งระบบ
+                    continue
+                spec = br.validate_spec(b["spec"])
+                asset, actor = spec["asset"], b["actor"]
+                if asset not in getattr(gu, "SUPPORTED_ASSETS", []):
+                    out["skipped"] += 1
+                    continue
+                if asset not in frames:
+                    frames[asset] = _load_market_frame(gu, asset)
+                cfg = _api_cfg(gu, asset, actor)
+                df = frames[asset]
+                mid = (
+                    df["Global_USD"].astype(float) * df["USDTHB"].astype(float)
+                    * (1.0 + cfg["local_premium"])
+                ).dropna()
+                mid = mid[mid > 0]
+                if len(mid) < 3:
+                    out["skipped"] += 1
+                    continue
+
+                bar = str(mid.index[-1])[:10]
+                if b.get("last_bar") == bar:
+                    out["skipped"] += 1
+                    continue
+                # จองแท่งนี้แบบ atomic กันประมวลผลซ้ำ
+                claimed = (
+                    sb.table("bot_strategies").update({"last_bar": bar})
+                    .eq("id", b["id"])
+                    .or_(f"last_bar.is.null,last_bar.neq.{bar}")
+                    .execute().data
+                )
+                if not claimed:
+                    out["skipped"] += 1
+                    continue
+                if not b.get("dry_run", True):
+                    _bot_tick_live(gu, sb, b, spec, mid, cfg, bar)
+                    out["acted"] += 1
                     continue
 
                 pos = b.get("position") if isinstance(b.get("position"), dict) else {}
