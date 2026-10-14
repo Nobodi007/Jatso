@@ -430,6 +430,15 @@ export default function BotLab({ api }: { api: BotApi }) {
     } catch (e) { setMsg(errMsg(e)); }
   };
 
+   const deleteBot = async (b: Bot) => {
+  if (!window.confirm(`ลบบอท "${b.name}" ?`)) return;
+  try {
+    await api(`/api/bots/${b.id}`, { method: "DELETE" });
+    if (runsFor === b.id) setRunsFor(null);
+    loadBots();
+  } catch (e) { setMsg(errMsg(e)); }
+};
+   
   const setMode = async (b: Bot, mode: "live" | "dry") => {
   if (mode === "live" && !window.confirm(`เปลี่ยนบอท "${b.name}" เป็นโหมดจริง?\nบอทจะซื้อขายจริงในพอร์ตของคุณ (สวิตช์จะถูกปิดไว้ก่อน)`)) return;
   try {
