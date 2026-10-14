@@ -36,6 +36,9 @@ except ImportError:
 
 import logging
 logging.getLogger("streamlit").setLevel(logging.ERROR)
+logging.getLogger(
+    "streamlit.runtime.scriptrunner_utils.script_run_context"
+).setLevel(logging.ERROR)
 
 import pandas as pd
 
