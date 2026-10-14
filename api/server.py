@@ -3670,4 +3670,351 @@ def create_order(
             raise _internal_server_error(
                 "เกิดข้อผิดพลาดภายใน API",
                 e,
+            )  
+# =========================================================
+# QUANT LAB — BOT API (step 2)
+# วางต่อท้าย api/server.py (ถ้ามี `if __name__ == "__main__":` ให้วางก่อนบรรทัดนั้น)
+# ใช้ของเดิมในไฟล์: app, br, require_api_key, require_user, _actor, load_gu,
+# _api_cfg, _load_market_frame, _internal_server_error, _safe_float,
+# ORDER_TRADING_FEE_RATE, HTTPException, Depends, BaseModel, Field, Optional,
+# RLock, deque, defaultdict, time, pd
+# =========================================================
+import uuid as _uuid
+import threading as _threading
+
+MAX_BOTS_PER_USER = 3
+_BOT_LOCK = RLock()
+_BT_HITS: dict = defaultdict(deque)
+_BT_HITS_LOCK = RLock()
+_BT_SEM = _threading.BoundedSemaphore(2)  # backtest พร้อมกันได้สูงสุด 2 งานทั้งระบบ
+_BT_PER_MIN = 5
+
+
+class BotSpecIn(BaseModel):
+    spec: dict
+
+
+class BacktestIn(BaseModel):
+    spec: dict
+    capital: float = Field(default=100_000.0, ge=100.0, le=1e9)
+
+
+class BotCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    spec: dict
+
+
+class BotPatchIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=60)
+    spec: Optional[dict] = None
+    enabled: Optional[bool] = None
+    # ไม่มีฟิลด์ dry_run โดยตั้งใจ: ขั้นที่ 2 ปรับเป็นโหมดจริงไม่ได้
+
+
+def _bot_validate(spec: dict) -> dict:
+    try:
+        return br.validate_spec(spec)
+    except br.RuleError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+def _bot_sb(gu):
+    sb = gu._get_supabase()
+    if sb is None:
+        raise HTTPException(status_code=503, detail="เชื่อมต่อฐานข้อมูลไม่ได้")
+    return sb
+
+
+def _bot_uuid(bot_id: str) -> str:
+    try:
+        return str(_uuid.UUID(str(bot_id)))
+    except Exception:
+        raise HTTPException(status_code=400, detail="รหัสบอทไม่ถูกต้อง")
+
+
+def _bot_row_out(row: dict) -> dict:
+    spec = row.get("spec") or {}
+    try:
+        text = br.spec_to_text(spec)
+    except Exception:
+        text = ""
+    return {
+        "id": row.get("id"),
+        "name": row.get("name"),
+        "spec": spec,
+        "rule_text": text,
+        "enabled": bool(row.get("enabled")),
+        "dry_run": bool(row.get("dry_run", True)),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def _bt_rate_limit(actor: str) -> None:
+    now = time.monotonic()
+    with _BT_HITS_LOCK:
+        q = _BT_HITS[actor]
+        while q and now - q[0] > 60:
+            q.popleft()
+        if len(q) >= _BT_PER_MIN:
+            raise HTTPException(
+                status_code=429,
+                detail=f"ทดสอบย้อนหลังได้ {_BT_PER_MIN} ครั้งต่อนาที รอสักครู่แล้วลองใหม่",
             )
+        q.append(now)
+
+
+def _spec_max_period(spec: dict) -> int:
+    best = 0
+    for grp in (spec["entry"], spec["exit"]):
+        for c in grp["conds"]:
+            for side in ("left", "right"):
+                best = max(best, int(c[side].get("period") or 0))
+    return best
+
+
+def _fnum(x, nd: int = 4):
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return round(v, nd) if v == v and v not in (float("inf"), float("-inf")) else None
+
+
+# ---------------- เทมเพลต ----------------
+
+@app.get("/api/bots/templates", dependencies=[Depends(require_api_key)])
+def bot_templates():
+    out = []
+    for key, t in br.TEMPLATES.items():
+        out.append({
+            "key": key,
+            "name": t["name"],
+            "desc": t["desc"],
+            "spec": t["spec"],
+            "rule_text": br.spec_to_text(t["spec"]),
+        })
+    return {"status": "ok", "templates": out}
+
+
+# ---------------- ตรวจกฎ + แปลงเป็นประโยคไทย ----------------
+
+@app.post("/api/bots/preview", dependencies=[Depends(require_api_key)])
+def bot_preview(body: BotSpecIn, user: str = Depends(require_user)):
+    spec = _bot_validate(body.spec)
+    return {"status": "ok", "spec": spec, "rule_text": br.spec_to_text(spec)}
+
+
+# ---------------- ทดสอบย้อนหลัง (ไม่แตะพอร์ต ไม่เขียนฐานข้อมูล) ----------------
+
+@app.post("/api/bots/backtest", dependencies=[Depends(require_api_key)])
+def bot_backtest(body: BacktestIn, user: str = Depends(require_user)):
+    try:
+        actor = _actor(user)
+        spec = _bot_validate(body.spec)
+        _bt_rate_limit(actor)
+
+        gu = load_gu()
+        asset = spec["asset"]
+        if asset not in getattr(gu, "SUPPORTED_ASSETS", []):
+            raise HTTPException(status_code=400, detail=f"ไม่รองรับเหรียญ {asset}")
+
+        # ใช้ _api_cfg เฉพาะ premium/spread (cfg["asset"] อาจถูกทับด้วยค่าตั้งของผู้ใช้ จึงไม่ใช้)
+        cfg = _api_cfg(gu, asset, actor)
+        df = _load_market_frame(gu, asset)
+        mid = (
+            df["Global_USD"].astype(float)
+            * df["USDTHB"].astype(float)
+            * (1.0 + cfg["local_premium"])
+        ).dropna()
+
+        if not _BT_SEM.acquire(blocking=False):
+            raise HTTPException(status_code=429, detail="ระบบกำลังประมวลผลหลายงาน ลองใหม่อีกครั้ง")
+        try:
+            res = br.backtest(
+                mid, spec, body.capital,
+                spread=cfg["dealer_spread"], fee=ORDER_TRADING_FEE_RATE,
+            )
+        except br.RuleError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        finally:
+            _BT_SEM.release()
+
+        eq = res["equity"]
+        step = max(1, len(eq) // 400)
+        pts = eq.iloc[::step]
+        if pts.index[-1] != eq.index[-1]:
+            pts = pd.concat([pts, eq.iloc[[-1]]])
+        bh = body.capital * (mid / float(mid.iloc[0]))
+        bh = bh.reindex(pts.index)
+        equity = [
+            {"date": str(i)[:10], "value": _fnum(v, 2), "buy_hold": _fnum(bh.loc[i], 2)}
+            for i, v in pts.items()
+        ]
+
+        trades = [
+            {
+                "date": str(t["date"])[:10], "side": t["side"],
+                "price": _fnum(t["price"], 2), "amount_thb": _fnum(t["amount_thb"], 2),
+                "reason": t["reason"], "pnl_pct": _fnum(t["pnl_pct"], 2),
+            }
+            for t in res["trades"][-200:]
+        ]
+
+        warnings = []
+        maxp = _spec_max_period(spec)
+        if len(mid) < maxp * 2:
+            warnings.append(
+                f"ข้อมูลย้อนหลังมี {len(mid)} วัน สั้นเกินไปสำหรับ period {maxp} ผลอาจไม่มีความหมาย"
+            )
+        if res["n_trades"] == 0:
+            warnings.append("ไม่มีการเข้าซื้อเลยในช่วงนี้")
+        elif res["n_closed"] < 5:
+            warnings.append("มีรอบซื้อขายที่ปิดแล้วน้อยกว่า 5 รอบ ผลนี้ยังเชื่อถือไม่ได้")
+        warnings.append("ผลย้อนหลังไม่รับประกันกำไรในอนาคต")
+
+        return {
+            "status": "ok",
+            "asset": asset,
+            "rule_text": br.spec_to_text(spec),
+            "bars": int(len(mid)),
+            "from": str(mid.index[0])[:10],
+            "to": str(mid.index[-1])[:10],
+            "capital": body.capital,
+            "final": _fnum(res["final"], 2),
+            "return_pct": _fnum(res["return_pct"], 2),
+            "buy_hold_return_pct": _fnum((float(mid.iloc[-1]) / float(mid.iloc[0]) - 1.0) * 100.0, 2),
+            "max_dd": _fnum(res["max_dd"], 2),
+            "n_trades": res["n_trades"],
+            "n_closed": res["n_closed"],
+            "win_rate": _fnum(res["win_rate"], 1),
+            "holding_at_end": res["holding_at_end"],
+            "equity": equity,
+            "trades": trades,
+            "warnings": warnings,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _internal_server_error("ทดสอบย้อนหลังไม่สำเร็จ", e, status_code=503)
+
+
+# ---------------- รายการ / สร้าง / แก้ / ลบ บอท ----------------
+
+@app.get("/api/bots", dependencies=[Depends(require_api_key)])
+def bots_list(user: str = Depends(require_user)):
+    try:
+        actor = _actor(user)
+        sb = _bot_sb(load_gu())
+        rows = (
+            sb.table("bot_strategies").select("*")
+            .eq("actor", actor).order("created_at").execute().data or []
+        )
+        return {"status": "ok", "max_bots": MAX_BOTS_PER_USER,
+                "bots": [_bot_row_out(r) for r in rows]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _internal_server_error("โหลดรายการบอทไม่สำเร็จ", e, status_code=503)
+
+
+@app.post("/api/bots", dependencies=[Depends(require_api_key)])
+def bots_create(body: BotCreateIn, user: str = Depends(require_user)):
+    try:
+        actor = _actor(user)
+        spec = _bot_validate(body.spec)
+        sb = _bot_sb(load_gu())
+        with _BOT_LOCK:
+            existing = (
+                sb.table("bot_strategies").select("id").eq("actor", actor).execute().data or []
+            )
+            if len(existing) >= MAX_BOTS_PER_USER:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"สร้างบอทได้สูงสุด {MAX_BOTS_PER_USER} ตัว ลบตัวเก่าก่อน",
+                )
+            row = {
+                "actor": actor,
+                "name": body.name.strip(),
+                "spec": spec,
+                "enabled": False,   # เริ่มปิดเสมอ
+                "dry_run": True,    # server บังคับ ไม่รับจาก client
+            }
+            res = sb.table("bot_strategies").insert(row).execute().data or []
+        if not res:
+            raise HTTPException(status_code=503, detail="บันทึกบอทไม่สำเร็จ")
+        return {"status": "ok", "bot": _bot_row_out(res[0])}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _internal_server_error("สร้างบอทไม่สำเร็จ", e, status_code=503)
+
+
+@app.patch("/api/bots/{bot_id}", dependencies=[Depends(require_api_key)])
+def bots_update(bot_id: str, body: BotPatchIn, user: str = Depends(require_user)):
+    try:
+        actor = _actor(user)
+        bid = _bot_uuid(bot_id)
+        patch: dict = {}
+        if body.name is not None:
+            patch["name"] = body.name.strip()
+        if body.spec is not None:
+            patch["spec"] = _bot_validate(body.spec)
+        if body.enabled is not None:
+            patch["enabled"] = bool(body.enabled)
+        if not patch:
+            raise HTTPException(status_code=400, detail="ไม่มีข้อมูลที่จะแก้ไข")
+        patch["dry_run"] = True  # ย้ำทุกครั้ง: ขั้นที่ 2 ไม่มีทางเป็นโหมดจริง
+        patch["updated_at"] = pd.Timestamp.now(tz="UTC").isoformat()
+
+        sb = _bot_sb(load_gu())
+        res = (
+            sb.table("bot_strategies").update(patch)
+            .eq("id", bid).eq("actor", actor).execute().data or []
+        )
+        if not res:
+            raise HTTPException(status_code=404, detail="ไม่พบบอทนี้")
+        return {"status": "ok", "bot": _bot_row_out(res[0])}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _internal_server_error("แก้ไขบอทไม่สำเร็จ", e, status_code=503)
+
+
+@app.delete("/api/bots/{bot_id}", dependencies=[Depends(require_api_key)])
+def bots_delete(bot_id: str, user: str = Depends(require_user)):
+    try:
+        actor = _actor(user)
+        bid = _bot_uuid(bot_id)
+        sb = _bot_sb(load_gu())
+        res = (
+            sb.table("bot_strategies").delete()
+            .eq("id", bid).eq("actor", actor).execute().data or []
+        )
+        if not res:
+            raise HTTPException(status_code=404, detail="ไม่พบบอทนี้")
+        return {"status": "ok", "deleted": bid}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _internal_server_error("ลบบอทไม่สำเร็จ", e, status_code=503)
+
+
+@app.get("/api/bots/{bot_id}/runs", dependencies=[Depends(require_api_key)])
+def bots_runs(bot_id: str, user: str = Depends(require_user)):
+    try:
+        actor = _actor(user)
+        bid = _bot_uuid(bot_id)
+        sb = _bot_sb(load_gu())
+        rows = (
+            sb.table("bot_runs")
+            .select("bar,action,reason,pnl_pct,dry_run,created_at")
+            .eq("bot_id", bid).eq("actor", actor)
+            .order("created_at", desc=True).limit(100).execute().data or []
+        )
+        return {"status": "ok", "runs": rows}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _internal_server_error("โหลดประวัติบอทไม่สำเร็จ", e, status_code=503)
