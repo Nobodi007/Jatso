@@ -430,14 +430,13 @@ export default function BotLab({ api }: { api: BotApi }) {
     } catch (e) { setMsg(errMsg(e)); }
   };
 
-  const deleteBot = async (b: Bot) => {
-    if (!window.confirm(`ลบบอท "${b.name}" ?`)) return;
-    try {
-      await api(`/api/bots/${b.id}`, { method: "DELETE" });
-      if (runsFor === b.id) setRunsFor(null);
-      loadBots();
-    } catch (e) { setMsg(errMsg(e)); }
-  };
+  const setMode = async (b: Bot, mode: "live" | "dry") => {
+  if (mode === "live" && !window.confirm(`เปลี่ยนบอท "${b.name}" เป็นโหมดจริง?\nบอทจะซื้อขายจริงในพอร์ตของคุณ (สวิตช์จะถูกปิดไว้ก่อน)`)) return;
+  try {
+    await api(`/api/bots/${b.id}/mode`, { method: "POST", body: { mode, confirm: true } });
+    loadBots();
+  } catch (e) { setMsg(errMsg(e)); }
+};
 
   const showRuns = async (b: Bot) => {
     if (runsFor === b.id) { setRunsFor(null); return; }
@@ -710,6 +709,9 @@ export default function BotLab({ api }: { api: BotApi }) {
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
+                   <button type="button" className={`${btnSmall} ${b.dry_run ? "" : "text-amber-500"}`} onClick={() => setMode(b, b.dry_run ? "live" : "dry")}>
+                    {b.dry_run ? "ไปโหมดจริง" : "กลับโหมดทดลอง"}
+                  </button>
                   <Switch checked={b.enabled} onChange={() => toggleBot(b)} label={`เปิดใช้งาน ${b.name}`} />
                   <button type="button" className={btnSmall} onClick={() => showRuns(b)}>
                     {runsFor === b.id ? "ซ่อนประวัติ" : "ประวัติ"}
