@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 /* =========================================================
-   BotLab — หน้าบอทเทรดใน Quant Lab
+   BotLab — หน้าบอทเทรดใน Quant Lab (ไม่พึ่งไลบรารีอื่น)
    ใช้: <BotLab api={botApi} />
-   ดีไซน์: ใช้ Tailwind token เดียวกับหน้าอื่นของเว็บ (bg-card, border, text-muted-foreground ฯลฯ)
-   ตรรกะ/การเรียก API เหมือนเวอร์ชันก่อนทุกประการ
+   botApi ต้อง: ใส่ base URL + header (API key / token) ให้ครบ,
+   แปลง body เป็น JSON, และ throw Error(ข้อความ detail) เมื่อ response ไม่ ok
    ========================================================= */
 
 export type BotApi = (
@@ -34,7 +34,14 @@ type Bot = {
   dry_run: boolean;
   created_at?: string;
 };
-type Run = { bar: string | null; action: string; reason: string | null; pnl_pct: number | null; created_at: string };
+type Run = {
+  bar: string | null;
+  action: string;
+  reason: string | null;
+  pnl_pct: number | null;
+  dry_run?: boolean;
+  created_at: string;
+};
 type BtResult = {
   asset: string;
   rule_text: string;
@@ -72,6 +79,8 @@ const KINDS: [string, string][] = [
 ];
 const DEFAULT_PERIOD: Record<string, number> = { sma: 20, ema: 20, rsi: 14, roc: 7 };
 const MAX_CONDS = 6;
+const ACTION_TH: Record<string, string> = { buy: "ซื้อ", sell: "ขาย", hold: "รอ", error: "ผิดพลาด" };
+const AMBER = "#d97706";
 
 const EMPTY_SPEC: Spec = {
   asset: "BTC",
@@ -99,196 +108,87 @@ const fmtThb = (n: number | null | undefined) =>
 const fmtPct = (n: number | null | undefined) =>
   n == null ? "-" : `${n > 0 ? "+" : ""}${n.toFixed(2)}%`;
 const colorOf = (n: number | null | undefined) =>
-  n == null || n === 0 ? "" : n > 0 ? "text-emerald-500" : "text-red-500";
+  n == null || n === 0 ? undefined : n > 0 ? "#16a34a" : "#dc2626";
 
-const ACTION_TH: Record<string, { label: string; cls: string }> = {
-  buy: { label: "ซื้อ", cls: "bg-emerald-500/10 text-emerald-500" },
-  sell: { label: "ขาย", cls: "bg-red-500/10 text-red-500" },
-  hold: { label: "ถือ", cls: "bg-muted text-muted-foreground" },
+/* ---------- styles (เป็นกลาง ใช้ได้ทั้งโหมดมืด/สว่าง) ---------- */
+const line = "1px solid rgba(128,128,128,.35)";
+const box: CSSProperties = { border: line, borderRadius: 14, padding: 16, marginBottom: 16 };
+const inp: CSSProperties = {
+  background: "transparent", color: "inherit", border: line, borderRadius: 8,
+  padding: "6px 8px", font: "inherit", minWidth: 0,
+};
+const btn: CSSProperties = {
+  background: "transparent", color: "inherit", border: line, borderRadius: 999,
+  padding: "7px 14px", font: "inherit", cursor: "pointer",
+};
+const btnPrimary: CSSProperties = { ...btn, background: "rgba(128,128,128,.22)", fontWeight: 600 };
+const btnLive: CSSProperties = { ...btn, color: AMBER, border: `1px solid ${AMBER}` };
+const muted: CSSProperties = { opacity: 0.65, fontSize: 13 };
+const badge: CSSProperties = { ...muted, border: line, borderRadius: 999, padding: "1px 8px" };
+const badgeLive: CSSProperties = {
+  fontSize: 13, color: AMBER, border: `1px solid ${AMBER}`, borderRadius: 999, padding: "1px 8px", fontWeight: 600,
 };
 
-/* ---------- class ที่ใช้ซ้ำ (ตรงกับดีไซน์หน้าอื่น) ---------- */
-const inputBase =
-  "h-10 rounded-lg border bg-background px-3 text-sm outline-none transition-colors focus:border-primary/60 disabled:opacity-50";
-const btnGhost =
-  "rounded-lg border px-4 py-2 text-sm font-medium transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50";
-const btnPrimary =
-  "rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40";
-const btnSmall =
-  "rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50";
-
-/* ---------- ชิ้นส่วน UI ---------- */
-function Card({
-  step,
-  title,
-  subtitle,
-  right,
-  children,
-}: {
-  step?: number;
-  title: string;
-  subtitle?: string;
-  right?: ReactNode;
-  children: ReactNode;
-}) {
+function Card({ title, children, right }: { title: string; children: ReactNode; right?: ReactNode }) {
   return (
-    <section className="rounded-xl border bg-card">
-      <div className="flex items-start justify-between gap-3 border-b px-5 py-4">
-        <div className="flex items-start gap-3">
-          {step !== undefined && (
-            <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold">
-              {step}
-            </span>
-          )}
-          <div>
-            <h3 className="font-semibold">{title}</h3>
-            {subtitle && <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>}
-          </div>
-        </div>
+    <section style={box}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <h3 style={{ margin: 0, fontSize: 17 }}>{title}</h3>
         {right}
       </div>
-      <div className="p-5">{children}</div>
-    </section>
-  );
-}
-
-function Field({ label, children, className = "" }: { label: string; children: ReactNode; className?: string }) {
-  return (
-    <label className={`block ${className}`}>
-      <span className="mb-1.5 block text-xs text-muted-foreground">{label}</span>
       {children}
-    </label>
-  );
-}
-
-function NumInput({
-  value,
-  onChange,
-  suffix,
-  min,
-  title,
-  className = "",
-  placeholder,
-}: {
-  value: number | string;
-  onChange: (v: string) => void;
-  suffix?: string;
-  min?: number;
-  title?: string;
-  className?: string;
-  placeholder?: string;
-}) {
-  return (
-    <div className={`relative ${className}`}>
-      <input
-        type="number"
-        min={min}
-        value={value}
-        title={title}
-        placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
-        className={`${inputBase} w-full ${suffix ? "pr-12" : ""}`}
-      />
-      {suffix && (
-        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
-          {suffix}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function Switch({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={onChange}
-      className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${checked ? "bg-emerald-500" : "bg-muted"}`}
-    >
-      <span
-        className={`absolute top-0.5 size-5 rounded-full bg-white shadow transition-all ${checked ? "left-[22px]" : "left-0.5"}`}
-      />
-    </button>
+    </section>
   );
 }
 
 /* ---------- ตัวแก้ operand / กลุ่มเงื่อนไข ---------- */
 function OperandEditor({ o, onChange }: { o: Operand; onChange: (o: Operand) => void }) {
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <select value={kindOf(o)} onChange={(e) => onChange(makeOperand(e.target.value, o))} className={`${inputBase} cursor-pointer`}>
+    <span style={{ display: "inline-flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+      <select value={kindOf(o)} onChange={(e) => onChange(makeOperand(e.target.value, o))} style={inp}>
         {KINDS.map(([k, label]) => (
           <option key={k} value={k}>{label}</option>
         ))}
       </select>
       {"value" in o && (
-        <NumInput className="w-28" value={o.value} onChange={(v) => onChange({ value: Number(v) })} />
+        <input type="number" value={o.value} style={{ ...inp, width: 90 }}
+          onChange={(e) => onChange({ value: Number(e.target.value) })} />
       )}
       {"period" in o && (
-        <NumInput
-          className="w-20"
-          min={1}
-          value={o.period}
-          title="period (จำนวนแท่ง)"
-          onChange={(v) => onChange({ ...o, period: Math.round(Number(v)) })}
-        />
+        <input type="number" min={1} value={o.period} style={{ ...inp, width: 64 }} title="period (จำนวนแท่ง)"
+          onChange={(e) => onChange({ ...o, period: Math.round(Number(e.target.value)) })} />
       )}
-    </div>
+    </span>
   );
 }
 
-function GroupEditor({ g, onChange, label, hint }: { g: Group; onChange: (g: Group) => void; label: string; hint: string }) {
+function GroupEditor({ g, onChange, label }: { g: Group; onChange: (g: Group) => void; label: string }) {
   const setCond = (i: number, c: Cond) => onChange({ ...g, conds: g.conds.map((x, j) => (j === i ? c : x)) });
   return (
-    <div className="rounded-xl border bg-background/40 p-4">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <div className="text-sm font-semibold">{label}</div>
-          <div className="text-xs text-muted-foreground">{hint}</div>
-        </div>
-        <select
-          value={g.op}
-          className={`${inputBase} cursor-pointer`}
-          onChange={(e) => onChange({ ...g, op: e.target.value as "all" | "any" })}
-        >
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+        <strong>{label}</strong>
+        <span style={muted}>เมื่อเข้าเงื่อนไข</span>
+        <select value={g.op} style={inp} onChange={(e) => onChange({ ...g, op: e.target.value as "all" | "any" })}>
           <option value="all">ทุกข้อ (และ)</option>
           <option value="any">ข้อใดข้อหนึ่ง (หรือ)</option>
         </select>
       </div>
-
-      <div className="space-y-2">
-        {g.conds.length === 0 && (
-          <div className="rounded-lg border border-dashed px-3 py-3 text-center text-xs text-muted-foreground">
-            ยังไม่มีเงื่อนไข
-          </div>
-        )}
-        {g.conds.map((c, i) => (
-          <div key={i} className="flex flex-wrap items-center gap-2 rounded-lg border bg-card p-2.5">
-            <OperandEditor o={c.left} onChange={(left) => setCond(i, { ...c, left })} />
-            <select value={c.op} className={`${inputBase} cursor-pointer`} onChange={(e) => setCond(i, { ...c, op: e.target.value })}>
-              {OPS.map(([k, t]) => (
-                <option key={k} value={k}>{t}</option>
-              ))}
-            </select>
-            <OperandEditor o={c.right} onChange={(right) => setCond(i, { ...c, right })} />
-            <button
-              type="button"
-              className={`${btnSmall} ml-auto text-red-500`}
-              onClick={() => onChange({ ...g, conds: g.conds.filter((_, j) => j !== i) })}
-            >
-              ลบ
-            </button>
-          </div>
-        ))}
-      </div>
-
+      {g.conds.map((c, i) => (
+        <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+          <OperandEditor o={c.left} onChange={(left) => setCond(i, { ...c, left })} />
+          <select value={c.op} style={inp} onChange={(e) => setCond(i, { ...c, op: e.target.value })}>
+            {OPS.map(([k, t]) => (
+              <option key={k} value={k}>{t}</option>
+            ))}
+          </select>
+          <OperandEditor o={c.right} onChange={(right) => setCond(i, { ...c, right })} />
+          <button style={btn} onClick={() => onChange({ ...g, conds: g.conds.filter((_, j) => j !== i) })}>ลบ</button>
+        </div>
+      ))}
       {g.conds.length < MAX_CONDS && (
         <button
-          type="button"
-          className={`${btnGhost} mt-3`}
+          style={btn}
           onClick={() =>
             onChange({ ...g, conds: [...g.conds, { left: { ind: "price" }, op: ">", right: { ind: "sma", period: 50 } }] })
           }
@@ -302,48 +202,27 @@ function GroupEditor({ g, onChange, label, hint }: { g: Group; onChange: (g: Gro
 
 /* ---------- กราฟ equity (SVG ล้วน) ---------- */
 function EquityChart({ pts }: { pts: BtResult["equity"] }) {
-  const W = 720, H = 240, PX = 8, PY = 10;
+  const W = 640, H = 220, P = 6;
   if (pts.length < 2) return null;
   const a = pts.map((p) => Number(p.value ?? 0));
   const b = pts.map((p) => Number(p.buy_hold ?? 0));
   const all = [...a, ...b];
   const lo = Math.min(...all), hi = Math.max(...all);
   const span = hi - lo || 1;
-  const x = (i: number, n: number) => PX + (i / (n - 1)) * (W - 2 * PX);
-  const y = (v: number) => H - PY - ((v - lo) / span) * (H - 2 * PY);
-  const path = (arr: number[]) => arr.map((v, i) => `${x(i, arr.length).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
-  const area = `${PX},${H - PY} ${path(a)} ${(W - PX).toFixed(1)},${H - PY}`;
-  const grid = [0, 0.25, 0.5, 0.75, 1];
-
+  const path = (arr: number[]) =>
+    arr.map((v, i) => `${(P + (i / (arr.length - 1)) * (W - 2 * P)).toFixed(1)},${(H - P - ((v - lo) / span) * (H - 2 * P)).toFixed(1)}`).join(" ");
   return (
     <div>
-      <div className="mb-2 flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block h-0.5 w-4 rounded bg-emerald-500" /> บอท
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block h-0 w-4 border-t-2 border-dashed border-muted-foreground" /> ถือเฉยๆ
-        </span>
-      </div>
-      <div className="rounded-lg border bg-background/40 p-2">
-        <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full text-muted-foreground">
-          {grid.map((g) => (
-            <line
-              key={g}
-              x1={PX} x2={W - PX}
-              y1={PY + g * (H - 2 * PY)} y2={PY + g * (H - 2 * PY)}
-              stroke="currentColor" strokeOpacity={0.15} strokeWidth={1}
-            />
-          ))}
-          <polygon points={area} fill="#10b981" fillOpacity={0.08} />
-          <polyline points={path(b)} fill="none" stroke="currentColor" strokeOpacity={0.7} strokeWidth={1.5} strokeDasharray="5 4" />
-          <polyline points={path(a)} fill="none" stroke="#10b981" strokeWidth={2} strokeLinejoin="round" />
-          <text x={PX + 2} y={PY + 10} fontSize={11} fill="currentColor">฿{fmtThb(hi)}</text>
-          <text x={PX + 2} y={H - PY - 4} fontSize={11} fill="currentColor">฿{fmtThb(lo)}</text>
-        </svg>
-      </div>
-      <div className="mt-1.5 flex justify-between text-xs text-muted-foreground">
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", border: line, borderRadius: 10 }}>
+        <polyline points={path(b)} fill="none" stroke="#9ca3af" strokeWidth={1.5} strokeDasharray="4 3" />
+        <polyline points={path(a)} fill="none" stroke="#3b82f6" strokeWidth={2} />
+      </svg>
+      <div style={{ display: "flex", justifyContent: "space-between", ...muted }}>
         <span>{pts[0].date}</span>
+        <span>
+          <span style={{ color: "#3b82f6" }}>━ บอท</span>{"  "}
+          <span style={{ color: "#9ca3af" }}>┅ ถือเฉยๆ</span>
+        </span>
         <span>{pts[pts.length - 1].date}</span>
       </div>
     </div>
@@ -416,7 +295,7 @@ export default function BotLab({ api }: { api: BotApi }) {
     try {
       await api("/api/bots", { method: "POST", body: { name: name.trim() || `บอท ${spec.asset}`, spec } });
       setName("");
-      setMsg("บันทึกบอทแล้ว (โหมดทดลอง ปิดอยู่)");
+      setMsg("บันทึกบอทแล้ว (เริ่มที่โหมดทดลอง และปิดอยู่)");
       loadBots();
     } catch (e) {
       setMsg(errMsg(e));
@@ -424,28 +303,24 @@ export default function BotLab({ api }: { api: BotApi }) {
   };
 
   const toggleBot = async (b: Bot) => {
+    // เปิดบอทโหมดจริง = เริ่มซื้อขายจริง ให้ยืนยันก่อน (ปิดไม่ต้องถาม)
+    if (!b.enabled && !b.dry_run &&
+      !window.confirm(`เปิดบอท "${b.name}" (โหมดจริง)?\nบอทจะเริ่มซื้อขายจริงในพอร์ตของคุณตามรอบที่ระบบเช็ก`)) return;
+    setMsg("");
     try {
       await api(`/api/bots/${b.id}`, { method: "PATCH", body: { enabled: !b.enabled } });
       loadBots();
     } catch (e) { setMsg(errMsg(e)); }
   };
 
-   const deleteBot = async (b: Bot) => {
-  if (!window.confirm(`ลบบอท "${b.name}" ?`)) return;
-  try {
-    await api(`/api/bots/${b.id}`, { method: "DELETE" });
-    if (runsFor === b.id) setRunsFor(null);
-    loadBots();
-  } catch (e) { setMsg(errMsg(e)); }
-};
-   
-  const setMode = async (b: Bot, mode: "live" | "dry") => {
-  if (mode === "live" && !window.confirm(`เปลี่ยนบอท "${b.name}" เป็นโหมดจริง?\nบอทจะซื้อขายจริงในพอร์ตของคุณ (สวิตช์จะถูกปิดไว้ก่อน)`)) return;
-  try {
-    await api(`/api/bots/${b.id}/mode`, { method: "POST", body: { mode, confirm: true } });
-    loadBots();
-  } catch (e) { setMsg(errMsg(e)); }
-};
+  const deleteBot = async (b: Bot) => {
+    if (!window.confirm(`ลบบอท "${b.name}" ?`)) return;
+    try {
+      await api(`/api/bots/${b.id}`, { method: "DELETE" });
+      if (runsFor === b.id) setRunsFor(null);
+      loadBots();
+    } catch (e) { setMsg(errMsg(e)); }
+  };
 
   const showRuns = async (b: Bot) => {
     if (runsFor === b.id) { setRunsFor(null); return; }
@@ -456,310 +331,203 @@ export default function BotLab({ api }: { api: BotApi }) {
     } catch (e) { setMsg(errMsg(e)); }
   };
 
+  const setMode = async (b: Bot, mode: "live" | "dry") => {
+    if (mode === "live" && !window.confirm(
+      `เปลี่ยนบอท "${b.name}" เป็นโหมดจริง?\nบอทจะซื้อขายจริงในพอร์ตของคุณ (สวิตช์จะถูกปิดไว้ก่อน ต้องเปิดเองอีกครั้ง)`)) return;
+    setMsg("");
+    try {
+      await api(`/api/bots/${b.id}/mode`, { method: "POST", body: { mode, confirm: true } });
+      setMsg(mode === "live" ? `"${b.name}" เป็นโหมดจริงแล้ว (ยังปิดอยู่)` : `"${b.name}" กลับเป็นโหมดทดลองแล้ว`);
+      if (runsFor === b.id) setRunsFor(null);
+      loadBots();
+    } catch (e) { setMsg(errMsg(e)); }
+  };
+
   const numOrNull = (v: string) => (v === "" ? null : Number(v));
   const canSave = !ruleErr && bots.length < maxBots;
   const tradesShown = useMemo(() => (bt ? [...bt.trades].reverse().slice(0, 30) : []), [bt]);
-
-  const stats: { label: string; value: string; cls?: string }[] = bt
-    ? [
-        { label: "เงินสุดท้าย", value: `฿${fmtThb(bt.final)}` },
-        { label: "ผลตอบแทนบอท", value: fmtPct(bt.return_pct), cls: colorOf(bt.return_pct) },
-        { label: "ถือเฉยๆ", value: fmtPct(bt.buy_hold_return_pct), cls: colorOf(bt.buy_hold_return_pct) },
-        { label: "ขาดทุนสูงสุด", value: fmtPct(bt.max_dd), cls: colorOf(bt.max_dd) },
-        { label: "รอบที่ปิดแล้ว", value: String(bt.n_closed) },
-        { label: "ชนะ", value: bt.win_rate == null ? "-" : `${bt.win_rate.toFixed(0)}%` },
-      ]
-    : [];
+  const liveCount = bots.filter((b) => !b.dry_run).length;
+  const liveRunning = bots.filter((b) => !b.dry_run && b.enabled).length;
 
   return (
-    <div className="space-y-6">
-      {/* หัวข้อ */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="text-xl font-bold">บอทเทรด</h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            ประกอบกฎซื้อขาย ทดสอบย้อนหลังด้วยราคาจริงของเว็บ แล้วบันทึกเป็นบอทของคุณ
-          </p>
+    <div style={{ marginTop: 24 }}>
+      <h2 style={{ marginBottom: 4 }}>บอทเทรด</h2>
+      <p style={{ ...muted, marginTop: 0 }}>
+        บอทใหม่ทุกตัวเริ่มที่ <strong>โหมดทดลอง</strong> (จำลองการซื้อขาย ไม่แตะ Wallet)
+        จะสลับเป็นโหมดจริงได้เมื่อรันทดลองครบ 3 แท่งราคา ผลย้อนหลังไม่รับประกันกำไรในอนาคต
+      </p>
+      {liveCount > 0 && (
+        <div style={{ border: `1px solid ${AMBER}`, color: AMBER, borderRadius: 10, padding: "8px 12px", marginBottom: 16, fontSize: 14 }}>
+          ⚠ คุณมีบอทโหมดจริง {liveCount} ตัว
+          {liveRunning > 0 ? ` (กำลังทำงาน ${liveRunning} ตัว — ซื้อขายด้วยเงินจริง)` : " (ยังปิดอยู่)"}
         </div>
-        <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-500">
-          โหมดทดลอง · ยังไม่ส่งคำสั่งซื้อขายจริง
-        </span>
-      </div>
+      )}
 
-      {/* 1. เทมเพลต */}
-      <Card step={1} title="เลือกเทมเพลต หรือประกอบกฎเอง" subtitle="กดเทมเพลตเพื่อโหลดกฎเริ่มต้น แล้วปรับแก้ได้ในขั้นถัดไป">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <Card title="1. เลือกเทมเพลต หรือประกอบกฎเอง">
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {templates.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              className="rounded-xl border bg-background/40 p-4 text-left transition-colors hover:bg-accent"
-              onClick={() => { setSpec(JSON.parse(JSON.stringify(t.spec))); setBt(null); }}
-            >
-              <div className="text-sm font-semibold">{t.name}</div>
-              <div className="mt-1 text-xs text-muted-foreground">{t.desc}</div>
+            <button key={t.key} style={btn} title={t.desc} onClick={() => { setSpec(JSON.parse(JSON.stringify(t.spec))); setBt(null); }}>
+              {t.name}
             </button>
           ))}
-          <button
-            type="button"
-            className="rounded-xl border border-dashed p-4 text-left transition-colors hover:bg-accent"
-            onClick={() => { setSpec(JSON.parse(JSON.stringify(EMPTY_SPEC))); setBt(null); }}
-          >
-            <div className="text-sm font-semibold">เริ่มใหม่</div>
-            <div className="mt-1 text-xs text-muted-foreground">ล้างกฎกลับเป็นค่าเริ่มต้น</div>
-          </button>
+          <button style={btn} onClick={() => { setSpec(JSON.parse(JSON.stringify(EMPTY_SPEC))); setBt(null); }}>เริ่มใหม่</button>
         </div>
       </Card>
 
-      {/* 2. กฎ */}
-      <Card step={2} title="กฎของบอท" subtitle="ตัดสินใจจากข้อมูลถึงแท่งก่อนหน้า แล้วซื้อ/ขายที่ราคาแท่งปัจจุบัน (ไม่มองอนาคต)">
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Field label="เหรียญ">
-            <select
-              value={spec.asset}
-              className={`${inputBase} w-full cursor-pointer`}
-              onChange={(e) => setSpec({ ...spec, asset: e.target.value })}
-            >
-              {ASSETS.map((a) => <option key={a}>{a}</option>)}
-            </select>
-          </Field>
-          <Field label="ขนาดออเดอร์">
-            <select
-              value={spec.sizing.type}
-              className={`${inputBase} w-full cursor-pointer`}
-              onChange={(e) => setSpec({ ...spec, sizing: { ...spec.sizing, type: e.target.value as Spec["sizing"]["type"] } })}
-            >
-              <option value="pct_of_cash">% ของเงินสด</option>
-              <option value="fixed_thb">จำนวนเงิน (บาท)</option>
-            </select>
-          </Field>
-          <Field label="ค่า">
-            <NumInput
-              value={spec.sizing.value}
-              suffix={spec.sizing.type === "pct_of_cash" ? "%" : "THB"}
-              onChange={(v) => setSpec({ ...spec, sizing: { ...spec.sizing, value: Number(v) } })}
-            />
-          </Field>
+      <Card title="2. กฎของบอท">
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+          <label>เหรียญ</label>
+          <select value={spec.asset} style={inp} onChange={(e) => setSpec({ ...spec, asset: e.target.value })}>
+            {ASSETS.map((a) => <option key={a}>{a}</option>)}
+          </select>
+          <label style={{ marginLeft: 12 }}>ขนาดออเดอร์</label>
+          <select value={spec.sizing.type} style={inp}
+            onChange={(e) => setSpec({ ...spec, sizing: { ...spec.sizing, type: e.target.value as Spec["sizing"]["type"] } })}>
+            <option value="pct_of_cash">% ของเงินสด</option>
+            <option value="fixed_thb">จำนวนเงิน (บาท)</option>
+          </select>
+          <input type="number" value={spec.sizing.value} style={{ ...inp, width: 100 }}
+            onChange={(e) => setSpec({ ...spec, sizing: { ...spec.sizing, value: Number(e.target.value) } })} />
         </div>
 
-        <div className="mt-5 grid gap-4 xl:grid-cols-2">
-          <GroupEditor
-            label="เงื่อนไขซื้อ"
-            hint="บอทจะซื้อเมื่อเข้าเงื่อนไข (ถือได้ทีละ 1 ตำแหน่ง)"
-            g={spec.entry}
-            onChange={(g) => setSpec({ ...spec, entry: g })}
-          />
-          <GroupEditor
-            label="เงื่อนไขขาย"
-            hint="หรือจะใช้ Take-profit / Stop-loss ด้านล่างอย่างเดียวก็ได้"
-            g={spec.exit}
-            onChange={(g) => setSpec({ ...spec, exit: { ...spec.exit, ...g } })}
-          />
+        <GroupEditor label="เงื่อนไขซื้อ" g={spec.entry} onChange={(g) => setSpec({ ...spec, entry: g })} />
+        <GroupEditor label="เงื่อนไขขาย" g={spec.exit}
+          onChange={(g) => setSpec({ ...spec, exit: { ...spec.exit, ...g } })} />
+
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 12 }}>
+          <label>Take-profit (%){" "}
+            <input type="number" style={{ ...inp, width: 80 }} value={spec.exit.take_profit_pct ?? ""}
+              onChange={(e) => setSpec({ ...spec, exit: { ...spec.exit, take_profit_pct: numOrNull(e.target.value) } })} />
+          </label>
+          <label>Stop-loss (%){" "}
+            <input type="number" style={{ ...inp, width: 80 }} value={spec.exit.stop_loss_pct ?? ""}
+              onChange={(e) => setSpec({ ...spec, exit: { ...spec.exit, stop_loss_pct: numOrNull(e.target.value) } })} />
+          </label>
         </div>
 
-        <div className="mt-5 grid gap-4 sm:grid-cols-2">
-          <Field label="Take-profit (ขายเมื่อกำไรถึง)">
-            <NumInput
-              suffix="%"
-              value={spec.exit.take_profit_pct ?? ""}
-              placeholder="ไม่ใช้"
-              onChange={(v) => setSpec({ ...spec, exit: { ...spec.exit, take_profit_pct: numOrNull(v) } })}
-            />
-          </Field>
-          <Field label="Stop-loss (ขายเมื่อขาดทุนถึง)">
-            <NumInput
-              suffix="%"
-              value={spec.exit.stop_loss_pct ?? ""}
-              placeholder="ไม่ใช้"
-              onChange={(v) => setSpec({ ...spec, exit: { ...spec.exit, stop_loss_pct: numOrNull(v) } })}
-            />
-          </Field>
-        </div>
-
-        <div className="mt-5 rounded-xl border bg-muted/40 px-4 py-3">
-          <div className="mb-1 text-xs text-muted-foreground">กฎที่ประกอบ (สรุปเป็นประโยค)</div>
-          {ruleErr ? (
-            <div className="text-sm text-red-500">{ruleErr}</div>
-          ) : (
-            <div className="text-sm font-medium">{ruleText || "กำลังตรวจกฎ…"}</div>
-          )}
+        <div style={{ border: line, borderRadius: 10, padding: 12 }}>
+          {ruleErr
+            ? <span style={{ color: "#dc2626" }}>{ruleErr}</span>
+            : <span>{ruleText || "กำลังตรวจกฎ…"}</span>}
         </div>
       </Card>
 
-      {/* 3. Backtest */}
-      <Card step={3} title="ทดสอบย้อนหลัง" subtitle="ใช้ราคาจริง + ส่วนต่าง (spread) และค่าธรรมเนียมเดียวกับหน้าซื้อขาย ไม่แตะพอร์ตของคุณ">
-        <div className="flex flex-wrap items-end gap-3">
-          <Field label="เงินลงทุน" className="w-48">
-            <NumInput value={capital} suffix="THB" onChange={(v) => setCapital(Number(v))} />
-          </Field>
-          <button type="button" className={btnPrimary} disabled={btBusy || !!ruleErr} onClick={runBacktest}>
+      <Card title="3. ทดสอบย้อนหลัง">
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <label>เงินลงทุน (บาท)</label>
+          <input type="number" value={capital} style={{ ...inp, width: 120 }} onChange={(e) => setCapital(Number(e.target.value))} />
+          <button style={btnPrimary} disabled={btBusy || !!ruleErr} onClick={runBacktest}>
             {btBusy ? "กำลังทดสอบ…" : "ทดสอบย้อนหลัง"}
           </button>
         </div>
-
-        {btErr && (
-          <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-500">{btErr}</div>
-        )}
+        {btErr && <p style={{ color: "#dc2626" }}>{btErr}</p>}
 
         {bt && (
-          <div className="mt-6 space-y-5">
-            <p className="text-xs text-muted-foreground">
-              {bt.asset} · {bt.from} ถึง {bt.to} ({bt.bars} วัน)
-            </p>
-
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-              {stats.map((s) => (
-                <div key={s.label} className="rounded-xl border bg-background/40 p-4">
-                  <div className="text-xs text-muted-foreground">{s.label}</div>
-                  <div className={`mt-1 text-xl font-bold ${s.cls ?? ""}`}>{s.value}</div>
+          <div style={{ marginTop: 16 }}>
+            <p style={muted}>{bt.asset} · {bt.from} ถึง {bt.to} ({bt.bars} วัน)</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 10, marginBottom: 14 }}>
+              {[
+                ["เงินสุดท้าย", `${fmtThb(bt.final)} ฿`, undefined],
+                ["ผลตอบแทนบอท", fmtPct(bt.return_pct), colorOf(bt.return_pct)],
+                ["ถือเฉยๆ", fmtPct(bt.buy_hold_return_pct), colorOf(bt.buy_hold_return_pct)],
+                ["ขาดทุนสูงสุด", fmtPct(bt.max_dd), colorOf(bt.max_dd)],
+                ["รอบที่ปิดแล้ว", String(bt.n_closed), undefined],
+                ["ชนะ", bt.win_rate == null ? "-" : `${bt.win_rate.toFixed(0)}%`, undefined],
+              ].map(([k, v, c]) => (
+                <div key={k as string} style={{ border: line, borderRadius: 10, padding: 10 }}>
+                  <div style={muted}>{k}</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: c as string | undefined }}>{v}</div>
                 </div>
               ))}
             </div>
 
             <EquityChart pts={bt.equity} />
 
-            {bt.warnings.length > 0 && (
-              <div className="space-y-1.5 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-500">
-                {bt.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
-              </div>
-            )}
+            {bt.warnings.map((w, i) => <p key={i} style={{ ...muted, margin: "8px 0 0" }}>⚠ {w}</p>)}
 
             {tradesShown.length > 0 && (
-              <div className="rounded-xl border">
-                <div className="border-b px-5 py-3 text-sm font-semibold">รายการซื้อขายย้อนหลัง</div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b text-xs text-muted-foreground">
-                        <th className="px-5 py-3 text-left font-medium">วันที่</th>
-                        <th className="px-5 py-3 text-left font-medium">ฝั่ง</th>
-                        <th className="px-5 py-3 text-right font-medium">ราคา</th>
-                        <th className="px-5 py-3 text-right font-medium">จำนวนเงิน</th>
-                        <th className="px-5 py-3 text-right font-medium">กำไร/ขาดทุน</th>
-                        <th className="px-5 py-3 text-left font-medium">เหตุผล</th>
+              <div style={{ overflowX: "auto", marginTop: 14 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ textAlign: "left", opacity: 0.7 }}>
+                      <th>วันที่</th><th>ฝั่ง</th><th>ราคา</th><th>จำนวนเงิน</th><th>กำไร/ขาดทุน</th><th>เหตุผล</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tradesShown.map((t, i) => (
+                      <tr key={i} style={{ borderTop: line }}>
+                        <td>{t.date}</td>
+                        <td>{t.side === "buy" ? "ซื้อ" : "ขาย"}</td>
+                        <td>{fmtThb(t.price)}</td>
+                        <td>{fmtThb(t.amount_thb)}</td>
+                        <td style={{ color: colorOf(t.pnl_pct) }}>{t.pnl_pct == null ? "-" : fmtPct(t.pnl_pct)}</td>
+                        <td>{t.reason}</td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {tradesShown.map((t, i) => (
-                        <tr key={i} className="border-b last:border-0">
-                          <td className="whitespace-nowrap px-5 py-3">{t.date}</td>
-                          <td className="px-5 py-3">
-                            <span
-                              className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                                t.side === "buy" ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500"
-                              }`}
-                            >
-                              {t.side === "buy" ? "ซื้อ" : "ขาย"}
-                            </span>
-                          </td>
-                          <td className="px-5 py-3 text-right">฿{fmtThb(t.price)}</td>
-                          <td className="px-5 py-3 text-right">฿{fmtThb(t.amount_thb)}</td>
-                          <td className={`px-5 py-3 text-right ${colorOf(t.pnl_pct)}`}>
-                            {t.pnl_pct == null ? "-" : fmtPct(t.pnl_pct)}
-                          </td>
-                          <td className="px-5 py-3 text-muted-foreground">{t.reason}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="border-t px-5 py-2.5 text-xs text-muted-foreground">แสดง 30 รายการล่าสุด</div>
+                    ))}
+                  </tbody>
+                </table>
+                <p style={muted}>แสดง 30 รายการล่าสุด</p>
               </div>
             )}
           </div>
         )}
       </Card>
 
-      {/* 4. บอทของฉัน */}
-      <Card
-        step={4}
-        title={`บอทของฉัน (${bots.length}/${maxBots})`}
-        subtitle="สร้างได้สูงสุดตามจำนวนที่กำหนด บอททุกตัวเริ่มที่โหมดทดลองและปิดอยู่"
-      >
-        <div className="flex flex-wrap items-center gap-3">
-          <input
-            placeholder="ตั้งชื่อบอท"
-            value={name}
-            maxLength={60}
-            onChange={(e) => setName(e.target.value)}
-            className={`${inputBase} min-w-[180px] flex-1`}
-          />
-          <button type="button" className={btnPrimary} disabled={!canSave} onClick={saveBot}>
-            บันทึกกฎนี้เป็นบอท
-          </button>
+      <Card title={`4. บอทของฉัน (${bots.length}/${maxBots})`}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          <input placeholder="ตั้งชื่อบอท" value={name} maxLength={60} style={{ ...inp, flex: 1, minWidth: 160 }}
+            onChange={(e) => setName(e.target.value)} />
+          <button style={btnPrimary} disabled={!canSave} onClick={saveBot}>บันทึกกฎนี้เป็นบอท</button>
         </div>
-        {msg && <p className="mt-3 text-sm text-muted-foreground">{msg}</p>}
+        {msg && <p style={muted}>{msg}</p>}
+        {bots.length === 0 && <p style={muted}>ยังไม่มีบอท</p>}
 
-        <div className="mt-5 space-y-3">
-          {bots.length === 0 && (
-            <div className="flex min-h-[120px] items-center justify-center rounded-xl border border-dashed text-sm text-muted-foreground">
-              ยังไม่มีบอท
-            </div>
-          )}
-
-          {bots.map((b) => (
-            <div key={b.id} className="rounded-xl border bg-background/40 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <span className="truncate text-sm font-semibold">{b.name}</span>
-                  <span
-                    className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
-                      b.dry_run ? "bg-amber-500/10 text-amber-500" : "bg-red-500/10 text-red-500"
-                    }`}
-                  >
-                    {b.dry_run ? "โหมดทดลอง" : "โหมดจริง"}
-                  </span>
-                  <span
-                    className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
-                      b.enabled ? "bg-emerald-500/10 text-emerald-500" : "bg-muted text-muted-foreground"
-                    }`}
-                  >
-                    {b.enabled ? "เปิดอยู่" : "ปิดอยู่"}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                   <button type="button" className={`${btnSmall} ${b.dry_run ? "" : "text-amber-500"}`} onClick={() => setMode(b, b.dry_run ? "live" : "dry")}>
-                    {b.dry_run ? "ไปโหมดจริง" : "กลับโหมดทดลอง"}
-                  </button>
-                  <Switch checked={b.enabled} onChange={() => toggleBot(b)} label={`เปิดใช้งาน ${b.name}`} />
-                  <button type="button" className={btnSmall} onClick={() => showRuns(b)}>
-                    {runsFor === b.id ? "ซ่อนประวัติ" : "ประวัติ"}
-                  </button>
-                  <button type="button" className={`${btnSmall} text-red-500`} onClick={() => deleteBot(b)}>
-                    ลบ
-                  </button>
-                </div>
+        {bots.map((b) => (
+          <div key={b.id}
+            style={{ border: b.dry_run ? line : `1px solid ${AMBER}`, borderRadius: 10, padding: 12, marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <div>
+                <strong>{b.name}</strong>{" "}
+                <span style={b.dry_run ? badge : badgeLive}>{b.dry_run ? "โหมดทดลอง" : "โหมดจริง"}</span>
               </div>
-              <p className="mt-2 text-xs text-muted-foreground">{b.rule_text}</p>
-
-              {runsFor === b.id && (
-                <div className="mt-3 max-h-64 overflow-y-auto rounded-lg border bg-card">
-                  {runs.length === 0 ? (
-                    <div className="px-4 py-6 text-center text-xs text-muted-foreground">ยังไม่มีประวัติการทำงาน</div>
-                  ) : (
-                    runs.map((r, i) => {
-                      const a = ACTION_TH[r.action] ?? { label: r.action, cls: "bg-muted text-muted-foreground" };
-                      return (
-                        <div key={i} className="flex items-center justify-between gap-3 border-b px-4 py-2.5 text-sm last:border-0">
-                          <div className="flex min-w-0 items-center gap-2">
-                            <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${a.cls}`}>{a.label}</span>
-                            <span className="truncate text-xs text-muted-foreground">{r.reason ?? ""}</span>
-                          </div>
-                          <span className="shrink-0 text-xs text-muted-foreground">
-                            {r.created_at.slice(0, 16).replace("T", " ")}
-                          </span>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              )}
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <label style={{ cursor: "pointer" }}>
+                  <input type="checkbox" checked={b.enabled} onChange={() => toggleBot(b)} /> เปิดใช้งาน
+                </label>
+                <button style={b.dry_run ? btn : btnLive} onClick={() => setMode(b, b.dry_run ? "live" : "dry")}>
+                  {b.dry_run ? "ไปโหมดจริง" : "กลับโหมดทดลอง"}
+                </button>
+                <button style={btn} onClick={() => showRuns(b)}>
+                  {runsFor === b.id ? "ซ่อนประวัติ" : "ประวัติ"}
+                </button>
+                <button style={btn} onClick={() => deleteBot(b)}>ลบ</button>
+              </div>
             </div>
-          ))}
-        </div>
+            <div style={{ ...muted, marginTop: 6 }}>{b.rule_text}</div>
 
-        <p className="mt-4 text-xs text-muted-foreground">
-          การเปิดใช้งานตอนนี้แค่บันทึกสถานะ ยังไม่มีตัววนเช็กที่ส่งคำสั่ง (ขั้นสุดท้ายของแผน) ผลย้อนหลังไม่รับประกันกำไรในอนาคต
+            {runsFor === b.id && (
+              <div style={{ marginTop: 10 }}>
+                {runs.length === 0
+                  ? <span style={muted}>ยังไม่มีประวัติการทำงาน</span>
+                  : runs.map((r, i) => (
+                    <div key={i} style={{ fontSize: 13, borderTop: line, padding: "4px 0" }}>
+                      {r.created_at.slice(0, 16).replace("T", " ")}
+                      {" · "}
+                      <span style={{ color: r.action === "error" ? "#dc2626" : undefined }}>
+                        {ACTION_TH[r.action] ?? r.action}
+                      </span>
+                      {r.dry_run === false && <span style={{ color: AMBER }}> [จริง]</span>}
+                      {r.reason ? ` · ${r.reason}` : ""}
+                      {r.pnl_pct != null && <span style={{ color: colorOf(r.pnl_pct) }}> · {fmtPct(r.pnl_pct)}</span>}
+                    </div>
+                  ))}
+              </div>
+            )}
+          </div>
+        ))}
+        <p style={muted}>
+          เมื่อเปิดใช้งาน ระบบจะเช็กบอทตามรอบ (วันละครั้งต่อแท่งราคา) โหมดทดลองไม่แตะ Wallet
+          ส่วนโหมดจริงส่งคำสั่งซื้อขายจริงในพอร์ตของคุณ
         </p>
       </Card>
     </div>
