@@ -34,6 +34,9 @@ try:
 except ImportError:
     from api import bot_rules as br
 
+import logging
+logging.getLogger("streamlit").setLevel(logging.ERROR)
+
 import pandas as pd
 
 # =========================================================
