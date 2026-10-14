@@ -3965,7 +3965,7 @@ def bots_update(bot_id: str, body: BotPatchIn, user: str = Depends(require_user)
             patch["enabled"] = bool(body.enabled)
         if not patch:
             raise HTTPException(status_code=400, detail="ไม่มีข้อมูลที่จะแก้ไข")
-        patch["dry_run"] = True  # ย้ำทุกครั้ง: ขั้นที่ 2 ไม่มีทางเป็นโหมดจริง
+        patch["updated_at"] = pd.Timestamp.now(tz="UTC").isoformat()
         
         sb = _bot_sb(load_gu())
         res = (
