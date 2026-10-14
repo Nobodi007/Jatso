@@ -26,6 +26,8 @@ import {
 import MorphOrb from "./components/ui/ai-thiking-orb-and-input"
 import RiskPage from "./components/risk/RiskPage"
 import { NumberTicker } from "./components/ui/number-ticker"
+import BotLab from "./BotLab"
+import type { BotApi } from "./BotLab"
 
 type Page =
   | "dashboard"
@@ -5863,6 +5865,35 @@ function TrendTimingCard({ onRefresh }: { onRefresh?: () => void }) {
   )
 }
 
+const botApi: BotApi = async (path, init) => {
+  const hasBody = init?.body !== undefined
+  const response = await authFetch(`${API_BASE_URL}${path}`, {
+    method: init?.method ?? "GET",
+    headers: {
+      Accept: "application/json",
+      ...(hasBody ? { "Content-Type": "application/json" } : {}),
+    },
+    body: hasBody ? JSON.stringify(init?.body) : undefined,
+    cache: "no-store",
+  })
+
+  let data: any = null
+  try {
+    data = await response.json()
+  } catch {
+    data = null
+  }
+
+  if (!response.ok) {
+    const detail = data?.detail
+    throw new Error(
+      typeof detail === "string"
+        ? detail
+        : detail?.message || `เกิดข้อผิดพลาด (HTTP ${response.status})`
+    )
+  }
+  return data
+}
 
 /* =========================================================
    QUANT LAB
@@ -6033,6 +6064,8 @@ function QuantLabPage({
           )}
         </div>
       </div>
+      
+      <BotLab api={botApi} />
     </div>
   )
 }
