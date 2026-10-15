@@ -12,14 +12,5 @@ pillow
 PyYAML
 google-auth>=2.0
 PyJWT
-# Add this line to the existing api/requirements.txt; do not replace that file.
-webull-openapi-python-sdk==3.0.0
-# Add this at the END of the existing api/server.py.
-# Keep the existing routes, API configuration, auth code, and UI untouched.
+webull-openapi-python-sdk==3.8.0
 
-
-
-app.include_router(
-    webull_router,
-    dependencies=[Depends(require_api_key), Depends(require_webull_access)],
-)
