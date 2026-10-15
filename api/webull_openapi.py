@@ -198,7 +198,7 @@ def list_accounts() -> Any:
 def account_positions(
     account_id: str = Query(..., min_length=1, max_length=100),
 ) -> Any:
-    """Read account positions from Webull UAT. No orders are submitted."""
+    """Read account positions only. No orders are submitted."""
     return _request(
         "GET",
         "/trading/assets/positions/list",
