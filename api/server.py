@@ -4305,3 +4305,18 @@ def bots_stop_all(user: str = Depends(require_user)):
         raise
     except Exception as e:
         raise _internal_server_error("หยุดบอทไม่สำเร็จ", e, status_code=503)
+
+# =========================================================
+# WEBULL UAT (READ-ONLY)
+# =========================================================
+# Keep Webull endpoints behind the existing API-key protection.
+# The adapter itself has no order placement/cancel endpoints.
+try:
+    from api.webull_openapi import router as webull_router
+except ImportError:
+    from webull_openapi import router as webull_router
+
+app.include_router(
+    webull_router,
+    dependencies=[Depends(require_api_key)],
+)
