@@ -4134,13 +4134,46 @@ def bots_tick(x_tick_secret: str = Header(default="")):
         _TICK_LOCK.release()
 
 # =========================================================
-# BOTS LIVE (โหมดจริง) — วางต่อท้ายบล็อก tick ใน api/server.py
-# ส่งคำสั่งผ่าน create_order() ตัวเดิม จึงได้ idempotency / wallet check / save เหมือนซื้อขายปกติ
-# เปิดใช้ได้เมื่อ env BOTS_LIVE_ENABLED=true เท่านั้น
+# BOTS LIVE — reconcile ต้นรอบ + กันคำสั่งค้าง + หยุดฉุกเฉิน
+#
+# วิธีใช้ใน api/server.py
+#   1) ลบฟังก์ชัน _bot_tick_live เดิมทั้งก้อน (ที่มาจาก bots_live_block.py)
+#   2) วางไฟล์นี้ทั้งหมดต่อท้ายไฟล์ (ไม่ต้องเพิ่ม import ใหม่)
+#
+# สิ่งที่เพิ่ม
+#   - ก่อนตัดสินใจทุกรอบ เทียบเหรียญที่บอทบันทึกกับที่ Wallet ถือจริง ถ้าไม่ตรง หยุดบอท + ลงประวัติ
+#   - บันทึก "pending" ก่อนส่งคำสั่ง และล้างหลังรู้ผล ถ้าเซิร์ฟเวอร์ตายกลางทาง
+#     รอบหน้าจะเจอ pending แล้วหยุดบอทให้คนตรวจ แทนที่จะสั่งต่อแบบเดา
+#   - อ่านสถานะ enabled/dry_run ซ้ำก่อนส่งคำสั่ง กันกรณีกดหยุดระหว่างรอบ
+#   - endpoint POST /api/bots/stop-all ปิดบอททุกตัวของผู้ใช้
 # =========================================================
-class BotModeIn(BaseModel):
-    mode: str
-    confirm: bool = False
+
+_RECON_TOL = 0.98  # Wallet ถือน้อยกว่าที่บอทบันทึกเกิน 2% = ไม่ตรง
+
+
+def _bot_now() -> str:
+    return pd.Timestamp.now(tz="UTC").isoformat()
+
+
+def _bot_halt(sb, b, bar, reason, position=None):
+    """ปิดบอท + ลงประวัติ (ใช้เมื่อสถานะไม่ตรงกับ Wallet หรือมีคำสั่งค้าง)"""
+    patch = {"enabled": False, "updated_at": _bot_now()}
+    if position is not None:
+        patch["position"] = position
+    sb.table("bot_strategies").update(patch).eq("id", b["id"]).execute()
+    sb.table("bot_runs").insert({
+        "bot_id": b["id"], "actor": b["actor"], "bar": bar, "action": "error",
+        "reason": str(reason)[:200], "pnl_pct": None, "dry_run": False,
+    }).execute()
+
+
+def _bot_set_pending(sb, b, base, side, key, amt):
+    p = {**base, "pending": {"side": side, "key": key, "amt": amt}}
+    sb.table("bot_strategies").update({"position": p}).eq("id", b["id"]).execute()
+
+
+def _bot_save_position(sb, b, position):
+    sb.table("bot_strategies").update({"position": position}).eq("id", b["id"]).execute()
 
 
 def _bot_tick_live(gu, sb, b, spec, mid, cfg, bar):
@@ -4148,109 +4181,127 @@ def _bot_tick_live(gu, sb, b, spec, mid, cfg, bar):
     pos = b.get("position") if isinstance(b.get("position"), dict) else {}
     coins = float(pos.get("coins", 0.0) or 0.0)
     cost = float(pos.get("cost_thb", 0.0) or 0.0)
+    base = {"coins": coins, "cost_thb": cost}
+
+    # ---------- reconcile ----------
+    if pos.get("pending"):
+        # มีคำสั่งที่ไม่รู้ผล (เซิร์ฟเวอร์อาจตายกลางทาง) ไม่เดาต่อ หยุดให้คนตรวจ
+        _bot_halt(
+            sb, b, bar,
+            "พบคำสั่งที่ยังไม่ยืนยันผล (เซิร์ฟเวอร์อาจรีสตาร์ตกลางทาง) "
+            "ตรวจประวัติคำสั่งกับ Wallet ก่อนเปิดบอทใหม่",
+            base,  # ตัด pending ออก เพื่อให้สลับโหมด/เปิดใหม่ได้หลังตรวจแล้ว
+        )
+        return
+
+    if coins > 0.0:
+        with ORDER_LOCK:
+            _sync_gu_actor(gu, actor)
+            held = _safe_float((_load_existing_sim(gu).get("customer_coins") or {}).get(asset), 0.0)
+        if held < coins * _RECON_TOL:
+            kept = max(min(coins, held), 0.0)
+            _bot_halt(
+                sb, b, bar,
+                f"Wallet ถือ {held:.8g} {asset} น้อยกว่าที่บอทบันทึก {coins:.8g} "
+                "(อาจขายเองไปก่อน) หยุดบอทแล้ว ตรวจ Wallet ก่อนเปิดใหม่",
+                {"coins": kept, "cost_thb": cost * kept / coins},
+            )
+            return
+
+    # ---------- ตัดสินใจ ----------
     spread, fee = float(cfg["dealer_spread"]), float(ORDER_TRADING_FEE_RATE)
     d = br.live_decision(mid, spec, {"coins": coins, "cost_thb": cost}, spread, fee)
     action, reason, newpos = d["action"], d["reason"], None
     px = float(mid.iloc[-1])  # mid รวม premium แล้ว
     min_trade = float(getattr(gu, "MIN_TRADE_THB", 50))
+    pending_set = False
 
     if action in ("buy", "sell"):
         with ORDER_LOCK:
             try:
-                _sync_gu_actor(gu, actor)
-                sim = _load_existing_sim(gu)
-                key = f"bot-{b['id']}-{bar}-{action}"
-                if action == "buy":
-                    amt = round(br.order_size(spec, _safe_float(sim.get("customer_thb"), 0.0)), 2)
-                    if amt < min_trade:
-                        action, reason = "hold", "เงินสดไม่พอสำหรับออเดอร์ขั้นต่ำ"
-                    else:
-                        res = create_order(
-                            order=OrderRequest(asset=asset, side="buy", amount_thb=amt),
-                            idempotency_key=key, user=actor,
-                        )
-                        if res.get("status") == "filled":
-                            got = _safe_float(res.get("quantity"), 0.0)
-                            newpos = {"coins": got, "cost_thb": amt}
-                            reason = f"{reason} · {(res.get('order') or {}).get('Order ID', '')}"
-                        else:
-                            action, reason = "hold", "คำสั่งซื้อถูกปฏิเสธ"
+                # กดหยุด/สลับโหมดระหว่างรอบ? อ่านซ้ำก่อนแตะเงินจริง
+                fresh = (
+                    sb.table("bot_strategies").select("enabled,dry_run")
+                    .eq("id", b["id"]).execute().data or []
+                )
+                if not fresh or not fresh[0].get("enabled") or fresh[0].get("dry_run", True):
+                    action, reason = "hold", "บอทถูกปิดหรือเปลี่ยนโหมดระหว่างรอบ"
                 else:
-                    held = _safe_float((sim.get("customer_coins") or {}).get(asset), 0.0)
-                    sell_coins = min(coins, held)
-                    # เผื่อ 0.5% กันขายเกินจำนวนที่ถืออยู่ (ยอดคิดจาก quote ฝั่งขาย)
-                    amt = round(sell_coins * px * (1.0 - spread) * 0.995, 2)
-                    if sell_coins <= 0:
-                        action, reason = "hold", "ไม่มีเหรียญให้ขาย (อาจถูกขายไปก่อน)"
-                        newpos = {"coins": 0.0, "cost_thb": 0.0}
-                    elif amt < min_trade:
-                        action, reason = "hold", "ยอดขายต่ำกว่าขั้นต่ำ"
-                    else:
-                        res = create_order(
-                            order=OrderRequest(asset=asset, side="sell", amount_thb=amt),
-                            idempotency_key=key, user=actor,
-                        )
-                        if res.get("status") == "filled":
-                            newpos = {"coins": 0.0, "cost_thb": 0.0}
-                            reason = f"{reason} · {(res.get('order') or {}).get('Order ID', '')}"
+                    _sync_gu_actor(gu, actor)
+                    sim = _load_existing_sim(gu)
+                    key = f"bot-{b['id']}-{bar}-{action}"
+                    if action == "buy":
+                        amt = round(br.order_size(spec, _safe_float(sim.get("customer_thb"), 0.0)), 2)
+                        if amt < min_trade:
+                            action, reason = "hold", "เงินสดไม่พอสำหรับออเดอร์ขั้นต่ำ"
                         else:
-                            action, reason = "hold", "คำสั่งขายถูกปฏิเสธ"
+                            _bot_set_pending(sb, b, base, "buy", key, amt)
+                            pending_set = True
+                            res = create_order(
+                                order=OrderRequest(asset=asset, side="buy", amount_thb=amt),
+                                idempotency_key=key, user=actor,
+                            )
+                            if res.get("status") == "filled":
+                                got = _safe_float(res.get("quantity"), 0.0)
+                                newpos = {"coins": got, "cost_thb": amt}
+                                reason = f"{reason} · {(res.get('order') or {}).get('Order ID', '')}"
+                            else:
+                                action, reason = "hold", "คำสั่งซื้อถูกปฏิเสธ"
+                    else:
+                        held = _safe_float((sim.get("customer_coins") or {}).get(asset), 0.0)
+                        sell_coins = min(coins, held)
+                        # เผื่อ 0.5% กันขายเกินจำนวนที่ถืออยู่ (ยอดคิดจาก quote ฝั่งขาย)
+                        amt = round(sell_coins * px * (1.0 - spread) * 0.995, 2)
+                        if sell_coins <= 0:
+                            action, reason = "hold", "ไม่มีเหรียญให้ขาย (อาจถูกขายไปก่อน)"
+                            newpos = {"coins": 0.0, "cost_thb": 0.0}
+                        elif amt < min_trade:
+                            action, reason = "hold", "ยอดขายต่ำกว่าขั้นต่ำ"
+                        else:
+                            _bot_set_pending(sb, b, base, "sell", key, amt)
+                            pending_set = True
+                            res = create_order(
+                                order=OrderRequest(asset=asset, side="sell", amount_thb=amt),
+                                idempotency_key=key, user=actor,
+                            )
+                            if res.get("status") == "filled":
+                                newpos = {"coins": 0.0, "cost_thb": 0.0}
+                                reason = f"{reason} · {(res.get('order') or {}).get('Order ID', '')}"
+                            else:
+                                action, reason = "hold", "คำสั่งขายถูกปฏิเสธ"
             except HTTPException as e:
                 action = "error"
                 reason = str(e.detail.get("message") if isinstance(e.detail, dict) else e.detail)[:200]
+            # Exception อื่น (เช่น ฐานข้อมูลล้มหลังส่งคำสั่ง) ปล่อยให้หลุดออกไป
+            # pending จะค้างไว้ และรอบหน้าบอทจะหยุดเพื่อให้คนตรวจ
 
+    # ---------- บันทึกผล ----------
     if newpos is not None:
-        sb.table("bot_strategies").update({"position": newpos}).eq("id", b["id"]).execute()
+        _bot_save_position(sb, b, newpos)          # เขียนทับ = ล้าง pending ในตัว
+    elif pending_set:
+        _bot_save_position(sb, b, base)            # ไม่ได้ fill แน่ชัด ล้าง pending กลับเป็นเดิม
+
     sb.table("bot_runs").insert({
         "bot_id": b["id"], "actor": actor, "bar": bar, "action": action,
         "reason": reason, "pnl_pct": _fnum(d.get("pnl_pct"), 2), "dry_run": False,
     }).execute()
 
 
-@app.post("/api/bots/{bot_id}/mode", dependencies=[Depends(require_api_key)])
-def bots_set_mode(bot_id: str, body: BotModeIn, user: str = Depends(require_user)):
-    with ORDER_LOCK:
-        try:
-            gu = load_gu()
-            actor = _actor(user)
-            _sync_gu_actor(gu, actor)
-            _set_api_role(gu, actor)
-            bid = _bot_uuid(bot_id)
-            sb = _bot_sb(gu)
-            if body.mode not in ("live", "dry"):
-                raise HTTPException(status_code=400, detail="mode ต้องเป็น live หรือ dry")
-            rows = sb.table("bot_strategies").select("*").eq("id", bid).eq("actor", actor).execute().data or []
-            if not rows:
-                raise HTTPException(status_code=404, detail="ไม่พบบอทนี้")
-            b = rows[0]
-            pos = b.get("position") if isinstance(b.get("position"), dict) else {}
-            now = pd.Timestamp.now(tz="UTC").isoformat()
+# ---------------- หยุดฉุกเฉิน: ปิดบอททุกตัวของผู้ใช้ ----------------
 
-            if body.mode == "live":
-                if os.environ.get("BOTS_LIVE_ENABLED", "").strip().lower() != "true":
-                    raise HTTPException(status_code=403, detail="โหมดจริงถูกปิดทั้งระบบ")
-                if not gu.can_trade():
-                    raise HTTPException(status_code=403, detail="ไม่มีสิทธิ์ Trader")
-                if not body.confirm:
-                    raise HTTPException(status_code=400, detail="ต้องยืนยันก่อนเปลี่ยนเป็นโหมดจริง")
-                if not b.get("dry_run", True):
-                    return {"status": "ok"}
-                runs = (
-                    sb.table("bot_runs").select("bar").eq("bot_id", bid)
-                    .eq("actor", actor).eq("dry_run", True).execute().data or []
-                )
-                if len({r.get("bar") for r in runs}) < 3:
-                    raise HTTPException(status_code=409, detail="ต้องรันโหมดทดลองอย่างน้อย 3 วัน (3 แท่งราคา) ก่อน")
-                patch = {"dry_run": False, "enabled": False,
-                         "position": {"coins": 0.0, "cost_thb": 0.0}, "updated_at": now}
-            else:
-                if not b.get("dry_run", True) and float(pos.get("coins", 0) or 0) > 0:
-                    raise HTTPException(status_code=409, detail="บอทกำลังถือเหรียญอยู่ ปิดบอทแล้วรอให้ขายก่อน")
-                patch = {"dry_run": True, "enabled": False, "position": None, "updated_at": now}
-
-            sb.table("bot_strategies").update(patch).eq("id", bid).eq("actor", actor).execute()
-            return {"status": "ok", "dry_run": patch["dry_run"]}
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise _internal_server_error("เปลี่ยนโหมดบอทไม่สำเร็จ", e, status_code=503)
+@app.post("/api/bots/stop-all", dependencies=[Depends(require_api_key)])
+def bots_stop_all(user: str = Depends(require_user)):
+    try:
+        actor = _actor(user)
+        sb = _bot_sb(load_gu())
+        with ORDER_LOCK:  # รอให้คำสั่งที่กำลังส่งอยู่จบก่อน
+            res = (
+                sb.table("bot_strategies")
+                .update({"enabled": False, "updated_at": _bot_now()})
+                .eq("actor", actor).eq("enabled", True).execute().data or []
+            )
+        return {"status": "ok", "stopped": len(res)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _internal_server_error("หยุดบอทไม่สำเร็จ", e, status_code=503)
