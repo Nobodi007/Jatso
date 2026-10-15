@@ -135,13 +135,16 @@ def _request(
     except HTTPException:
         raise
     except Exception as exc:
-        # Do not return raw SDK exception text: some SDK errors include request
-        # metadata. It is safer to report only the exception class to clients.
+        logging.getLogger("uvicorn.error").error(
+            "webull request failed %s: %s: %s",
+            path,
+            type(exc).__name__,
+            str(exc)[:300],
+        )
         raise HTTPException(
             status_code=502,
             detail=f"Webull UAT SDK request failed ({type(exc).__name__}). Check Render logs and UAT permissions.",
         ) from None
-
 
 def _sdk_available() -> bool:
     try:
