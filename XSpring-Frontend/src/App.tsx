@@ -4439,17 +4439,6 @@ type NewsItem = {
   source: string
 }
 
-const NEWS_FEEDS = [
-  {
-    name: "CoinDesk",
-    url: "https://www.coindesk.com/arc/outboundfeeds/rss/",
-  },
-  {
-    name: "Cointelegraph",
-    url: "https://cointelegraph.com/rss",
-  },
-]
-
 function NewsAiButton({
   url,
   title,
