@@ -202,11 +202,22 @@ def account_positions(
     account_id: str = Query(..., min_length=1, max_length=100),
 ) -> Any:
     """Read account positions only. No orders are submitted."""
-    return _request(
-        "GET",
-        "/trading/assets/positions/list",
-        params={"account_id": account_id},
-    )
+    app_key, app_secret = _app_credentials()
+    access_token = _get_access_token()
+    try:
+        from webull.trade.trade_client import TradeClient
+        client = _new_client(app_key, app_secret)
+        client.set_token(access_token)
+        res = TradeClient(client).account_v2.get_account_position(account_id)
+        return res.json()
+    except Exception as exc:
+        logging.getLogger("uvicorn.error").error(
+            "webull positions failed: %s: %s", type(exc).__name__, str(exc)[:300]
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Webull UAT positions request failed ({type(exc).__name__}).",
+        ) from None
 
 @router.get("/stocks/snapshots")
 def stock_snapshots(
