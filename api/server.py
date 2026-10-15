@@ -3894,7 +3894,7 @@ def bot_backtest(body: BacktestIn, user: str = Depends(require_user)):
             "n_trades": res["n_trades"],
             "n_closed": res["n_closed"],
             "win_rate": _fnum(res["win_rate"], 1),
-            "holding_at_end": res["holding_at_end"],
+            "holding_at_end": bool(res["holding_at_end"]),
             "equity": equity,
             "trades": trades,
             "warnings": warnings,
