@@ -4546,46 +4546,30 @@ useEffect(() => {
 
 const btcChange = tickers.find((t) => t.asset === "BTC")?.change
 const ethChange = tickers.find((t) => t.asset === "ETH")?.change
+const sources = Array.from(new Set(items.map((i) => i.source))).filter(Boolean)
 
-  const loadNews = async () => {
+   const loadNews = async () => {
     setNewsLoading(true)
     setNewsError("")
 
     try {
-      const responses = await Promise.all(
-        NEWS_FEEDS.map(async (feed) => {
-          const endpoint = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feed.url)}`
-          const response = await fetch(endpoint, { cache: "no-store" })
-          if (!response.ok) throw new Error(`${feed.name}: HTTP ${response.status}`)
+      const res = await fetch(`${API_BASE_URL}/api/public/news`, { cache: "no-store" })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const body = await res.json()
+      const rows = Array.isArray(body?.items) ? body.items : []
 
-          const body = await response.json()
-          const feedItems = Array.isArray(body?.items) ? body.items : []
+      const mapped: NewsItem[] = rows
+        .map((r: any) => ({
+          title: String(r?.title || ""),
+          link: String(r?.url || ""),
+          pubDate: r?.published_ts ? new Date(Number(r.published_ts) * 1000).toISOString() : "",
+          description: "",
+          source: String(r?.source || "Unknown"),
+        }))
+        .filter((item: NewsItem) => item.title && item.link)
 
-          return feedItems.slice(0, 12).map((item: any) => ({
-            title: String(item?.title || "Untitled"),
-            link: String(item?.link || ""),
-            pubDate: String(item?.pubDate || ""),
-            description: String(item?.description || "")
-              .replace(/<[^>]*>/g, " ")
-              .replace(/\s+/g, " ")
-              .trim(),
-            source: feed.name,
-          })) as NewsItem[]
-        })
-      )
-
-      const merged = responses
-        .flat()
-        .filter((item) => item.title && item.link)
-        .sort((a, b) => {
-          const aTime = new Date(a.pubDate).getTime()
-          const bTime = new Date(b.pubDate).getTime()
-          if (Number.isFinite(aTime) && Number.isFinite(bTime)) return bTime - aTime
-          return 0
-        })
-
-      setItems(merged)
-      if (merged.length === 0) setNewsError("ยังไม่มีข่าวที่โหลดได้จากแหล่งข่าว")
+      setItems(mapped)
+      if (mapped.length === 0) setNewsError("ยังไม่มีข่าวที่โหลดได้จากแหล่งข่าว")
     } catch (err) {
       setNewsError(err instanceof Error ? err.message : "ไม่สามารถโหลดข่าวได้")
     } finally {
