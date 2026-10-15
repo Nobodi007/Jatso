@@ -4625,7 +4625,7 @@ const sources = Array.from(new Set(items.map((i) => i.source))).filter(Boolean)
         />
         <StatCard
           title="Sources"
-          value={String(NEWS_FEEDS.length)}
+          value={String(sources.length)}
           change="แหล่งข่าว"
         />
         <StatCard
@@ -4641,7 +4641,7 @@ const sources = Array.from(new Set(items.map((i) => i.source))).filter(Boolean)
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {["All", ...NEWS_FEEDS.map((feed) => feed.name)].map((source) => (
+        {["All", ...sources].map((source) => (
           <button
             key={source}
             onClick={() => setActiveSource(source)}
