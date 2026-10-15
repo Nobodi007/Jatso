@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import logging
 import os
+import time
+from threading import Lock
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -22,19 +24,61 @@ WEBULL_BASE_URL = f"https://{WEBULL_HOST}"
 REQUEST_TIMEOUT_SECONDS = 15
 
 
-def _settings() -> tuple[str, str, str]:
+_token_cache: dict[str, Any] = {"token": "", "expires_at": 0, "status": ""}
+_token_lock = Lock()
+
+
+def _app_credentials() -> tuple[str, str]:
     app_key = os.getenv("WEBULL_APP_KEY", "").strip()
     app_secret = os.getenv("WEBULL_APP_SECRET", "").strip()
-    access_token = os.getenv("WEBULL_ACCESS_TOKEN", "").strip()
-    if not (app_key and app_secret and access_token):
+    if not (app_key and app_secret):
         raise HTTPException(
             status_code=503,
-            detail=(
-                "Webull UAT is not configured. Set WEBULL_APP_KEY, "
-                "WEBULL_APP_SECRET, and WEBULL_ACCESS_TOKEN in the backend environment."
-            ),
+            detail="Webull UAT is not configured. Set WEBULL_APP_KEY and WEBULL_APP_SECRET in the backend environment.",
         )
-    return app_key, app_secret, access_token
+    return app_key, app_secret
+
+
+def _new_client(app_key: str, app_secret: str) -> ApiClient:
+    client = ApiClient(
+        app_key, app_secret, "th", connect_timeout=5,
+        timeout=REQUEST_TIMEOUT_SECONDS, auto_retry=False,
+    )
+    client.add_endpoint("th", WEBULL_HOST)
+    return client
+
+
+def _get_access_token() -> str:
+    """Create/cache a UAT token on the server; never expose its value to the browser."""
+    app_key, app_secret = _app_credentials()
+    env_token = os.getenv("WEBULL_ACCESS_TOKEN", "").strip()
+    if env_token:
+        return env_token
+    now_ms = int(time.time() * 1000)
+    with _token_lock:
+        token = str(_token_cache.get("token") or "")
+        expires_at = int(_token_cache.get("expires_at") or 0)
+        if token and expires_at > now_ms + 60_000:
+            return token
+        try:
+            client = _new_client(app_key, app_secret)
+            request = ApiRequest("/auth/tokens/create", version="v3", method="POST")
+            response = client.get_response(request)
+            payload = response.json()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Webull UAT token creation failed ({type(exc).__name__}). Check UAT permissions and SDK signing support.",
+            ) from None
+        token = str(payload.get("token") or "")
+        status = str(payload.get("status") or "").upper()
+        expires_at = int(payload.get("expires_at") or 0)
+        if not token:
+            raise HTTPException(status_code=502, detail="Webull UAT token response did not contain a token.")
+        _token_cache.update({"token": token, "expires_at": expires_at, "status": status})
+        if status not in {"NORMAL", "PENDING"}:
+            raise HTTPException(status_code=502, detail=f"Webull UAT token status is {status or 'UNKNOWN'}.")
+        return token
 
 
 def _stringify_params(params: dict[str, Any] | None) -> dict[str, str]:
@@ -58,7 +102,8 @@ def _request(
     params: dict[str, Any] | None = None,
     body: dict[str, Any] | None = None,
 ) -> Any:
-    app_key, app_secret, access_token = _settings()
+    app_key, app_secret = _app_credentials()
+    access_token = _get_access_token()
     query = _stringify_params(params)
 
     # Use Webull's official SDK for request signing and transport. This avoids
@@ -68,15 +113,7 @@ def _request(
     logging.getLogger("webull").setLevel(logging.CRITICAL)
     logging.getLogger("webull.core").setLevel(logging.CRITICAL)
     try:
-        client = ApiClient(
-            app_key,
-            app_secret,
-            "th",
-            connect_timeout=5,
-            timeout=REQUEST_TIMEOUT_SECONDS,
-            auto_retry=False,
-        )
-        client.add_endpoint("th", WEBULL_HOST)
+        client = _new_client(app_key, app_secret)
         client.set_token(access_token)
         request = ApiRequest(
             path,
@@ -108,14 +145,29 @@ def webull_status() -> dict[str, Any]:
         "trading_actions_enabled": False,
         "endpoint_host": WEBULL_HOST,
         "configured": all(os.getenv(name, "").strip() for name in (
-            "WEBULL_APP_KEY", "WEBULL_APP_SECRET", "WEBULL_ACCESS_TOKEN"
+            "WEBULL_APP_KEY", "WEBULL_APP_SECRET"
         )),
         "credentials_present": {
             "app_key": bool(os.getenv("WEBULL_APP_KEY", "").strip()),
             "app_secret": bool(os.getenv("WEBULL_APP_SECRET", "").strip()),
-            "access_token": bool(os.getenv("WEBULL_ACCESS_TOKEN", "").strip()),
+            "access_token": bool(os.getenv("WEBULL_ACCESS_TOKEN", "").strip() or _token_cache.get("token")),
             "allowed_user": bool(os.getenv("WEBULL_ALLOWED_USER_EMAIL", "").strip()),
         },
+    }
+
+
+@router.post("/token/create")
+def create_access_token() -> dict[str, Any]:
+    """Create or reuse a server-side UAT token; token value is never returned."""
+    token = _get_access_token()
+    return {
+        "provider": "Webull Thailand OpenAPI",
+        "environment": "UAT",
+        "token_created": bool(token),
+        "token_cached": bool(_token_cache.get("token")),
+        "status": _token_cache.get("status") or "EXTERNAL_TOKEN",
+        "expires_at": _token_cache.get("expires_at") or None,
+        "token_value_returned": False,
     }
 
 
