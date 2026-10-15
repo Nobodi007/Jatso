@@ -440,6 +440,17 @@ export default function BotLab({ api }: { api: BotApi }) {
     } catch (e) { setMsg(errMsg(e)); }
   };
 
+  const stopAll = async () => {
+  if (!window.confirm("หยุดบอททุกตัวของคุณ?")) return
+  try {
+    const r = await api("/api/bots/stop-all", { method: "POST" })
+    setMsg(`หยุดบอทแล้ว ${r?.stopped ?? 0} ตัว`)
+  } catch (e) {
+    setMsg(e instanceof Error ? e.message : "หยุดบอทไม่สำเร็จ")
+  }
+  await loadBots()
+  } 
+   
   const setMode = async (b: Bot, mode: "live" | "dry") => {
     if (
       mode === "live" &&
@@ -698,6 +709,9 @@ export default function BotLab({ api }: { api: BotApi }) {
           <button type="button" className={btnPrimary} disabled={!canSave} onClick={saveBot}>
             บันทึกกฎนี้เป็นบอท
           </button>
+           <button type="button" className={`${btnSmall} text-red-500`} onClick={stopAll}>
+            หยุดบอททั้งหมด
+           </button>
         </div>
         {msg && <p className="mt-3 text-sm text-muted-foreground">{msg}</p>}
 
