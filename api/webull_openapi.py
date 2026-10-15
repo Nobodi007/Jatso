@@ -12,8 +12,6 @@ from threading import Lock
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
-from webull.core.client import ApiClient
-from webull.core.request import ApiRequest
 
 
 router = APIRouter(prefix="/api/webull", tags=["Webull UAT (read-only)"])
@@ -39,7 +37,12 @@ def _app_credentials() -> tuple[str, str]:
     return app_key, app_secret
 
 
-def _new_client(app_key: str, app_secret: str) -> ApiClient:
+def _new_client(app_key: str, app_secret: str):
+    # Lazy import: keep status routes available even if SDK installation fails.
+    try:
+        from webull.core.client import ApiClient
+    except Exception as exc:
+        raise RuntimeError("Webull SDK unavailable: " + type(exc).__name__) from None
     client = ApiClient(
         app_key, app_secret, "th", connect_timeout=5,
         timeout=REQUEST_TIMEOUT_SECONDS, auto_retry=False,
@@ -62,6 +65,7 @@ def _get_access_token() -> str:
             return token
         try:
             client = _new_client(app_key, app_secret)
+            from webull.core.request import ApiRequest
             request = ApiRequest("/auth/tokens/create", version="v3", method="POST")
             response = client.get_response(request)
             payload = response.json()
@@ -115,6 +119,7 @@ def _request(
     try:
         client = _new_client(app_key, app_secret)
         client.set_token(access_token)
+        from webull.core.request import ApiRequest
         request = ApiRequest(
             path,
             version="v3",
@@ -135,6 +140,15 @@ def _request(
         ) from None
 
 
+def _sdk_available() -> bool:
+    try:
+        from webull.core.client import ApiClient  # noqa: F401
+        from webull.core.request import ApiRequest  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 @router.get("/status")
 def webull_status() -> dict[str, Any]:
     """Safe configuration diagnostic; never returns credentials or token values."""
@@ -147,6 +161,7 @@ def webull_status() -> dict[str, Any]:
         "configured": all(os.getenv(name, "").strip() for name in (
             "WEBULL_APP_KEY", "WEBULL_APP_SECRET"
         )),
+        "sdk_importable": _sdk_available(),
         "credentials_present": {
             "app_key": bool(os.getenv("WEBULL_APP_KEY", "").strip()),
             "app_secret": bool(os.getenv("WEBULL_APP_SECRET", "").strip()),
