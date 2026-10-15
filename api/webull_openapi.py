@@ -70,6 +70,9 @@ def _get_access_token() -> str:
             response = client.get_response(request)
             payload = response.json()
         except Exception as exc:
+            logging.getLogger("uvicorn.error").error(
+                "webull token create failed: %s: %s", type(exc).__name__, str(exc)[:300]
+            )
             raise HTTPException(
                 status_code=502,
                 detail=f"Webull UAT token creation failed ({type(exc).__name__}). Check UAT permissions and SDK signing support.",
