@@ -4306,6 +4306,61 @@ def bots_stop_all(user: str = Depends(require_user)):
     except Exception as e:
         raise _internal_server_error("หยุดบอทไม่สำเร็จ", e, status_code=503)
 
+# ---------------- เปลี่ยนโหมดบอท (ทดลอง <-> จริง) ----------------
+
+class BotModeIn(BaseModel):
+    mode: str
+    confirm: bool = False
+
+
+@app.post("/api/bots/{bot_id}/mode", dependencies=[Depends(require_api_key)])
+def bots_set_mode(bot_id: str, body: BotModeIn, user: str = Depends(require_user)):
+    with ORDER_LOCK:
+        try:
+            gu = load_gu()
+            actor = _actor(user)
+            _sync_gu_actor(gu, actor)
+            _set_api_role(gu, actor)
+            bid = _bot_uuid(bot_id)
+            sb = _bot_sb(gu)
+            if body.mode not in ("live", "dry"):
+                raise HTTPException(status_code=400, detail="mode ต้องเป็น live หรือ dry")
+            rows = sb.table("bot_strategies").select("*").eq("id", bid).eq("actor", actor).execute().data or []
+            if not rows:
+                raise HTTPException(status_code=404, detail="ไม่พบบอทนี้")
+            b = rows[0]
+            pos = b.get("position") if isinstance(b.get("position"), dict) else {}
+            now = pd.Timestamp.now(tz="UTC").isoformat()
+
+            if body.mode == "live":
+                if os.environ.get("BOTS_LIVE_ENABLED", "").strip().lower() != "true":
+                    raise HTTPException(status_code=403, detail="โหมดจริงถูกปิดทั้งระบบ")
+                if not gu.can_trade():
+                    raise HTTPException(status_code=403, detail="ไม่มีสิทธิ์ Trader")
+                if not body.confirm:
+                    raise HTTPException(status_code=400, detail="ต้องยืนยันก่อนเปลี่ยนเป็นโหมดจริง")
+                if not b.get("dry_run", True):
+                    return {"status": "ok"}
+                runs = (
+                    sb.table("bot_runs").select("bar").eq("bot_id", bid)
+                    .eq("actor", actor).eq("dry_run", True).execute().data or []
+                )
+                if len({r.get("bar") for r in runs}) < 3:
+                    raise HTTPException(status_code=409, detail="ต้องรันโหมดทดลองอย่างน้อย 3 วัน (3 แท่งราคา) ก่อน")
+                patch = {"dry_run": False, "enabled": False,
+                         "position": {"coins": 0.0, "cost_thb": 0.0}, "updated_at": now}
+            else:
+                if not b.get("dry_run", True) and float(pos.get("coins", 0) or 0) > 0:
+                    raise HTTPException(status_code=409, detail="บอทกำลังถือเหรียญอยู่ ปิดบอทแล้วรอให้ขายก่อน")
+                patch = {"dry_run": True, "enabled": False, "position": None, "updated_at": now}
+
+            sb.table("bot_strategies").update(patch).eq("id", bid).eq("actor", actor).execute()
+            return {"status": "ok", "dry_run": patch["dry_run"]}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise _internal_server_error("เปลี่ยนโหมดบอทไม่สำเร็จ", e, status_code=503)
+
 # WEBULL UAT — READ ONLY
 try:
     from api.webull_openapi import router as webull_router
