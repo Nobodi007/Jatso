@@ -26,15 +26,6 @@ except Exception:  # SDK ติดตั้งไม่ได้ ให้เฉ
     ApiClient = None  # type: ignore
     ApiRequest = None  # type: ignore
 
-
-import hmac
-from fastapi import Depends, Header
-
-def require_api_key(x_api_key: str = Header(default="")):
-    expected = os.getenv("APP_API_KEY", "")
-    if not expected or not hmac.compare_digest(x_api_key.encode(), expected.encode()):
-        raise HTTPException(status_code=401, detail="unauthorized")
-
 router = APIRouter(prefix="/api/webull", tags=["Webull"])
 
 # Never allow a browser parameter to alter the upstream host.
@@ -42,14 +33,21 @@ _HOSTS = {
     "uat":  ("th-api.uat.webullbroker.com", "th-events-api.uat.webullbroker.com"),
     "prod": ("api.webull.co.th", "events-api.webull.co.th"),
 }
-_ENV = os.getenv("WEBULL_ENV", "uat").lower()
+_ENV = os.getenv("WEBULL_ENV", "uat").strip().lower()
 if _ENV not in _HOSTS:
-    raise RuntimeError("WEBULL_ENV must be uat or prod")
+    logging.getLogger(__name__).warning("WEBULL_ENV=%r is invalid; falling back to uat", _ENV)
+    _ENV = "uat"
 WEBULL_HOST, WEBULL_EVENTS_HOST_DEFAULT = _HOSTS[_ENV]
 WEBULL_REGION = "th"
 REQUEST_TIMEOUT_SECONDS = 15
 TOKEN_FALLBACK_LIFETIME_MS = 10 * 60_000
-TOKEN_FAIL_COOLDOWN_SECONDS = 120
+TOKEN_REFRESH_MARGIN_MS = 60_000
+# Webull may send an OTP to the account owner for every NEW token, so never create one
+# more often than this, whatever the outcome (success, failure, 401 retry storms).
+TOKEN_CREATE_MIN_INTERVAL_SECONDS = 120
+# A PENDING (not yet OTP-verified) token that gets 401 is kept this long instead of being
+# thrown away and re-created (which would send yet another OTP).
+TOKEN_PENDING_GRACE_SECONDS = 600
 
 # Silence SDK internals once at import time (they may log signed headers/params).
 logging.getLogger("webull").setLevel(logging.CRITICAL)
@@ -102,6 +100,12 @@ def _flag_enabled(name: str) -> bool:
 
 
 def _require_mutation_flag(name: str, purpose: str) -> None:
+    if _ENV != "uat" and not _flag_enabled("WEBULL_PROD_MUTATIONS_ENABLED"):
+        raise HTTPException(
+            status_code=423,
+            detail={"message": f"{purpose} is blocked outside UAT", "required_environment_flag":
+                    "WEBULL_PROD_MUTATIONS_ENABLED", "environment": _ENV},
+        )
     if not _flag_enabled(name):
         raise HTTPException(
             status_code=423,
@@ -118,7 +122,7 @@ def _check_account_allowed(account_id: str, purpose: str) -> None:
     """If WEBULL_ALLOWED_ACCOUNT_IDS is set, only those accounts may be used for mutations/events."""
     allowed = _allowed_account_ids()
     if not allowed or account_id not in allowed:
-        raise HTTPException(status_code=403, detail="webull api key missing or invalid")
+        raise HTTPException(status_code=403, detail=f"บัญชีนี้ไม่ได้อยู่ใน WEBULL_ALLOWED_ACCOUNT_IDS สำหรับ {purpose}")
 
 
 def _body_account_id(body: dict[str, Any]) -> str:
@@ -208,21 +212,20 @@ def _get_access_token() -> str:
         expires_at = int(_token_cache.get("expires_at") or 0)
         if cached and expires_at > now_ms + TOKEN_REFRESH_MARGIN_MS:
             return cached
-        wait = float(_token_cache.get("fail_until") or 0) - time.time()
+        wait = float(_token_cache.get("next_create_at") or 0) - time.time()
         if wait > 0:
             raise HTTPException(status_code=503, detail={
                 "message": "รอยืนยันตัวตนกับ Webull อยู่ (กันส่ง OTP ซ้ำ) ลองใหม่อีกครั้งภายหลัง",
-                "retry_after_seconds": int(wait)})
+                "retry_after_seconds": int(wait) + 1})
+        # Set BEFORE calling Webull so every outcome (success, failure, 401 loop) is rate-limited.
+        _token_cache["next_create_at"] = time.time() + TOKEN_CREATE_MIN_INTERVAL_SECONDS
         try:
             client = _new_client(app_key, app_secret)
             response = client.get_response(ApiRequest("/auth/tokens/create", version="v3", method="POST"))
             payload = response.json()
         except Exception as exc:
             status, detail, request_id = _extract_error(exc)
-            
-            _token_cache["fail_until"] = time.time() + TOKEN_FAIL_COOLDOWN_SECONDS
             _log.warning("Webull token creation failed: http=%s type=%s code=%s request_id=%s",
-                         
                          status, detail.get("error_type"), detail.get("error_code"), request_id)
             raise HTTPException(
                 status_code=502,
@@ -250,7 +253,8 @@ def _get_access_token() -> str:
         # by actual endpoint calls, not inferred here. Never cache an unusable token.
         if status not in {"NORMAL", "PENDING"}:
             raise HTTPException(status_code=502, detail={"message": "Webull token is not usable", "status": status})
-        _token_cache.update({"token": token, "expires_at": expires_at, "status": status})
+        _token_cache.update({"token": token, "expires_at": expires_at, "status": status,
+                             "created_at": time.time()})
         return token
 
 
@@ -319,8 +323,15 @@ def _request_upstream(
             break
 
     failure = last_failure or _UpstreamFailure(None, {"message": "Webull request failed"})
-    if failure.status == 401 and not os.getenv("WEBULL_ACCESS_TOKEN", "").strip():
-        _invalidate_token_cache()  # expired/revoked token: recreate on next call
+    if (failure.status == 401 or str(failure.detail.get("error_code") or "").upper() == "INVALID_TOKEN") \
+            and not os.getenv("WEBULL_ACCESS_TOKEN", "").strip():
+        age = time.time() - float(_token_cache.get("created_at") or 0)
+        if _token_cache.get("status") == "PENDING" and age < TOKEN_PENDING_GRACE_SECONDS:
+            raise HTTPException(status_code=503, detail={
+                "message": "โทเค็น Webull ยังรอยืนยัน OTP ยืนยันในแอป/SMS ล่าสุดหนึ่งครั้ง แล้วรอสักครู่ก่อนรีเฟรช",
+                "upstream_status": failure.status, "token_status": "PENDING",
+                "retry_after_seconds": int(TOKEN_PENDING_GRACE_SECONDS - age)}) from None
+        _invalidate_token_cache()  # expired/revoked token: recreate on next call (rate-limited)
 
     # Preserve 4xx business errors like 417 so the client can distinguish permission,
     # parameter, and server-side failures. Normalize upstream 5xx/unknown to gateway 502.
@@ -337,7 +348,7 @@ def _is_cacheable(method: str, candidates: tuple[str, ...]) -> bool:
     """แคชเฉพาะ market-data แบบ GET กับ bars (POST แต่อ่านอย่างเดียว) ไม่แคช trading/orders เด็ดขาด"""
     if CACHE_TTL_SECONDS <= 0:
         return False
-    if not all("/market-data/" in p for p in candidates):
+    if "/market-data/" not in candidates[0]:
         return False
     return method.upper() == "GET" or candidates == _STOCK_BARS_PATHS
 
@@ -390,8 +401,10 @@ def _query(request: Request, *, default_category: str | None = None, require_sym
 def webull_status() -> dict[str, Any]:
     token_exists = bool(os.getenv("WEBULL_ACCESS_TOKEN", "").strip() or _token_cache.get("token"))
     return {
-        "provider": "Webull Thailand OpenAPI", "environment": "UAT", "read_only_default": True,
+        "provider": "Webull Thailand OpenAPI", "environment": _ENV.upper(), "read_only_default": True,
         "upstream_host": WEBULL_HOST,
+        "token_status": _token_cache.get("status") or None,
+        "cache_ttl_seconds": CACHE_TTL_SECONDS,
         "credentials_present": {
             "app_key": bool(os.getenv("WEBULL_APP_KEY", "").strip()),
             "app_secret": bool(os.getenv("WEBULL_APP_SECRET", "").strip()),
