@@ -19,9 +19,12 @@ from threading import Lock, RLock, Thread
 from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from webull.core.client import ApiClient
-from webull.core.request import ApiRequest
-
+try:
+    from webull.core.client import ApiClient
+    from webull.core.request import ApiRequest
+except Exception:  # SDK ติดตั้งไม่ได้ ให้เฉพาะ route Webull ใช้ไม่ได้ ไม่ให้ทั้ง API ล้ม
+    ApiClient = None  # type: ignore
+    ApiRequest = None  # type: ignore
 router = APIRouter(prefix="/api/webull", tags=["Webull UAT"])
 
 # Never allow a browser parameter to alter the upstream host.
@@ -87,8 +90,8 @@ def _allowed_account_ids() -> set[str]:
 def _check_account_allowed(account_id: str, purpose: str) -> None:
     """If WEBULL_ALLOWED_ACCOUNT_IDS is set, only those accounts may be used for mutations/events."""
     allowed = _allowed_account_ids()
-    if allowed and account_id not in allowed:
-        raise HTTPException(status_code=403, detail=f"This account_id is not allowlisted for {purpose}.")
+    if not allowed or account_id not in allowed:
+        raise HTTPException(status_code=403, detail=f"บัญชีนี้ไม่ได้อยู่ใน WEBULL_ALLOWED_ACCOUNT_IDS สำหรับ {purpose}")
 
 
 def _body_account_id(body: dict[str, Any]) -> str:
@@ -97,6 +100,8 @@ def _body_account_id(body: dict[str, Any]) -> str:
         raise HTTPException(status_code=422, detail="account_id is required in body (max 100 chars).")
     return account_id
 
+if ApiClient is None:
+        raise HTTPException(status_code=503, detail="Webull SDK ยังไม่พร้อมใช้งานบนเซิร์ฟเวอร์")
 
 # ============================== SDK CLIENT / TOKEN ==============================
 def _new_client(app_key: str, app_secret: str) -> ApiClient:
