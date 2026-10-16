@@ -42,6 +42,17 @@ _log = logging.getLogger(__name__)
 
 _token_cache: dict[str, Any] = {"token": "", "expires_at": 0, "status": ""}
 _token_lock = Lock()
+import json  # ย้ายไปรวมกับ import ด้านบนก็ได้
+from threading import BoundedSemaphore
+
+# แคชคำตอบ market-data (อ่านอย่างเดียว) ฝั่งหลังบ้าน ตั้ง WEBULL_CACHE_TTL=0 เพื่อปิด
+CACHE_TTL_SECONDS = int(os.getenv("WEBULL_CACHE_TTL", "45"))
+CACHE_MAX_ENTRIES = 300
+# จำกัดคำขอที่ยิงไป Webull พร้อมกัน (ลดการกิน RAM/thread บน Render Free)
+MAX_CONCURRENT_UPSTREAM = int(os.getenv("WEBULL_MAX_CONCURRENT", "3"))
+_upstream_slots = BoundedSemaphore(MAX_CONCURRENT_UPSTREAM)
+_resp_cache: dict[str, tuple[float, Any]] = {}
+_resp_cache_lock = Lock()
 
 # gRPC event stream state is deliberately in-memory. It can be drained by polling
 # /events/recent; a production deployment should persist events if they must survive restarts.
@@ -100,11 +111,10 @@ def _body_account_id(body: dict[str, Any]) -> str:
         raise HTTPException(status_code=422, detail="account_id is required in body (max 100 chars).")
     return account_id
 
-if ApiClient is None:
-        raise HTTPException(status_code=503, detail="Webull SDK ยังไม่พร้อมใช้งานบนเซิร์ฟเวอร์")
-
 # ============================== SDK CLIENT / TOKEN ==============================
 def _new_client(app_key: str, app_secret: str) -> ApiClient:
+    if ApiClient is None:
+        raise HTTPException(status_code=503, detail="Webull SDK ยังไม่พร้อมใช้งานบนเซิร์ฟเวอร์")
     client = ApiClient(
         app_key, app_secret, WEBULL_REGION,
         connect_timeout=5, timeout=REQUEST_TIMEOUT_SECONDS, auto_retry=False,
@@ -233,7 +243,7 @@ def _clean_query(params: dict[str, Any] | None) -> dict[str, str]:
     return result
 
 
-def _request(
+def _request_upstream(
     path: str | tuple[str, ...],
     *,
     method: str = "GET",
@@ -297,7 +307,47 @@ def _request(
                  failure.detail.get("error_code") or failure.detail.get("message"))
     raise HTTPException(status_code=code, detail=payload) from None
 
+def _is_cacheable(method: str, candidates: tuple[str, ...]) -> bool:
+    """แคชเฉพาะ market-data แบบ GET กับ bars (POST แต่อ่านอย่างเดียว) ไม่แคช trading/orders เด็ดขาด"""
+    if CACHE_TTL_SECONDS <= 0:
+        return False
+    if not all("/market-data/" in p for p in candidates):
+        return False
+    return method.upper() == "GET" or candidates == _STOCK_BARS_PATHS
 
+
+def _request(
+    path: str | tuple[str, ...],
+    *,
+    method: str = "GET",
+    params: dict[str, Any] | None = None,
+    body: dict[str, Any] | list[Any] | None = None,
+) -> Any:
+    candidates = (path,) if isinstance(path, str) else tuple(path)
+    key: str | None = None
+    if _is_cacheable(method, candidates):
+        key = json.dumps([candidates, method.upper(), sorted(_clean_query(params).items()), body],
+                         sort_keys=True, default=str)
+        with _resp_cache_lock:
+            hit = _resp_cache.get(key)
+            if hit and hit[0] > time.time():
+                return hit[1]
+
+    if not _upstream_slots.acquire(timeout=10):
+        raise HTTPException(status_code=503, detail="Webull ถูกเรียกพร้อมกันมากเกินไป ลองใหม่อีกครั้งในไม่กี่วินาที")
+    try:
+        result = _request_upstream(path, method=method, params=params, body=body)
+    finally:
+        _upstream_slots.release()
+
+    if key is not None:  # error ยกเว้นเป็น HTTPException ไปแล้ว จึงไม่ถูกแคช
+        with _resp_cache_lock:
+            _resp_cache[key] = (time.time() + CACHE_TTL_SECONDS, result)
+            if len(_resp_cache) > CACHE_MAX_ENTRIES:
+                for k in sorted(_resp_cache, key=lambda k: _resp_cache[k][0])[:50]:
+                    _resp_cache.pop(k, None)
+    return result
+    
 def _query(request: Request, *, default_category: str | None = None, require_symbol: bool = False) -> dict[str, Any]:
     params: dict[str, Any] = {}
     for key, value in request.query_params.multi_items():
