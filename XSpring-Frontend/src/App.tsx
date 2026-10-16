@@ -361,7 +361,7 @@ function AppInner() {
             )}
           </div>
 
-          <nav class          {isAdmin && (
+          {isAdmin && (
             <div className={`grid gap-1 p-2 pb-0 ${sidebarOpen ? "grid-cols-2" : "grid-cols-1"}`}>
               <button
                 onClick={() => setPage("dashboard")}
@@ -382,7 +382,7 @@ function AppInner() {
             </div>
           )}
           {page !== "usstocks" && (
-          <nav className="space-y-1 p-2">Name="space-y-1 p-2">
+          <nav className="space-y-1 p-2"
             {navigation.map((item) => {
               const Icon = item.icon
               const active = page === item.id
