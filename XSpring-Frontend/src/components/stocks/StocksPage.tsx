@@ -16,6 +16,7 @@ const ERR = {
   compare_2_to_4: "เลือกหุ้น 2–4 ตัว คั่นด้วยเครื่องหมายจุลภาค",
   invalid_range: "ช่วงวันที่ไม่ถูกต้อง (ไม่เกิน 31 วัน)",
   telegram_failed: "ส่งข้อความ Telegram ไม่สำเร็จ กด /start กับบอทก่อน",
+  no_backend: "เชื่อมต่อ API หุ้นไม่ได้ ตรวจ apiBase และการ deploy backend",
 };
 const msg = (e) => ERR[e] || "เกิดข้อผิดพลาด ลองใหม่อีกครั้ง";
 
