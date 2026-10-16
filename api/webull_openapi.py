@@ -118,7 +118,7 @@ def _check_account_allowed(account_id: str, purpose: str) -> None:
     """If WEBULL_ALLOWED_ACCOUNT_IDS is set, only those accounts may be used for mutations/events."""
     allowed = _allowed_account_ids()
     if not allowed or account_id not in allowed:
-        raise HTTPException(status_code=403, detail=f"บัญชีนี้ไม่ได้อยู่ใน WEBULL_ALLOWED_ACCOUNT_IDS สำหรับ {purpose}")
+        raise HTTPException(status_code=403, detail="webull api key missing or invalid")
 
 
 def _body_account_id(body: dict[str, Any]) -> str:
