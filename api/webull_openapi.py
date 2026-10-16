@@ -25,11 +25,27 @@ try:
 except Exception:  # SDK ติดตั้งไม่ได้ ให้เฉพาะ route Webull ใช้ไม่ได้ ไม่ให้ทั้ง API ล้ม
     ApiClient = None  # type: ignore
     ApiRequest = None  # type: ignore
-router = APIRouter(prefix="/api/webull", tags=["Webull UAT"])
+
+
+import hmac
+from fastapi import Depends, Header
+
+def require_api_key(x_api_key: str = Header(default="")):
+    expected = os.getenv("APP_API_KEY", "")
+    if not expected or not hmac.compare_digest(x_api_key.encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+router = APIRouter(prefix="/api/webull", tags=["Webull"], dependencies=[Depends(require_api_key)])
 
 # Never allow a browser parameter to alter the upstream host.
-WEBULL_HOST = "th-api.uat.webullbroker.com"
-WEBULL_EVENTS_HOST_DEFAULT = "th-events-api.uat.webullbroker.com"
+_HOSTS = {
+    "uat":  ("th-api.uat.webullbroker.com", "th-events-api.uat.webullbroker.com"),
+    "prod": ("api.webull.co.th", "events-api.webull.co.th"),
+}
+_ENV = os.getenv("WEBULL_ENV", "uat").lower()
+if _ENV not in _HOSTS:
+    raise RuntimeError("WEBULL_ENV must be uat or prod")
+WEBULL_HOST, WEBULL_EVENTS_HOST_DEFAULT = _HOSTS[_ENV]
 WEBULL_REGION = "th"
 REQUEST_TIMEOUT_SECONDS = 15
 TOKEN_FALLBACK_LIFETIME_MS = 10 * 60_000
