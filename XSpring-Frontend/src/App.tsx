@@ -231,15 +231,6 @@ function AppInner() {
   const [portfolioError, setPortfolioError] = useState("")
   const [orderRefreshKey, setOrderRefreshKey] = useState(0)
   const isAdmin = (user as unknown as { role?: string } | null)?.role === "admin"
-  const callUs = (path: string, init?: RequestInit) =>
-    authFetch(`${API_BASE_URL}${path}`, {
-      ...init,
-      headers: {
-        Accept: "application/json",
-        "X-API-Key": String(DEALER_API_KEY || ""),
-        ...((init?.headers as Record<string, string> | undefined) ?? {}),
-      },
-    })
 
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try {
