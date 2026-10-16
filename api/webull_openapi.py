@@ -597,7 +597,7 @@ def screener_high_dividend(request: Request) -> Any:
 
 @router.get("/screener/52-week-high-low")
 def screener_52_week_high_low(request: Request) -> Any:
-    return _screener_get("52-week-high-low", request)
+    return _screener_get("52whl", request)
 
 
 # ============================== WATCHLISTS ==============================
