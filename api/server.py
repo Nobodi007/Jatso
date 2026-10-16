@@ -30,6 +30,13 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 try:
+    from stocks.router import router as stocks_router
+except ImportError:
+    from api.stocks.router import router as stocks_router
+app.include_router(stocks_router)
+
+
+try:
     import bot_rules as br
 except ImportError:
     from api import bot_rules as br
