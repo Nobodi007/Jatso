@@ -28,6 +28,7 @@ import RiskPage from "./components/risk/RiskPage"
 import { NumberTicker } from "./components/ui/number-ticker"
 import BotLab from "./BotLab"
 import type { BotApi } from "./BotLab"
+import UsStocks from "./UsStocks"
 
 type Page =
   | "dashboard"
@@ -42,6 +43,8 @@ type Page =
   | "quant"
   | "news"
   | "settings"
+  | "usstocks"
+
 
 type Asset = string
 type OrderSide = "BUY" | "SELL"
@@ -228,6 +231,16 @@ function AppInner() {
   const [portfolioLoading, setPortfolioLoading] = useState(false)
   const [portfolioError, setPortfolioError] = useState("")
   const [orderRefreshKey, setOrderRefreshKey] = useState(0)
+  const isAdmin = (user as unknown as { role?: string } | null)?.role === "admin"
+  const callUs = (path: string, init?: RequestInit) =>
+    authFetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers: {
+        Accept: "application/json",
+        "X-API-Key": String(DEALER_API_KEY || ""),
+        ...((init?.headers as Record<string, string> | undefined) ?? {}),
+      },
+    })
 
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try {
@@ -348,7 +361,28 @@ function AppInner() {
             )}
           </div>
 
-          <nav className="space-y-1 p-2">
+          <nav class          {isAdmin && (
+            <div className={`grid gap-1 p-2 pb-0 ${sidebarOpen ? "grid-cols-2" : "grid-cols-1"}`}>
+              <button
+                onClick={() => setPage("dashboard")}
+                className={`rounded-lg px-2 py-1.5 text-xs font-medium transition-colors ${
+                  page !== "usstocks" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"
+                }`}
+              >
+                {sidebarOpen ? "คริปโต" : "C"}
+              </button>
+              <button
+                onClick={() => setPage("usstocks")}
+                className={`rounded-lg px-2 py-1.5 text-xs font-medium transition-colors ${
+                  page === "usstocks" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"
+                }`}
+              >
+                {sidebarOpen ? "หุ้นสหรัฐ" : "US"}
+              </button>
+            </div>
+          )}
+          {page !== "usstocks" && (
+          <nav className="space-y-1 p-2">Name="space-y-1 p-2">
             {navigation.map((item) => {
               const Icon = item.icon
               const active = page === item.id
@@ -384,6 +418,7 @@ function AppInner() {
               )
             })}
           </nav>
+            )}
         </aside>
 
         {/* MAIN */}
@@ -537,6 +572,7 @@ function AppInner() {
 
             {page === "news" && <NewsPage />}
             {page === "risk" && <RiskPage />}
+            {page === "usstocks" && isAdmin && <UsStocks call={callUs} />}
 
             {page !== "dashboard" &&
               page !== "markets" &&
