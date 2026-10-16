@@ -4381,28 +4381,3 @@ def bots_set_mode(bot_id: str, body: BotModeIn, user: str = Depends(require_user
             raise
         except Exception as e:
             raise _internal_server_error("เปลี่ยนโหมดบอทไม่สำเร็จ", e, status_code=503)
-
-# WEBULL UAT — READ ONLY (เฉพาะแอดมิน)
-try:
-    from api.webull_openapi import router as webull_router
-except ImportError:
-    from webull_openapi import router as webull_router
-
-
-def require_webull_admin(request: Request) -> str:
-    auth = request.headers.get("authorization", "")
-    if not auth.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="ต้องล็อกอินก่อน")
-    try:
-        claims = jwt.decode(auth[7:].strip(), _jwt_secret(), algorithms=["HS256"])
-    except Exception:
-        raise HTTPException(status_code=401, detail="โทเคนไม่ถูกต้องหรือหมดอายุ")
-    if str(claims.get("role") or "").lower() != "admin":
-        raise HTTPException(status_code=403, detail="เฉพาะแอดมินเท่านั้น")
-    return str(claims.get("sub") or "")
-
-
-app.include_router(
-    webull_router,
-    dependencies=[Depends(require_api_key), Depends(require_webull_admin)],
-)
