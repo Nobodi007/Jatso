@@ -74,11 +74,14 @@ async def _log_memory(request, call_next):
 try:
     from stocks.router import router as stocks_router
     from stocks.fundamentals import router as fundamentals_router
+    from stocks.user import router as stocks_user_router
 except ImportError:
     from api.stocks.router import router as stocks_router
     from api.stocks.fundamentals import router as fundamentals_router
+    from api.stocks.user import router as stocks_user_router
 app.include_router(stocks_router)
 app.include_router(fundamentals_router)
+app.include_router(stocks_user_router)
 
 # Route เดิมของมึงอยู่ต่อด้านล่าง
 # =========================================================
