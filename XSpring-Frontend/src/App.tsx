@@ -355,9 +355,7 @@ function AppInner() {
             <div className={`grid gap-1 p-2 pb-0 ${sidebarOpen ? "grid-cols-2" : "grid-cols-1"}`}>
               <button
                 onClick={() => setPage("dashboard")}
-                className={`rounded-lg px-2 py-1.5 text-xs font-medium transition-colors ${
-                  page !== "usstocks" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"
-                }`}
+                className="rounded-lg bg-primary px-2 py-1.5 text-xs font-medium text-primary-foreground"
               >
                 {sidebarOpen ? "คริปโต" : "C"}
               </button>
