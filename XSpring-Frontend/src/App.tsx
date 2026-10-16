@@ -382,7 +382,7 @@ function AppInner() {
             </div>
           )}
           {page !== "usstocks" && (
-          <nav className="space-y-1 p-2"
+          <nav className="space-y-1 p-2">
             {navigation.map((item) => {
               const Icon = item.icon
               const active = page === item.id
