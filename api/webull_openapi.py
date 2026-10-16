@@ -49,7 +49,7 @@ WEBULL_HOST, WEBULL_EVENTS_HOST_DEFAULT = _HOSTS[_ENV]
 WEBULL_REGION = "th"
 REQUEST_TIMEOUT_SECONDS = 15
 TOKEN_FALLBACK_LIFETIME_MS = 10 * 60_000
-TOKEN_REFRESH_MARGIN_MS = 60_000
+TOKEN_FAIL_COOLDOWN_SECONDS = 120
 
 # Silence SDK internals once at import time (they may log signed headers/params).
 logging.getLogger("webull").setLevel(logging.CRITICAL)
@@ -208,12 +208,22 @@ def _get_access_token() -> str:
         expires_at = int(_token_cache.get("expires_at") or 0)
         if cached and expires_at > now_ms + TOKEN_REFRESH_MARGIN_MS:
             return cached
+        wait = float(_token_cache.get("fail_until") or 0) - time.time()
+        if wait > 0:
+            raise HTTPException(status_code=503, detail={
+                "message": "รอยืนยันตัวตนกับ Webull อยู่ (กันส่ง OTP ซ้ำ) ลองใหม่อีกครั้งภายหลัง",
+                "retry_after_seconds": int(wait)})
         try:
             client = _new_client(app_key, app_secret)
             response = client.get_response(ApiRequest("/auth/tokens/create", version="v3", method="POST"))
             payload = response.json()
         except Exception as exc:
             status, detail, request_id = _extract_error(exc)
+            
+            _token_cache["fail_until"] = time.time() + TOKEN_FAIL_COOLDOWN_SECONDS
+            _log.warning("Webull token creation failed: http=%s type=%s code=%s request_id=%s",
+                         
+                         status, detail.get("error_type"), detail.get("error_code"), request_id)
             raise HTTPException(
                 status_code=502,
                 detail={"message": "Webull UAT token creation failed", "upstream_status": status,
