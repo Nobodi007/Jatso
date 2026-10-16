@@ -314,7 +314,7 @@ def _request_upstream(
 
     # Preserve 4xx business errors like 417 so the client can distinguish permission,
     # parameter, and server-side failures. Normalize upstream 5xx/unknown to gateway 502.
-    code = failure.status if failure.status and 400 <= failure.status < 500 else 502
+    code = failure.status if failure.status and 400 <= failure.status < 500 and failure.status not in {401, 403} else 502
     payload = {"provider": "Webull UAT", "upstream_status": failure.status, **failure.detail}
     if failure.request_id:
         payload["request_id"] = failure.request_id
