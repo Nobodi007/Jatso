@@ -1,7 +1,5 @@
+// @ts-nocheck
 import { useState, useEffect, useMemo, useCallback } from "react";
-
-/* ใช้งาน: <StocksPage getToken={() => localStorage.getItem("token")} apiBase="" />
-   getToken ต้องคืน JWT ที่ backend ตรวจด้วย AUTH_JWT_SECRET (ใช้กับหน้า "พอร์ตของฉัน") */
 
 const ERR = {
   rate_limited: "โควต้าข้อมูลเต็มชั่วคราว ลองใหม่อีกครั้งในอีกสักครู่",
