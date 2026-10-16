@@ -121,8 +121,9 @@ function flattenScalars(data: unknown, prefix = "", depth = 0): [string, string]
   return out
 }
 
-function formatCell(value: unknown): string {
+function formatCell(value: unknown, key = ""): string {
   if (value === null || value === undefined) return "—"
+  if (/year$/i.test(key)) return String(value)
   if (typeof value === "number") return value.toLocaleString("en-US", { maximumFractionDigits: 4 })
   if (typeof value === "object") return JSON.stringify(value).slice(0, 60)
   return String(value)
@@ -268,15 +269,80 @@ function PriceChart({ bars, mode }: { bars: Bar[]; mode: "candle" | "line" }) {
   )
 }
 
+const STATEMENT_LABELS: Record<string, string> = {
+  total_revenue: "รายได้รวม",
+  revenue: "รายได้",
+  cost_of_revenue: "ต้นทุนขาย",
+  gross_profit: "กำไรขั้นต้น",
+  operating_income: "กำไรจากการดำเนินงาน",
+  net_income: "กำไรสุทธิ",
+}
+const STATEMENT_META = new Set(["fiscal_year", "fiscal_period", "end_date", "currency", "publish_date"])
+
+function fmtMoney(v: unknown): string {
+  if (v === null || v === undefined || v === "") return "–"
+  const n = Number(v)
+  if (!Number.isFinite(n)) return typeof v === "object" ? "–" : String(v)
+  const a = Math.abs(n)
+  if (a >= 1e9) return `${(n / 1e9).toFixed(2)}B`
+  if (a >= 1e6) return `${(n / 1e6).toFixed(2)}M`
+  if (a >= 1000) return n.toLocaleString("en-US", { maximumFractionDigits: 0 })
+  return n.toLocaleString("en-US", { maximumFractionDigits: 4 })
+}
+
+function StatementTable({ rows }: { rows: Row[] }) {
+  const periods = [...rows].sort((a, b) => String(b.end_date ?? "").localeCompare(String(a.end_date ?? "")))
+  const keys = Array.from(new Set(periods.flatMap((r) => Object.keys(r))))
+    .filter((k) => !STATEMENT_META.has(k))
+    .filter((k) => periods.some((r) => r[k] !== null && r[k] !== undefined && r[k] !== "" && typeof r[k] !== "object"))
+    .sort((a, b) => (a in STATEMENT_LABELS ? 0 : 1) - (b in STATEMENT_LABELS ? 0 : 1))
+  const head = (r: Row) => {
+    const p = String(r.fiscal_period ?? "")
+    return `${r.fiscal_year ?? ""} ${/^\d$/.test(p) ? "Q" + p : p}`.trim()
+  }
+
+  return (
+    <div className="mt-4 overflow-x-auto">
+      <table className="w-full text-left text-sm">
+        <thead>
+          <tr className="border-b text-xs text-muted-foreground">
+            <th className="sticky left-0 whitespace-nowrap bg-card px-3 py-2 font-medium">
+              รายการ ({String(periods[0]?.currency ?? "")})
+            </th>
+            {periods.map((p, i) => (
+              <th key={i} className="whitespace-nowrap px-3 py-2 text-right font-medium">
+                {head(p)}
+                <div className="text-[10px] font-normal opacity-70">{String(p.end_date ?? "")}</div>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {keys.map((k) => (
+            <tr key={k} className="border-b last:border-0">
+              <td className="sticky left-0 whitespace-nowrap bg-card px-3 py-2">
+                {STATEMENT_LABELS[k] ?? k.replace(/_/g, " ")}
+              </td>
+              {periods.map((p, i) => (
+                <td key={i} className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{fmtMoney(p[k])}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
 /* ---------- UI blocks ---------- */
 function Panel({
-  title, subtitle, call, path, body,
+  title, subtitle, call, path, body, statement,
 }: {
   title: string
   subtitle?: string
   call: Fetcher
   path: string | null
   body?: string
+  statement?: boolean
 }) {
   const { loading, error, data, reload } = useEndpoint(call, path, body)
   const rows = findRows(data)
@@ -305,7 +371,8 @@ function Panel({
         <div className="mt-4 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-4 py-3 text-sm">{error}</div>
       )}
 
-      {!error && rows.length > 0 && (
+      {!error && rows.length > 0 && statement && <StatementTable rows={rows} />}
+      {!error && rows.length > 0 && !statement && (
         <div className="mt-4 overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead>
@@ -541,6 +608,7 @@ function FundamentalsTab({ call, items, defaultSymbol, title }: {
         subtitle={title}
         call={call}
         path={`/api/webull/fundamentals/${slug}?symbol=${encodeURIComponent(symbol)}`}
+        statement={["income-statement", "balance-sheet", "cash-flow"].includes(slug)}
       />
     </div>
   )
