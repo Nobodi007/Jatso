@@ -30,13 +30,6 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 try:
-    from stocks.router import router as stocks_router
-except ImportError:
-    from api.stocks.router import router as stocks_router
-app.include_router(stocks_router)
-
-
-try:
     import bot_rules as br
 except ImportError:
     from api import bot_rules as br
@@ -78,6 +71,11 @@ async def _log_memory(request, call_next):
             before, _rss_mb(), request.method, request.url.path,
         )
     return response
+try:
+    from stocks.router import router as stocks_router
+except ImportError:
+    from api.stocks.router import router as stocks_router
+app.include_router(stocks_router)
 
 # Route เดิมของมึงอยู่ต่อด้านล่าง
 # =========================================================
