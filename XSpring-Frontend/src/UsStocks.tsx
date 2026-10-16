@@ -70,10 +70,6 @@ const PREFERRED_COLUMNS = [
   "account_id", "account_type", "account_status",
 ]
 
-/* งบการเงิน: slug ที่ใช้ตารางงวด และ query ที่ Webull รองรับ (type = ANNUAL | QUARTERLY, count สูงสุด 20) */
-const STATEMENT_SLUGS = ["income-statement", "balance-sheet", "cash-flow"]
-const STATEMENT_COUNT = 20
-
 /* ---------- helpers ---------- */
 async function getJson(call: Fetcher, path: string, body?: string): Promise<unknown> {
   const init: RequestInit | undefined = body
@@ -279,31 +275,11 @@ const STATEMENT_LABELS: Record<string, string> = {
   revenue: "รายได้",
   cost_of_revenue: "ต้นทุนขาย",
   gross_profit: "กำไรขั้นต้น",
-  opex: "ค่าใช้จ่ายในการดำเนินงาน",
-  sga_exp: "ค่าใช้จ่ายขายและบริหาร",
-  rnd_exp: "ค่าใช้จ่ายวิจัยและพัฒนา",
-  op_income: "กำไรจากการดำเนินงาน",
-  op_profit: "กำไรจากการดำเนินงาน (op_profit)",
-  other_net_income: "รายได้อื่นสุทธิ",
-  unusual_expense_income: "รายการผิดปกติ",
-  gain_loss_on_sale_of_assets: "กำไร(ขาดทุน)จากการขายสินทรัพย์",
-  ebt: "กำไรก่อนภาษี",
-  income_tax: "ภาษีเงินได้",
-  eat: "กำไรหลังภาษี",
-  extra_items: "รายการพิเศษ",
-  minority_interest: "ส่วนได้เสียที่ไม่มีอำนาจควบคุม",
+  operating_income: "กำไรจากการดำเนินงาน",
   net_income: "กำไรสุทธิ",
-  diluted_avg_shares: "หุ้นเฉลี่ย (diluted)",
-  diluted_eps_excl_extra: "EPS diluted (ไม่รวมรายการพิเศษ)",
-  diluted_eps_incl_extra: "EPS diluted (รวมรายการพิเศษ)",
-  dps: "ปันผลต่อหุ้น",
 }
-// ฟิลด์ที่ไม่แสดงเป็นแถว: ข้อมูลหัวคอลัมน์ + ฟิลด์ที่ซ้ำกัน/ไม่อยู่ในเอกสาร Webull (inter_expse_inc_net_oper)
-const STATEMENT_META = new Set([
-  "fiscal_year", "fiscal_period", "end_date", "currency", "publish_date",
-  "inter_expse_inc_net_oper", "other_oper_expse_total",
-])
-const STATEMENT_BOLD = new Set(["total_revenue", "gross_profit", "op_income", "net_income"])
+const STATEMENT_META = new Set(["fiscal_year", "fiscal_period", "end_date", "currency", "publish_date"])
+const STATEMENT_BOLD = new Set(["total_revenue", "gross_profit", "operating_income", "net_income"])
 
 function fmtMoney(v: unknown): string {
   if (v === null || v === undefined || v === "") return "–"
@@ -328,19 +304,16 @@ function yoyPct(periods: Row[], i: number, k: string): number | null {
   return ((a - b) / Math.abs(b)) * 100
 }
 
-// fiscal_period: 0 = ทั้งปี (FY), 1-4 = ไตรมาส
-function periodHead(r: Row): string {
-  const p = String(r.fiscal_period ?? "")
-  const label = p === "0" ? "FY" : /^[1-4]$/.test(p) ? `Q${p}` : p
-  return `${r.fiscal_year ?? ""} ${label}`.trim()
-}
-
 function StatementTable({ rows }: { rows: Row[] }) {
   const periods = [...rows].sort((a, b) => String(b.end_date ?? "").localeCompare(String(a.end_date ?? "")))
   const keys = Array.from(new Set(periods.flatMap((r) => Object.keys(r))))
     .filter((k) => !STATEMENT_META.has(k))
     .filter((k) => periods.some((r) => r[k] !== null && r[k] !== undefined && r[k] !== "" && typeof r[k] !== "object"))
     .sort((a, b) => (a in STATEMENT_LABELS ? 0 : 1) - (b in STATEMENT_LABELS ? 0 : 1))
+  const head = (r: Row) => {
+    const p = String(r.fiscal_period ?? "")
+    return `${r.fiscal_year ?? ""} ${/^\d$/.test(p) ? "Q" + p : p}`.trim()
+  }
 
   return (
     <div className="mt-4 overflow-x-auto">
@@ -352,7 +325,7 @@ function StatementTable({ rows }: { rows: Row[] }) {
             </th>
             {periods.map((p, i) => (
               <th key={i} className="whitespace-nowrap px-3 py-2 text-right font-medium">
-                {periodHead(p)}
+                {head(p)}
                 <div className="text-[10px] font-normal opacity-70">{String(p.end_date ?? "")}</div>
               </th>
             ))}
@@ -650,40 +623,17 @@ function FundamentalsTab({ call, items, defaultSymbol, title }: {
 }) {
   const [symbol, setSymbol] = useState(defaultSymbol)
   const [slug, setSlug] = useState(items[0].slug)
-  const [period, setPeriod] = useState<"QUARTERLY" | "ANNUAL">("QUARTERLY")
   const current = items.find((i) => i.slug === slug)
-  const isStatement = STATEMENT_SLUGS.includes(slug)
-  const extra = isStatement ? `&type=${period}&count=${STATEMENT_COUNT}` : ""
-
   return (
     <div className="space-y-4">
       <SymbolBar value={symbol} onSubmit={setSymbol} placeholder={`สัญลักษณ์ เช่น ${defaultSymbol}`} />
       <Chips items={items} value={slug} onChange={setSlug} />
-      {isStatement && (
-        <div className="flex flex-wrap gap-2">
-          {([
-            { id: "QUARTERLY", label: "รายไตรมาส" },
-            { id: "ANNUAL", label: "รายปี" },
-          ] as const).map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              onClick={() => setPeriod(p.id)}
-              className={`rounded-full border px-3 py-1.5 text-xs transition-colors ${
-                period === p.id ? "bg-primary text-primary-foreground" : "hover:bg-accent"
-              }`}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-      )}
       <Panel
         title={`${current?.label ?? slug} · ${symbol}`}
-        subtitle={isStatement ? `${title} · ${period === "ANNUAL" ? "รายปี" : "รายไตรมาส"} สูงสุด ${STATEMENT_COUNT} งวด` : title}
+        subtitle={title}
         call={call}
-        path={`/api/webull/fundamentals/${slug}?symbol=${encodeURIComponent(symbol)}${extra}`}
-        statement={isStatement}
+        path={`/api/webull/fundamentals/${slug}?symbol=${encodeURIComponent(symbol)}`}
+        statement={["income-statement", "balance-sheet", "cash-flow"].includes(slug)}
       />
     </div>
   )
