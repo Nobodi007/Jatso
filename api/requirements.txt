@@ -12,5 +12,5 @@ pillow
 PyYAML
 google-auth>=2.0
 PyJWT
-webull-openapi-python-sdk==3.0.3
+httpx
 
