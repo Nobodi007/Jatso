@@ -354,50 +354,65 @@ function AppInner() {
           </div>
 
           {isAdmin && (
-            <div className={`grid gap-1 p-2 pb-0 ${sidebarOpen ? "grid-cols-2" : "grid-cols-1"}`}>
+          <div className={`grid gap-1 p-2 pb-0 ${sidebarOpen ? "grid-cols-2" : "grid-cols-1"}`}>
+            <button
+              onClick={() => setPage("dashboard")}
+              className={`rounded-lg px-2 py-1.5 text-xs font-medium ${
+                page !== "stocks"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:bg-accent"
+              }`}
+            >
+              {sidebarOpen ? "คริปโต" : "C"}
+            </button>
+            <button
+              onClick={() => setPage("stocks")}
+              className={`rounded-lg px-2 py-1.5 text-xs font-medium ${
+                page === "stocks"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:bg-accent"
+              }`}
+            >
+              {sidebarOpen ? "หุ้นสหรัฐ" : "S"}
+            </button>
+          </div>
+        )}
+        <nav className="space-y-1 p-2">
+          {navigation.map((item) => {
+            const Icon = item.icon
+            const active = page === item.id
+        
+            return (
               <button
-                onClick={() => setPage("dashboard")}
-                className={`rounded-lg px-2 py-1.5 text-xs font-medium ${
-                  page !== "stocks"
+                key={item.id}
+                onClick={() => setPage(item.id)}
+                className={`group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${
+                  active
                     ? "bg-primary text-primary-foreground"
-                    : "bg-muted text-muted-foreground hover:bg-accent"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
                 }`}
               >
-                {sidebarOpen ? "คริปโต" : "C"}
+                <Icon className="size-4 shrink-0" />
+        
+                {sidebarOpen && (
+                  <>
+                    <span className="flex-1 truncate">{item.label}</span>
+        
+                    {item.count !== undefined && (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                          active ? "bg-primary-foreground/20" : "bg-muted"
+                        }`}
+                      >
+                        {item.count}
+                      </span>
+                    )}
+                  </>
+                )}
               </button>
-              <button
-                onClick={() => setPage("stocks")}
-                className={`rounded-lg px-2 py-1.5 text-xs font-medium ${
-                  page === "stocks"
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-muted text-muted-foreground hover:bg-accent"
-                }`}
-              >
-                {sidebarOpen ? "หุ้นสหรัฐ" : "S"}
-              </button>
-            </div>
-          )}
-                  <Icon className="size-4 shrink-0" />
-
-                  {sidebarOpen && (
-                    <>
-                      <span className="flex-1 truncate">{item.label}</span>
-
-                      {item.count !== undefined && (
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                            active ? "bg-primary-foreground/20" : "bg-muted"
-                          }`}
-                        >
-                          {item.count}
-                        </span>
-                      )}
-                    </>
-                  )}
-                </button>
-              )
-            })}
-          </nav>
+            )
+          })}
+        </nav>
         </aside>
 
         {/* MAIN */}
