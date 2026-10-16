@@ -35,7 +35,7 @@ def require_api_key(x_api_key: str = Header(default="")):
     if not expected or not hmac.compare_digest(x_api_key.encode(), expected.encode()):
         raise HTTPException(status_code=401, detail="unauthorized")
 
-router = APIRouter(prefix="/api/webull", tags=["Webull"], dependencies=[Depends(require_api_key)])
+router = APIRouter(prefix="/api/webull", tags=["Webull"])
 
 # Never allow a browser parameter to alter the upstream host.
 _HOSTS = {
