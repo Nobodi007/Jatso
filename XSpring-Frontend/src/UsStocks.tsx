@@ -624,16 +624,33 @@ function FundamentalsTab({ call, items, defaultSymbol, title }: {
   const [symbol, setSymbol] = useState(defaultSymbol)
   const [slug, setSlug] = useState(items[0].slug)
   const current = items.find((i) => i.slug === slug)
+  const [finType, setFinType] = useState<"QUARTERLY" | "ANNUAL">("QUARTERLY")
+  const isStatement = ["income-statement", "balance-sheet", "cash-flow"].includes(slug)
+  const statementQuery = isStatement ? `&type=${finType}&count=${finType === "QUARTERLY" ? 20 : 8}` : ""
   return (
     <div className="space-y-4">
       <SymbolBar value={symbol} onSubmit={setSymbol} placeholder={`สัญลักษณ์ เช่น ${defaultSymbol}`} />
       <Chips items={items} value={slug} onChange={setSlug} />
+      {isStatement && (
+        <div className="inline-flex overflow-hidden rounded-lg border text-sm">
+          {(["QUARTERLY", "ANNUAL"] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setFinType(t)}
+              className={`px-3 py-1.5 ${finType === t ? "bg-primary text-primary-foreground" : "bg-background"}`}
+            >
+              {t === "QUARTERLY" ? "รายไตรมาส" : "รายปี"}
+            </button>
+          ))}
+        </div>
+      )}
       <Panel
         title={`${current?.label ?? slug} · ${symbol}`}
         subtitle={title}
         call={call}
-        path={`/api/webull/fundamentals/${slug}?symbol=${encodeURIComponent(symbol)}`}
-        statement={["income-statement", "balance-sheet", "cash-flow"].includes(slug)}
+        path={`/api/webull/fundamentals/${slug}?symbol=${encodeURIComponent(symbol)}${statementQuery}`}
+        statement={isStatement}
       />
     </div>
   )
