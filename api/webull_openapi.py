@@ -338,7 +338,10 @@ def create_access_token() -> dict[str, Any]:
 @router.post("/token/check")
 def check_access_token() -> Any:
     token = _get_access_token()
-    return _request("/auth/tokens/check", method="POST", body={"token": token})
+    result = _request("/auth/tokens/check", method="POST", body={"token": token})
+    if isinstance(result, dict):
+        result = {k: v for k, v in result.items() if k.lower() not in {"token", "access_token"}}
+    return result
 
 
 # ============================== TRADING ACCOUNT READS ==============================
