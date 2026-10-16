@@ -290,6 +290,20 @@ function fmtMoney(v: unknown): string {
   return n.toLocaleString("en-US", { maximumFractionDigits: 4 })
 }
 
+const STATEMENT_BOLD = new Set(["total_revenue", "gross_profit", "operating_income", "net_income"])
+
+function yoyPct(periods: Row[], i: number, k: string): number | null {
+  const cur = periods[i]
+  const prev = periods.find(
+    (p) => Number(p.fiscal_year) === Number(cur.fiscal_year) - 1 && String(p.fiscal_period) === String(cur.fiscal_period),
+  )
+  if (!prev) return null
+  const a = Number(cur[k])
+  const b = Number(prev[k])
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b === 0) return null
+  return ((a - b) / Math.abs(b)) * 100
+}
+
 function StatementTable({ rows }: { rows: Row[] }) {
   const periods = [...rows].sort((a, b) => String(b.end_date ?? "").localeCompare(String(a.end_date ?? "")))
   const keys = Array.from(new Set(periods.flatMap((r) => Object.keys(r))))
@@ -319,70 +333,26 @@ function StatementTable({ rows }: { rows: Row[] }) {
         </thead>
         <tbody>
           {keys.map((k) => (
-            <tr key={k} className="border-b last:border-0">
+            <tr key={k} className={`border-b last:border-0 ${STATEMENT_BOLD.has(k) ? "bg-muted/40 font-semibold" : ""}`}>
               <td className="sticky left-0 whitespace-nowrap bg-card px-3 py-2">
                 {STATEMENT_LABELS[k] ?? k.replace(/_/g, " ")}
               </td>
-              {periods.map((p, i) => (
-                <td key={i} className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{fmtMoney(p[k])}</td>
-              ))}
+              {periods.map((p, i) => {
+                const g = yoyPct(periods, i, k)
+                return (
+                  <td key={i} className="whitespace-nowrap px-3 py-2 text-right tabular-nums">
+                    {fmtMoney(p[k])}
+                    {g !== null && (
+                      <div className={`text-[10px] ${g >= 0 ? "text-emerald-500" : "text-red-500"}`}>
+                        {g >= 0 ? "+" : ""}{g.toFixed(2)}%
+                      </div>
+                    )}
+                  </td>
+                )
+              })}
             </tr>
           ))}
         </tbody>
-      </table>
-    </div>
-  )
-}
-/* ---------- UI blocks ---------- */
-function Panel({
-  title, subtitle, call, path, body, statement,
-}: {
-  title: string
-  subtitle?: string
-  call: Fetcher
-  path: string | null
-  body?: string
-  statement?: boolean
-}) {
-  const { loading, error, data, reload } = useEndpoint(call, path, body)
-  const rows = findRows(data)
-  const columns = rows.length > 0 ? pickColumns(rows) : []
-  const scalars = rows.length === 0 && data ? flattenScalars(data) : []
-
-  return (
-    <section className="rounded-xl border bg-card p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="text-base font-semibold">{title}</h3>
-          {subtitle && <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>}
-        </div>
-        <button
-          type="button"
-          onClick={() => void reload()}
-          disabled={loading || !path}
-          className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs hover:bg-accent disabled:opacity-50"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-          {loading ? "กำลังโหลด" : "รีเฟรช"}
-        </button>
-      </div>
-
-      {error && (
-        <div className="mt-4 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-4 py-3 text-sm">{error}</div>
-      )}
-
-      {!error && rows.length > 0 && statement && <StatementTable rows={rows} />}
-      {!error && rows.length > 0 && !statement && (
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b text-xs text-muted-foreground">
-                {columns.map((c) => (
-                  <th key={c} className="whitespace-nowrap px-3 py-2 font-medium">{c}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
               {rows.slice(0, 50).map((row, i) => (
                 <tr key={i} className="border-b last:border-0">
                   {columns.map((c) => (
