@@ -269,6 +269,7 @@ function PriceChart({ bars, mode }: { bars: Bar[]; mode: "candle" | "line" }) {
   )
 }
 
+/* ---------- UI blocks ---------- */
 const STATEMENT_LABELS: Record<string, string> = {
   total_revenue: "รายได้รวม",
   revenue: "รายได้",
@@ -278,6 +279,7 @@ const STATEMENT_LABELS: Record<string, string> = {
   net_income: "กำไรสุทธิ",
 }
 const STATEMENT_META = new Set(["fiscal_year", "fiscal_period", "end_date", "currency", "publish_date"])
+const STATEMENT_BOLD = new Set(["total_revenue", "gross_profit", "operating_income", "net_income"])
 
 function fmtMoney(v: unknown): string {
   if (v === null || v === undefined || v === "") return "–"
@@ -289,8 +291,6 @@ function fmtMoney(v: unknown): string {
   if (a >= 1000) return n.toLocaleString("en-US", { maximumFractionDigits: 0 })
   return n.toLocaleString("en-US", { maximumFractionDigits: 4 })
 }
-
-const STATEMENT_BOLD = new Set(["total_revenue", "gross_profit", "operating_income", "net_income"])
 
 function yoyPct(periods: Row[], i: number, k: string): number | null {
   const cur = periods[i]
@@ -353,10 +353,65 @@ function StatementTable({ rows }: { rows: Row[] }) {
             </tr>
           ))}
         </tbody>
+      </table>
+    </div>
+  )
+}
+
+function Panel({
+  title, subtitle, call, path, body, statement,
+}: {
+  title: string
+  subtitle?: string
+  call: Fetcher
+  path: string | null
+  body?: string
+  statement?: boolean
+}) {
+  const { loading, error, data, reload } = useEndpoint(call, path, body)
+  const rows = findRows(data)
+  const columns = rows.length > 0 ? pickColumns(rows) : []
+  const scalars = rows.length === 0 && data ? flattenScalars(data) : []
+
+  return (
+    <section className="rounded-xl border bg-card p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-base font-semibold">{title}</h3>
+          {subtitle && <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>}
+        </div>
+        <button
+          type="button"
+          onClick={() => void reload()}
+          disabled={loading || !path}
+          className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs hover:bg-accent disabled:opacity-50"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+          {loading ? "กำลังโหลด" : "รีเฟรช"}
+        </button>
+      </div>
+
+      {error && (
+        <div className="mt-4 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-4 py-3 text-sm">{error}</div>
+      )}
+
+      {!error && rows.length > 0 && statement && <StatementTable rows={rows} />}
+
+      {!error && rows.length > 0 && !statement && (
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="border-b text-xs text-muted-foreground">
+                {columns.map((c) => (
+                  <th key={c} className="whitespace-nowrap px-3 py-2 font-medium">{c}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
               {rows.slice(0, 50).map((row, i) => (
                 <tr key={i} className="border-b last:border-0">
                   {columns.map((c) => (
-                    <td key={c} className="whitespace-nowrap px-3 py-2">{formatCell(row[c])}</td>
+                    <td key={c} className="whitespace-nowrap px-3 py-2">{formatCell(row[c], c)}</td>
                   ))}
                 </tr>
               ))}
