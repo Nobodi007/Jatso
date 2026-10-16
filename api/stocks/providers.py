@@ -6,6 +6,7 @@ from .cache import ProviderError, RateLimited, take_quota
 
 FINNHUB_KEY = os.getenv("FINNHUB_KEY", "")
 ALPHA_KEY = os.getenv("ALPHA_KEY", "")
+FMP_KEY = os.getenv("FMP_KEY", "")
 
 _client = httpx.AsyncClient(timeout=10)
 
@@ -42,19 +43,22 @@ async def alpha(**params):
 
 
 async def daily_history(symbol: str) -> list[dict]:
-    data = await alpha(function="TIME_SERIES_DAILY", symbol=symbol, outputsize="compact")
-    series = data.get("Time Series (Daily)", {})
-    return [
-        {
-            "time": d,
-            "open": float(v["1. open"]),
-            "high": float(v["2. high"]),
-            "low": float(v["3. low"]),
-            "close": float(v["4. close"]),
-            "volume": int(v["5. volume"]),
-        }
-        for d, v in sorted(series.items())
+    if not FMP_KEY:
+        raise ProviderError("FMP_KEY not set")
+    if not take_quota("fmp", 240, 86400):  # ใช้ชื่อเดียวกับ fundamentals.py จะได้นับโควต้ารวมกัน
+        raise RateLimited("fmp")
+    data = await _get_json(
+        "https://financialmodelingprep.com/stable/historical-price-eod/full",
+        {"symbol": symbol, "apikey": FMP_KEY},
+    )
+    if not isinstance(data, list):
+        raise ProviderError(str(data)[:200])
+    rows = [
+        {"time": x["date"], "open": x["open"], "high": x["high"],
+         "low": x["low"], "close": x["close"], "volume": int(x.get("volume") or 0)}
+        for x in data[:120]
     ]
+    return sorted(rows, key=lambda r: r["time"])
 
 
 def _parse_movers(rows: list[dict]) -> list[dict]:
