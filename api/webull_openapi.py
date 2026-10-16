@@ -225,8 +225,9 @@ def _get_access_token() -> str:
             payload = response.json()
         except Exception as exc:
             status, detail, request_id = _extract_error(exc)
-            _log.warning("Webull token creation failed: http=%s type=%s code=%s request_id=%s",
-                         status, detail.get("error_type"), detail.get("error_code"), request_id)
+            _log.warning("Webull token creation failed: http=%s type=%s code=%s request_id=%s raw=%s",
+                         status, detail.get("error_type"), detail.get("error_code"), request_id,
+                         (str(exc) or repr(exc))[:300])
             raise HTTPException(
                 status_code=502,
                 detail={"message": "Webull UAT token creation failed", "upstream_status": status,
