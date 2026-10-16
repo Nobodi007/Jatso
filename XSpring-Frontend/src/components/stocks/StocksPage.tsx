@@ -463,6 +463,7 @@ export default function StocksPage({ getToken, apiBase = "" }) {
     if (r.status === 204) return null;
     const j = await r.json().catch(() => null);
     if (!r.ok) throw new Error(typeof j?.detail === "string" ? j.detail : "error");
+    if (j === null) throw new Error("no_backend");
     return j;
   }, [apiBase, getToken]);
 
@@ -474,7 +475,7 @@ export default function StocksPage({ getToken, apiBase = "" }) {
 
   useEffect(() => {
     if (!q.trim()) return setSr([]);
-    const id = setTimeout(() => api(`/search?q=${encodeURIComponent(q.trim())}`).then(setSr).catch(() => setSr([])), 350);
+    const id = setTimeout(() => api(`/search?q=${encodeURIComponent(q.trim())}`).then((d) => setSr(Array.isArray(d) ? d : [])).catch(() => setSr([])), 350);
     return () => clearTimeout(id);
   }, [q, api]);
 
