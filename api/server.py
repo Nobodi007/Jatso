@@ -51,7 +51,28 @@ app = FastAPI(
     version="1.4.0",
 )
 
+# วางบล็อก log RAM ตรงนี้
+_mem_log = logging.getLogger("mem")
 
+def _rss_mb() -> float:
+    try:
+        with open("/proc/self/statm") as f:
+            return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 1048576
+    except Exception:
+        return -1.0
+
+@app.middleware("http")
+async def _log_memory(request, call_next):
+    before = _rss_mb()
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        _mem_log.warning(
+            "RAM %.0f→%.0f MB  %s %s",
+            before, _rss_mb(), request.method, request.url.path,
+        )
+    return response
+
+# Route เดิมของมึงอยู่ต่อด้านล่าง
 # =========================================================
 # CORS
 # =========================================================
