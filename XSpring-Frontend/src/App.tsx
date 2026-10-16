@@ -28,7 +28,7 @@ import RiskPage from "./components/risk/RiskPage"
 import { NumberTicker } from "./components/ui/number-ticker"
 import BotLab from "./BotLab"
 import type { BotApi } from "./BotLab"
-import StocksPage from "./stocks/StocksPage";
+import StocksPage from "./components/stocks/StocksPage";
 
 type Page =
   | "dashboard"
