@@ -176,10 +176,9 @@ async def get_financials(s: str, years: int) -> dict:
                 row[k] = cols[k].get(end)
             ocf, capex = row["operatingCashFlow"], row["capex"]
             row["freeCashFlow"] = ocf - capex if ocf is not None and capex is not None else None
-            rows.append(row)
-
-                    if row["grossProfit"] is None and row["revenue"] is not None and row["costOfRevenue"] is not None:
+            if row["grossProfit"] is None and row["revenue"] is not None and row["costOfRevenue"] is not None:
                 row["grossProfit"] = row["revenue"] - row["costOfRevenue"]
+            rows.append(row)
                         
         return {"symbol": s, "name": d.get("entityName"), "currency": "USD", "annual": rows}
 
