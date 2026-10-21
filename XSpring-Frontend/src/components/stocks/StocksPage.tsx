@@ -367,16 +367,11 @@ function Detail({ api, symbol, authed, onWatch }) {
     </>
   )}
 
-<Card title="กราฟราคา">
-  {pr.loading && !pr.data ? (
-    <div className="h-[420px] animate-pulse rounded-xl bg-zinc-800/40" />
-  ) : (
-    <TVChart
-      symbol={tvSymbol(symbol, pr.data?.exchange)}
-      height={420}
-    />
-  )}
-    </Card>
+      <Card title="กราฟราคา">
+        {pr.loading && !pr.data
+          ? <div className="h-[420px] animate-pulse rounded-xl bg-zinc-800/40" />
+          : <TVChart symbol={tvSymbol(symbol, pr.data?.exchange)} height={420} />}
+      </Card>
       {f.data?.annual?.length > 0 && (
         <div className="grid gap-5 lg:grid-cols-2">
           <Card title="รายได้และกำไรสุทธิรายปี"><Bars rows={f.data.annual} series={[{ k: "revenue", label: "รายได้", color: "#10b981" }, { k: "netIncome", label: "กำไรสุทธิ", color: "#a7f3d0" }]} /></Card>
