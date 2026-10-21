@@ -120,33 +120,49 @@ function Donut({ items, center }) {
 }
 
 function Bars({ rows, series }) {
+  const [hi, setHi] = useState(null);
+  const [on, setOn] = useState(false);
+  useEffect(() => { const t = requestAnimationFrame(() => setOn(true)); return () => cancelAnimationFrame(t); }, []);
   const W = 600, H = 200, max = Math.max(...rows.flatMap((r) => series.map((s) => r[s.k] || 0)), 1);
   const gw = W / rows.length, bw = Math.min(28, (gw - 16) / series.length);
+  const sel = rows[hi ?? rows.length - 1];
+  const margin = sel.revenue && sel.netIncome != null ? ((sel.netIncome / sel.revenue) * 100).toFixed(1) + "%" : "–";
   return (
     <div>
       <svg viewBox={`0 0 ${W} ${H + 22}`} className="w-full" role="img" aria-label="กราฟแท่งรายปี">
         {[0.25, 0.5, 0.75, 1].map((t) => <line key={t} x1="0" x2={W} y1={H - H * t} y2={H - H * t} stroke="#27272a" />)}
         {rows.map((r, i) => (
-          <g key={r.year}>
-            {series.map((s, j) => { const h = (Math.max(r[s.k] || 0, 0) / max) * H; return <rect key={s.k} x={i * gw + gw / 2 - (bw * series.length) / 2 + j * bw} y={H - h} width={bw - 3} height={h} rx="3" fill={s.color} />; })}
-            <text x={i * gw + gw / 2} y={H + 16} textAnchor="middle" fontSize="11" fill="#71717a">{r.year}</text>
+          <g key={r.year} opacity={hi == null || hi === i ? 1 : 0.35} style={{ transition: "opacity .2s" }}>
+            {hi === i && <rect x={i * gw} y="0" width={gw} height={H + 22} fill="#fff" opacity="0.04" rx="6" />}
+            {series.map((s, j) => {
+              const h = (Math.max(r[s.k] || 0, 0) / max) * H;
+              return <rect key={s.k} x={i * gw + gw / 2 - (bw * series.length) / 2 + j * bw} y={H - h} width={bw - 3} height={h} rx="3" fill={s.color}
+                style={{ transformBox: "fill-box", transformOrigin: "bottom", transform: on ? "scaleY(1)" : "scaleY(0)", transition: `transform .6s ease ${i * 70}ms` }} />;
+            })}
+            <text x={i * gw + gw / 2} y={H + 16} textAnchor="middle" fontSize="11" fill={hi === i ? "#fff" : "#71717a"}>{r.year}</text>
+            <rect x={i * gw} y="0" width={gw} height={H + 22} fill="transparent" style={{ cursor: "pointer" }}
+              onMouseEnter={() => setHi(i)} onMouseLeave={() => setHi(null)} onClick={() => setHi(hi === i ? null : i)} />
           </g>
         ))}
       </svg>
-      <div className="mt-2 flex gap-4 text-xs text-zinc-400">{series.map((s) => <span key={s.k} className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ background: s.color }} />{s.label} (สูงสุด {big(max)})</span>)}</div>
+      <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 rounded-xl bg-zinc-950/60 px-3 py-2 text-sm">
+        <span className="font-semibold text-white">ปี {sel.year}</span>
+        {series.map((s) => <span key={s.k} className="flex items-center gap-1.5 text-zinc-300"><span className="h-2.5 w-2.5 rounded-full" style={{ background: s.color }} />{s.label} {big(sel[s.k])}</span>)}
+        <span className="text-zinc-500">อัตรากำไรสุทธิ {margin}</span>
+      </div>
     </div>
   );
 }
 
-/* Sankey งบกำไรขาดทุน: รายได้ -> กำไรขั้นต้น -> กำไรดำเนินงาน -> กำไรสุทธิ (SVG ล้วน ไม่ต้องลงไลบรารี) */
 function Sankey({ a }) {
+  const [h, setH] = useState(null);
   const { revenue: rev, grossProfit: gp, operatingIncome: oi, netIncome: ni } = a;
   if ([rev, gp, oi, ni].some((v) => v == null) || rev <= 0 || gp > rev || oi > gp || ni > oi || ni < 0)
     return <p className="py-4 text-sm text-zinc-500">ข้อมูลปีนี้ไม่พอวาด Sankey (ต้องมีรายได้ กำไรขั้นต้น กำไรดำเนินงาน และกำไรสุทธิที่เป็นบวก)</p>;
   const N = [["รายได้", rev, 0], ["ต้นทุนขาย", rev - gp, 1, 1], ["กำไรขั้นต้น", gp, 1], ["ค่าใช้จ่ายดำเนินงาน", gp - oi, 2, 1], ["กำไรดำเนินงาน", oi, 2], ["ภาษี ดอกเบี้ย อื่นๆ", oi - ni, 3, 1], ["กำไรสุทธิ", ni, 3]];
   const L = [[0, 1], [0, 2], [2, 3], [2, 4], [4, 5], [4, 6]];
   const W = 720, H = 250, NW = 12, TOP = 20, GAP = 14, k = (H - TOP - GAP) / rev;
-  const col = [0, 0, 0, 0], nodes = N.map(([n, v, c, bad]) => { const h = Math.max(v * k, 2), y = TOP + col[c]; col[c] += h + GAP; return { n, v, bad, h, y, x: (c * (W - NW)) / 3, c, o: 0, i: 0 }; });
+  const col = [0, 0, 0, 0], nodes = N.map(([n, v, c, bad]) => { const hh = Math.max(v * k, 2), y = TOP + col[c]; col[c] += hh + GAP; return { n, v, bad, h: hh, y, x: (c * (W - NW)) / 3, c, o: 0, i: 0 }; });
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="แผนภาพ Sankey งบกำไรขาดทุน">
       {L.map(([s, t]) => {
@@ -154,12 +170,17 @@ function Sankey({ a }) {
         if (b.v <= 0) return null;
         const y0 = a1.y + a1.o + th / 2, y1 = b.y + b.i + th / 2, x0 = a1.x + NW, x1 = b.x, xm = (x0 + x1) / 2;
         a1.o += th; b.i += th;
-        return <path key={`${s}-${t}`} d={`M${x0},${y0} C${xm},${y0} ${xm},${y1} ${x1},${y1}`} fill="none" stroke={b.bad ? "#f87171" : "#10b981"} strokeOpacity="0.28" strokeWidth={th} />;
+        const hot = h != null && (h === s || h === t);
+        return <path key={`${s}-${t}`} d={`M${x0},${y0} C${xm},${y0} ${xm},${y1} ${x1},${y1}`} fill="none" stroke={b.bad ? "#f87171" : "#10b981"}
+          strokeOpacity={h == null ? 0.28 : hot ? 0.6 : 0.07} strokeWidth={th} style={{ transition: "stroke-opacity .2s" }} />;
       })}
-      {nodes.map((n) => (
-        <g key={n.n}>
-          <rect x={n.x} y={n.y} width={NW} height={n.h} rx="3" fill={n.bad ? "#f87171" : "#10b981"} />
-          <text x={n.c === 3 ? n.x + NW : n.x} y={n.y - 6} textAnchor={n.c === 3 ? "end" : "start"} fontSize="11" fill="#d4d4d8">{n.n} {big(n.v)}</text>
+      {nodes.map((n, i) => (
+        <g key={n.n} style={{ cursor: "pointer" }} onMouseEnter={() => setH(i)} onMouseLeave={() => setH(null)} onClick={() => setH(h === i ? null : i)}>
+          <rect x={n.x - 6} y={n.y - 4} width={NW + 12} height={n.h + 8} fill="transparent" />
+          <rect x={n.x} y={n.y} width={NW} height={n.h} rx="3" fill={n.bad ? "#f87171" : "#10b981"} opacity={h == null || h === i ? 1 : 0.4} />
+          <text x={n.c === 3 ? n.x + NW : n.x} y={n.y - 6} textAnchor={n.c === 3 ? "end" : "start"} fontSize={h === i ? 12 : 11} fontWeight={h === i ? 700 : 400} fill={h === i ? "#fff" : "#d4d4d8"}>
+            {n.n} {big(n.v)}{h === i ? ` (${((n.v / rev) * 100).toFixed(1)}% ของรายได้)` : ""}
+          </text>
         </g>
       ))}
     </svg>
@@ -191,12 +212,14 @@ function Line({ rows }) {
 }
 
 /* ---------- กราฟ TradingView (widget ฟรี ไม่กินโควต้า API) ---------- */
+const ETF_EX = { SPY: "AMEX:SPY", QQQ: "NASDAQ:QQQ", DIA: "AMEX:DIA" };
 const tvSymbol = (symbol, exchange = "") => {
-  const e = exchange.toUpperCase();
+  if (ETF_EX[symbol]) return ETF_EX[symbol];
+  const e = (exchange || "").toUpperCase();
   if (e.includes("NASDAQ")) return `NASDAQ:${symbol}`;
   if (e.includes("NEW YORK") || e.includes("NYSE")) return `NYSE:${symbol}`;
   if (e.includes("AMEX") || e.includes("ARCA")) return `AMEX:${symbol}`;
-  return symbol; // ให้ TradingView เดาเอง
+  return symbol;
 };
 
 const TVChart = memo(function TVChart({ symbol, height = 420 }) {
@@ -343,13 +366,13 @@ function Detail({ api, symbol, authed, onWatch }) {
       </div>
     </>
   )}
-</Card>
-      <Card title="กราฟราคา">
-  {!pr.data ? (
+
+<Card title="กราฟราคา">
+  {pr.loading && !pr.data ? (
     <div className="h-[420px] animate-pulse rounded-xl bg-zinc-800/40" />
   ) : (
     <TVChart
-      symbol={tvSymbol(symbol, pr.data.exchange)}
+      symbol={tvSymbol(symbol, pr.data?.exchange)}
       height={420}
     />
   )}
