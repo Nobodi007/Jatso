@@ -172,8 +172,8 @@ const cryptoNavigation: NavigationItem[] = [
 ]
 
 const stockNavigation: NavigationItem[] = [
-  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { id: "markets", label: "Markets", icon: CandlestickChart },
+  { id: "dashboard", label: "Market Overview", icon: LayoutDashboard },
+  { id: "markets", label: "Company", icon: CandlestickChart },
   { id: "watchlist", label: "Watchlist", icon: Eye },
   { id: "screener", label: "Screener", icon: ScanSearch },
   { id: "trade", label: "Trade", icon: ArrowLeftRight },
@@ -252,7 +252,7 @@ function AppInner() {
   const [aiOpen, setAiOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const [page, setPage] = useState<Page>("dashboard")
-  const [market, setMarket] = useState<Market>("crypto")
+  const [market, setMarket] = useState<Market>( () => (localStorage.getItem("market") as Market) || "crypto")useEffect(() => { localStorage.setItem("market", market) }, [market])
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null)
   const [portfolioLoading, setPortfolioLoading] = useState(false)
@@ -261,6 +261,13 @@ function AppInner() {
   const isAdmin = (user as unknown as { role?: string } | null)?.role === "admin"
   const navigation = market === "stocks" ? stockNavigation : cryptoNavigation
   const currentPage = navigation.find((item) => item.id === page)
+  useEffect(() => {
+  try {
+    localStorage.setItem("market", market)
+  } catch {
+    // ไม่ขัดขวางการทำงาน หาก localStorage ใช้งานไม่ได้
+  }
+}, [market])
 
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try {
