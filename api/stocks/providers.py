@@ -1,5 +1,8 @@
 import os
 
+import logging
+log = logging.getLogger("stocks.providers")
+
 import httpx
 
 from .cache import ProviderError, RateLimited, take_quota
@@ -32,10 +35,15 @@ async def finnhub(path: str, **params):
 
 # ---------- Alpha Vantage ----------
 async def alpha(**params):
+    if not ALPHA_KEY:
+        raise ProviderError("ALPHA_KEY not set")
     if not take_quota("alpha", 25, 86400):
+        log.warning("alpha: local quota counter exhausted")
         raise RateLimited("alphavantage")
     data = await _get_json("https://www.alphavantage.co/query", {**params, "apikey": ALPHA_KEY})
-    if "Note" in data or "Information" in data:  # Alpha ตอบ 200 แม้โดน limit
+    msg = data.get("Note") or data.get("Information")
+    if msg:
+        log.warning("alpha: %s", msg[:200])
         raise RateLimited("alphavantage")
     if "Error Message" in data:
         raise ProviderError(data["Error Message"])
