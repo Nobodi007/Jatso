@@ -1,4 +1,5 @@
 import asyncio
+import time
 import re
 from datetime import date, timedelta
 
@@ -47,9 +48,21 @@ async def market_overview():
     return [{**q, "name": INDEX_ETFS[q["symbol"]]} for q in quotes]
 
 
+_movers_fail_until = 0.0
+
+
 @router.get("/market/movers")
 async def market_movers():
-    return await guard(cached("movers", 4 * 3600, p.top_movers))
+    global _movers_fail_until
+    if time.time() < _movers_fail_until:
+        raise HTTPException(503, "rate_limited")
+    try:
+        return await cached("movers", 12 * 3600, p.top_movers)
+    except RateLimited:
+        _movers_fail_until = time.time() + 1800  # พัก 30 นาที ไม่ยิง Alpha ซ้ำ
+        raise HTTPException(503, "rate_limited")
+    except ProviderError:
+        raise HTTPException(502, "provider_error")
 
 
 # ---------- ค้นหา ----------
