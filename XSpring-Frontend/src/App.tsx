@@ -45,7 +45,9 @@ type Page =
   | "news"
   | "settings"
   | "stocks"
-
+  | "watchlist"
+  | "screener"
+  | "earnings"
 
 
 type Asset = string
@@ -149,7 +151,9 @@ type NavigationItem = {
   count?: number
 }
 
-const navigation: NavigationItem[] = [
+type Market = "crypto" | "stocks"
+
+const cryptoNavigation: NavigationItem[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "markets", label: "Markets", icon: CandlestickChart },
   { id: "trade", label: "Trade", icon: ArrowLeftRight },
@@ -163,6 +167,23 @@ const navigation: NavigationItem[] = [
   { id: "news", label: "News", icon: Newspaper },
   { id: "settings", label: "Settings", icon: Settings },
 ]
+
+const stockNavigation: NavigationItem[] = [
+  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { id: "markets", label: "Markets", icon: CandlestickChart },
+  { id: "watchlist", label: "Watchlist", icon: Eye },
+  { id: "screener", label: "Screener", icon: ScanSearch },
+  { id: "trade", label: "Trade", icon: ArrowLeftRight },
+  { id: "portfolio", label: "Portfolio", icon: Wallet },
+  { id: "orders", label: "Orders", icon: ClipboardList, count: 3 },
+  { id: "positions", label: "Positions", icon: BarChart3 },
+  { id: "earnings", label: "Earnings", icon: CalendarDays },
+  { id: "risk", label: "Risk Center", icon: ShieldAlert },
+  { id: "quant", label: "Quant Lab", icon: FlaskConical },
+  { id: "news", label: "News", icon: Newspaper },
+  { id: "settings", label: "Settings", icon: Settings },
+]
+
 
 const marketData: Record<
   Asset,
@@ -228,6 +249,7 @@ function AppInner() {
   const [aiOpen, setAiOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const [page, setPage] = useState<Page>("dashboard")
+  const [market, setMarket] = useState<Market>("crypto")
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null)
   const [portfolioLoading, setPortfolioLoading] = useState(false)
@@ -330,8 +352,8 @@ function AppInner() {
   return () => window.clearInterval(timer)
 }, [])
 
-  const currentPage = navigation.find((item) => item.id === page)
-
+  const navigation = market === "stocks" ? stockNavigation : cryptoNavigation
+  
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="flex min-h-screen">
@@ -357,7 +379,10 @@ function AppInner() {
           {isAdmin && (
           <div className={`grid gap-1 p-2 pb-0 ${sidebarOpen ? "grid-cols-2" : "grid-cols-1"}`}>
             <button
-              onClick={() => setPage("dashboard")}
+              onClick={() => {
+              setMarket("crypto")
+              setPage("dashboard")
+            }}
               className={`rounded-lg px-2 py-1.5 text-xs font-medium ${
                 page !== "stocks"
                   ? "bg-primary text-primary-foreground"
@@ -367,7 +392,10 @@ function AppInner() {
               {sidebarOpen ? "คริปโต" : "C"}
             </button>
             <button
-              onClick={() => setPage("stocks")}
+              onClick={() => {
+                setMarket("stocks")
+                setPage("stocks")
+              }}
               className={`rounded-lg px-2 py-1.5 text-xs font-medium ${
                 page === "stocks"
                   ? "bg-primary text-primary-foreground"
