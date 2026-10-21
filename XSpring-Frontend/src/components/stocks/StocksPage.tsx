@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, memo } from "react";
 
 const ERR = {
   rate_limited: "โควต้าข้อมูลเต็มชั่วคราว ลองใหม่อีกครั้งในอีกสักครู่",
@@ -199,7 +199,7 @@ const tvSymbol = (symbol, exchange = "") => {
   return symbol; // ให้ TradingView เดาเอง
 };
 
-function TVChart({ symbol, height = 420 }) {
+const TVChart = memo(function TVChart({ symbol, height = 420 }) {
   const ref = useCallback((el) => {
     if (!el) return;
     el.innerHTML = "";
@@ -220,7 +220,7 @@ function TVChart({ symbol, height = 420 }) {
     el.appendChild(s);
   }, [symbol]);
   return <div ref={ref} className="tradingview-widget-container" style={{ height, width: "100%" }} />;
-}
+});
 
 /* ---------- 1) ภาพรวมตลาด ---------- */
 function Market({ api, open }) {
@@ -344,11 +344,11 @@ function Detail({ api, symbol, authed, onWatch }) {
   )}
 </Card>
       <Card title="กราฟราคา">
-  {pr.loading ? (
+  {!pr.data ? (
     <div className="h-[420px] animate-pulse rounded-xl bg-zinc-800/40" />
   ) : (
     <TVChart
-      symbol={tvSymbol(symbol, pr.data?.exchange)}
+      symbol={tvSymbol(symbol, pr.data.exchange)}
       height={420}
     />
   )}
@@ -537,19 +537,38 @@ function Compare({ api, open }) {
 /* ---------- หน้าหลัก ---------- */
 export default function StocksPage({ getToken, apiBase = "" }) {
   const authed = !!(typeof getToken === "function" && getToken());
-  const api = useCallback(async (path, opts = {}) => {
-    const t = typeof getToken === "function" ? getToken() : null;
-    const r = await fetch(`${apiBase}/api/stocks${path}`, {
-      method: opts.method || "GET",
-      headers: { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) },
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
-    });
-    if (r.status === 204) return null;
-    const j = await r.json().catch(() => null);
-    if (!r.ok) throw new Error(typeof j?.detail === "string" ? j.detail : "error");
-    if (j === null) throw new Error("no_backend");
-    return j;
-  }, [apiBase, getToken]);
+  const tokenRef = useRef(getToken);
+tokenRef.current = getToken;
+
+const api = useCallback(async (path, opts = {}) => {
+  const t =
+    typeof tokenRef.current === "function"
+      ? tokenRef.current()
+      : null;
+
+  const r = await fetch(`${apiBase}/api/stocks${path}`, {
+    method: opts.method || "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...(t ? { Authorization: `Bearer ${t}` } : {}),
+    },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+
+  if (r.status === 204) return null;
+
+  const j = await r.json().catch(() => null);
+
+  if (!r.ok) {
+    throw new Error(
+      typeof j?.detail === "string" ? j.detail : "error"
+    );
+  }
+
+  if (j === null) throw new Error("no_backend");
+
+  return j;
+}, [apiBase]);
 
   const [tab, setTab] = useState("market");
   const [sym, setSym] = useState(null);
