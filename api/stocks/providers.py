@@ -1,5 +1,8 @@
 import os
 
+import asyncio
+from datetime import datetime, timezone
+
 import logging
 log = logging.getLogger("stocks.providers")
 
@@ -69,30 +72,46 @@ async def daily_history(symbol: str) -> list[dict]:
     return sorted(rows, key=lambda r: r["time"])
 
 
-def _parse_movers(rows: list[dict]) -> list[dict]:
+def _parse_fmp_movers(rows: list[dict]) -> list[dict]:
     out = []
-    for x in rows:
+    for x in rows or []:
         try:
-            price, vol = float(x["price"]), int(x["volume"])
-            if price < 5 or vol < 500_000:
+            price = float(x["price"])
+            if price < 5:  # ตัดหุ้นราคาต่ำ (penny stock) ออก
                 continue
             out.append({
-                "symbol": x["ticker"],
+                "symbol": x["symbol"],
+                "name": x.get("name"),
                 "price": price,
-                "change": float(x["change_amount"]),
-                "changePercent": float(x["change_percentage"].rstrip("%")),
-                "volume": vol,
+                "change": float(x["change"]),
+                "changePercent": float(x["changesPercentage"]),
+                "volume": int(x.get("volume") or 0),
             })
         except (KeyError, ValueError, TypeError):
             continue
     return out[:10]
 
 
+async def _fmp_list(path: str) -> list[dict]:
+    if not FMP_KEY:
+        raise ProviderError("FMP_KEY not set")
+    if not take_quota("fmp", 240, 86400):
+        raise RateLimited("fmp")
+    data = await _get_json(f"https://financialmodelingprep.com/stable{path}", {"apikey": FMP_KEY})
+    if not isinstance(data, list):
+        raise ProviderError(str(data)[:200])
+    return data
+
+
 async def top_movers() -> dict:
-    d = await alpha(function="TOP_GAINERS_LOSERS")
+    gainers, losers, active = await asyncio.gather(
+        _fmp_list("/biggest-gainers"),
+        _fmp_list("/biggest-losers"),
+        _fmp_list("/most-actives"),
+    )
     return {
-        "gainers": _parse_movers(d.get("top_gainers", [])),
-        "losers": _parse_movers(d.get("top_losers", [])),
-        "mostActive": _parse_movers(d.get("most_actively_traded", [])),
-        "updatedAt": d.get("last_updated"),
+        "gainers": _parse_fmp_movers(gainers),
+        "losers": _parse_fmp_movers(losers),
+        "mostActive": _parse_fmp_movers(active),
+        "updatedAt": datetime.now(timezone.utc).isoformat(),
     }
