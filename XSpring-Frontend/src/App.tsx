@@ -568,9 +568,9 @@ function AppInner() {
             {page === "risk" && <RiskPage />}
             {page === "stocks" && (
             <StocksPage
-              getToken={() => localStorage.getItem("token")}
-              apiBase="https://xspring-api.onrender.com"
-            />
+            getToken={getStocksToken}
+            apiBase="https://xspring-api.onrender.com"
+          />
           )}
 
             {page !== "dashboard" &&
