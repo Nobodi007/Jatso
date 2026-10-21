@@ -278,6 +278,67 @@ function Market({ api, open }) {
   );
 }
 
+/* ---------- ตารางงบการเงิน 3 งบ ---------- */
+const FIN_LABELS = {
+  revenue: "รายได้", costOfRevenue: "ต้นทุนขาย", grossProfit: "กำไรขั้นต้น",
+  researchAndDevelopment: "R&D", sga: "SG&A", operatingExpenses: "ค่าใช้จ่ายดำเนินงานรวม",
+  operatingIncome: "กำไรจากการดำเนินงาน", interestExpense: "ดอกเบี้ยจ่าย",
+  incomeBeforeTax: "กำไรก่อนภาษี", incomeTax: "ภาษี", netIncome: "กำไรสุทธิ",
+  eps: "EPS (diluted)", dilutedShares: "จำนวนหุ้น (diluted)",
+  cash: "เงินสด", shortTermInvestments: "เงินลงทุนระยะสั้น", receivables: "ลูกหนี้",
+  inventory: "สินค้าคงคลัง", currentAssets: "สินทรัพย์หมุนเวียน", ppe: "ที่ดิน อาคาร อุปกรณ์",
+  goodwill: "Goodwill", totalAssets: "สินทรัพย์รวม", currentLiabilities: "หนี้สินหมุนเวียน",
+  shortTermDebt: "หนี้ระยะสั้น", longTermDebt: "หนี้ระยะยาว", totalDebt: "หนี้รวม",
+  totalLiabilities: "หนี้สินรวม", equity: "ส่วนของผู้ถือหุ้น", netDebt: "หนี้สุทธิ",
+  depreciation: "ค่าเสื่อมราคา", sbc: "ค่าตอบแทนเป็นหุ้น (SBC)",
+  operatingCashFlow: "กระแสเงินสดดำเนินงาน", capex: "CapEx", freeCashFlow: "กระแสเงินสดอิสระ",
+  investingCashFlow: "กระแสเงินสดลงทุน", financingCashFlow: "กระแสเงินสดจัดหาเงิน",
+  buybacks: "ซื้อหุ้นคืน", dividendsPaid: "จ่ายปันผล",
+  grossMargin: "Gross margin", operatingMargin: "Operating margin", netMargin: "Net margin", fcfMargin: "FCF margin",
+};
+const FIN_TABS = { income: "งบกำไรขาดทุน", balance: "งบดุล", cashflow: "งบกระแสเงินสด" };
+const FIN_MARGINS = { income: ["grossMargin", "operatingMargin", "netMargin"], balance: [], cashflow: ["fcfMargin"] };
+const MARGIN_KEYS = new Set(["grossMargin", "operatingMargin", "netMargin", "fcfMargin"]);
+
+function Statements({ s }) {
+  const [tab, setTab] = useState("income");
+  const rows = s.data?.annual;
+  if (!rows?.length) return null;
+  const keys = [...(s.data.statements?.[tab] || []), ...FIN_MARGINS[tab]];
+  const cell = (k, v) => (v == null ? "–" : MARGIN_KEYS.has(k) ? v.toFixed(1) + "%" : k === "eps" ? num(v) : big(v));
+  return (
+    <Card title="งบการเงินรายปี (USD)" right={<div className="flex gap-2">{Object.entries(FIN_TABS).map(([id, t]) => <Pill key={id} on={tab === id} onClick={() => setTab(id)}>{t}</Pill>)}</div>}>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-zinc-500">
+              <th className="sticky left-0 bg-zinc-900 py-2 pr-4 text-left font-normal">รายการ</th>
+              {[...rows].reverse().map((r) => <th key={r.fiscalYearEnd} className="px-3 py-2 text-right font-normal">{r.year}</th>)}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-zinc-800">
+            {keys.map((k) => (
+              <tr key={k} className="text-zinc-200">
+                <td className="sticky left-0 whitespace-nowrap bg-zinc-900 py-2 pr-4 text-zinc-400">{FIN_LABELS[k] || k}</td>
+                {[...rows].reverse().map((r) => {
+                  const v = r[k], g = r.yoy?.[k];
+                  return (
+                    <td key={r.fiscalYearEnd} className="whitespace-nowrap px-3 py-2 text-right tabular-nums">
+                      <div className={v < 0 ? "text-red-400" : ""}>{cell(k, v)}</div>
+                      {g != null && !MARGIN_KEYS.has(k) && <div className={`text-[11px] ${tone(g)}`}>{pct(g)}</div>}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-3 text-xs text-zinc-600">ที่มา SEC EDGAR · ตัวเลข "–" คือบริษัทนี้ไม่ได้รายงานรายการนั้นด้วย tag มาตรฐาน · % ใต้ตัวเลขคือเปลี่ยนจากปีก่อน</p>
+    </Card>
+  );
+}
+
 /* ---------- 2) หุ้นรายตัว ---------- */
 const MET = [["P/E", "pe"], ["P/B", "pb"], ["P/S", "ps"], ["ROE %", "roe"], ["ROA %", "roa"], ["Gross margin %", "grossMargin"],
   ["Net margin %", "netMargin"], ["D/E", "debtToEquity"], ["Current ratio", "currentRatio"], ["ปันผล %", "dividendYield"],
@@ -287,7 +348,7 @@ function Detail({ api, symbol, authed, onWatch }) {
   const q = useGet(api, `/${symbol}/quote`);
   const pr = useGet(api, `/${symbol}/profile`);
   const m = useGet(api, `/${symbol}/metrics`);
-  const f = useGet(api, `/${symbol}/financials?years=5`);
+  const f = useGet(api, `/${symbol}/financials?years=15`);
   const n = useGet(api, `/${symbol}/news`);
   const [note, setNote] = useState("");
   const add = async () => {
@@ -380,7 +441,7 @@ function Detail({ api, symbol, authed, onWatch }) {
 </Card>
       {f.data?.annual?.length > 0 && (
         <div className="grid gap-5 lg:grid-cols-2">
-          <Card title="รายได้และกำไรสุทธิรายปี"><Bars rows={f.data.annual} series={[{ k: "revenue", label: "รายได้", color: "#10b981" }, { k: "netIncome", label: "กำไรสุทธิ", color: "#a7f3d0" }]} /></Card>
+          <Card title="รายได้และกำไรสุทธิรายปี"><Bars rows={f.data.annual.slice(-8)} series={[{ k: "revenue", label: "รายได้", color: "#10b981" }, { k: "netIncome", label: "กำไรสุทธิ", color: "#a7f3d0" }]} /></Card>
           <Card title={`รายได้ไหลไปไหน ปี ${f.data.annual[f.data.annual.length - 1].year}`}><Sankey a={f.data.annual[f.data.annual.length - 1]} /></Card>
         </div>
       )}
@@ -388,26 +449,8 @@ function Detail({ api, symbol, authed, onWatch }) {
         <Status s={m} />
         {m.data && <div className="grid grid-cols-2 gap-3 md:grid-cols-5">{MET.map(([l, k]) => <Stat key={k} label={l} value={num(m.data[k])} />)}</div>}
       </Card>
-      <Card title="งบการเงินรายปี (USD)">
-        <Status s={f} empty={!f.loading && !f.error && !f.data?.annual?.length && "ไม่มีข้อมูล"} />
-        {f.data?.annual?.length > 0 && (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead><tr className="text-zinc-500"><th className="py-2 text-left font-normal">ปี</th>{["รายได้", "กำไรขั้นต้น", "กำไรสุทธิ", "EPS", "กระแสเงินสดอิสระ"].map((t) => <th key={t} className="py-2 text-right font-normal">{t}</th>)}</tr></thead>
-              <tbody className="divide-y divide-zinc-800">
-                {[...f.data.annual].reverse().map((r) => (
-                  <tr key={r.year} className="text-zinc-200">
-                    <td className="py-2">{r.year}</td>
-                    <td className="text-right">{big(r.revenue)}</td><td className="text-right">{big(r.grossProfit)}</td>
-                    <td className={`text-right ${tone(r.netIncome)}`}>{big(r.netIncome)}</td>
-                    <td className="text-right">{num(r.eps)}</td><td className={`text-right ${tone(r.freeCashFlow)}`}>{big(r.freeCashFlow)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+      <Status s={f} empty={!f.loading && !f.error && !f.data?.annual?.length && (f.data?.taxonomy === "non-us-gaap" ? "หุ้นตัวนี้ใช้มาตรฐานบัญชี IFRS ยังไม่รองรับ" : "ไม่มีข้อมูล")} />
+      <Statements s={f} />
       <Card title="ข่าวล่าสุด (7 วัน)">
         <Status s={n} empty={!n.loading && !n.error && !n.data?.length && "ไม่มีข่าวในช่วงนี้"} />
         <div className="divide-y divide-zinc-800">
