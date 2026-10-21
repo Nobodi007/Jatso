@@ -29,6 +29,7 @@ import { NumberTicker } from "./components/ui/number-ticker"
 import BotLab from "./BotLab"
 import type { BotApi } from "./BotLab"
 import StocksPage from "./components/stocks/StocksPage";
+const getStocksToken = () => localStorage.getItem("token");
 
 type Page =
   | "dashboard"
