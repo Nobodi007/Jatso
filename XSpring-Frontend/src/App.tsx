@@ -356,8 +356,6 @@ function AppInner() {
 
   return () => window.clearInterval(timer)
 }, [])
-
-  const navigation = market === "stocks" ? stockNavigation : cryptoNavigation
   
   
   return (
