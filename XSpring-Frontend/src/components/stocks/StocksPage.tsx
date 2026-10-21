@@ -190,6 +190,38 @@ function Line({ rows }) {
   );
 }
 
+/* ---------- กราฟ TradingView (widget ฟรี ไม่กินโควต้า API) ---------- */
+const tvSymbol = (symbol, exchange = "") => {
+  const e = exchange.toUpperCase();
+  if (e.includes("NASDAQ")) return `NASDAQ:${symbol}`;
+  if (e.includes("NEW YORK") || e.includes("NYSE")) return `NYSE:${symbol}`;
+  if (e.includes("AMEX") || e.includes("ARCA")) return `AMEX:${symbol}`;
+  return symbol; // ให้ TradingView เดาเอง
+};
+
+function TVChart({ symbol, height = 420 }) {
+  const ref = useCallback((el) => {
+    if (!el) return;
+    el.innerHTML = "";
+    const w = document.createElement("div");
+    w.className = "tradingview-widget-container__widget";
+    w.style.height = "100%";
+    w.style.width = "100%";
+    el.appendChild(w);
+    const s = document.createElement("script");
+    s.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
+    s.async = true;
+    s.innerHTML = JSON.stringify({
+      autosize: true, symbol, interval: "D", timezone: "Asia/Bangkok",
+      theme: "dark", style: "1", locale: "th_TH",
+      backgroundColor: "rgba(10,10,10,1)", allow_symbol_change: false,
+      hide_side_toolbar: true, support_host: "https://www.tradingview.com",
+    });
+    el.appendChild(s);
+  }, [symbol]);
+  return <div ref={ref} className="tradingview-widget-container" style={{ height, width: "100%" }} />;
+}
+
 /* ---------- 1) ภาพรวมตลาด ---------- */
 function Market({ api, open }) {
   const ov = useGet(api, "/market/overview");
@@ -212,7 +244,7 @@ function Market({ api, open }) {
               <span className="text-left font-semibold text-white">{r.symbol}</span>
               <span className="text-right text-zinc-300">{usd(r.price)}</span>
               <span className={`text-right ${tone(r.changePercent)}`}>{pct(r.changePercent)}</span>
-              <span className="text-right text-zinc-500">{big(r.volume)}</span>
+              <span className="text-right text-zinc-500">{r.volume ? big(r.volume) : "–"}</span>
             </button>
           ))}
         </div>
@@ -230,7 +262,6 @@ const MET = [["P/E", "pe"], ["P/B", "pb"], ["P/S", "ps"], ["ROE %", "roe"], ["RO
 function Detail({ api, symbol, authed, onWatch }) {
   const q = useGet(api, `/${symbol}/quote`);
   const pr = useGet(api, `/${symbol}/profile`);
-  const h = useGet(api, `/${symbol}/history`);
   const m = useGet(api, `/${symbol}/metrics`);
   const f = useGet(api, `/${symbol}/financials?years=5`);
   const n = useGet(api, `/${symbol}/news`);
@@ -242,33 +273,86 @@ function Detail({ api, symbol, authed, onWatch }) {
   const d = q.data;
   return (
     <div className="space-y-5">
-      <Card>
-        <Status s={q} />
-        {d && (
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              {pr.data?.logo && <img src={pr.data.logo} alt="" className="h-12 w-12 rounded-xl bg-white p-1" />}
-              <div>
-                <div className="text-sm text-zinc-400">{pr.data?.name || symbol} · {pr.data?.exchange}</div>
-                <div className="text-3xl font-bold text-white">{usd(d.price)}</div>
-                <div className={`text-sm ${tone(d.change)}`}>{usd(d.change)} ({pct(d.changePercent)})</div>
-              </div>
+      <Card className="min-h-[210px]">
+  {q.error && <Status s={q} />}
+
+  {q.loading && !d && (
+    <div className="animate-pulse space-y-4">
+      <div className="flex items-center gap-4">
+        <div className="h-12 w-12 rounded-xl bg-zinc-800" />
+        <div className="space-y-2">
+          <div className="h-4 w-48 rounded bg-zinc-800" />
+          <div className="h-8 w-32 rounded bg-zinc-800" />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+        {[...Array(5)].map((_, i) => (
+          <div key={i} className="h-[58px] rounded-xl bg-zinc-800/60" />
+        ))}
+      </div>
+    </div>
+  )}
+
+  {d && (
+    <>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-4">
+          {pr.data?.logo && (
+            <img
+              src={pr.data.logo}
+              alt=""
+              className="h-12 w-12 rounded-xl bg-white p-1"
+            />
+          )}
+          <div>
+            <div className="text-sm text-zinc-400">
+              {pr.data?.name || symbol} · {pr.data?.exchange}
             </div>
-            <div className="text-right">
-              <Btn kind="ghost" onClick={add} disabled={!authed}>+ Watchlist</Btn>
-              {note && <p className="mt-2 text-xs text-zinc-400">{note}</p>}
+            <div className="text-3xl font-bold text-white">
+              {usd(d.price)}
+            </div>
+            <div className={`text-sm ${tone(d.change)}`}>
+              {usd(d.change)} ({pct(d.changePercent)})
             </div>
           </div>
-        )}
-        {d && (
-          <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-5">
-            <Stat label="เปิด" value={usd(d.open)} /><Stat label="สูงสุดวันนี้" value={usd(d.high)} />
-            <Stat label="ต่ำสุดวันนี้" value={usd(d.low)} /><Stat label="ปิดก่อนหน้า" value={usd(d.prevClose)} />
-            <Stat label="มูลค่าตลาด" value={pr.data?.marketCap ? "$" + big(pr.data.marketCap * 1e6) : "–"} />
-          </div>
-        )}
-      </Card>
-      <Card title="ราคาปิดรายวัน"><Status s={h} />{h.data && <Line rows={h.data} />}</Card>
+        </div>
+        <div className="text-right">
+          <Btn kind="ghost" onClick={add} disabled={!authed}>
+            + Watchlist
+          </Btn>
+          {note && (
+            <p className="mt-2 text-xs text-zinc-400">{note}</p>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-5">
+        <Stat label="เปิด" value={usd(d.open)} />
+        <Stat label="สูงสุดวันนี้" value={usd(d.high)} />
+        <Stat label="ต่ำสุดวันนี้" value={usd(d.low)} />
+        <Stat label="ปิดก่อนหน้า" value={usd(d.prevClose)} />
+        <Stat
+          label="มูลค่าตลาด"
+          value={
+            pr.data?.marketCap
+              ? "$" + big(pr.data.marketCap * 1e6)
+              : "–"
+          }
+        />
+      </div>
+    </>
+  )}
+</Card>
+      <Card title="กราฟราคา">
+  {pr.loading ? (
+    <div className="h-[420px] animate-pulse rounded-xl bg-zinc-800/40" />
+  ) : (
+    <TVChart
+      symbol={tvSymbol(symbol, pr.data?.exchange)}
+      height={420}
+    />
+  )}
+    </Card>
       {f.data?.annual?.length > 0 && (
         <div className="grid gap-5 lg:grid-cols-2">
           <Card title="รายได้และกำไรสุทธิรายปี"><Bars rows={f.data.annual} series={[{ k: "revenue", label: "รายได้", color: "#10b981" }, { k: "netIncome", label: "กำไรสุทธิ", color: "#a7f3d0" }]} /></Card>
