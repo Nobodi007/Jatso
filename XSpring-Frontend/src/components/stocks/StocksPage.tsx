@@ -366,6 +366,7 @@ function Detail({ api, symbol, authed, onWatch }) {
       </div>
     </>
   )}
+  </Card>
 
 <Card title="กราฟราคา">
   {pr.loading && !pr.data ? (
