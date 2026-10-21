@@ -391,11 +391,11 @@ function AppInner() {
           <div className={`grid gap-1 p-2 pb-0 ${sidebarOpen ? "grid-cols-2" : "grid-cols-1"}`}>
             <button
               onClick={() => {
-              setMarket("crypto")
-              setPage("dashboard")
-            }}
+                setMarket("crypto")
+                setPage("dashboard")
+              }}
               className={`rounded-lg px-2 py-1.5 text-xs font-medium ${
-                page !== "stocks"
+                market === "crypto"
                   ? "bg-primary text-primary-foreground"
                   : "bg-muted text-muted-foreground hover:bg-accent"
               }`}
@@ -405,10 +405,10 @@ function AppInner() {
             <button
               onClick={() => {
                 setMarket("stocks")
-                setPage("stocks")
+                setPage("dashboard")
               }}
               className={`rounded-lg px-2 py-1.5 text-xs font-medium ${
-                page === "stocks"
+                market === "stocks"
                   ? "bg-primary text-primary-foreground"
                   : "bg-muted text-muted-foreground hover:bg-accent"
               }`}
@@ -417,7 +417,7 @@ function AppInner() {
             </button>
           </div>
         )}
-        <nav className="space-y-1 p-2">
+                <nav className="space-y-1 p-2">
           {navigation.map((item) => {
             const Icon = item.icon
             const active = page === item.id
@@ -532,26 +532,34 @@ function AppInner() {
           {/* CONTENT */}
           <main className="flex-1 overflow-auto p-6">
 
-            {page === "dashboard" && (
-              <DashboardPage
-                portfolio={portfolio}
-                loading={portfolioLoading}
-                error={portfolioError}
-                onRefresh={refreshPortfolio}
-                onTrade={() => setPage("trade")}
-              />
-            )}
-
-            {page === "markets" && (
-              <MarketsPage
-                portfolio={portfolio}
-                onTrade={(asset) => {
-                  void asset
-                  setPage("trade")
-                }}
-                onOrderBook={() => setPage("orderbook")}
-              />
-            )}
+            {page === "dashboard" && market === "crypto" && (
+            <DashboardPage
+              portfolio={portfolio}
+              loading={portfolioLoading}
+              error={portfolioError}
+              onRefresh={refreshPortfolio}
+              onTrade={() => setPage("trade")}
+            />
+          )}
+          
+          {page === "dashboard" && market === "stocks" && (
+            <StocksPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" />
+          )}
+          
+          {page === "markets" && market === "crypto" && (
+            <MarketsPage
+              portfolio={portfolio}
+              onTrade={(asset) => {
+                void asset
+                setPage("trade")
+              }}
+              onOrderBook={() => setPage("orderbook")}
+            />
+          )}
+          
+          {page === "markets" && market === "stocks" && (
+            <StocksPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" />
+          )}
 
             {page === "trade" && (
               <TradePage
