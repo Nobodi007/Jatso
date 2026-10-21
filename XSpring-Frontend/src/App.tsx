@@ -252,7 +252,7 @@ function AppInner() {
   const [aiOpen, setAiOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const [page, setPage] = useState<Page>("dashboard")
-  const [market, setMarket] = useState<Market>( () => (localStorage.getItem("market") as Market) || "crypto")useEffect(() => { localStorage.setItem("market", market) }, [market])
+  const [market, setMarket] = useState<Market>(() => (localStorage.getItem("market") as Market) || "crypto")
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null)
   const [portfolioLoading, setPortfolioLoading] = useState(false)
