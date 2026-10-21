@@ -98,32 +98,90 @@ async def get_metrics(s: str) -> dict:
 # =====================================================
 # งบการเงิน (SEC EDGAR)
 # =====================================================
+# =====================================================
+# งบการเงิน (SEC EDGAR)
+# =====================================================
+# ลำดับใน list = ลำดับ fallback (tag แรกได้สิทธิ์ก่อน tag หลังเติมปีที่ขาด)
 CONCEPTS = {
+    # ---- งบกำไรขาดทุน ----
     "revenue": [
         "RevenueFromContractWithCustomerExcludingAssessedTax",
         "Revenues",
         "SalesRevenueNet",
         "RevenueFromContractWithCustomerIncludingAssessedTax",
     ],
-    "grossProfit": ["GrossProfit"],
     "costOfRevenue": ["CostOfRevenue", "CostOfGoodsAndServicesSold"],
+    "grossProfit": ["GrossProfit"],
+    "researchAndDevelopment": ["ResearchAndDevelopmentExpense"],
+    "sga": ["SellingGeneralAndAdministrativeExpense"],
+    "operatingExpenses": ["OperatingExpenses", "CostsAndExpenses"],
     "operatingIncome": ["OperatingIncomeLoss"],
-    "netIncome": ["NetIncomeLoss"],
+    "interestExpense": ["InterestExpense", "InterestExpenseNonoperating", "InterestExpenseDebt"],
+    "incomeBeforeTax": [
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+    ],
+    "incomeTax": ["IncomeTaxExpenseBenefit"],
+    "netIncome": ["NetIncomeLoss", "ProfitLoss"],
     "eps": ["EarningsPerShareDiluted", "EarningsPerShareBasic"],
+    "dilutedShares": ["WeightedAverageNumberOfDilutedSharesOutstanding"],
+    # ---- งบดุล ----
+    "cash": ["CashAndCashEquivalentsAtCarryingValue"],
+    "shortTermInvestments": [
+        "ShortTermInvestments", "MarketableSecuritiesCurrent",
+        "AvailableForSaleSecuritiesDebtSecuritiesCurrent",
+    ],
+    "receivables": ["AccountsReceivableNetCurrent"],
+    "inventory": ["InventoryNet"],
+    "currentAssets": ["AssetsCurrent"],
+    "ppe": ["PropertyPlantAndEquipmentNet"],
+    "goodwill": ["Goodwill"],
     "totalAssets": ["Assets"],
+    "currentLiabilities": ["LiabilitiesCurrent"],
+    "shortTermDebt": ["LongTermDebtCurrent", "DebtCurrent", "ShortTermBorrowings"],
+    "longTermDebt": ["LongTermDebtNoncurrent", "LongTermDebt"],
     "totalLiabilities": ["Liabilities"],
     "equity": [
         "StockholdersEquity",
         "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
     ],
-    "cash": ["CashAndCashEquivalentsAtCarryingValue"],
-    "longTermDebt": ["LongTermDebtNoncurrent", "LongTermDebt"],
+    # ---- งบกระแสเงินสด ----
+    "depreciation": [
+        "DepreciationDepletionAndAmortization", "DepreciationAndAmortization", "Depreciation",
+    ],
+    "sbc": ["ShareBasedCompensation"],
     "operatingCashFlow": ["NetCashProvidedByUsedInOperatingActivities"],
     "capex": ["PaymentsToAcquirePropertyPlantAndEquipment"],
+    "investingCashFlow": ["NetCashProvidedByUsedInInvestingActivities"],
+    "financingCashFlow": ["NetCashProvidedByUsedInFinancingActivities"],
+    "buybacks": ["PaymentsForRepurchaseOfCommonStock"],
     "dividendsPaid": ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"],
 }
-INSTANT = {"totalAssets", "totalLiabilities", "equity", "cash", "longTermDebt"}  # ตัวเลขงบดุล
 
+# ตัวเลขงบดุล (ณ วันที่ ไม่มี start date)
+INSTANT = {
+    "cash", "shortTermInvestments", "receivables", "inventory", "currentAssets", "ppe",
+    "goodwill", "totalAssets", "currentLiabilities", "shortTermDebt", "longTermDebt",
+    "totalLiabilities", "equity",
+}
+
+# จัดกลุ่มให้ฝั่งหน้าเว็บใช้เรนเดอร์ตาราง (key = แท็บย่อยใน Statements)
+STATEMENTS = {
+    "income": [
+        "revenue", "costOfRevenue", "grossProfit", "researchAndDevelopment", "sga",
+        "operatingExpenses", "operatingIncome", "interestExpense", "incomeBeforeTax",
+        "incomeTax", "netIncome", "eps", "dilutedShares",
+    ],
+    "balance": [
+        "cash", "shortTermInvestments", "receivables", "inventory", "currentAssets", "ppe",
+        "goodwill", "totalAssets", "currentLiabilities", "shortTermDebt", "longTermDebt",
+        "totalDebt", "totalLiabilities", "equity", "netDebt",
+    ],
+    "cashflow": [
+        "netIncome", "depreciation", "sbc", "operatingCashFlow", "capex", "freeCashFlow",
+        "investingCashFlow", "financingCashFlow", "buybacks", "dividendsPaid",
+    ],
+}
 
 async def _cik_map() -> dict:
     async def fetch():
@@ -136,7 +194,7 @@ def _annual_values(facts: dict, names: list[str], instant: bool) -> dict:
     merged: dict[str, float] = {}
     for name in names:
         units = (facts.get(name) or {}).get("units", {})
-        rows = units.get("USD") or units.get("USD/shares") or []
+        rows = units.get("USD") or units.get("USD/shares") or units.get("shares") or []
         per: dict[str, tuple] = {}
         for x in rows:
             if x.get("form") not in ("10-K", "10-K/A"):
@@ -147,7 +205,7 @@ def _annual_values(facts: dict, names: list[str], instant: bool) -> dict:
                 if not start:
                     continue
                 days = (date.fromisoformat(end) - date.fromisoformat(start)).days
-                if not 350 <= days <= 380:  # เอาเฉพาะตัวเลขทั้งปี ไม่เอารายไตรมาส
+                if not 350 <= days <= 380:  # เอาเฉพาะตัวเลขทั้งปี
                     continue
             filed = x.get("filed", "")
             if end not in per or filed > per[end][1]:  # ถ้ามีงบแก้ไข ใช้ฉบับล่าสุด
@@ -156,11 +214,84 @@ def _annual_values(facts: dict, names: list[str], instant: bool) -> dict:
             merged.setdefault(end, val)  # concept แรกในรายการได้สิทธิ์ก่อน
     return merged
 
+def _yoy(cur, prev):
+    if cur is None or prev in (None, 0):
+        return None
+    return (cur - prev) / abs(prev) * 100
+
+
+def _pct(a, b):
+    return a / b * 100 if a is not None and b else None
+
+
+def _derive(row: dict) -> None:
+    """คำนวณบรรทัดที่ SEC ไม่ได้ให้ตรง ๆ"""
+    g = row.get
+    if g("grossProfit") is None and g("revenue") is not None and g("costOfRevenue") is not None:
+        row["grossProfit"] = g("revenue") - g("costOfRevenue")
+    if g("operatingCashFlow") is not None and g("capex") is not None:
+        row["freeCashFlow"] = g("operatingCashFlow") - g("capex")
+    else:
+        row["freeCashFlow"] = None
+    if g("shortTermDebt") is not None or g("longTermDebt") is not None:
+        row["totalDebt"] = (g("shortTermDebt") or 0) + (g("longTermDebt") or 0)
+    else:
+        row["totalDebt"] = None
+    if g("totalLiabilities") is None and g("totalAssets") is not None and g("equity") is not None:
+        row["totalLiabilities"] = g("totalAssets") - g("equity")
+    liquid = (g("cash") or 0) + (g("shortTermInvestments") or 0) if g("cash") is not None else None
+    row["netDebt"] = row["totalDebt"] - liquid if row["totalDebt"] is not None and liquid is not None else None
+    # margin (%)
+    row["grossMargin"] = _pct(g("grossProfit"), g("revenue"))
+    row["operatingMargin"] = _pct(g("operatingIncome"), g("revenue"))
+    row["netMargin"] = _pct(g("netIncome"), g("revenue"))
+    row["fcfMargin"] = _pct(g("freeCashFlow"), g("revenue"))
+
+
+GROWTH_KEYS = sorted({k for ks in STATEMENTS.values() for k in ks})
+
+
+def _add_growth(rows: list[dict]) -> None:
+    """% เปลี่ยนจากปีก่อน ใส่ใน row['yoy'][key] (ข้ามถ้าปีไม่ติดกัน เช่น ขาดข้อมูลบางปี)"""
+    for i, row in enumerate(rows):
+        yoy = {}
+        prev = rows[i - 1] if i else None
+        if prev:
+            gap = (date.fromisoformat(row["fiscalYearEnd"]) - date.fromisoformat(prev["fiscalYearEnd"])).days
+            if 300 <= gap <= 430:
+                for k in GROWTH_KEYS:
+                    yoy[k] = _yoy(row.get(k), prev.get(k))
+        row["yoy"] = yoy
+
 
 async def get_financials(s: str, years: int) -> dict:
     cik = (await guard(_cik_map())).get(s.replace(".", "-"))
     if not cik:
         raise HTTPException(404, "not_in_sec")  # เช่น หุ้นต่างชาติที่ยื่น 20-F
+
+    async def fetch():
+        d = await _sec_get(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json")
+        if not d:
+            return {"symbol": s, "name": None, "annual": []}
+        facts = d.get("facts", {}).get("us-gaap", {})
+        if not facts:  # ไม่มี us-gaap เลย (เช่น ใช้ IFRS) -> ส่งว่างพร้อมธง
+            return {"symbol": s, "name": d.get("entityName"), "currency": "USD",
+                    "annual": [], "taxonomy": "non-us-gaap", "statements": STATEMENTS}
+        cols = {k: _annual_values(facts, v, k in INSTANT) for k, v in CONCEPTS.items()}
+        ends = sorted(set(cols["revenue"]) | set(cols["netIncome"]))  # ย้อนหลังเท่าที่ SEC มี
+        rows = []
+        for end in ends:
+            row = {"fiscalYearEnd": end, "year": int(end[:4])}
+            for k in CONCEPTS:
+                row[k] = cols[k].get(end)
+            _derive(row)
+            rows.append(row)
+        _add_growth(rows)
+        return {"symbol": s, "name": d.get("entityName"), "currency": "USD",
+                "annual": rows, "statements": STATEMENTS}
+
+    data = await guard(cached(f"fin:{s}", 86400, fetch))
+    return {**data, "annual": data["annual"][-years:]}
 
     async def fetch():
         d = await _sec_get(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json")
@@ -264,9 +395,36 @@ async def dividend_calendar(
 async def metrics(symbol: str):
     return await get_metrics(norm(symbol))
 
+@router.get("/{symbol}/overview")
+async def overview(symbol: str):
+    s = norm(symbol)
+    pr, m = await asyncio.gather(profile(s), get_metrics(s))
+    try:
+        fin = await get_financials(s, 1)
+        last = fin["annual"][-1] if fin["annual"] else {}
+    except HTTPException:  # หุ้นที่ไม่อยู่ใน SEC: ยังแสดง key facts ได้ แต่ไม่มี capital structure
+        last = {}
+    mcap = pr.get("marketCap")  # ตรวจหน่วยให้ตรงกับที่ profile() ส่งมา (Finnhub ปกติเป็นล้านดอลลาร์)
+    debt = last.get("totalDebt")
+    liquid = (last.get("cash") or 0) + (last.get("shortTermInvestments") or 0) if last.get("cash") is not None else None
+    ev = mcap + debt - liquid if None not in (mcap, debt, liquid) else None
+    return {
+        "symbol": s,
+        "keyFacts": {
+            "name": pr.get("name"), "logo": pr.get("logo"), "industry": pr.get("industry"),
+            "marketCap": mcap, "pe": m["pe"], "eps": m["eps"], "dividendYield": m["dividendYield"],
+            "website": pr.get("weburl") or pr.get("website"),
+            "employees": pr.get("employeeTotal") or pr.get("employees"),
+            "description": pr.get("description"),
+        },
+        "capitalStructure": {"marketCap": mcap, "debt": debt, "cash": liquid, "enterpriseValue": ev,
+                             "asOf": last.get("fiscalYearEnd")},
+        "latest": last,
+    }
+
 
 @router.get("/{symbol}/financials")
-async def financials(symbol: str, years: int = Query(5, ge=1, le=10)):
+async def financials(symbol: str, years: int = Query(5, ge=1, le=20)):
     return await get_financials(norm(symbol), years)
 
 
