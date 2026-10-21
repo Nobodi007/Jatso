@@ -106,6 +106,7 @@ CONCEPTS = {
         "RevenueFromContractWithCustomerIncludingAssessedTax",
     ],
     "grossProfit": ["GrossProfit"],
+    "costOfRevenue": ["CostOfRevenue", "CostOfGoodsAndServicesSold"],
     "operatingIncome": ["OperatingIncomeLoss"],
     "netIncome": ["NetIncomeLoss"],
     "eps": ["EarningsPerShareDiluted", "EarningsPerShareBasic"],
@@ -176,6 +177,10 @@ async def get_financials(s: str, years: int) -> dict:
             ocf, capex = row["operatingCashFlow"], row["capex"]
             row["freeCashFlow"] = ocf - capex if ocf is not None and capex is not None else None
             rows.append(row)
+
+                    if row["grossProfit"] is None and row["revenue"] is not None and row["costOfRevenue"] is not None:
+                row["grossProfit"] = row["revenue"] - row["costOfRevenue"]
+                        
         return {"symbol": s, "name": d.get("entityName"), "currency": "USD", "annual": rows}
 
     data = await guard(cached(f"fin:{s}", 86400, fetch))
