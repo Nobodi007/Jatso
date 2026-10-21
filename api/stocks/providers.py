@@ -72,16 +72,19 @@ async def daily_history(symbol: str) -> list[dict]:
 def _parse_movers(rows: list[dict]) -> list[dict]:
     out = []
     for x in rows:
-        price, vol = float(x["price"]), int(x["volume"])
-        if price < 5 or vol < 500_000:  # ตัดหุ้นราคาต่ำและวอลุ่มน้อยออก
+        try:
+            price, vol = float(x["price"]), int(x["volume"])
+            if price < 5 or vol < 500_000:
+                continue
+            out.append({
+                "symbol": x["ticker"],
+                "price": price,
+                "change": float(x["change_amount"]),
+                "changePercent": float(x["change_percentage"].rstrip("%")),
+                "volume": vol,
+            })
+        except (KeyError, ValueError, TypeError):
             continue
-        out.append({
-            "symbol": x["ticker"],
-            "price": price,
-            "change": float(x["change_amount"]),
-            "changePercent": float(x["change_percentage"].rstrip("%")),
-            "volume": vol,
-        })
     return out[:10]
 
 
