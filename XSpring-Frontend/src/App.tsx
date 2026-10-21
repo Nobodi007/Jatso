@@ -259,6 +259,8 @@ function AppInner() {
   const [portfolioError, setPortfolioError] = useState("")
   const [orderRefreshKey, setOrderRefreshKey] = useState(0)
   const isAdmin = (user as unknown as { role?: string } | null)?.role === "admin"
+  const navigation = market === "stocks" ? stockNavigation : cryptoNavigation
+  const currentPage = navigation.find((item) => item.id === page)
 
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try {
@@ -805,8 +807,6 @@ function OrderBookPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [lastUpdated, setLastUpdated] = useState("")
-  const navigation = market === "stocks" ? stockNavigation : cryptoNavigation
-  const currentPage = navigation.find((item) => item.id === page)
 
   useEffect(() => {
     let cancelled = false
