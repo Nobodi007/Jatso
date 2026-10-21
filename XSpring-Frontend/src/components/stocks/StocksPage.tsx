@@ -205,14 +205,15 @@ const TVChart = memo(function TVChart({ symbol, height = 420 }) {
     el.innerHTML = "";
     const w = document.createElement("div");
     w.className = "tradingview-widget-container__widget";
-    w.style.height = "100%";
+    w.style.height = `${height}px`;
     w.style.width = "100%";
     el.appendChild(w);
     const s = document.createElement("script");
     s.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
     s.async = true;
     s.innerHTML = JSON.stringify({
-      autosize: true, symbol, interval: "D", timezone: "Asia/Bangkok",
+      autosize: false, width: "100%", height,   // ← แก้บรรทัดนี้ (ส่ง height เข้าไป)
+      symbol, interval: "D", timezone: "Asia/Bangkok",
       theme: "dark", style: "1", locale: "th_TH",
       backgroundColor: "rgba(10,10,10,1)", allow_symbol_change: false,
       hide_side_toolbar: true, support_host: "https://www.tradingview.com",
