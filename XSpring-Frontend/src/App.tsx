@@ -35,6 +35,7 @@ import StocksPage from "./components/stocks/StocksPage";
 const getStocksToken = () => localStorage.getItem("token");
 import ScreenerPage from "./components/stocks/ScreenerPage"
 import StocksTradePage from "./components/trading/StocksTradePage"
+import StockNewsPage from "./components/stocks/StockNewsPage"
 
 type Page =
   | "dashboard"
@@ -634,7 +635,10 @@ function AppInner() {
               />
             )}
 
-            {page === "news" && <NewsPage />}
+            {page === "news" && market === "crypto" && <NewsPage />}
+            {page === "news" && market === "stocks" && (
+              <StockNewsPage apiBase="https://xspring-api.onrender.com" />
+            )}
             {page === "risk" && <RiskPage />}
             {page === "stocks" && (
             <StocksPage
