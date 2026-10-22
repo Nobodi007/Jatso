@@ -40,7 +40,12 @@ router = APIRouter(prefix="/api/stock-book", tags=["stock-book"])
 OWNER_EMAILS = {e.strip().lower() for e in os.getenv("STOCK_OWNER_EMAILS", "").split(",") if e.strip()}
 OWNER_CASH = 100_000_000.0
 DEFAULT_CASH = 1_000_000.0
-FINNHUB_KEY = os.getenv("FINNHUB_API_KEY", "")
+FINNHUB_KEY = (
+    os.getenv("FINNHUB_API_KEY")
+    or os.getenv("FINNHUB_KEY")
+    or os.getenv("FINNHUB_TOKEN")
+    or ""
+)
 
 
 class TradeIn(BaseModel):
@@ -53,15 +58,22 @@ class TradeIn(BaseModel):
 
 
 def _quote(sym: str) -> float | None:
+    if not FINNHUB_KEY:
+        print("[stock-book] ไม่เจอ Finnhub key ใน env")
+        return None
     try:
         r = requests.get(
             "https://finnhub.io/api/v1/quote",
             params={"symbol": sym, "token": FINNHUB_KEY},
             timeout=8,
-        ).json()
-        c = r.get("c")
+        )
+        j = r.json()
+        c = j.get("c")
+        if not c:
+            print(f"[stock-book] quote {sym} ว่าง: status={r.status_code} body={j}")
         return float(c) if c else None
-    except Exception:
+    except Exception as e:
+        print(f"[stock-book] quote {sym} error: {e}")
         return None
 
 
