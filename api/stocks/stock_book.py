@@ -8,7 +8,16 @@ import jwt  # PyJWT
 from fastapi import Header
 from supabase import create_client
 
-supabase = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+_SB_KEY = (
+    os.getenv("SUPABASE_KEY")
+    or os.getenv("SUPABASE_SERVICE_KEY")
+    or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    or os.getenv("SUPABASE_ANON_KEY")
+)
+if not _SB_KEY:
+    raise RuntimeError("ไม่เจอ Supabase key ใน env ตั้งชื่ออะไรไว้ใน Render ให้ใส่ชื่อนั้น")
+
+supabase = create_client(os.environ["SUPABASE_URL"], _SB_KEY)
 
 
 def get_current_email(authorization: str = Header(default="")) -> str:
