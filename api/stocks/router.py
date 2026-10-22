@@ -11,6 +11,8 @@ from .cache import ProviderError, RateLimited, cached
 router = APIRouter(prefix="/api/stocks", tags=["stocks"])
 SYMBOL_RE = re.compile(r"^[A-Z][A-Z.\-]{0,9}$")
 INDEX_ETFS = {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "DIA": "Dow Jones"}
+from .stock_heatmap import router as heatmap_router
+router.include_router(heatmap_router)
 
 
 def norm(symbol: str) -> str:
