@@ -183,10 +183,11 @@ def _next_job():
     # Dow/Nasdaq 100 ก่อน แล้วค่อยหุ้น S&P 500 ที่เหลือ
     rows.sort(key=lambda r: (0 if r["idx"] & {"dow", "ndx"} else 1, r["symbol"]))
     for r in rows:
-        if r["market_cap"] is None and r["fails"] < 3:
+        if r["fails"] >= 3:
+            continue
+        if r["market_cap"] is None:
             return "profile", r
-    for r in rows:
-        if r["quote_at"] is None and r["fails"] < 3:
+        if r["quote_at"] is None:
             return "quote", r
     if _market_open() and rows:
         return "quote", min(rows, key=lambda r: r["quote_at"] or 0)
