@@ -572,7 +572,7 @@ function AppInner() {
             <StocksPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" view="detail" />
           )}
 
-            {page === "trade" && (
+            {page === "trade" && market === "crypto" && (
               <TradePage
                 portfolio={portfolio}
                 loading={portfolioLoading}
@@ -580,6 +580,10 @@ function AppInner() {
                 onRefresh={refreshPortfolio}
                 onOrderCreated={notifyOrderCreated}
               />
+            )}
+            
+            {page === "trade" && market === "stocks" && (
+              <StocksTradePage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" />
             )}
 
             {page === "orderbook" && <OrderBookPage />}
