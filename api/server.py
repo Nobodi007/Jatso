@@ -1552,7 +1552,7 @@ def _extract_json(raw: str) -> dict:
 
 @app.post("/api/news/summarize", dependencies=[Depends(require_api_key)])
 def summarize_news(n: NewsAiIn, user: str = Depends(require_user)):
-    cache_key = f"{n.kind}:{n.url}":
+    cache_key = f"{n.kind}:{n.url}"
     if cache_key in _AI_NEWS_CACHE:
         return _AI_NEWS_CACHE[cache_key]
 
