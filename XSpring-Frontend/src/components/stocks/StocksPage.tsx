@@ -222,8 +222,29 @@ const tvSymbol = (symbol, exchange = "") => {
   return symbol;
 };
 
+function useIsDark() {
+  const read = () => {
+    if (typeof document === "undefined") return false;
+    const html = document.documentElement, body = document.body;
+    if (html.classList.contains("dark") || body?.classList.contains("dark")) return true;
+    const t = html.dataset.theme || body?.dataset.theme;
+    return t ? t === "dark" : false;
+  };
+  const [dark, setDark] = useState(read);
+  useEffect(() => {
+    const update = () => setDark(read());
+    const mo = new MutationObserver(update);
+    const opts = { attributes: true, attributeFilter: ["class", "data-theme"] };
+    mo.observe(document.documentElement, opts);
+    if (document.body) mo.observe(document.body, opts);
+    update();
+    return () => mo.disconnect();
+  }, []);
+  return dark;
+}
+
 const TVChart = memo(function TVChart({ symbol, height = 420 }) {
-  const dark = typeof document !== "undefined" && document.documentElement.classList.contains("dark");
+  const dark = useIsDark();
   const ref = useCallback((el) => {
     if (!el) return;
     el.innerHTML = "";
@@ -244,7 +265,7 @@ const TVChart = memo(function TVChart({ symbol, height = 420 }) {
       hide_side_toolbar: true, support_host: "https://www.tradingview.com",
     });
     el.appendChild(s);
-  }, [symbol, dark]);
+  }, [symbol, dark, height]);
   return <div ref={ref} className="tradingview-widget-container" style={{ height, width: "100%" }} />;
 });
 
