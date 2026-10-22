@@ -17,18 +17,15 @@ type Order = {
   fillPrice: number | null; createdAt: string; filledAt: string | null; reason?: string | null;
 };
 
+/* ---------- config ---------- */
+const BOOK_BASE = "https://xspring-api.onrender.com"; // ใช้เมื่อไม่ได้ส่ง apiBase มา
+
 /* ---------- helpers ---------- */
 const ERR: Record<string, string> = {
-  insufficient_cash: "เงินสดไม่พอสำหรับคำสั่งนี้",
-  insufficient_shares: "จำนวนหุ้นที่ถืออยู่ไม่พอขาย",
-  market_closed: "ตลาดสหรัฐปิดอยู่ ส่งคำสั่ง Market ไม่ได้ (ใช้ Limit แทนได้)",
   rate_limited: "ผู้ให้บริการราคาจำกัดการเรียกชั่วคราว ลองใหม่อีกครั้งในอีกสักครู่",
   provider_error: "ดึงราคาไม่สำเร็จ ลองใหม่อีกครั้ง",
   symbol_not_found: "ไม่พบหุ้นตัวนี้",
   invalid_symbol: "สัญลักษณ์หุ้นไม่ถูกต้อง",
-  invalid_limit: "ราคา Limit ไม่ถูกต้อง",
-  not_found: "ไม่พบคำสั่งนี้",
-  not_cancellable: "คำสั่งนี้ยกเลิกไม่ได้แล้ว",
   unauthorized: "กรุณาเข้าสู่ระบบก่อนซื้อขาย",
 };
 const QUICK = ["AAPL", "NVDA", "TSLA", "MSFT", "AMZN", "META", "GOOGL", "SPY"];
@@ -58,14 +55,15 @@ const STATUS: Record<Order["status"], [string, string]> = {
 /* ---------- page ---------- */
 export default function StocksTradePage({
   getToken, apiBase = "",
-}: { getToken?: () => string | null | undefined; apiBase?: string }) {
-  const authed = !!getToken?.();
+}: { getToken?: () => Promise<string | null | undefined> | string | null | undefined; apiBase?: string }) {
+  const authed = !!getToken;
   const tokenRef = useRef(getToken);
   tokenRef.current = getToken;
 
+  /* API ราคา/ค้นหา/โปรไฟล์ (/api/stocks) */
   const api = useCallback(
     async <T,>(path: string, opts: { method?: string; body?: unknown } = {}): Promise<T | null> => {
-      const t = tokenRef.current?.();
+      const t = await tokenRef.current?.();
       const r = await fetch(`${apiBase}/api/stocks${path}`, {
         method: opts.method || "GET",
         headers: { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) },
@@ -74,6 +72,22 @@ export default function StocksTradePage({
       if (r.status === 204) return null;
       const j = await r.json().catch(() => null);
       if (!r.ok) throw new Error(r.status === 401 ? "unauthorized" : typeof j?.detail === "string" ? j.detail : "error");
+      return j as T;
+    },
+    [apiBase],
+  );
+
+  /* API พอร์ต/ซื้อขาย (/api/stock-book) */
+  const book = useCallback(
+    async <T,>(path: string, opts: { method?: string; body?: unknown } = {}): Promise<T> => {
+      const t = await tokenRef.current?.();
+      const r = await fetch(`${apiBase || BOOK_BASE}/api/stock-book${path}`, {
+        method: opts.method || "GET",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${t ?? ""}` },
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(typeof j?.detail === "string" ? j.detail : `HTTP ${r.status}`);
       return j as T;
     },
     [apiBase],
@@ -124,21 +138,33 @@ export default function StocksTradePage({
     }
   }, [quote?.price]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* account / positions / orders */
+  /* account / positions / orders (จากระบบพอร์ต stock-book) */
   const [account, setAccount] = useState<Account | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [bookErr, setBookErr] = useState("");
   const refresh = useCallback(async () => {
     if (!authed) return;
     try {
-      const [a, p, o] = await Promise.all([
-        api<Account>("/trade/account"), api<Position[]>("/trade/positions"), api<Order[]>("/trade/orders"),
-      ]);
-      if (a) setAccount(a);
-      setPositions(Array.isArray(p) ? p : []);
-      setOrders(Array.isArray(o) ? o : []);
-    } catch { /* เงียบไว้ รอบหน้าลองใหม่ */ }
-  }, [api, authed]);
+      const [b, t] = await Promise.all([book<any>("/portfolio"), book<any[]>("/trades")]);
+      setAccount({ cash: b.cash, marketValue: b.market_value, equity: b.equity });
+      setPositions(
+        (b.positions ?? []).map((p: any): Position => ({
+          symbol: p.symbol, qty: p.qty, avgCost: p.avg_cost, price: p.last,
+        })),
+      );
+      setOrders(
+        (Array.isArray(t) ? t : []).map((x: any): Order => ({
+          id: x.id, symbol: x.symbol, side: x.side, type: "market", qty: x.qty,
+          limitPrice: null, status: "filled", fillPrice: x.price,
+          createdAt: x.ts, filledAt: x.ts, reason: x.note,
+        })),
+      );
+      setBookErr("");
+    } catch (e: any) {
+      setBookErr(e?.message ?? "โหลดพอร์ตไม่สำเร็จ");
+    }
+  }, [book, authed]);
   useEffect(() => {
     refresh();
     const id = setInterval(refresh, 10000);
@@ -181,33 +207,24 @@ export default function StocksTradePage({
     if (!confirming) { setConfirming(true); return; }
     setBusy(true); setNotice(null);
     try {
-      const o = await api<Order>("/trade/orders", {
+      const r = await book<{ price: number }>("/trade", {
         method: "POST",
-        body: { symbol, side, type, qty: qtyN, limitPrice: type === "limit" ? limitN : undefined },
+        body: { symbol, side, qty: qtyN, price: type === "limit" ? limitN : null },
       });
       setNotice({
         ok: true,
-        text: o?.status === "filled"
-          ? `${side === "buy" ? "ซื้อ" : "ขาย"} ${qtyN} ${symbol} @ ${usd(o.fillPrice)} สำเร็จ`
-          : `ส่งคำสั่ง Limit แล้ว รอราคาถึง ${usd(limitN)}`,
+        text: `${side === "buy" ? "ซื้อ" : "ขาย"} ${qtyN} ${symbol} @ ${usd(r.price)} สำเร็จ`,
       });
       setQty(""); setConfirming(false);
-      refresh();
+      await refresh();
     } catch (e: any) {
-      setNotice({ ok: false, text: ERR[e.message] ?? "ส่งคำสั่งไม่สำเร็จ" });
+      setNotice({ ok: false, text: ERR[e.message] ?? e.message ?? "ส่งคำสั่งไม่สำเร็จ" });
       setConfirming(false);
     } finally { setBusy(false); }
   };
 
-  const cancel = async (id: number) => {
-    try { await api(`/trade/orders/${id}`, { method: "DELETE" }); refresh(); }
-    catch (e: any) { setNotice({ ok: false, text: ERR[e.message] ?? "ยกเลิกไม่สำเร็จ" }); }
-  };
-
   /* bottom tabs */
-  const [tab, setTab] = useState<"positions" | "open" | "history">("positions");
-  const openOrders = orders.filter((o) => o.status === "open");
-  const history = orders.filter((o) => o.status !== "open");
+  const [tab, setTab] = useState<"positions" | "history">("positions");
 
   const rangePct = quote && quote.high > quote.low
     ? Math.min(100, Math.max(0, ((quote.price - quote.low) / (quote.high - quote.low)) * 100)) : 50;
@@ -252,6 +269,12 @@ export default function StocksTradePage({
           ))}
         </div>
       </div>
+
+      {bookErr && (
+        <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-400">
+          โหลดพอร์ตไม่ได้: {bookErr}
+        </div>
+      )}
 
       {/* ===== Symbol header ===== */}
       <section className="rounded-2xl border border-border bg-card p-5">
@@ -346,6 +369,9 @@ export default function StocksTradePage({
               </button>
             ))}
           </div>
+          {type === "limit" && (
+            <p className="mt-2 text-xs text-muted-foreground">ระบบจะซื้อขายที่ราคา Limit ที่ระบุทันที ไม่รอให้ราคาตลาดมาถึง</p>
+          )}
 
           <dl className="mt-4 space-y-1.5 text-sm">
             <Row k="เงินสดคงเหลือ" v={usd(cash)} />
@@ -417,16 +443,15 @@ export default function StocksTradePage({
         <Stat label="มูลค่าพอร์ตรวม" value={usd(account?.equity)} />
         <Stat label="เงินสด" value={usd(account?.cash)} />
         <Stat label="มูลค่าหุ้นที่ถือ" value={usd(account?.marketValue)} />
-        <Stat label="คำสั่งที่รออยู่" value={String(openOrders.length)} />
+        <Stat label="จำนวนรายการซื้อขาย" value={String(orders.length)} />
       </section>
 
-      {/* ===== Positions / Orders ===== */}
+      {/* ===== Positions / History ===== */}
       <section className="rounded-2xl border border-border bg-card">
         <div className="flex gap-1 border-b border-border px-3 pt-3">
           {([
             ["positions", `หุ้นที่ถือ (${positions.length})`],
-            ["open", `คำสั่งที่รออยู่ (${openOrders.length})`],
-            ["history", "ประวัติคำสั่ง"],
+            ["history", "ประวัติการซื้อขาย"],
           ] as const).map(([k, label]) => (
             <button
               key={k}
@@ -465,15 +490,9 @@ export default function StocksTradePage({
                 })}
               </Table>
             )
-          ) : tab === "open" ? (
-            openOrders.length === 0 ? <Empty text="ไม่มีคำสั่งที่รอจับคู่" /> : (
-              <Table head={["เวลา", "หุ้น", "ฝั่ง", "ประเภท", "จำนวน", "ราคา Limit", "สถานะ", ""]}>
-                {openOrders.map((o) => <OrderRow key={o.id} o={o} onCancel={() => cancel(o.id)} />)}
-              </Table>
-            )
-          ) : history.length === 0 ? <Empty text="ยังไม่มีประวัติคำสั่ง" /> : (
+          ) : orders.length === 0 ? <Empty text="ยังไม่มีประวัติการซื้อขาย" /> : (
             <Table head={["เวลา", "หุ้น", "ฝั่ง", "ประเภท", "จำนวน", "ราคาจับคู่", "สถานะ"]}>
-              {history.map((o) => <OrderRow key={o.id} o={o} />)}
+              {orders.map((o) => <OrderRow key={o.id} o={o} />)}
             </Table>
           )}
         </div>
@@ -522,7 +541,7 @@ function Table({ head, children }: { head: string[]; children: React.ReactNode }
     </table>
   );
 }
-function OrderRow({ o, onCancel }: { o: Order; onCancel?: () => void }) {
+function OrderRow({ o }: { o: Order }) {
   const [label, cls] = STATUS[o.status];
   return (
     <tr className="border-t border-border">
@@ -533,15 +552,10 @@ function OrderRow({ o, onCancel }: { o: Order; onCancel?: () => void }) {
       <td className={`px-4 py-3 text-right font-medium ${o.side === "buy" ? "text-emerald-500" : "text-rose-500"}`}>{o.side === "buy" ? "ซื้อ" : "ขาย"}</td>
       <td className="px-4 py-3 text-right">{o.type === "market" ? "Market" : "Limit"}</td>
       <td className="px-4 py-3 text-right tabular-nums">{num(o.qty, 0)}</td>
-      <td className="px-4 py-3 text-right tabular-nums">{usd(onCancel ? o.limitPrice : o.fillPrice ?? o.limitPrice)}</td>
+      <td className="px-4 py-3 text-right tabular-nums">{usd(o.fillPrice ?? o.limitPrice)}</td>
       <td className="px-4 py-3 text-right">
         <span title={o.reason ?? ""} className={`rounded-md px-2 py-0.5 text-xs ${cls}`}>{label}</span>
       </td>
-      {onCancel && (
-        <td className="px-4 py-3 text-right">
-          <button onClick={onCancel} className="rounded-md border border-border px-2.5 py-1 text-xs hover:bg-accent">ยกเลิก</button>
-        </td>
-      )}
     </tr>
   );
 }
