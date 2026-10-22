@@ -4,8 +4,23 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 # TODO: แก้ 2 บรรทัดนี้ให้ตรงของจริงใน server.py
-from api.deps import get_current_email   # dependency ที่คืนอีเมลจาก JWT
-from api.deps import supabase            # supabase client
+import jwt  # PyJWT
+from fastapi import Header
+from supabase import create_client
+
+supabase = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+
+
+def get_current_email(authorization: str = Header(default="")) -> str:
+    token = authorization.removeprefix("Bearer ").strip()
+    try:
+        data = jwt.decode(token, os.environ["AUTH_JWT_SECRET"], algorithms=["HS256"])
+    except Exception:
+        raise HTTPException(401, "token ไม่ถูกต้อง")
+    email = data.get("email") or data.get("sub")
+    if not email:
+        raise HTTPException(401, "ไม่มีอีเมลใน token")
+    return str(email).lower()
 
 router = APIRouter(prefix="/api/stock-book", tags=["stock-book"])
 
