@@ -1,128 +1,74 @@
 import { useEffect, useMemo, useState } from "react"
 
+type Unit = "usd" | "pct" | "x" | "mcap" | "vol" | "num"
+type Tier = "core" | "adv" | "quant"
+type Metric = { id: string; label: string; group: string; tier: Tier; unit: Unit; ph: string }
+type Meta = {
+  groups: { id: string; title: string }[]
+  metrics: Metric[]
+  industries: string[]
+  exchanges: string[]
+}
 type Row = { symbol: string; name?: string | null; industry?: string | null; [k: string]: any }
-
 type Resp = {
   updatedAt: string | null
   partial: boolean
   universe: number
   loaded: number
   total: number
-  industries: string[]
+  coverage: Record<string, number>
   rows: Row[]
 }
+type Range = { min: string; max: string }
+type Filters = Record<string, Range>
 
-type FieldSpec = {
-  id: string
-  param: string
-  label: string
-  ph: string
-  mul?: number // คูณก่อนส่ง (เช่น พันล้าน → ล้าน)
-  neg?: boolean // กลับเครื่องหมาย (เช่น "ห่างไม่เกิน 5%" → ≥ -5)
-}
-
-const GROUPS: { title: string; fields: FieldSpec[] }[] = [
-  {
-    title: "มูลค่า (ถูกหรือแพง)",
-    fields: [
-      { id: "pe", param: "pe_max", label: "P/E ไม่เกิน", ph: "เช่น 20" },
-      { id: "pb", param: "pb_max", label: "P/B ไม่เกิน", ph: "เช่น 3" },
-      { id: "ps", param: "ps_max", label: "P/S ไม่เกิน", ph: "เช่น 5" },
-    ],
-  },
-  {
-    title: "คุณภาพกิจการ",
-    fields: [
-      { id: "roe", param: "roe_min", label: "ROE อย่างน้อย (%)", ph: "เช่น 15" },
-      { id: "roa", param: "roa_min", label: "ROA อย่างน้อย (%)", ph: "เช่น 5" },
-      { id: "gross", param: "gross_min", label: "Gross margin อย่างน้อย (%)", ph: "เช่น 40" },
-      { id: "opm", param: "opm_min", label: "Operating margin อย่างน้อย (%)", ph: "เช่น 15" },
-      { id: "margin", param: "margin_min", label: "กำไรสุทธิอย่างน้อย (%)", ph: "เช่น 10" },
-    ],
-  },
-  {
-    title: "การเติบโต",
-    fields: [
-      { id: "rev", param: "rev_min", label: "รายได้โตอย่างน้อย (%)", ph: "เช่น 10" },
-      { id: "epsg", param: "eps_g_min", label: "EPS โตอย่างน้อย (%)", ph: "เช่น 10" },
-    ],
-  },
-  {
-    title: "ความมั่นคงและความเสี่ยง",
-    fields: [
-      { id: "de", param: "de_max", label: "หนี้/ทุน (D/E) ไม่เกิน", ph: "เช่น 1" },
-      { id: "cr", param: "cr_min", label: "Current ratio อย่างน้อย", ph: "เช่น 1.5" },
-      { id: "beta", param: "beta_max", label: "Beta ไม่เกิน", ph: "เช่น 1.2" },
-    ],
-  },
-  {
-    title: "ปันผล",
-    fields: [{ id: "div", param: "div_min", label: "ปันผลอย่างน้อย (%)", ph: "เช่น 2" }],
-  },
-  {
-    title: "ราคาและโมเมนตัม",
-    fields: [
-      { id: "near", param: "from_high_min", neg: true, label: "ห่างจากสูงสุด 52 สัปดาห์ไม่เกิน (%)", ph: "เช่น 10" },
-      { id: "r13", param: "ret13w_min", label: "ผลตอบแทน 3 เดือนอย่างน้อย (%)", ph: "เช่น 10" },
-      { id: "r52", param: "ret52w_min", label: "ผลตอบแทน 1 ปีอย่างน้อย (%)", ph: "เช่น 20" },
-    ],
-  },
-  {
-    title: "ขนาดและสภาพคล่อง",
-    fields: [
-      { id: "mcap", param: "mcap_min", mul: 1000, label: "มูลค่าตลาดอย่างน้อย (พันล้าน USD)", ph: "เช่น 100" },
-      { id: "vol", param: "vol_min", label: "วอลุ่มเฉลี่ย 10 วันอย่างน้อย (ล้านหุ้น)", ph: "เช่น 5" },
-    ],
-  },
+const TIERS: { id: Tier; label: string }[] = [
+  { id: "core", label: "หลัก" },
+  { id: "adv", label: "Advanced" },
+  { id: "quant", label: "Quant" },
 ]
 
-const ALL_FIELDS = GROUPS.flatMap((g) => g.fields)
-type Filters = Record<string, string>
-const EMPTY: Filters = {}
+const BASE_COLS = ["price", "changePercent", "marketCap"]
 
 const PRESETS: { label: string; hint: string; f: Filters }[] = [
-  { label: "ราคาไม่แพง", hint: "P/E ≤ 15, ROE ≥ 10%", f: { pe: "15", roe: "10" } },
-  { label: "คุณภาพสูง", hint: "ROE ≥ 20%, กำไรสุทธิ ≥ 15%", f: { roe: "20", margin: "15" } },
-  { label: "เติบโตเร็ว", hint: "รายได้โต ≥ 15%, EPS โต ≥ 15%", f: { rev: "15", epsg: "15" } },
-  { label: "ปันผลเด่น", hint: "ปันผล ≥ 3%, Beta ≤ 1", f: { div: "3", beta: "1" } },
-  { label: "งบแข็งแรง", hint: "D/E ≤ 0.5, Current ratio ≥ 1.5, ROE ≥ 12%", f: { de: "0.5", cr: "1.5", roe: "12" } },
-  { label: "ผันผวนต่ำ", hint: "Beta ≤ 0.8, มูลค่า ≥ 50B", f: { beta: "0.8", mcap: "50" } },
-  { label: "ใกล้จุดสูงสุด", hint: "ห่างจาก High ≤ 5%, 3 เดือน ≥ 10%", f: { near: "5", r13: "10" } },
+  { label: "ราคาไม่แพง", hint: "P/E ≤ 15, ROE ≥ 10%", f: { pe: { min: "", max: "15" }, roe: { min: "10", max: "" } } },
+  { label: "คุณภาพสูง", hint: "ROE ≥ 20%, Net margin ≥ 15%", f: { roe: { min: "20", max: "" }, netMargin: { min: "15", max: "" } } },
+  { label: "เติบโตเร็ว", hint: "รายได้โต ≥ 15%, EPS โต ≥ 15%", f: { revenueGrowth: { min: "15", max: "" }, epsGrowth: { min: "15", max: "" } } },
+  { label: "ปันผลเด่น", hint: "ปันผล ≥ 3%, Payout ≤ 70%", f: { dividendYield: { min: "3", max: "" }, payoutRatio: { min: "", max: "70" } } },
+  { label: "งบแข็งแรง", hint: "D/E ≤ 0.5, Current ratio ≥ 1.5, ROE ≥ 12%", f: { debtToEquity: { min: "", max: "0.5" }, currentRatio: { min: "1.5", max: "" }, roe: { min: "12", max: "" } } },
+  { label: "ใกล้จุดสูงสุด", hint: "ห่างจาก High 52 สัปดาห์ไม่เกิน 5%", f: { fromHigh52w: { min: "-5", max: "" } } },
+  { label: "ใหญ่และคล่อง", hint: "มูลค่าตลาด ≥ 100,000 ล้าน, วอลุ่ม ≥ 5 ล้านหุ้น", f: { marketCap: { min: "100000", max: "" }, avgVolume: { min: "5", max: "" } } },
 ]
 
-type Col = { key: string; label: string; fmt: "usd" | "pct" | "mcap" | "n1" | "n2"; tone?: boolean }
-const COLS: Col[] = [
-  { key: "price", label: "ราคา", fmt: "usd" },
-  { key: "changePercent", label: "วันนี้", fmt: "pct", tone: true },
-  { key: "marketCap", label: "มูลค่าตลาด", fmt: "mcap" },
-  { key: "pe", label: "P/E", fmt: "n1" },
-  { key: "pb", label: "P/B", fmt: "n1" },
-  { key: "ps", label: "P/S", fmt: "n1" },
-  { key: "roe", label: "ROE %", fmt: "n1" },
-  { key: "netMargin", label: "กำไรสุทธิ %", fmt: "n1" },
-  { key: "dividendYield", label: "ปันผล %", fmt: "n2" },
-  { key: "debtToEquity", label: "D/E", fmt: "n2" },
-  { key: "beta", label: "Beta", fmt: "n2" },
-  { key: "revenueGrowth", label: "รายได้โต %", fmt: "n1", tone: true },
-  { key: "epsGrowth", label: "EPS โต %", fmt: "n1", tone: true },
-  { key: "fromHigh52w", label: "ห่างจาก High 52 สัปดาห์ %", fmt: "pct" },
-  { key: "return13w", label: "3 เดือน %", fmt: "pct", tone: true },
-]
+const UNIT_HINT: Partial<Record<Unit, string>> = { pct: "%", x: "เท่า", usd: "USD", mcap: "ล้าน USD", vol: "ล้านหุ้น" }
 
-const fmt = (v: any, f: Col["fmt"]) => {
+const fmt = (v: any, u: Unit) => {
   if (v == null || typeof v !== "number") return "–"
   const L = (d: number) => v.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d })
-  switch (f) {
+  switch (u) {
     case "usd": return `$${L(2)}`
     case "pct": return `${v > 0 ? "+" : ""}${v.toFixed(2)}%`
-    case "mcap": return v >= 1e6 ? `${(v / 1e6).toFixed(2)}T` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}B` : `${v.toFixed(0)}M`
-    case "n1": return L(1)
+    case "mcap": {
+      const a = Math.abs(v)
+      return a >= 1e6 ? `${(v / 1e6).toFixed(2)}T` : a >= 1e3 ? `${(v / 1e3).toFixed(1)}B` : `${v.toFixed(0)}M`
+    }
+    case "vol": return `${L(2)}M`
+    case "x": return L(2)
     default: return L(2)
   }
 }
 
 const tone = (v: any) =>
   typeof v !== "number" || v === 0 ? "" : v > 0 ? "text-emerald-500" : "text-red-500"
+const isToned = (m: Metric) => m.id === "changePercent" || /Growth$/.test(m.id)
+
+// "" → undefined (ไม่ใช้), ตัวเลขไม่ถูกต้อง → NaN
+const parse = (s: string): number | undefined => {
+  const t = (s ?? "").trim().replace(/,/g, "")
+  if (t === "") return undefined
+  const n = Number(t)
+  return Number.isFinite(n) ? n : NaN
+}
 
 function openCompany(symbol: string) {
   try {
@@ -134,31 +80,55 @@ function openCompany(symbol: string) {
 }
 
 export default function ScreenerPage({ apiBase }: { apiBase: string }) {
-  const [filters, setFilters] = useState<Filters>(EMPTY)
+  const [meta, setMeta] = useState<Meta | null>(null)
+  const [active, setActive] = useState<string[]>([])
+  const [filters, setFilters] = useState<Filters>({})
   const [industry, setIndustry] = useState("")
+  const [exchange, setExchange] = useState("")
   const [sort, setSort] = useState("marketCap")
   const [desc, setDesc] = useState(true)
   const [data, setData] = useState<Resp | null>(null)
-  const [industries, setIndustries] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [tick, setTick] = useState(0)
+  const [picker, setPicker] = useState(false)
+  const [tier, setTier] = useState<Tier>("core")
 
-  const activeCount = useMemo(
-    () => ALL_FIELDS.filter((f) => (filters[f.id] ?? "").trim() !== "").length + (industry ? 1 : 0),
-    [filters, industry]
-  )
+  const byId = useMemo(() => new Map((meta?.metrics ?? []).map((m) => [m.id, m])), [meta])
+
+  // โหลดรายการตัวชี้วัด (ซ้ำเมื่อ backend ยังไม่มีข้อมูลอุตสาหกรรม/ตลาด)
+  useEffect(() => {
+    if (meta && meta.industries.length) return
+    let off = false
+    fetch(`${apiBase}/api/stocks/screener/meta`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((j: Meta) => !off && setMeta(j))
+      .catch((e) => !off && setError(e instanceof Error ? e.message : "โหลดไม่สำเร็จ"))
+    return () => {
+      off = true
+    }
+  }, [apiBase, meta, tick])
+
+  const activeCount = active.length + (industry ? 1 : 0) + (exchange ? 1 : 0)
+  const invalid = (id: string) => {
+    const r = filters[id]
+    return !!r && (Number.isNaN(parse(r.min)) || Number.isNaN(parse(r.max)))
+  }
 
   useEffect(() => {
     let off = false
-    const id = window.setTimeout(async () => {
+    const timer = window.setTimeout(async () => {
       const qs = new URLSearchParams()
-      for (const f of ALL_FIELDS) {
-        const raw = (filters[f.id] ?? "").trim()
-        const n = Number(raw)
-        if (raw !== "" && Number.isFinite(n)) qs.set(f.param, String(n * (f.mul ?? 1) * (f.neg ? -1 : 1)))
+      for (const id of active) {
+        const r = filters[id]
+        if (!r) continue
+        const lo = parse(r.min)
+        const hi = parse(r.max)
+        if (lo !== undefined && !Number.isNaN(lo)) qs.set(`${id}_min`, String(lo))
+        if (hi !== undefined && !Number.isNaN(hi)) qs.set(`${id}_max`, String(hi))
       }
       if (industry) qs.set("industry", industry)
+      if (exchange) qs.set("exchange", exchange)
       qs.set("sort", sort)
       qs.set("desc", String(desc))
       qs.set("limit", "200")
@@ -170,7 +140,6 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
         const j = (await r.json()) as Resp
         if (!off) {
           setData(j)
-          if (j.industries?.length) setIndustries(j.industries)
           setError("")
         }
       } catch (e) {
@@ -181,9 +150,9 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
     }, 400)
     return () => {
       off = true
-      window.clearTimeout(id)
+      window.clearTimeout(timer)
     }
-  }, [apiBase, filters, industry, sort, desc, tick])
+  }, [apiBase, active, filters, industry, exchange, sort, desc, tick])
 
   // ระหว่างที่ backend ยังดึงข้อมูลไม่ครบ โหลดซ้ำเองทุก 20 วินาที
   useEffect(() => {
@@ -192,7 +161,25 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
     return () => window.clearTimeout(id)
   }, [data])
 
-  const setField = (id: string) => (v: string) => setFilters((f) => ({ ...f, [id]: v }))
+  const addFilter = (id: string) => {
+    setActive((a) => (a.includes(id) ? a : [...a, id]))
+    setFilters((f) => (f[id] ? f : { ...f, [id]: { min: "", max: "" } }))
+  }
+  const removeFilter = (id: string) => setActive((a) => a.filter((x) => x !== id))
+  const setRange = (id: string, k: keyof Range, v: string) =>
+    setFilters((f) => ({ ...f, [id]: { ...(f[id] ?? { min: "", max: "" }), [k]: v } }))
+  const applyPreset = (f: Filters) => {
+    setFilters(f)
+    setActive(Object.keys(f))
+    setIndustry("")
+    setExchange("")
+  }
+  const clearAll = () => {
+    setFilters({})
+    setActive([])
+    setIndustry("")
+    setExchange("")
+  }
   const clickSort = (k: string) => {
     if (k === sort) setDesc((d) => !d)
     else {
@@ -201,15 +188,25 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
     }
   }
 
+  // ตารางแสดงคอลัมน์พื้นฐาน + ทุกตัวที่ใช้กรอง เพื่อให้เห็นว่าทำไมหุ้นตัวนั้นผ่านเกณฑ์
+  const cols = useMemo(
+    () =>
+      [...new Set([...BASE_COLS, ...active])]
+        .map((id) => byId.get(id))
+        .filter((m): m is Metric => !!m),
+    [active, byId]
+  )
+
   const rows = data?.rows ?? []
   const building = data != null && (data.partial || data.loaded === 0)
+  const noData = (id: string) => !!data && data.loaded >= 20 && (data.coverage?.[id] ?? 0) === 0
 
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-2xl font-bold">Screener</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          กรองหุ้นสหรัฐตามอัตราส่วนการเงิน จากชุดหุ้นใหญ่ที่ระบบสแกนไว้ ({data?.universe ?? "–"} ตัว)
+          เลือกเฉพาะตัวกรองที่สนใจ แล้วกรองหุ้นสหรัฐจากชุดหุ้นใหญ่ที่ระบบสแกนไว้ ({data?.universe ?? "–"} ตัว)
         </p>
       </div>
 
@@ -221,10 +218,7 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
               key={p.label}
               type="button"
               title={p.hint}
-              onClick={() => {
-                setFilters(p.f)
-                setIndustry("")
-              }}
+              onClick={() => applyPreset(p.f)}
               className="rounded-full border px-3 py-1 text-xs hover:bg-accent"
             >
               {p.label}
@@ -232,53 +226,152 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
           ))}
           <button
             type="button"
-            onClick={() => {
-              setFilters(EMPTY)
-              setIndustry("")
-            }}
+            onClick={clearAll}
             className="rounded-full px-3 py-1 text-xs text-muted-foreground hover:bg-accent"
           >
             ล้างเงื่อนไข{activeCount > 0 ? ` (${activeCount})` : ""}
           </button>
         </div>
 
-        <div className="mb-5 max-w-xs">
-          <label className="mb-1 block text-xs text-muted-foreground">กลุ่มอุตสาหกรรม</label>
-          <select
-            value={industry}
-            onChange={(e) => setIndustry(e.target.value)}
-            className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
-          >
-            <option value="">ทั้งหมด</option>
-            {industries.map((i) => (
-              <option key={i} value={i}>
-                {i}
-              </option>
-            ))}
-          </select>
+        <div className="mb-5 grid max-w-xl gap-4 sm:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">กลุ่มอุตสาหกรรม</label>
+            <select
+              value={industry}
+              onChange={(e) => setIndustry(e.target.value)}
+              className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
+            >
+              <option value="">ทั้งหมด</option>
+              {(meta?.industries ?? []).map((i) => (
+                <option key={i} value={i}>{i}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">ตลาดที่จดทะเบียน</label>
+            <select
+              value={exchange}
+              onChange={(e) => setExchange(e.target.value)}
+              className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
+            >
+              <option value="">ทั้งหมด</option>
+              {(meta?.exchanges ?? []).map((i) => (
+                <option key={i} value={i}>{i}</option>
+              ))}
+            </select>
+          </div>
         </div>
 
-        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-          {GROUPS.map((g) => (
-            <div key={g.title} className="rounded-lg border bg-muted/20 p-4">
-              <div className="mb-3 text-sm font-semibold">{g.title}</div>
-              <div className="space-y-3">
-                {g.fields.map((f) => (
-                  <div key={f.id}>
-                    <label className="mb-1 block text-xs text-muted-foreground">{f.label}</label>
-                    <input
-                      value={filters[f.id] ?? ""}
-                      onChange={(e) => setField(f.id)(e.target.value)}
-                      inputMode="decimal"
-                      placeholder={f.ph}
-                      className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
-                    />
+        {active.length > 0 && (
+          <div className="mb-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {active.map((id) => {
+              const m = byId.get(id)
+              if (!m) return null
+              const r = filters[id] ?? { min: "", max: "" }
+              const bad = invalid(id)
+              const hint = UNIT_HINT[m.unit]
+              return (
+                <div key={id} className="rounded-lg border bg-muted/20 p-3">
+                  <div className="mb-2 flex items-start justify-between gap-2">
+                    <div className="text-sm font-semibold">{m.label}</div>
+                    <button
+                      type="button"
+                      onClick={() => removeFilter(id)}
+                      aria-label={`เอา ${m.label} ออก`}
+                      className="text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      ลบ
+                    </button>
                   </div>
-                ))}
-              </div>
+                  <div className="flex items-center gap-2">
+                    {(["min", "max"] as const).map((k) => (
+                      <div key={k} className="flex-1">
+                        <label className="mb-1 block text-[11px] text-muted-foreground">
+                          {k === "min" ? "ตั้งแต่" : "ไม่เกิน"}
+                        </label>
+                        <input
+                          value={r[k]}
+                          onChange={(e) => setRange(id, k, e.target.value)}
+                          inputMode="decimal"
+                          placeholder={k === "min" ? m.ph : ""}
+                          className={`w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary ${
+                            Number.isNaN(parse(r[k])) ? "border-red-500" : ""
+                          }`}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  {bad ? (
+                    <div className="mt-1 text-[11px] text-red-500">กรอกเป็นตัวเลขเท่านั้น</div>
+                  ) : hint ? (
+                    <div className="mt-1 text-[11px] text-muted-foreground">หน่วย: {hint}</div>
+                  ) : null}
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={() => setPicker((v) => !v)}
+          className="rounded-lg border px-3 py-2 text-sm hover:bg-accent"
+        >
+          {picker ? "ปิดรายการตัวกรอง" : "+ เพิ่มตัวกรอง"}
+        </button>
+
+        {picker && meta && (
+          <div className="mt-4 rounded-lg border bg-muted/20 p-4">
+            <div className="mb-4 flex gap-1">
+              {TIERS.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setTier(t.id)}
+                  className={`rounded-full px-3 py-1 text-xs ${
+                    tier === t.id ? "bg-primary text-primary-foreground" : "border hover:bg-accent"
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
             </div>
-          ))}
-        </div>
+            <div className="space-y-4">
+              {meta.groups.map((g) => {
+                const ms = meta.metrics.filter((m) => m.group === g.id && m.tier === tier)
+                if (!ms.length) return null
+                return (
+                  <div key={g.id}>
+                    <div className="mb-2 text-xs font-semibold">{g.title}</div>
+                    <div className="flex flex-wrap gap-2">
+                      {ms.map((m) => {
+                        const on = active.includes(m.id)
+                        const empty = noData(m.id)
+                        return (
+                          <button
+                            key={m.id}
+                            type="button"
+                            disabled={on || empty}
+                            title={empty ? "ยังไม่มีข้อมูลตัวนี้จากแหล่งข้อมูล" : undefined}
+                            onClick={() => addFilter(m.id)}
+                            className={`rounded-full border px-3 py-1 text-xs ${
+                              on ? "bg-accent text-muted-foreground" : empty ? "opacity-40" : "hover:bg-accent"
+                            }`}
+                          >
+                            {m.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
+              {!meta.metrics.some((m) => m.tier === tier) && (
+                <p className="text-xs text-muted-foreground">ยังไม่มีตัวชี้วัดในหมวดนี้</p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {error && (
@@ -308,15 +401,15 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1400px] text-sm">
+          <table className="w-full text-sm" style={{ minWidth: 220 + cols.length * 120 }}>
             <thead>
               <tr className="border-b text-xs text-muted-foreground">
                 <th className="sticky left-0 bg-card px-4 py-3 text-left font-medium">หุ้น</th>
-                {COLS.map((c) => (
-                  <th key={c.key} className="whitespace-nowrap px-3 py-3 text-right font-medium">
-                    <button type="button" onClick={() => clickSort(c.key)} className="hover:text-foreground">
+                {cols.map((c) => (
+                  <th key={c.id} className="whitespace-nowrap px-3 py-3 text-right font-medium">
+                    <button type="button" onClick={() => clickSort(c.id)} className="hover:text-foreground">
                       {c.label}
-                      {sort === c.key ? (desc ? " ▼" : " ▲") : ""}
+                      {sort === c.id ? (desc ? " ▼" : " ▲") : ""}
                     </button>
                   </th>
                 ))}
@@ -327,18 +420,20 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
                 <tr
                   key={r.symbol}
                   onClick={() => openCompany(r.symbol)}
-                  className="cursor-pointer border-b last:border-0 hover:bg-accent/40"
+                  className="group cursor-pointer border-b last:border-0 hover:bg-accent/40"
                 >
-                  <td className="sticky left-0 bg-card px-4 py-3">
+                  <td className="sticky left-0 bg-card px-4 py-3 group-hover:bg-muted">
                     <div className="font-semibold">{r.symbol}</div>
-                    <div className="max-w-[200px] truncate text-xs text-muted-foreground">{r.name || r.industry || ""}</div>
+                    <div className="max-w-[200px] truncate text-xs text-muted-foreground">
+                      {r.name || r.industry || ""}
+                    </div>
                   </td>
-                  {COLS.map((c) => (
+                  {cols.map((c) => (
                     <td
-                      key={c.key}
-                      className={`whitespace-nowrap px-3 py-3 text-right tabular-nums ${c.tone ? tone(r[c.key]) : ""}`}
+                      key={c.id}
+                      className={`whitespace-nowrap px-3 py-3 text-right tabular-nums ${isToned(c) ? tone(r[c.id]) : ""}`}
                     >
-                      {fmt(r[c.key], c.fmt)}
+                      {fmt(r[c.id], c.unit)}
                     </td>
                   ))}
                 </tr>
@@ -354,7 +449,7 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
 
       <p className="text-xs leading-5 text-muted-foreground">
         กดชื่อคอลัมน์เพื่อเรียงลำดับ กดแถวเพื่อดูข้อมูลบริษัท · ตัวเลขเป็นค่า TTM จาก Finnhub
-        ครอบคลุมเฉพาะชุดหุ้นที่ระบบสแกน ไม่ใช่ทั้งตลาด · ถ้าตัวกรองไหนเว้นว่างไว้จะไม่ถูกใช้
+        ครอบคลุมเฉพาะชุดหุ้นที่ระบบสแกน ไม่ใช่ทั้งตลาด · ช่องที่เว้นว่างไม่ถูกใช้
         หุ้นที่ไม่มีข้อมูลตัวนั้นจะถูกตัดออกเมื่อใช้ตัวกรองนั้น · ใช้เพื่อการศึกษา ไม่ใช่คำแนะนำการลงทุน
       </p>
     </div>
