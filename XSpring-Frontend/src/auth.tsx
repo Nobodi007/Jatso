@@ -8,7 +8,7 @@ const API_BASE_URL = "https://xspring-api.onrender.com"
 const GOOGLE_CLIENT_ID = String(import.meta.env.VITE_GOOGLE_CLIENT_ID || "").trim()
 const DEALER_API_KEY = String(import.meta.env.VITE_DEALER_API_KEY || "").trim()
 
-const TOKEN_KEY = "xspring_token"
+export const TOKEN_KEY = "xspring_token"
 const USER_KEY = "xspring_user"
 
 export type AuthUser = {
