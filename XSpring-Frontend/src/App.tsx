@@ -38,6 +38,7 @@ import StocksTradePage from "./components/trading/StocksTradePage"
 import StockNewsPage from "./components/stocks/StockNewsPage"
 import StockBook from "./components/stocks/StockBook";
 import { TOKEN_KEY } from "./auth";
+import StockBook from "./components/stocks/StockPortfolioPage";
 
 type Page =
   | "dashboard"
