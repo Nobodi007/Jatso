@@ -36,6 +36,7 @@ const getStocksToken = () => localStorage.getItem("token");
 import ScreenerPage from "./components/stocks/ScreenerPage"
 import StocksTradePage from "./components/trading/StocksTradePage"
 import StockNewsPage from "./components/stocks/StockNewsPage"
+import StockBook from "./components/stocks/StockBook";
 
 type Page =
   | "dashboard"
@@ -595,34 +596,37 @@ function AppInner() {
             )}
 
             {page === "portfolio" && market === "crypto" && (
-            <PortfolioPage
+              <PortfolioPage
                 portfolio={portfolio}
                 loading={portfolioLoading}
                 error={portfolioError}
                 onRefresh={refreshPortfolio}
               />
             )}
-
+            
             {page === "portfolio" && market === "stocks" && (
-              <StocksPage
-                getToken={getStocksToken}
-                apiBase="https://xspring-api.onrender.com"
-                view="mine"
-              />
+              <StockBook getToken={getStocksToken} view="portfolio" />
             )}
+            
             {page === "screener" && market === "stocks" && (
               <ScreenerPage apiBase="https://xspring-api.onrender.com" />
             )}
-
-            {page === "orders" && <OrdersPage refreshKey={orderRefreshKey} />}
-
-            {page === "positions" && (
+            
+            {page === "orders" && market === "crypto" && <OrdersPage refreshKey={orderRefreshKey} />}
+            {page === "orders" && market === "stocks" && (
+              <StockBook getToken={getStocksToken} view="orders" />
+            )}
+            
+            {page === "positions" && market === "crypto" && (
               <PositionsPage
                 portfolio={portfolio}
                 loading={portfolioLoading}
                 error={portfolioError}
                 onRefresh={refreshPortfolio}
               />
+            )}
+            {page === "positions" && market === "stocks" && (
+              <StockBook getToken={getStocksToken} view="positions" />
             )}
 
           
