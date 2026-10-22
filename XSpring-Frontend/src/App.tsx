@@ -37,9 +37,7 @@ import ScreenerPage from "./components/stocks/ScreenerPage"
 import StocksTradePage from "./components/trading/StocksTradePage"
 import StockNewsPage from "./components/stocks/StockNewsPage"
 import StockBook from "./components/stocks/StockBook";
-{page === "trade" && market === "stocks" && (
-  <StocksTradePage getToken={getStocksToken} />
-)}
+import { TOKEN_KEY } from "./auth";
 
 type Page =
   | "dashboard"
