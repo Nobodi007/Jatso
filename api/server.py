@@ -1527,11 +1527,19 @@ NEWS_AI_SYSTEM = (
     "ใช้เฉพาะข้อมูลที่ให้มา ห้ามแต่งเพิ่ม ห้ามแนะนำให้ซื้อหรือขาย"
 )
 
+STOCK_NEWS_AI_SYSTEM = (
+    "แปลและสรุปข่าวหุ้นสหรัฐเป็นภาษาไทย ตอบเป็น JSON เท่านั้น ห้ามมี markdown หรือข้อความอื่น "
+    'รูปแบบ: {"title_th":"...","summary_th":"สรุป 2-3 ประโยค",'
+    '"sentiment":"bullish|bearish|neutral","note":"ผลต่อราคาหุ้นหรือบริษัทที่ข่าวพูดถึง สั้นๆ"} '
+    "ใช้เฉพาะข้อมูลที่ให้มา ห้ามแต่งเพิ่ม ห้ามแนะนำให้ซื้อหรือขาย"
+)
+
 
 class NewsAiIn(BaseModel):
     url: str = Field(..., max_length=1000)
     title: str = Field(..., min_length=1, max_length=300)
     snippet: str = Field(default="", max_length=1500)
+    kind: str = Field(default="crypto", max_length=10)
 
 
 def _extract_json(raw: str) -> dict:
@@ -1544,8 +1552,9 @@ def _extract_json(raw: str) -> dict:
 
 @app.post("/api/news/summarize", dependencies=[Depends(require_api_key)])
 def summarize_news(n: NewsAiIn, user: str = Depends(require_user)):
-    if n.url in _AI_NEWS_CACHE:
-        return _AI_NEWS_CACHE[n.url]
+    cache_key = f"{n.kind}:{n.url}":
+    if cache_key in _AI_NEWS_CACHE:
+        return _AI_NEWS_CACHE[cache_key]
 
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
@@ -1555,15 +1564,118 @@ def summarize_news(n: NewsAiIn, user: str = Depends(require_user)):
 
     try:
         gu = load_gu()
-        raw = str(gu.ask_ai(messages, api_key, system_override=NEWS_AI_SYSTEM) or "")
+        raw = str(gu.ask_ai(messages, api_key, system_override=(STOCK_NEWS_AI_SYSTEM if n.kind == "stock" else NEWS_AI_SYSTEM)) or "")
         result = _extract_json(raw)
     except Exception as e:
         raise _internal_server_error("สรุปข่าวไม่สำเร็จ", e)
 
     if len(_AI_NEWS_CACHE) > 500:
         _AI_NEWS_CACHE.clear()
-    _AI_NEWS_CACHE[n.url] = result
+    _AI_NEWS_CACHE[cache_key] = result
     return result
+
+# ---------- ข่าวหุ้น: ดึงข่าว + จัดหมวดบวก/กลาง/ลบ ----------
+import importlib as _il
+import re as _re
+from datetime import date as _date, timedelta as _td
+
+_STOCK_SYM_RE = _re.compile(r"^[A-Z][A-Z.\-]{0,9}$")
+_STOCK_SENT_CACHE: dict = {}
+STOCK_SENT_SYSTEM = (
+    "จัดหมวดข่าวหุ้นสหรัฐตามผลต่อราคาหุ้นหรือบริษัทที่ข่าวพูดถึง "
+    'ตอบเป็น JSON เท่านั้น ห้ามมี markdown รูปแบบ {"results":[{"i":0,"s":"bullish"}]} '
+    "i คือเลขข่าวที่ให้ s เป็นได้แค่ bullish, bearish หรือ neutral "
+    "ใช้ neutral เมื่อไม่ชัดเจนหรือไม่เกี่ยวกับราคา ใช้เฉพาะข้อมูลที่ให้ ห้ามแนะนำให้ซื้อหรือขาย"
+)
+
+
+def _stocks_mod(name: str):
+    try:
+        return _il.import_module(f"stocks.{name}")
+    except ImportError:
+        return _il.import_module(f"api.stocks.{name}")
+
+
+@app.get("/api/stocks/newsfeed")
+async def stocks_newsfeed(symbol: str = ""):
+    p = _stocks_mod("providers")
+    c = _stocks_mod("cache")
+    sym = symbol.upper().strip()
+    if sym and not _STOCK_SYM_RE.match(sym):
+        raise HTTPException(status_code=400, detail="invalid_symbol")
+    try:
+        if sym:
+            to = _date.today()
+            frm = to - _td(days=7)
+            items = await c.cached(
+                f"news:{sym}", 1800,
+                lambda: p.finnhub("/company-news", symbol=sym, **{"from": frm.isoformat(), "to": to.isoformat()}),
+            )
+        else:
+            items = await c.cached("news:general", 900, lambda: p.finnhub("/news", category="general"))
+    except c.RateLimited:
+        raise HTTPException(status_code=503, detail="rate_limited")
+    except c.ProviderError:
+        raise HTTPException(status_code=502, detail="provider_error")
+
+    rows = [
+        {k: n.get(k) for k in ("id", "headline", "summary", "source", "url", "image", "datetime")}
+        for n in (items or [])
+        if n.get("headline") and n.get("url")
+    ]
+    rows.sort(key=lambda r: r.get("datetime") or 0, reverse=True)
+    return rows[:30]
+
+
+class _SNItem(BaseModel):
+    id: str = Field(..., max_length=40)
+    headline: str = Field(..., min_length=1, max_length=300)
+    summary: str = Field(default="", max_length=400)
+
+
+class StockNewsClassifyIn(BaseModel):
+    items: list[_SNItem]
+
+
+@app.post("/api/stocks/newsfeed/classify", dependencies=[Depends(require_api_key)])
+def classify_stock_news(body: StockNewsClassifyIn, user: str = Depends(require_user)):
+    if len(body.items) > 30:
+        raise HTTPException(status_code=400, detail="too_many_items")
+
+    out, todo = {}, []
+    for it in body.items:
+        hit = _STOCK_SENT_CACHE.get(it.headline)
+        if hit:
+            out[it.id] = hit
+        else:
+            todo.append(it)
+
+    if todo:
+        api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            raise HTTPException(status_code=503, detail="ยังไม่ได้ตั้ง GEMINI_API_KEY บน Backend")
+        lines = "\n".join(f"{i}. {t.headline} — {t.summary[:200]}" for i, t in enumerate(todo))
+        try:
+            gu = load_gu()
+            raw = str(gu.ask_ai([{"role": "user", "content": lines}], api_key, system_override=STOCK_SENT_SYSTEM) or "")
+            data = _extract_json(raw)
+        except Exception as e:
+            raise _internal_server_error("จัดหมวดข่าวไม่สำเร็จ", e)
+
+        if len(_STOCK_SENT_CACHE) > 2000:
+            _STOCK_SENT_CACHE.clear()
+        for r in data.get("results") or []:
+            try:
+                t = todo[int(r.get("i"))]
+            except (TypeError, ValueError, IndexError):
+                continue
+            s = r.get("s")
+            if s not in ("bullish", "bearish", "neutral"):
+                s = "neutral"
+            out[t.id] = s
+            _STOCK_SENT_CACHE[t.headline] = s
+
+    return {"sentiments": out}
 
 # =========================================================
 # PUBLIC EXCHANGES (ตารางเทียบราคากระดานไทย) — ดึงจาก gu.fetch_perp_venues
