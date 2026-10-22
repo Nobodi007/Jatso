@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { useState, useEffect, useMemo, useCallback, useRef, memo } from "react";
+import MarketHeatmap from "./MarketHeatmap";
 
 const ERR = {
   rate_limited: "โควต้าข้อมูลเต็มชั่วคราว ลองใหม่อีกครั้งในอีกสักครู่",
@@ -735,7 +736,7 @@ export default function StocksPage({ getToken, apiBase = "", view = "market" }) 
           </div>
         </header>
 
-        {view === "market" && <Market api={api} open={open} />}
+        {view === "market" && <MarketHeatmap api={api} open={open} />}
         {view === "detail" &&
           (sym ? (
             <Detail key={sym} api={api} symbol={sym} authed={authed} />
