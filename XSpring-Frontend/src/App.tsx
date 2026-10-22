@@ -547,6 +547,10 @@ function AppInner() {
               onTrade={() => setPage("trade")}
             />
           )}
+            
+            {page === "trade" && market === "stocks" && (
+              <StocksTradePage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" />
+            )}
           
           {page === "dashboard" && market === "stocks" && (
             <StocksPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" view="market" />
