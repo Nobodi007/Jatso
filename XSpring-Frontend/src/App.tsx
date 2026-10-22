@@ -268,6 +268,11 @@ function AppInner() {
     // ไม่ขัดขวางการทำงาน หาก localStorage ใช้งานไม่ได้
   }
 }, [market])
+  useEffect(() => {
+  const go = () => setPage("markets")
+  window.addEventListener("stocks:open-company", go)
+  return () => window.removeEventListener("stocks:open-company", go)
+}, [])
 
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try {
@@ -543,7 +548,7 @@ function AppInner() {
           )}
           
           {page === "dashboard" && market === "stocks" && (
-            <StocksPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" />
+            <StocksPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" view="market" />
           )}
           
           {page === "markets" && market === "crypto" && (
@@ -558,7 +563,7 @@ function AppInner() {
           )}
           
           {page === "markets" && market === "stocks" && (
-            <StocksPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" />
+            <StocksPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" view="detail" />
           )}
 
             {page === "trade" && (
@@ -582,12 +587,20 @@ function AppInner() {
               />
             )}
 
-            {page === "portfolio" && (
-              <PortfolioPage
+            {page === "portfolio" && market === "crypto" && (
+            <PortfolioPage
                 portfolio={portfolio}
                 loading={portfolioLoading}
                 error={portfolioError}
                 onRefresh={refreshPortfolio}
+              />
+            )}
+
+            {page === "portfolio" && market === "stocks" && (
+              <StocksPage
+                getToken={getStocksToken}
+                apiBase="https://xspring-api.onrender.com"
+                view="mine"
               />
             )}
 
