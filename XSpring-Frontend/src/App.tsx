@@ -581,10 +581,6 @@ function AppInner() {
                 onOrderCreated={notifyOrderCreated}
               />
             )}
-            
-            {page === "trade" && market === "stocks" && (
-              <StocksTradePage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" />
-            )}
 
             {page === "orderbook" && <OrderBookPage />}
 
