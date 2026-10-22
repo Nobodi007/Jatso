@@ -34,6 +34,7 @@ import type { BotApi } from "./BotLab"
 import StocksPage from "./components/stocks/StocksPage";
 const getStocksToken = () => localStorage.getItem("token");
 import ScreenerPage from "./components/stocks/ScreenerPage"
+import StocksTradePage from "./components/trading/StocksTradePage"
 
 type Page =
   | "dashboard"
