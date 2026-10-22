@@ -603,76 +603,125 @@ function Compare({ api, open }) {
 }
 
 /* ---------- หน้าหลัก ---------- */
-export default function StocksPage({ getToken, apiBase = "" }) {
+export default function StocksPage({ getToken, apiBase = "", view = "market" }) {
   const authed = !!(typeof getToken === "function" && getToken());
   const tokenRef = useRef(getToken);
-tokenRef.current = getToken;
+  tokenRef.current = getToken;
 
-const api = useCallback(async (path, opts = {}) => {
-  const t =
-    typeof tokenRef.current === "function"
-      ? tokenRef.current()
-      : null;
+  const api = useCallback(async (path, opts = {}) => {
+    const t = typeof tokenRef.current === "function" ? tokenRef.current() : null;
 
-  const r = await fetch(`${apiBase}/api/stocks${path}`, {
-    method: opts.method || "GET",
-    headers: {
-      "Content-Type": "application/json",
-      ...(t ? { Authorization: `Bearer ${t}` } : {}),
-    },
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-  });
+    const r = await fetch(`${apiBase}/api/stocks${path}`, {
+      method: opts.method || "GET",
+      headers: {
+        "Content-Type": "application/json",
+        ...(t ? { Authorization: `Bearer ${t}` } : {}),
+      },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
 
-  if (r.status === 204) return null;
+    if (r.status === 204) return null;
 
-  const j = await r.json().catch(() => null);
+    const j = await r.json().catch(() => null);
 
-  if (!r.ok) {
-    throw new Error(
-      typeof j?.detail === "string" ? j.detail : "error"
-    );
-  }
+    if (!r.ok) {
+      throw new Error(typeof j?.detail === "string" ? j.detail : "error");
+    }
 
-  if (j === null) throw new Error("no_backend");
+    if (j === null) throw new Error("no_backend");
 
-  return j;
-}, [apiBase]);
+    return j;
+  }, [apiBase]);
 
-  const [tab, setTab] = useState("market");
   const [sym, setSym] = useState(null);
   const [q, setQ] = useState("");
   const [sr, setSr] = useState([]);
-  const open = (s) => { setSym(s); setTab("detail"); setSr([]); setQ(""); };
+
+  // ค้นหา/กดหุ้นจากหน้าไหนก็ตาม เก็บตัวที่เลือกไว้ แล้วขอให้ App สลับไปหน้า Company
+  const open = (s) => {
+    setSym(s);
+    setSr([]);
+    setQ("");
+    if (view !== "detail") {
+      try { localStorage.setItem("stocks_pending_symbol", s); } catch {}
+      window.dispatchEvent(new CustomEvent("stocks:open-company", { detail: s }));
+    }
+  };
+
+  // ถ้ามาถึงหน้า Company พร้อมหุ้นที่ค้างไว้ ให้เปิดตัวนั้น
+  useEffect(() => {
+    if (view !== "detail") return;
+    try {
+      const p = localStorage.getItem("stocks_pending_symbol");
+      if (p) {
+        setSym(p);
+        localStorage.removeItem("stocks_pending_symbol");
+      }
+    } catch {}
+  }, [view]);
 
   useEffect(() => {
     if (!q.trim()) return setSr([]);
-    const id = setTimeout(() => api(`/search?q=${encodeURIComponent(q.trim())}`).then((d) => setSr(Array.isArray(d) ? d : [])).catch(() => setSr([])), 350);
+    const id = setTimeout(
+      () =>
+        api(`/search?q=${encodeURIComponent(q.trim())}`)
+          .then((d) => setSr(Array.isArray(d) ? d : []))
+          .catch(() => setSr([])),
+      350
+    );
     return () => clearTimeout(id);
   }, [q, api]);
 
-  const TABS = [["market", "ภาพรวมตลาด"], ["detail", sym ? `รายตัว · ${sym}` : "รายตัว"], ["mine", "พอร์ตของฉัน"], ["compare", "เปรียบเทียบ"]];
+  const TITLES = {
+    market: ["หุ้นสหรัฐ", "ราคา งบการเงิน และพอร์ตหุ้น NYSE / Nasdaq หน่วย USD"],
+    detail: ["ข้อมูลบริษัท", "ราคา กราฟ งบการเงิน และข่าวของหุ้นรายตัว"],
+    mine: ["พอร์ตหุ้นของฉัน", "สถานะที่ถือ Watchlist และแจ้งเตือนราคา"],
+  };
+  const [title, subtitle] = TITLES[view] || TITLES.market;
+
   return (
     <div className="min-h-screen bg-[#0a0a0a] p-6 text-zinc-100">
       <div className="mx-auto max-w-6xl space-y-6">
         <header className="flex flex-wrap items-end justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold text-white">หุ้นสหรัฐ</h1>
-            <p className="mt-1 text-sm text-zinc-400">ราคา งบการเงิน และพอร์ตหุ้น NYSE / Nasdaq หน่วย USD</p>
+            <h1 className="text-3xl font-bold text-white">{title}</h1>
+            <p className="mt-1 text-sm text-zinc-400">{subtitle}</p>
           </div>
           <div className="relative w-full md:w-80">
-            <Input placeholder="ค้นหาหุ้น เช่น Apple, TSLA" value={q} onChange={(e) => setQ(e.target.value)} aria-label="ค้นหาหุ้น" />
+            <Input
+              placeholder="ค้นหาหุ้น เช่น Apple, TSLA"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              aria-label="ค้นหาหุ้น"
+            />
             {sr.length > 0 && (
               <ul className="absolute z-10 mt-2 max-h-72 w-full overflow-auto rounded-xl border border-zinc-800 bg-zinc-900 shadow-xl">
-                {sr.map((x) => <li key={x.symbol}><button onClick={() => open(x.symbol)} className="flex w-full justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-zinc-800"><span className="font-semibold text-white">{x.symbol}</span><span className="truncate text-zinc-400">{x.name}</span></button></li>)}
+                {sr.map((x) => (
+                  <li key={x.symbol}>
+                    <button
+                      onClick={() => open(x.symbol)}
+                      className="flex w-full justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-zinc-800"
+                    >
+                      <span className="font-semibold text-white">{x.symbol}</span>
+                      <span className="truncate text-zinc-400">{x.name}</span>
+                    </button>
+                  </li>
+                ))}
               </ul>
             )}
           </div>
         </header>
-        <nav className="flex flex-wrap gap-2">{TABS.map(([id, t]) => <Pill key={id} on={tab === id} onClick={() => setTab(id)}>{t}</Pill>)}</nav>
-        {tab === "market" && <Market api={api} open={open} />}
-        {tab === "detail" && (sym ? <Detail key={sym} api={api} symbol={sym} authed={authed} /> : <Card><p className="text-sm text-zinc-500">ค้นหาหุ้นด้านบน หรือเลือกจากภาพรวมตลาด</p></Card>)}
-        {tab === "mine" && <Mine api={api} open={open} authed={authed} />}
-        {tab === "compare" && <Compare api={api} open={open} />}
+
+        {view === "market" && <Market api={api} open={open} />}
+        {view === "detail" &&
+          (sym ? (
+            <Detail key={sym} api={api} symbol={sym} authed={authed} />
+          ) : (
+            <Card>
+              <p className="text-sm text-zinc-500">ค้นหาหุ้นด้านบน หรือเลือกจากหน้า Market Overview</p>
+            </Card>
+          ))}
+        {view === "mine" && <Mine api={api} open={open} authed={authed} />}
       </div>
     </div>
   );
