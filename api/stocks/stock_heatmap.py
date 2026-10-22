@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 import requests
 from fastapi import APIRouter, HTTPException, Query
 
-router = APIRouter(prefix="/api/stocks/heatmap", tags=["stock-heatmap"])
+router = APIRouter(prefix="/heatmap", tags=["stock-heatmap"])
 
 FINNHUB_KEY = (
     os.getenv("FINNHUB_API_KEY") or os.getenv("FINNHUB_KEY") or os.getenv("FINNHUB_TOKEN") or ""
