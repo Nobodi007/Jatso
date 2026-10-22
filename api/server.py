@@ -79,7 +79,7 @@ except ImportError:
     from api.stocks.router import router as stocks_router
     from api.stocks.fundamentals import router as fundamentals_router
     from api.stocks.user import router as stocks_user_router
-    from stocks import screener as stocks_screener   
+    from api.stocks import screener as stocks_screener   
     
 app.include_router(stocks_router)
 app.include_router(fundamentals_router)
