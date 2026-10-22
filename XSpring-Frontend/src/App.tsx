@@ -32,7 +32,7 @@ import { NumberTicker } from "./components/ui/number-ticker"
 import BotLab from "./BotLab"
 import type { BotApi } from "./BotLab"
 import StocksPage from "./components/stocks/StocksPage";
-const getStocksToken = () => localStorage.getItem("token");
+const getStocksToken = () => localStorage.getItem(TOKEN_KEY);
 import ScreenerPage from "./components/stocks/ScreenerPage"
 import StocksTradePage from "./components/trading/StocksTradePage"
 import StockNewsPage from "./components/stocks/StockNewsPage"
