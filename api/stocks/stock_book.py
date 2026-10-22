@@ -22,13 +22,17 @@ supabase = create_client(os.environ["SUPABASE_URL"], _SB_KEY)
 
 def get_current_email(authorization: str = Header(default="")) -> str:
     token = authorization.removeprefix("Bearer ").strip()
+    if not token or token in ("null", "undefined"):
+        raise HTTPException(401, "frontend ไม่ได้ส่ง token มา (getStocksToken คืนค่าว่าง)")
     try:
         data = jwt.decode(token, os.environ["AUTH_JWT_SECRET"], algorithms=["HS256"])
-    except Exception:
-        raise HTTPException(401, "token ไม่ถูกต้อง")
+    except KeyError:
+        raise HTTPException(401, "ไม่มี env AUTH_JWT_SECRET")
+    except Exception as e:
+        raise HTTPException(401, f"decode ไม่ผ่าน: {type(e).__name__}: {e}")
     email = data.get("email") or data.get("sub")
     if not email:
-        raise HTTPException(401, "ไม่มีอีเมลใน token")
+        raise HTTPException(401, f"ไม่มีอีเมลใน token (claims: {list(data.keys())})")
     return str(email).lower()
 
 router = APIRouter(prefix="/api/stock-book", tags=["stock-book"])
