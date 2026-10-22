@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 /* ------------------------------------------------------------------ */
@@ -117,7 +117,7 @@ const Pill = ({ on, children, onClick }: { on: boolean; children: ReactNode; onC
 
 /* ---------------- Heatmap ---------------- */
 
-function Heatmap({ items, onOpen, setTip }: { items: Item[]; onOpen: (s: string) => void; setTip: (t: Tip) => void }) {
+const Heatmap = memo(function Heatmap({ items, onOpen, setTip }: { items: Item[]; onOpen: (s: string) => void; setTip: (t: Tip) => void }) {
   const [ref, { w: W, h: H }] = useSize();
   const [shown, setShown] = useState(false);
   useEffect(() => {
@@ -183,7 +183,7 @@ function Heatmap({ items, onOpen, setTip }: { items: Item[]; onOpen: (s: string)
       ))}
     </div>
   );
-}
+});
 
 function Tooltip({ tip }: { tip: Tip }) {
   if (!tip) return null;
@@ -263,7 +263,7 @@ export default function MarketHeatmap({ api, open }: { api: Api; open: (symbol: 
   const progress = data && data.total ? Math.round((data.ready / data.total) * 100) : 0;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 pb-20">
       {/* เลือกดัชนี */}
       <div className="grid gap-4 md:grid-cols-3">
         {INDEXES.map((x) => {
@@ -355,7 +355,10 @@ export default function MarketHeatmap({ api, open }: { api: Api; open: (symbol: 
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-base font-semibold text-foreground">หุ้นเคลื่อนไหวเด่น</h3>
-            <p className="mt-0.5 text-xs text-muted-foreground">เฉพาะหุ้นใน {cur.name}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              เฉพาะหุ้นใน {cur.name}
+              {data && data.ready < data.total && ` · โหลดแล้ว ${data.ready}/${data.total} ตัว อันดับจะเปลี่ยนเมื่อข้อมูลครบ`}
+            </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Pill on={kind === "gainers"} onClick={() => setKind("gainers")}>ขึ้นแรง</Pill>
