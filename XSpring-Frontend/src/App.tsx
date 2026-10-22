@@ -33,6 +33,7 @@ import BotLab from "./BotLab"
 import type { BotApi } from "./BotLab"
 import StocksPage from "./components/stocks/StocksPage";
 const getStocksToken = () => localStorage.getItem("token");
+import ScreenerPage from "./components/stocks/ScreenerPage"
 
 type Page =
   | "dashboard"
@@ -603,6 +604,9 @@ function AppInner() {
                 view="mine"
               />
             )}
+            {page === "screener" && market === "stocks" && (
+              <ScreenerPage apiBase="https://xspring-api.onrender.com" />
+            )}
 
             {page === "orders" && <OrdersPage refreshKey={orderRefreshKey} />}
 
@@ -644,6 +648,7 @@ function AppInner() {
               page !== "positions" &&
               page !== "risk" &&
               page !== "quant" &&
+              page !== "screener" &&
               page !== "news" && <PlaceholderPage title={currentPage?.label ?? ""} />}
 
           </main>
