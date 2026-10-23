@@ -94,7 +94,16 @@ export default function StocksTradePage({
   );
 
   /* symbol + search */
-  const [symbol, setSymbol] = useState("AAPL");
+  const [symbol, setSymbol] = useState(() => {
+  try {
+    const p = localStorage.getItem("trade_pending_symbol");
+    if (p) {
+      localStorage.removeItem("trade_pending_symbol");
+      return p;
+    }
+  } catch {}
+  return "AAPL";
+});
   const [q, setQ] = useState("");
   const [results, setResults] = useState<{ symbol: string; name: string }[]>([]);
   useEffect(() => {
