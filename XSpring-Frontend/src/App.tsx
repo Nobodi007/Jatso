@@ -580,10 +580,6 @@ function AppInner() {
             <StocksPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" view="detail" />
           )}
 
-          {page === "watchlist" && market === "stocks" && (
-            <StocksPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" view="watchlist" />
-          )}
-
             {page === "trade" && market === "crypto" && (
               <TradePage
                 portfolio={portfolio}
