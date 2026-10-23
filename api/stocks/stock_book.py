@@ -165,13 +165,15 @@ async def trade(body: TradeIn, email: str = Depends(get_current_email)):
         raise HTTPException(400, "Quantity too small.")
     fee = _fee(qty * price)
     realized = None
+    warnings: list[str] = []
     if body.side == "sell":
         sym_rows = [r for r in rows if str(r["symbol"]).upper() == sym]
         try:
             spl = {sym: await rd.splits(sym)} if sym_rows else {}
         except Exception:
-            log.warning("split data unavailable for %s; sell blocked", sym)
-            raise HTTPException(503, "Corporate-action data unavailable; sell temporarily blocked.")
+            log.warning("split data unavailable for %s; selling with unadjusted history", sym)
+            spl = {}
+            warnings.append(f"splits_unavailable:{sym}")
         try:
             pos = L.positions(L.adjust_for_splits(L.to_trades(sym_rows), spl)).get(sym)
         except L.LedgerError:
@@ -197,7 +199,7 @@ async def trade(body: TradeIn, email: str = Depends(get_current_email)):
         raise HTTPException(500, "Trade failed.")
     rd.invalidate(f"report:{email}")
     return {"ok": True, "price": price, "cash": (res or {}).get("cash"), "realized_pnl": realized,
-            "trade": (res or {}).get("trade")}
+            "trade": (res or {}).get("trade"), "warnings": warnings}
 
 
 @router.post("/reset")
