@@ -115,3 +115,58 @@ async def top_movers() -> dict:
         "mostActive": _parse_fmp_movers(active),
         "updatedAt": datetime.now(timezone.utc).isoformat(),
     }
+
+# ---- Risk Center additions (do not modify daily_history above; charts depend on it) ----
+from datetime import date, timedelta
+
+FMP_BASE = "https://financialmodelingprep.com/stable"
+
+async def _fmp(path: str, **params):
+    if not FMP_KEY:
+        raise ProviderError("fmp key missing")
+    if not take_quota("fmp", 240, 86400):          # shares the existing 'fmp' bucket
+        raise RateLimited("fmp")
+    data = await _get_json(f"{FMP_BASE}{path}", {**params, "apikey": FMP_KEY})
+    if isinstance(data, dict) and ("Error Message" in data or "error" in data):
+        raise ProviderError(f"fmp {path}: rejected (plan/permission)")
+    return data
+
+async def daily_history_range(symbol: str, start: date, end: date) -> list[dict]:
+    """Split-adjusted (verify via probe), NOT dividend-adjusted EOD bars, ascending."""
+    data = await _fmp("/historical-price-eod/full", symbol=symbol,
+                      **{"from": start.isoformat(), "to": end.isoformat()})
+    rows = data if isinstance(data, list) else (data or {}).get("historical", [])
+    out = []
+    for r in rows:
+        try:
+            out.append({"date": str(r["date"])[:10], "open": float(r["open"]), "high": float(r["high"]),
+                        "low": float(r["low"]), "close": float(r["close"])})
+        except (KeyError, TypeError, ValueError):
+            continue
+    out.sort(key=lambda r: r["date"])
+    return out
+
+async def stock_splits(symbol: str) -> list[dict]:
+    data = await _fmp("/splits", symbol=symbol)
+    out = []
+    for r in data or []:
+        try:
+            num, den = float(r["numerator"]), float(r["denominator"])
+            if num > 0 and den > 0:
+                out.append({"date": str(r["date"])[:10], "ratio": num / den})
+        except (KeyError, TypeError, ValueError):
+            continue
+    return sorted(out, key=lambda r: r["date"])
+
+async def treasury_3m(start: date, end: date) -> list[dict]:
+    """3M Treasury yield as annual decimal. Chunked in 90-day windows."""
+    out, cur = {}, start
+    while cur <= end:
+        chunk_end = min(cur + timedelta(days=89), end)
+        data = await _fmp("/treasury-rates", **{"from": cur.isoformat(), "to": chunk_end.isoformat()})
+        for r in data or []:
+            v = r.get("month3")
+            if v is not None:
+                out[str(r["date"])[:10]] = float(v) / 100.0
+        cur = chunk_end + timedelta(days=1)
+    return [{"date": d, "rate": out[d]} for d in sorted(out)]
