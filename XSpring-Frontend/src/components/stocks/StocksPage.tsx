@@ -332,7 +332,7 @@ function Statements({ s }) {
   const keys = [...(s.data.statements?.[tab] || []), ...FIN_MARGINS[tab]];
   const cell = (k, v) => (v == null ? "–" : MARGIN_KEYS.has(k) ? v.toFixed(1) + "%" : k === "eps" ? num(v) : big(v));
   return (
-    <Card title="งบการเงินรายปี (USD)" right={<div className="flex gap-2">{Object.entries(FIN_TABS).map(([id, t]) => <Pill key={id} on={tab === id} onClick={() => setTab(id)}>{t}</Pill>)}</div>}>
+    <Card title={`งบการเงินรายปี (${s.data.currency || "USD"})`} right={<div className="flex gap-2">{Object.entries(FIN_TABS).map(([id, t]) => <Pill key={id} on={tab === id} onClick={() => setTab(id)}>{t}</Pill>)}</div>}>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -359,7 +359,7 @@ function Statements({ s }) {
           </tbody>
         </table>
       </div>
-      <p className="mt-3 text-xs text-muted-foreground">ที่มา SEC EDGAR · ตัวเลข "–" คือบริษัทนี้ไม่ได้รายงานรายการนั้นด้วย tag มาตรฐาน · % ใต้ตัวเลขคือเปลี่ยนจากปีก่อน</p>
+      <p className="mt-3 text-xs text-muted-foreground">ที่มา SEC EDGAR · ตัวเลขเป็นสกุลเงินที่บริษัทรายงาน ไม่ได้แปลงเป็นดอลลาร์ · "–" คือบริษัทไม่ได้รายงานรายการนั้นด้วย tag มาตรฐาน · % ใต้ตัวเลขคือเปลี่ยนจากปีก่อน</p>
     </Card>
   );
 }
@@ -474,7 +474,7 @@ function Detail({ api, symbol, authed, onWatch }) {
         <Status s={m} />
         {m.data && <div className="grid grid-cols-2 gap-3 md:grid-cols-5">{MET.map(([l, k]) => <Stat key={k} label={l} value={num(m.data[k])} />)}</div>}
       </Card>
-      <Status s={f} empty={!f.loading && !f.error && !f.data?.annual?.length && (f.data?.taxonomy === "non-us-gaap" ? "หุ้นตัวนี้ใช้มาตรฐานบัญชี IFRS ยังไม่รองรับ" : "ไม่มีข้อมูล")} />
+      <Status s={f} empty={!f.loading && !f.error && !f.data?.annual?.length && (f.data?.taxonomy === "unsupported" ? "ไม่พบงบการเงินแบบ XBRL ของหุ้นตัวนี้ใน SEC" : "ไม่มีข้อมูล" ? "หุ้นตัวนี้ใช้มาตรฐานบัญชี IFRS ยังไม่รองรับ" : "ไม่มีข้อมูล")} />
       <Statements s={f} />
       <Card title="ข่าวล่าสุด (7 วัน)">
         <Status s={n} empty={!n.loading && !n.error && !n.data?.length && "ไม่มีข่าวในช่วงนี้"} />
