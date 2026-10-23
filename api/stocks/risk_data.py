@@ -14,7 +14,7 @@ BENCHMARK = "^GSPC"
 LOOKBACK_DAYS = 400
 MAX_SYMBOLS = 40
 EOD_TTL, SPLIT_TTL, RF_TTL, FAIL_TTL = 6 * 3600, 24 * 3600, 12 * 3600, 300
-MAX_KEYS = 2000
+MAX_KEYS = 300
 
 _cache: dict[str, tuple[float, Any]] = {}
 _failed: dict[str, float] = {}
