@@ -72,27 +72,21 @@ async def _log_memory(request, call_next):
         )
     return response
 try:
-    from stocks.risk_api import router as stock_risk_api_router
-    from stocks.router import router as stocks_router
-    from stocks.fundamentals import router as fundamentals_router
-    from stocks.user import router as stocks_user_router
-except ImportError:
-    from api.stocks.router import router as stocks_router
-    from api.stocks.fundamentals import router as fundamentals_router
-    from api.stocks.user import router as stocks_user_router
-    from api.stocks import screener as stocks_screener   
-    from api.stocks.stock_book import router as stock_book_router
-    from api.stocks.router import router as stocks_router
-    from api.stocks.stock_heatmap import router as heatmap_router
-    
-app.include_router(stock_risk_api_router)   
+    from api.stocks.risk_api import router as stock_risk_api_router
+from api.stocks.router import router as stocks_router
+from api.stocks.fundamentals import router as fundamentals_router
+from api.stocks.user import router as stocks_user_router
+from api.stocks import screener as stocks_screener
+from api.stocks.stock_book import router as stock_book_router
+from api.stocks.stock_heatmap import router as heatmap_router
+
+app.include_router(stock_risk_api_router)   # ต้องอยู่ก่อน stocks_router
 app.include_router(stocks_router)
 app.include_router(fundamentals_router)
 app.include_router(stocks_user_router)
 app.include_router(stocks_screener.router)
 app.include_router(stock_book_router)
 app.include_router(heatmap_router)
-app.include_router(stocks_router)
 
 
 @app.on_event("startup")
