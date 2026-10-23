@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef, memo } from "react";
 import MarketHeatmap from "./MarketHeatmap";
 import WatchlistPage from "./WatchlistPage";
+import EarningsPage from "./EarningsPage";
 
 const ERR = {
   rate_limited: "โควต้าข้อมูลเต็มชั่วคราว ลองใหม่อีกครั้งในอีกสักครู่",
@@ -707,6 +708,7 @@ export default function StocksPage({ getToken, apiBase = "", view = "market" }) 
     detail: ["ข้อมูลบริษัท", "ราคา กราฟ งบการเงิน และข่าวของหุ้นรายตัว"],
     mine: ["พอร์ตหุ้นของฉัน", "สถานะที่ถือ Watchlist และแจ้งเตือนราคา"],
     watchlist: ["Watchlist", "หุ้นที่ติดตาม กราฟ และทางลัดไปเทรด"],
+    earnings: ["Earnings", "ปฏิทินประกาศงบและวันขึ้น XD"],
   };
   const [title, subtitle] = TITLES[view] || TITLES.market;
 
@@ -754,6 +756,7 @@ export default function StocksPage({ getToken, apiBase = "", view = "market" }) 
           ))}
         {view === "mine" && <Mine api={api} open={open} authed={authed} />}
         {view === "watchlist" && <WatchlistPage api={api} authed={authed} open={open} goTrade={goTrade} />}
+        {view === "earnings" && <EarningsPage api={api} open={open} authed={authed} />}
       </div>
     </div>
   );
