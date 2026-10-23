@@ -173,6 +173,10 @@ async def _report(email: str) -> dict:
 PERIOD = Query("1y", pattern="^1y$")
 
 
+def _na(reason: str) -> dict:
+    return {"value": None, "status": "unavailable", "unit": "", "formula": "", "n_obs": 0, "reason": reason}
+
+
 @router.get("/overview")
 async def overview(period: str = PERIOD, email: str = Depends(current_email)):
     rep = await _report(email)
@@ -180,12 +184,14 @@ async def overview(period: str = PERIOD, email: str = Depends(current_email)):
     perf, ra, tail = a.get("performance", {}), a.get("risk_adjusted", {}), a.get("tail", {})
     nav = rep.get("nav_series") or []
     lastp = nav[-1] if nav else None
+    why = f"data_status={rep['meta'].get('data_status')}"
+    g = lambda d, k: d.get(k) or _na(why)
     return {"meta": rep["meta"], "cards": {
         "market_value": {"value": lastp["nav"] if lastp else None, "unit": "USD",
                          "basis": "EOD close + cash", "as_of": lastp["date"] if lastp else None},
-        "portfolio_return": perf.get("portfolio_return"), "benchmark_return": perf.get("benchmark_return"),
-        "active_return": perf.get("active_return"), "volatility": perf.get("volatility"),
-        "max_drawdown": tail.get("max_drawdown"), "sharpe": ra.get("sharpe"),
+        "portfolio_return": g(perf, "portfolio_return"), "benchmark_return": g(perf, "benchmark_return"),
+        "active_return": g(perf, "active_return"), "volatility": g(perf, "volatility"),
+        "max_drawdown": g(tail, "max_drawdown"), "sharpe": g(ra, "sharpe"),
         "active_alerts": {"value": None, "status": "unavailable", "reason": "alerts engine ships in Phase 4"}}}
 
 
