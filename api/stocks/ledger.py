@@ -78,12 +78,13 @@ def to_trades(rows: list[dict]) -> list[Trade]:
 
 
 def adjust_for_splits(trades: list[Trade], splits: dict[str, list[tuple[date, float]]]) -> list[Trade]:
-    """Restate trades in today's split-adjusted units. Split with ex-date > session applies."""
+    """Restate trades in today's split-adjusted units. Split applies if ex-date > ET calendar date of the fill
+    (after-hours fills before the ex-date still carry pre-split prices)."""
     out = []
     for t in trades:
         f = 1.0
         for d, ratio in splits.get(t.symbol, []):
-            if d > t.session_date:
+            if d > t.ts.astimezone(ET).date():
                 f *= ratio
         out.append(t if f == 1.0 else replace(t, qty=t.qty * f, price=t.price / f))
     return out
