@@ -274,9 +274,14 @@ function AppInner() {
   }
 }, [market])
   useEffect(() => {
-  const h = () => setPage("trade");
-  window.addEventListener("stocks:open-trade", h);
-  return () => window.removeEventListener("stocks:open-trade", h);
+  const toCompany = () => setPage("markets");
+  const toTrade = () => setPage("trade");
+  window.addEventListener("stocks:open-company", toCompany);
+  window.addEventListener("stocks:open-trade", toTrade);
+  return () => {
+    window.removeEventListener("stocks:open-company", toCompany);
+    window.removeEventListener("stocks:open-trade", toTrade);
+  };
 }, []);
 
   const [theme, setTheme] = useState<"light" | "dark">(() => {
