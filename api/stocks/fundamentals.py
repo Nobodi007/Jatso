@@ -97,10 +97,11 @@ async def get_metrics(s: str) -> dict:
 
 # =====================================================
 # งบการเงิน (SEC EDGAR)
+# รองรับ 10-K (บริษัทอเมริกา) และ 20-F/40-F (บริษัทต่างชาติ)
+# รองรับ us-gaap และ ifrs-full และใช้สกุลเงินที่บริษัทรายงานจริง
 # =====================================================
-# =====================================================
-# งบการเงิน (SEC EDGAR)
-# =====================================================
+ANNUAL_FORMS = {"10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"}
+
 # ลำดับใน list = ลำดับ fallback (tag แรกได้สิทธิ์ก่อน tag หลังเติมปีที่ขาด)
 CONCEPTS = {
     # ---- งบกำไรขาดทุน ----
@@ -158,6 +159,48 @@ CONCEPTS = {
     "dividendsPaid": ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"],
 }
 
+# ชื่อ tag ชุด IFRS (บริษัทที่ยื่น 20-F ด้วย IFRS เช่น ASML, NVO)
+# หมายเหตุ: บริษัทบางแห่งใช้ tag ของตัวเอง (extension) สำหรับบางรายการ ซึ่งจะขึ้น "–"
+# ใช้ /{symbol}/financials/debug ดูว่าบริษัทนั้นใช้ tag ชื่ออะไร แล้วเพิ่มในลิสต์ด้านล่าง
+IFRS_CONCEPTS = {k: [] for k in CONCEPTS}
+IFRS_CONCEPTS.update({
+    "revenue": ["Revenue", "RevenueFromContractsWithCustomers"],
+    "costOfRevenue": ["CostOfSales"],
+    "grossProfit": ["GrossProfit"],
+    "researchAndDevelopment": ["ResearchAndDevelopmentExpense"],
+    "sga": ["SellingGeneralAndAdministrativeExpense", "AdministrativeExpense"],
+    "operatingIncome": ["ProfitLossFromOperatingActivities"],
+    "interestExpense": ["InterestExpense", "FinanceCosts"],
+    "incomeBeforeTax": ["ProfitLossBeforeTax"],
+    "incomeTax": ["IncomeTaxExpenseContinuingOperations"],
+    "netIncome": ["ProfitLossAttributableToOwnersOfParent", "ProfitLoss"],
+    "eps": ["DilutedEarningsLossPerShare", "BasicEarningsLossPerShare"],
+    "dilutedShares": ["AdjustedWeightedAverageShares", "WeightedAverageShares"],
+    "cash": ["CashAndCashEquivalents"],
+    "receivables": ["CurrentTradeReceivables", "TradeAndOtherCurrentReceivables"],
+    "inventory": ["Inventories"],
+    "currentAssets": ["CurrentAssets"],
+    "ppe": ["PropertyPlantAndEquipment"],
+    "goodwill": ["Goodwill"],
+    "totalAssets": ["Assets"],
+    "currentLiabilities": ["CurrentLiabilities"],
+    "shortTermDebt": ["CurrentBorrowings", "CurrentPortionOfLongtermBorrowings", "ShorttermBorrowings"],
+    "longTermDebt": ["LongtermBorrowings", "NoncurrentBorrowings"],
+    "totalLiabilities": ["Liabilities"],
+    "equity": ["EquityAttributableToOwnersOfParent", "Equity"],
+    "depreciation": ["DepreciationAndAmortisationExpense", "AdjustmentsForDepreciationAndAmortisationExpense"],
+    "sbc": ["AdjustmentsForSharebasedPayments"],
+    "operatingCashFlow": ["CashFlowsFromUsedInOperatingActivities"],
+    "capex": ["PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities"],
+    "investingCashFlow": ["CashFlowsFromUsedInInvestingActivities"],
+    "financingCashFlow": ["CashFlowsFromUsedInFinancingActivities"],
+    "buybacks": ["PaymentsToAcquireOrRedeemEntitysShares"],
+    "dividendsPaid": ["DividendsPaidClassifiedAsFinancingActivities"],
+})
+
+# บริษัทบางแห่งรายงานรายจ่ายเป็นค่าลบ ให้เป็นบวกเสมอเพื่อให้สูตร FCF ถูก
+ABS_KEYS = {"capex", "buybacks", "dividendsPaid"}
+
 # ตัวเลขงบดุล (ณ วันที่ ไม่มี start date)
 INSTANT = {
     "cash", "shortTermInvestments", "receivables", "inventory", "currentAssets", "ppe",
@@ -183,6 +226,7 @@ STATEMENTS = {
     ],
 }
 
+
 async def _cik_map() -> dict:
     async def fetch():
         d = await _sec_get("https://www.sec.gov/files/company_tickers.json")
@@ -190,16 +234,42 @@ async def _cik_map() -> dict:
     return await cached("sec:tickers", 86400, fetch)
 
 
-def _annual_values(facts: dict, names: list[str], instant: bool) -> dict:
+def _kind(key: str) -> str:
+    return "pershare" if key == "eps" else "shares" if key == "dilutedShares" else "money"
+
+
+def _units_for(units: dict, kind: str, cur: str) -> list:
+    """เลือกชุดตัวเลขตามชนิด: เงิน (ตามสกุลที่บริษัทรายงาน) / ต่อหุ้น / จำนวนหุ้น"""
+    if kind == "shares":
+        return units.get("shares") or []
+    if kind == "pershare":
+        return units.get(f"{cur}/shares") or next((v for k, v in units.items() if k.endswith("/shares")), [])
+    return units.get(cur) or []
+
+
+def _detect_currency(facts: dict, concepts: dict) -> str | None:
+    """สกุลเงินที่บริษัทใช้รายงานงบ: เลือกสกุลที่มีข้อมูลรายปีมากสุดจาก concept หลัก"""
+    score: dict[str, int] = {}
+    for key in ("revenue", "netIncome", "totalAssets"):
+        for name in concepts.get(key, []):
+            for unit, rows in ((facts.get(name) or {}).get("units") or {}).items():
+                if "/" in unit or unit in ("shares", "pure"):
+                    continue
+                score[unit] = score.get(unit, 0) + sum(1 for x in rows if x.get("form") in ANNUAL_FORMS)
+    return max(score, key=score.get) if score else None
+
+
+def _annual_values(facts: dict, names: list[str], instant: bool, kind: str, cur: str) -> dict:
     merged: dict[str, float] = {}
     for name in names:
-        units = (facts.get(name) or {}).get("units", {})
-        rows = units.get("USD") or units.get("USD/shares") or units.get("shares") or []
+        rows = _units_for((facts.get(name) or {}).get("units", {}), kind, cur)
         per: dict[str, tuple] = {}
         for x in rows:
-            if x.get("form") not in ("10-K", "10-K/A"):
+            if x.get("form") not in ANNUAL_FORMS:
                 continue
             end = x.get("end")
+            if not end:
+                continue
             if not instant:
                 start = x.get("start")
                 if not start:
@@ -213,6 +283,7 @@ def _annual_values(facts: dict, names: list[str], instant: bool) -> dict:
         for end, (val, _) in per.items():
             merged.setdefault(end, val)  # concept แรกในรายการได้สิทธิ์ก่อน
     return merged
+
 
 def _yoy(cur, prev):
     if cur is None or prev in (None, 0):
@@ -264,56 +335,47 @@ def _add_growth(rows: list[dict]) -> None:
         row["yoy"] = yoy
 
 
+def _build_rows(facts: dict, concepts: dict, cur: str) -> list[dict]:
+    cols = {k: _annual_values(facts, names, k in INSTANT, _kind(k), cur) for k, names in concepts.items()}
+    ends = sorted(set(cols["revenue"]) | set(cols["netIncome"]))  # ย้อนหลังเท่าที่ SEC มี
+    rows = []
+    for end in ends:
+        row = {"fiscalYearEnd": end, "year": int(end[:4])}
+        for k in concepts:
+            v = cols[k].get(end)
+            row[k] = abs(v) if v is not None and k in ABS_KEYS else v
+        _derive(row)
+        rows.append(row)
+    return rows
+
+
 async def get_financials(s: str, years: int) -> dict:
     cik = (await guard(_cik_map())).get(s.replace(".", "-"))
     if not cik:
-        raise HTTPException(404, "not_in_sec")  # เช่น หุ้นต่างชาติที่ยื่น 20-F
+        raise HTTPException(404, "not_in_sec")  # ไม่มีใน SEC เลย (เช่น หุ้นที่ไม่ได้ยื่นกับ SEC)
 
     async def fetch():
         d = await _sec_get(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json")
         if not d:
-            return {"symbol": s, "name": None, "annual": []}
-        facts = d.get("facts", {}).get("us-gaap", {})
-        if not facts:  # ไม่มี us-gaap เลย (เช่น ใช้ IFRS) -> ส่งว่างพร้อมธง
-            return {"symbol": s, "name": d.get("entityName"), "currency": "USD",
-                    "annual": [], "taxonomy": "non-us-gaap", "statements": STATEMENTS}
-        cols = {k: _annual_values(facts, v, k in INSTANT) for k, v in CONCEPTS.items()}
-        ends = sorted(set(cols["revenue"]) | set(cols["netIncome"]))  # ย้อนหลังเท่าที่ SEC มี
-        rows = []
-        for end in ends:
-            row = {"fiscalYearEnd": end, "year": int(end[:4])}
-            for k in CONCEPTS:
-                row[k] = cols[k].get(end)
-            _derive(row)
-            rows.append(row)
-        _add_growth(rows)
-        return {"symbol": s, "name": d.get("entityName"), "currency": "USD",
-                "annual": rows, "statements": STATEMENTS}
+            return {"symbol": s, "name": None, "currency": None, "annual": [], "taxonomy": "unsupported",
+                    "statements": STATEMENTS}
+        all_facts = d.get("facts") or {}
+        # ลอง us-gaap ก่อน (รวมบริษัทต่างชาติที่ใช้ US GAAP เช่น ARM) แล้วค่อย IFRS
+        for tax, concepts in (("us-gaap", CONCEPTS), ("ifrs-full", IFRS_CONCEPTS)):
+            facts = all_facts.get(tax) or {}
+            cur = _detect_currency(facts, concepts) if facts else None
+            if not cur:
+                continue
+            rows = _build_rows(facts, concepts, cur)
+            if rows:
+                _add_growth(rows)
+                return {"symbol": s, "name": d.get("entityName"), "currency": cur, "taxonomy": tax,
+                        "annual": rows, "statements": STATEMENTS}
+        return {"symbol": s, "name": d.get("entityName"), "currency": None, "annual": [],
+                "taxonomy": "unsupported", "statements": STATEMENTS}
 
-    data = await guard(cached(f"fin:{s}", 86400, fetch))
-    return {**data, "annual": data["annual"][-years:]}
-
-    async def fetch():
-        d = await _sec_get(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json")
-        if not d:
-            return {"symbol": s, "name": None, "annual": []}
-        facts = d.get("facts", {}).get("us-gaap", {})
-        cols = {k: _annual_values(facts, v, k in INSTANT) for k, v in CONCEPTS.items()}
-        ends = sorted(set(cols["revenue"]) | set(cols["netIncome"]))[-10:]
-        rows = []
-        for end in ends:
-            row = {"fiscalYearEnd": end, "year": int(end[:4])}
-            for k in CONCEPTS:
-                row[k] = cols[k].get(end)
-            ocf, capex = row["operatingCashFlow"], row["capex"]
-            row["freeCashFlow"] = ocf - capex if ocf is not None and capex is not None else None
-            if row["grossProfit"] is None and row["revenue"] is not None and row["costOfRevenue"] is not None:
-                row["grossProfit"] = row["revenue"] - row["costOfRevenue"]
-            rows.append(row)
-                        
-        return {"symbol": s, "name": d.get("entityName"), "currency": "USD", "annual": rows}
-
-    data = await guard(cached(f"fin:{s}", 86400, fetch))
+    # คีย์ fin2 เพื่อไม่ใช้ผลว่างที่เคยแคชไว้จากโค้ดเวอร์ชันเก่า
+    data = await guard(cached(f"fin2:{s}", 86400, fetch))
     return {**data, "annual": data["annual"][-years:]}
 
 
@@ -395,19 +457,23 @@ async def dividend_calendar(
 async def metrics(symbol: str):
     return await get_metrics(norm(symbol))
 
+
 @router.get("/{symbol}/overview")
 async def overview(symbol: str):
     s = norm(symbol)
     pr, m = await asyncio.gather(profile(s), get_metrics(s))
+    cur = "USD"
     try:
         fin = await get_financials(s, 1)
         last = fin["annual"][-1] if fin["annual"] else {}
+        cur = fin.get("currency") or "USD"
     except HTTPException:  # หุ้นที่ไม่อยู่ใน SEC: ยังแสดง key facts ได้ แต่ไม่มี capital structure
         last = {}
     mcap = pr.get("marketCap")  # ตรวจหน่วยให้ตรงกับที่ profile() ส่งมา (Finnhub ปกติเป็นล้านดอลลาร์)
     debt = last.get("totalDebt")
     liquid = (last.get("cash") or 0) + (last.get("shortTermInvestments") or 0) if last.get("cash") is not None else None
-    ev = mcap + debt - liquid if None not in (mcap, debt, liquid) else None
+    # มูลค่าตลาดเป็น USD ถ้างบเป็นสกุลอื่นห้ามเอามารวมกัน
+    ev = mcap + debt - liquid if cur == "USD" and None not in (mcap, debt, liquid) else None
     return {
         "symbol": s,
         "keyFacts": {
@@ -418,7 +484,7 @@ async def overview(symbol: str):
             "description": pr.get("description"),
         },
         "capitalStructure": {"marketCap": mcap, "debt": debt, "cash": liquid, "enterpriseValue": ev,
-                             "asOf": last.get("fiscalYearEnd")},
+                             "currency": cur, "asOf": last.get("fiscalYearEnd")},
         "latest": last,
     }
 
@@ -426,6 +492,29 @@ async def overview(symbol: str):
 @router.get("/{symbol}/financials")
 async def financials(symbol: str, years: int = Query(5, ge=1, le=20)):
     return await get_financials(norm(symbol), years)
+
+
+@router.get("/{symbol}/financials/debug")
+async def financials_debug(symbol: str, q: str = ""):
+    """ดู tag ที่บริษัทนั้นรายงานจริงใน SEC (เฉพาะที่มีข้อมูลรายปี) ใช้ตอนต้องเพิ่ม tag ให้หุ้นที่ยังขึ้น "–"
+    ตัวอย่าง: /api/stocks/ASML/financials/debug?q=borrow"""
+    s = norm(symbol)
+    cik = (await guard(_cik_map())).get(s.replace(".", "-"))
+    if not cik:
+        raise HTTPException(404, "not_in_sec")
+    d = await guard(_sec_get(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"))
+    out: dict = {}
+    for tax, facts in ((d or {}).get("facts") or {}).items():
+        tags = {}
+        for name, f in facts.items():
+            if q and q.lower() not in name.lower():
+                continue
+            for unit, rows in (f.get("units") or {}).items():
+                n = sum(1 for x in rows if x.get("form") in ANNUAL_FORMS)
+                if n:
+                    tags[f"{name} [{unit}]"] = n
+        out[tax] = dict(sorted(tags.items()))
+    return {"symbol": s, "entity": (d or {}).get("entityName"), "annualFactCount": out}
 
 
 @router.get("/{symbol}/dividends")
