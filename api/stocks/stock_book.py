@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from . import ledger as L
 from . import risk_data as rd
+from .db import sb, SbError
 
 log = logging.getLogger("stocks.stock_book")
 FEE_BPS = Decimal(os.getenv("STOCK_FEE_BPS", "0"))          # default 0 = same as today
@@ -66,18 +67,29 @@ async def trade(body: TradeIn, email: str = Depends(current_email)):
         except Exception:
             log.warning("split data unavailable for %s; sell blocked", sym)
             raise HTTPException(503, "Corporate-action data unavailable; sell temporarily blocked.")
-        pos = L.positions(L.adjust_for_splits(L.to_trades(sym_rows), spl)).get(sym)
-        held = pos.qty if pos else 0.0
-        if held + L.QTY_EPS < qty:
-            raise HTTPException(400, f"Insufficient shares (held {held:g}).")
+         try:
+            pos = L.positions(L.adjust_for_splits(L.to_trades(sym_rows), spl)).get(sym)
+        except L.LedgerError:
+            log.exception("ledger inconsistent for %s", sym)
+            raise HTTPException(409, "Trade history inconsistent.")
         realized = round((price - pos.avg_cost) * qty - fee, 2)
     elif qty * price + fee > float(acc["cash"]) + 1e-9:
         raise HTTPException(400, "Insufficient cash.")
+    
     try:
         res = await sb("POST", "rpc/stock_execute_trade", json={
             "p_email": email, "p_symbol": sym, "p_side": body.side, "p_qty": qty, "p_price": price,
             "p_fee": fee, "p_realized_pnl": realized, "p_note": body.note, "p_quote_ts": quote_ts,
-            "p_price_source": "finnhub_quote", "p_expected_last_id": last_id})
+            "p_price_source": "finnhub_quote", "p_expected_last_id": last_id
+        }, raw_error=True)
+    except SbError as e:
+        msg = e.body
+        if "ledger_changed" in msg:
+            raise HTTPException(409, "Portfolio changed during submission; please retry.")
+        if "insufficient_cash" in msg:
+            raise HTTPException(400, "Insufficient cash.")
+        log.exception("trade rpc failed")
+        raise HTTPException(500, "Trade failed.")
     except Exception as e:                         # ⚠️ VERIFY sb() error message format
         msg = str(e)
         if "ledger_changed" in msg:
