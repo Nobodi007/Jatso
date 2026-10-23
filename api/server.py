@@ -71,8 +71,7 @@ async def _log_memory(request, call_next):
             before, _rss_mb(), request.method, request.url.path,
         )
     return response
-try:
-    from api.stocks.risk_api import router as stock_risk_api_router
+from api.stocks.risk_api import router as stock_risk_api_router
 from api.stocks.router import router as stocks_router
 from api.stocks.fundamentals import router as fundamentals_router
 from api.stocks.user import router as stocks_user_router
