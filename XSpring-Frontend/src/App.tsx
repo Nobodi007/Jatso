@@ -274,10 +274,10 @@ function AppInner() {
   }
 }, [market])
   useEffect(() => {
-  const go = () => setPage("markets")
-  window.addEventListener("stocks:open-company", go)
-  return () => window.removeEventListener("stocks:open-company", go)
-}, [])
+  const h = () => setPage("trade");
+  window.addEventListener("stocks:open-trade", h);
+  return () => window.removeEventListener("stocks:open-trade", h);
+}, []);
 
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try {
@@ -573,6 +573,10 @@ function AppInner() {
           
           {page === "markets" && market === "stocks" && (
             <StocksPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" view="detail" />
+          )}
+
+          {page === "watchlist" && market === "stocks" && (
+            <StocksPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" view="watchlist" />
           )}
 
             {page === "trade" && market === "crypto" && (
