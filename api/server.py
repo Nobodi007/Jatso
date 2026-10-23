@@ -72,6 +72,7 @@ async def _log_memory(request, call_next):
         )
     return response
 try:
+    from stocks.risk_api import router as stock_risk_api_router
     from stocks.router import router as stocks_router
     from stocks.fundamentals import router as fundamentals_router
     from stocks.user import router as stocks_user_router
@@ -84,6 +85,7 @@ except ImportError:
     from api.stocks.router import router as stocks_router
     from api.stocks.stock_heatmap import router as heatmap_router
     
+app.include_router(stock_risk_api_router)   
 app.include_router(stocks_router)
 app.include_router(fundamentals_router)
 app.include_router(stocks_user_router)
