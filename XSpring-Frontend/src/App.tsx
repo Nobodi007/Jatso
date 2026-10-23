@@ -672,6 +672,7 @@ function AppInner() {
               page !== "risk" &&
               page !== "quant" &&
               page !== "screener" &&
+              page !== "watchlist" &&
               page !== "news" && <PlaceholderPage title={currentPage?.label ?? ""} />}
 
           </main>
