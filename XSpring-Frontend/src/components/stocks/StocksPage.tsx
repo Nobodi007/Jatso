@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { useState, useEffect, useMemo, useCallback, useRef, memo } from "react";
 import MarketHeatmap from "./MarketHeatmap";
+import WatchlistPage from "./WatchlistPage";
 
 const ERR = {
   rate_limited: "โควต้าข้อมูลเต็มชั่วคราว ลองใหม่อีกครั้งในอีกสักครู่",
@@ -426,8 +427,8 @@ function Detail({ api, symbol, authed, onWatch }) {
           </div>
         </div>
         <div className="text-right">
-          <Btn kind="ghost" onClick={add} disabled={!authed}>
-            + Watchlist
+          <Btn kind="ghost" onClick={add} disabled={!authed || note === "เพิ่มใน Watchlist แล้ว"}>
+            {note === "เพิ่มใน Watchlist แล้ว" ? "✓ อยู่ใน Watchlist" : "+ Watchlist"}
           </Btn>
           {note && (
             <p className="mt-2 text-xs text-muted-foreground">{note}</p>
@@ -672,6 +673,11 @@ export default function StocksPage({ getToken, apiBase = "", view = "market" }) 
     }
   };
 
+  const goTrade = (s) => {
+  try { localStorage.setItem("trade_pending_symbol", s); } catch {}
+  window.dispatchEvent(new CustomEvent("stocks:open-trade", { detail: s }));
+};
+
   // ถ้ามาถึงหน้า Company พร้อมหุ้นที่ค้างไว้ ให้เปิดตัวนั้น
   useEffect(() => {
     if (view !== "detail") return;
@@ -700,6 +706,7 @@ export default function StocksPage({ getToken, apiBase = "", view = "market" }) 
     market: ["หุ้นสหรัฐ", "ราคา งบการเงิน และพอร์ตหุ้น NYSE / Nasdaq หน่วย USD"],
     detail: ["ข้อมูลบริษัท", "ราคา กราฟ งบการเงิน และข่าวของหุ้นรายตัว"],
     mine: ["พอร์ตหุ้นของฉัน", "สถานะที่ถือ Watchlist และแจ้งเตือนราคา"],
+    watchlist: ["Watchlist", "หุ้นที่ติดตาม กราฟ และทางลัดไปเทรด"],
   };
   const [title, subtitle] = TITLES[view] || TITLES.market;
 
@@ -746,6 +753,7 @@ export default function StocksPage({ getToken, apiBase = "", view = "market" }) 
             </Card>
           ))}
         {view === "mine" && <Mine api={api} open={open} authed={authed} />}
+        {view === "watchlist" && <WatchlistPage api={api} authed={authed} open={open} goTrade={goTrade} />}
       </div>
     </div>
   );
