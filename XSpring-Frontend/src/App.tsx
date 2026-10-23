@@ -584,6 +584,10 @@ function AppInner() {
             <StocksPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" view="watchlist" />
           )}  
 
+          {page === "earnings" && market === "stocks" && (
+            <StocksPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" view="earnings" />
+          )}
+
             {page === "trade" && market === "crypto" && (
               <TradePage
                 portfolio={portfolio}
@@ -673,6 +677,7 @@ function AppInner() {
               page !== "quant" &&
               page !== "screener" &&
               page !== "watchlist" &&
+              page !== "earnings" &&
               page !== "news" && <PlaceholderPage title={currentPage?.label ?? ""} />}
 
           </main>
