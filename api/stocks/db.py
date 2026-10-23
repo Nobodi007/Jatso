@@ -11,8 +11,15 @@ SB_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 _client = httpx.AsyncClient(timeout=10)
 
 
+class SbError(Exception):
+    """Raw PostgREST error (opt-in via raw_error=True) so callers can read RPC error text."""
+    def __init__(self, status: int, body: str):
+        super().__init__(f"{status}: {body[:300]}")
+        self.status, self.body = status, body
+
+
 async def sb(method: str, table: str, *, params: dict | None = None,
-             json=None, prefer: str | None = None):
+             json=None, prefer: str | None = None, raw_error: bool = False):
     """เรียก Supabase ทุก query ต้องกรอง user_email เอง เพราะ service role ข้าม RLS"""
     if not SB_URL or not SB_KEY:
         raise HTTPException(503, "db_not_configured")
@@ -33,6 +40,8 @@ async def sb(method: str, table: str, *, params: dict | None = None,
         log.warning("supabase network error: %s", e)
         raise HTTPException(502, "db_error")
 
+    if raw_error and resp.status_code >= 400:
+        raise SbError(resp.status_code, resp.text)
     if resp.status_code == 409:
         raise HTTPException(409, "already_exists")
     if resp.status_code >= 400:
