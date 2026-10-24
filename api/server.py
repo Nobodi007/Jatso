@@ -78,6 +78,7 @@ from api.stocks.user import router as stocks_user_router
 from api.stocks import screener as stocks_screener
 from api.stocks.stock_book import router as stock_book_router
 from api.stocks.stock_heatmap import router as heatmap_router
+from api.stocks.risk_alerts import router as risk_alerts_router
 
 app.include_router(stock_risk_api_router)   # ต้องอยู่ก่อน stocks_router
 app.include_router(stocks_router)
@@ -86,6 +87,7 @@ app.include_router(stocks_user_router)
 app.include_router(stocks_screener.router)
 app.include_router(stock_book_router)
 app.include_router(heatmap_router)
+app.include_router(risk_alerts_router)
 
 
 @app.on_event("startup")
