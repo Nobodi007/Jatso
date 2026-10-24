@@ -28,6 +28,7 @@ import {
 } from "lucide-react"
 import MorphOrb from "./components/ui/ai-thiking-orb-and-input"
 import RiskPage from "./components/risk/RiskPage"
+import StockRiskPage from "./components/risk/StockRiskPage"
 import { NumberTicker } from "./components/ui/number-ticker"
 import BotLab from "./BotLab"
 import type { BotApi } from "./BotLab"
@@ -657,7 +658,10 @@ function AppInner() {
             {page === "news" && market === "stocks" && (
               <StockNewsPage apiBase="https://xspring-api.onrender.com" />
             )}
-            {page === "risk" && <RiskPage />}
+            {page === "risk" && market === "crypto" && <RiskPage />}
+            {page === "risk" && market === "stocks" && (
+              <StockRiskPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" />
+            )}
             {page === "stocks" && (
             <StocksPage
             getToken={getStocksToken}
