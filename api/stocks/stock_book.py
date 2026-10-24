@@ -14,10 +14,11 @@ from . import ledger as L
 from . import risk_data as rd
 from .db import SbError, sb
 from .router import get_quote
+from .auth_sanitize import sanitize_401
 
 log = logging.getLogger("stocks.stock_book")
 
-
+@sanitize_401
 def get_current_email(authorization: str = Header(default="")) -> str:
     token = authorization.removeprefix("Bearer ").strip()
     if not token or token in ("null", "undefined"):
