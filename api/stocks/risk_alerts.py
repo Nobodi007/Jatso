@@ -30,6 +30,9 @@ _evaluate_limit = make_limiter(current_email, 5, 60, "evaluate")
 
 LIMIT_FIELDS = ("max_drawdown", "max_single_weight", "max_hhi", "min_cash_weight")
 MIN_DD_OBS = 20  # drawdown alert ต้องมีข้อมูลอย่างน้อยเท่านี้ ไม่งั้นข้าม
+# risk_engine ติดป้าย limited_sample ให้ drawdown ทุกค่าที่มีน้อยกว่า 250 observation (ค่ายังคำนวณได้ปกติ)
+# ถ้าข้ามเพราะป้ายนี้ alert drawdown จะเงียบไปเกือบปี จึงรับทั้งสองสถานะ แล้วกันด้วย MIN_DD_OBS แทน
+DD_OK_STATUSES = ("ok", "limited_sample")
 
 
 def _now() -> str:
@@ -95,14 +98,13 @@ async def put_limits(body: LimitsIn, email: str = Depends(current_email)):
 
 
 # ------------------------------------------------------------------ evaluation
-def _drawdown_metric(analysis: dict | None):
-    """ดึง max_drawdown จาก analysis["tail"]["max_drawdown"] (โครงสร้างจริงของ /overview)
-    คืน dict ของ metric หรือ None ถ้าไม่มีโครงสร้างนี้"""
+def _drawdown_metrics(analysis: dict | None):
+    """คืน (current_drawdown, max_drawdown) จาก analysis["tail"] เป็น dict ของ Metric หรือ None"""
     tail = (analysis or {}).get("tail")
     if not isinstance(tail, dict):
-        return None
-    md = tail.get("max_drawdown")
-    return md if isinstance(md, dict) else None
+        return None, None
+    cur, mx = tail.get("current_drawdown"), tail.get("max_drawdown")
+    return (cur if isinstance(cur, dict) else None), (mx if isinstance(mx, dict) else None)
 
 
 def _find_conditions(exp: dict, analysis: dict | None, limits: dict):
@@ -154,28 +156,29 @@ def _find_conditions(exp: dict, analysis: dict | None, limits: dict):
     else:
         skipped.append({"alert_type": "low_cash", "reason": "cash_weight_unavailable"})
 
-    # drawdown = max drawdown ของช่วงรายงาน (peak-to-trough) ไม่ใช่ drawdown ปัจจุบัน
-    # อ่านจาก analysis["tail"]["max_drawdown"]
-    # TODO: tail.current_drawdown ตรงกับความหมายของลิมิตมากกว่า ค่อยเปลี่ยนเมื่อเห็นรูปแบบค่าจริงจาก /metrics
-    md = _drawdown_metric(analysis)
+    # drawdown = ขาดทุนปัจจุบันจากจุดสูงสุดของช่วงรายงาน (tail.current_drawdown) กลับขึ้นมาแล้ว alert ปิดเอง
+    # ไม่ใช้ max drawdown ของช่วง เพราะละเมิดครั้งเดียวแล้วค่านั้นค้างอยู่ทั้งปี alert จะไม่มีวันปิด
+    # max drawdown ของช่วงเก็บไว้ใน detail เป็นข้อมูลประกอบ
+    cur, mx = _drawdown_metrics(analysis)
     if lim["max_drawdown"] is None:
         evaluated.add("drawdown")
-    elif md is None:
+    elif cur is None:
         skipped.append({"alert_type": "drawdown", "reason": "analysis_unavailable"})
-    elif md.get("status") != "ok" or md.get("value") is None:
+    elif cur.get("status") not in DD_OK_STATUSES or cur.get("value") is None:
         skipped.append({"alert_type": "drawdown",
-                        "reason": md.get("reason") or md.get("status") or "drawdown_unavailable"})
-    elif (md.get("n_obs") or 0) < MIN_DD_OBS:
+                        "reason": cur.get("reason") or cur.get("status") or "drawdown_unavailable"})
+    elif (cur.get("n_obs") or 0) < MIN_DD_OBS:
         skipped.append({"alert_type": "drawdown",
-                        "reason": f"insufficient_data: n_obs={md.get('n_obs') or 0} < {MIN_DD_OBS}"})
+                        "reason": f"insufficient_data: n_obs={cur.get('n_obs') or 0} < {MIN_DD_OBS}"})
     else:
         evaluated.add("drawdown")
-        dd = abs(float(md["value"]))
+        dd = abs(float(cur["value"]))
         if dd > lim["max_drawdown"]:
             found[("drawdown", "")] = {
                 "alert_type": "drawdown", "symbol": None, "threshold": lim["max_drawdown"],
                 "observed_value": dd,
-                "detail": {"n_obs": md.get("n_obs"), "basis": "max drawdown over report period"}}
+                "detail": {"n_obs": cur.get("n_obs"), "basis": "current drawdown from peak over report period",
+                           "max_drawdown_period": None if not mx else mx.get("value")}}
 
     return found, evaluated, skipped
 
