@@ -13,9 +13,11 @@ from pydantic import BaseModel, Field
 from . import ledger as L
 from . import risk_data as rd
 from . import risk_engine as E
+from . import risk_attribution as A
 from . import risk_exposure as X
 from .auth import current_email
 from .cache import ProviderError, RateLimited
+from .db import sb
 from .risk_ratelimit import make_limiter
 
 log = logging.getLogger("stocks.risk_api")
@@ -195,7 +197,16 @@ async def _build(email: str) -> dict:
     if rf_map and rf is None:
         warnings.append({"code": "risk_free_gap", "detail": "gap > 7 days; Sharpe/Alpha unavailable"})
     analysis = E.analyze(rp, rb, rf, dates)
-    return done("ok" if not warnings else "ok_with_warnings", analysis=analysis, nav_series=_nav_json(nav))
+    attribution = None
+    try:                                                     # Phase 3: must never break the report itself
+        attribution = A.attribution(adj, calendar, {s: _ffill(closes.get(s, {}), calendar) for s in symbols}, nav)
+        if not attribution["sum_check"]["ok"]:
+            warnings.append({"code": "attribution_residual", "residual": attribution["sum_check"]["residual"]})
+    except ValueError as e:                                  # LedgerError is a ValueError
+        log.warning("attribution unavailable: %s", e)
+        warnings.append({"code": "attribution_unavailable"})
+    return done("ok" if not warnings else "ok_with_warnings", analysis=analysis, nav_series=_nav_json(nav),
+                attribution=attribution)
 
 
 async def _report(email: str) -> dict:
@@ -218,6 +229,16 @@ PERIOD = Query("1y", pattern="^1y$")
 _heavy = make_limiter(current_email, 30, 60, "heavy")
 
 
+async def _active_alerts(email: str) -> dict:
+    """จำนวน alert ที่เปิดอยู่ ณ การประเมินล่าสุด (POST /alerts/evaluate) ไม่ใช่ตามราคาสด"""
+    try:
+        rows = await sb("GET", "stock_risk_alerts",
+                        params={"email": f"eq.{email}", "status": "eq.active", "select": "id"}) or []
+    except HTTPException:
+        return {"value": None, "status": "unavailable", "reason": "alerts_unavailable"}
+    return {"value": len(rows), "status": "ok", "unit": "count", "basis": "as of last alerts evaluation"}
+
+
 @router.get("/overview")
 async def overview(period: str = PERIOD, email: str = Depends(_heavy)):
     rep = await _report(email)
@@ -231,7 +252,7 @@ async def overview(period: str = PERIOD, email: str = Depends(_heavy)):
         "portfolio_return": perf.get("portfolio_return"), "benchmark_return": perf.get("benchmark_return"),
         "active_return": perf.get("active_return"), "volatility": perf.get("volatility"),
         "max_drawdown": tail.get("max_drawdown"), "sharpe": ra.get("sharpe"),
-        "active_alerts": {"value": None, "status": "unavailable", "reason": "alerts engine ships in Phase 4"}}}
+        "active_alerts": await _active_alerts(email)}}
 
 
 @router.get("/performance")
@@ -302,6 +323,17 @@ async def risk_decomposition(period: str = PERIOD, email: str = Depends(_heavy))
     w, _, _ = X.nav_weights(ctx["holdings"], ctx["cash"])
     return {"meta": _meta_with(rep, ctx),
             "decomposition": X.risk_decomposition(w, ctx["returns"])}
+
+
+@router.get("/attribution")
+async def attribution_view(period: str = PERIOD, email: str = Depends(_heavy)):
+    rep = await _report(email)
+    attr = rep.get("attribution")
+    if attr is None:
+        st = rep["meta"].get("data_status")
+        return {"meta": rep["meta"], "attribution": None, "status": "unavailable",
+                "reason": f"attribution not computed (data_status={st})"}
+    return {"meta": rep["meta"], "attribution": attr}
 
 
 _SYM = re.compile(r"^[A-Za-z0-9.\-]{1,12}$")
