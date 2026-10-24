@@ -8,6 +8,7 @@
 
 alert ทั้งหมดอิงสถานะ ณ ราคาปิดล่าสุด (as_of) ไม่ใช่ราคาสด
 ถ้าข้อมูลยังไม่พร้อม จะไม่เปิดและไม่ปิด alert ใด ๆ (กันปิดผิดจากข้อมูลขาด)
+ยกเว้นไม่มีเทรด active เลย (no_activity เช่นหลัง Soft Reset): ไม่มีอะไรละเมิดลิมิตได้ ปิดทั้งหมด
 """
 from __future__ import annotations
 
@@ -30,6 +31,7 @@ _evaluate_limit = make_limiter(current_email, 5, 60, "evaluate")
 _limits_write = make_limiter(current_email, 20, 60, "limits")
 
 LIMIT_FIELDS = ("max_drawdown", "max_single_weight", "max_hhi", "min_cash_weight")
+ALERT_TYPES = ("drawdown", "single_weight", "hhi", "low_cash")
 MIN_DD_OBS = 20  # drawdown alert ต้องมีข้อมูลอย่างน้อยเท่านี้ ไม่งั้นข้าม
 # risk_engine ติดป้าย limited_sample ให้ drawdown ทุกค่าที่มีน้อยกว่า 250 observation (ค่ายังคำนวณได้ปกติ)
 # ถ้าข้ามเพราะป้ายนี้ alert drawdown จะเงียบไปเกือบปี จึงรับทั้งสองสถานะ แล้วกันด้วย MIN_DD_OBS แทน
@@ -141,10 +143,11 @@ def _find_conditions(exp: dict, analysis: dict | None, limits: dict):
                 "alert_type": "hhi", "symbol": None, "threshold": lim["max_hhi"],
                 "observed_value": h["value"],
                 "detail": {"n_positions": h.get("n_obs"), "basis": "equity weights"}}
-    elif h.get("status") == "undefined" and not exp.get("positions"):
-        evaluated.add("hhi")          # no positions: nothing can breach, so an active hhi alert may resolve
+    elif not exp.get("positions"):
+        evaluated.add("hhi")  # ไม่มีตำแหน่งหุ้น: ไม่มีอะไรละเมิดได้ alert hhi เก่าปิดได้
     else:
         skipped.append({"alert_type": "hhi", "reason": h.get("reason") or h.get("status")})
+
     # เงินสดต่ำ
     cw = exp.get("cash_weight")
     if lim["min_cash_weight"] is None:
@@ -199,14 +202,18 @@ async def evaluate(email: str = Depends(_evaluate_limit)):
     ctx = rep.get("exposure_ctx")
     meta = rep.get("meta", {})
     status, as_of = meta.get("data_status"), meta.get("as_of")
-    if ctx is None or status not in ("ok", "ok_with_warnings") or not as_of:
+
+    if status == "no_activity":
+        # ไม่มีเทรด active เลย (เช่น หลัง Soft Reset): ไม่มีอะไรละเมิดลิมิตได้ ปิด alert ที่ค้างทั้งหมด
+        found, evaluated, skipped = {}, set(ALERT_TYPES), []
+    elif ctx is None or status not in ("ok", "ok_with_warnings") or not as_of:
         return {"evaluated": False, "reason": "data_not_ready", "data_status": status,
                 "warnings": meta.get("warnings", [])}
-
-    limits = await _get_limits(email)
-    sectors = {s: "n/a" for s in ctx["holdings"]}  # ไม่ใช้ sector ที่นี่ ไม่เรียก Finnhub
-    exp = X.exposure(ctx["holdings"], ctx["cash"], sectors)
-    found, evaluated, skipped = _find_conditions(exp, rep.get("analysis"), limits)
+    else:
+        limits = await _get_limits(email)
+        sectors = {s: "n/a" for s in ctx["holdings"]}  # ไม่ใช้ sector ที่นี่ ไม่เรียก Finnhub
+        exp = X.exposure(ctx["holdings"], ctx["cash"], sectors)
+        found, evaluated, skipped = _find_conditions(exp, rep.get("analysis"), limits)
 
     active_rows = await sb("GET", "stock_risk_alerts",
                            params={"email": f"eq.{email}", "status": "eq.active", "select": "*"}) or []
