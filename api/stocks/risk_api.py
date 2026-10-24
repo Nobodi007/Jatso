@@ -5,11 +5,15 @@ import asyncio
 import logging
 from datetime import date, datetime, timezone
 
+import re
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from . import ledger as L
 from . import risk_data as rd
 from . import risk_engine as E
+from . import risk_exposure as X
 from .auth import current_email
 from .cache import ProviderError, RateLimited
 
@@ -45,6 +49,33 @@ def _nav_json(points):
              "market_value": p.market_value, "stale_symbols": list(p.stale)} for p in points]
 
 
+def _ffill(series: dict[date, float], calendar: list[date], limit: int = 5) -> list[float | None]:
+    prior = [d for d in series if d < calendar[0] and series[d] > 0]
+    last_c, last_k = (series[max(prior)], -1) if prior else (None, None)
+    out = []
+    for k, d in enumerate(calendar):
+        c = series.get(d)
+        if c is not None and c > 0:
+            last_c, last_k = c, k
+        out.append(last_c if last_c is not None and k - last_k <= limit else None)
+    return out
+
+
+def _exposure_ctx(adj, last: date, calendar: list[date], closes: dict, cash: float) -> dict:
+    held = {s: p for s, p in L.positions([t for t in adj if t.session_date <= last]).items() if p.qty > L.QTY_EPS}
+    holdings, returns, skipped = {}, {}, []
+    for s, p in held.items():
+        px = _ffill(closes.get(s, {}), calendar)
+        if px[-1] is None:
+            skipped.append({"code": "position_unpriced", "symbol": s})
+            continue
+        holdings[s] = {"qty": p.qty, "price": px[-1], "avg_cost": p.avg_cost}
+        returns[s] = [None if (px[i] is None or px[i - 1] is None) else px[i] / px[i - 1] - 1
+                      for i in range(1, len(px))]
+    return {"as_of": last.isoformat(), "cash": cash, "holdings": holdings, "returns": returns,
+            "skipped": skipped, "bench_returns": None}
+
+
 async def _build(email: str) -> dict:
     today = datetime.now(L.ET).date()
     f_start, f_end = rd.window(today)
@@ -56,8 +87,11 @@ async def _build(email: str) -> dict:
         "providers": {"prices": "Financial Modeling Prep EOD", "risk_free": "FMP treasury-rates 3M"},
         "method_version": E.METHOD_VERSION, "computed_at": datetime.now(timezone.utc).isoformat()}
 
+    state: dict = {}
+
     def done(status: str, **body):
-        return {"meta": {**meta, "data_status": status, "warnings": warnings}, **body}
+        extra = {"exposure_ctx": state["ctx"]} if "ctx" in state else {}
+        return {"meta": {**meta, "data_status": status, "warnings": warnings}, **extra, **body}
 
     acc = await rd.account(email)
     if not acc:
@@ -129,6 +163,7 @@ async def _build(email: str) -> dict:
         warnings.append({"code": "ledger_invalid", "detail": str(e)})
         return done("ledger_integrity_error")
     warnings.extend(issues)
+    state["ctx"] = _exposure_ctx(adj, last, calendar, closes, nav[-1].cash)
 
     for t in adj:                                            # price sanity vs daily range
         b = bars.get(t.symbol, {}).get(t.ts.astimezone(L.ET).date())
@@ -154,6 +189,7 @@ async def _build(email: str) -> dict:
     if bench_rows:
         bmap = {date.fromisoformat(r["date"]): r["close"] for r in bench_rows}
         rb = [bmap[dates[i]] / bmap[dates[i - 1]] - 1 for i in range(1, len(dates))]
+        state["ctx"]["bench_returns"] = rb
     rf = _daily_rf(rf_map, dates)
     if rf_map and rf is None:
         warnings.append({"code": "risk_free_gap", "detail": "gap > 7 days; Sharpe/Alpha unavailable"})
@@ -211,3 +247,79 @@ async def metrics(period: str = PERIOD, email: str = Depends(current_email)):
     keep = ("max_drawdown", "current_drawdown", "drawdown_episode", "var_95", "es_95", "downside_deviation")
     return {"meta": rep["meta"], "risk_adjusted": a.get("risk_adjusted"),
             "tail": {k: tail.get(k) for k in keep}, "conventions": a.get("conventions")}
+
+
+# ---------------- Phase 2: exposure / risk decomposition / stress ----------------
+async def _ctx(email: str):
+    rep = await _report(email)
+    ctx = rep.get("exposure_ctx")
+    if not ctx or not ctx["holdings"]:
+        return rep, None
+    return rep, ctx
+
+
+def _no_ctx(rep: dict, key: str) -> dict:
+    st = rep["meta"].get("data_status")
+    return {"meta": rep["meta"], key: None,
+            "status": "unavailable", "reason": f"no priced positions (data_status={st})"}
+
+
+def _meta_with(rep: dict, ctx: dict, extra: list[dict] | None = None, **more) -> dict:
+    w = list(rep["meta"]["warnings"]) + list(ctx["skipped"]) + list(extra or [])
+    return {**rep["meta"], "as_of": ctx["as_of"], "warnings": w, **more}
+
+
+@router.get("/exposure")
+async def exposure(period: str = PERIOD, email: str = Depends(current_email)):
+    rep, ctx = await _ctx(email)
+    if ctx is None:
+        return _no_ctx(rep, "exposure")
+    syms = list(ctx["holdings"])
+
+    async def sec(s):
+        try:
+            return await rd.sector(s)
+        except ProviderError:
+            return None
+
+    got = await asyncio.gather(*[sec(s) for s in syms])
+    sectors = dict(zip(syms, got))
+    missing = [{"code": "sector_unavailable", "symbol": s} for s, v in sectors.items() if not v]
+    return {"meta": _meta_with(rep, ctx, missing,
+                               sector_classification="Finnhub industry (not GICS); approximate"),
+            "exposure": X.exposure(ctx["holdings"], ctx["cash"], sectors)}
+
+
+@router.get("/risk-decomposition")
+async def risk_decomposition(period: str = PERIOD, email: str = Depends(current_email)):
+    rep, ctx = await _ctx(email)
+    if ctx is None:
+        return _no_ctx(rep, "decomposition")
+    w, _, _ = X.nav_weights(ctx["holdings"], ctx["cash"])
+    return {"meta": _meta_with(rep, ctx),
+            "decomposition": X.risk_decomposition(w, ctx["returns"])}
+
+
+_SYM = re.compile(r"^[A-Za-z0-9.\-]{1,12}$")
+
+
+class StressIn(BaseModel):
+    market_shock: float | None = Field(default=None, ge=-1.0, le=1.0)
+    shocks: dict[str, float] = Field(default_factory=dict)
+
+
+@router.post("/stress-test")
+async def stress_test(body: StressIn, email: str = Depends(current_email)):
+    shocks = {k.strip().upper(): v for k, v in body.shocks.items()}
+    if body.market_shock is None and not shocks:
+        raise HTTPException(400, "Provide market_shock and/or shocks.")
+    if len(shocks) > rd.MAX_SYMBOLS or any(not _SYM.match(k) or not -1.0 <= v <= 1.0 for k, v in shocks.items()):
+        raise HTTPException(400, "Invalid shocks (symbols A-Z0-9.-, values within -1..1).")
+    rep, ctx = await _ctx(email)
+    if ctx is None:
+        return _no_ctx(rep, "stress")
+    betas = X.holding_betas(ctx["returns"], ctx["bench_returns"])
+    out = X.stress(ctx["holdings"], ctx["cash"], betas, body.market_shock, shocks)
+    out["unknown_symbols"] = sorted(set(shocks) - set(ctx["holdings"]))
+    out["betas"] = {s: m.to_dict() for s, m in betas.items()}
+    return {"meta": _meta_with(rep, ctx), "stress": out}
