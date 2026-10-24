@@ -17,16 +17,28 @@ FMP_KEY = os.getenv("FMP_KEY", "")
 _client = httpx.AsyncClient(timeout=10)
 
 
+class PlanRestricted(ProviderError):
+    """Provider refused: symbol/endpoint is outside our subscription."""
+
+
 async def _get_json(url: str, params: dict):
     try:
         resp = await _client.get(url, params=params)
     except httpx.HTTPError as e:
-        raise ProviderError(str(e)) from e
+        raise ProviderError(type(e).__name__) from e      # never echo the URL (it may carry an api key)
     if resp.status_code == 429:
         raise RateLimited(url)
+    head = resp.text[:300].lower()
     if resp.status_code >= 400:
+        if resp.status_code in (402, 403) or "subscription" in head:
+            raise PlanRestricted(f"{url} -> {resp.status_code}")
         raise ProviderError(f"{url} -> {resp.status_code}")
-    return resp.json()
+    try:
+        return resp.json()
+    except ValueError:
+        if "subscription" in head or head.startswith("premium"):
+            raise PlanRestricted(f"{url} -> restricted")
+        raise ProviderError(f"{url} -> non-JSON response")
 
 
 # ---------- Finnhub ----------
@@ -170,3 +182,100 @@ async def treasury_3m(start: date, end: date) -> list[dict]:
                 out[str(r["date"])[:10]] = float(v) / 100.0
         cur = chunk_end + timedelta(days=1)
     return [{"date": d, "rate": out[d]} for d in sorted(out)]
+
+
+# ---------- Yahoo Finance fallback (UNOFFICIAL; used only when FMP refuses/fails) ----------
+import math
+import time as _time
+from datetime import time as _dtime
+from zoneinfo import ZoneInfo
+
+_NY = ZoneInfo("America/New_York")
+_yf_sem = asyncio.Semaphore(2)
+_fmp_denied: dict[str, float] = {}        # symbol -> time FMP said "not in plan"
+_DENY_TTL = 24 * 3600
+
+
+def _fmp_skipped(symbol: str) -> bool:
+    t = _fmp_denied.get(symbol)
+    return t is not None and _time.time() - t < _DENY_TTL
+
+
+def _yf_sym(symbol: str) -> str:
+    return symbol if symbol.startswith("^") else symbol.replace(".", "-")
+
+
+def _yf_history_sync(symbol: str, start: date, end: date) -> list[dict]:
+    import yfinance as yf
+    df = yf.Ticker(_yf_sym(symbol)).history(
+        start=start.isoformat(), end=(end + timedelta(days=1)).isoformat(),
+        auto_adjust=False, actions=False)                      # Close = split-adjusted, not dividend-adjusted
+    now = datetime.now(_NY)
+    out = []
+    for ts, r in df.iterrows():
+        try:
+            o, h, l, c = (float(r[k]) for k in ("Open", "High", "Low", "Close"))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not all(math.isfinite(x) for x in (o, h, l, c)) or c <= 0:
+            continue
+        d = ts.date()
+        if d == now.date() and now.time() < _dtime(16, 15):    # drop today's unfinished bar
+            continue
+        out.append({"date": d.isoformat(), "open": o, "high": h, "low": l, "close": c, "src": "yahoo"})
+    out.sort(key=lambda r: r["date"])
+    return out
+
+
+def _yf_splits_sync(symbol: str) -> list[dict]:
+    import yfinance as yf
+    df = yf.Ticker(_yf_sym(symbol)).history(period="max", interval="1d", auto_adjust=False, actions=True)
+    if df is None or df.empty:
+        raise ProviderError("yahoo: empty history")            # failure != "no splits"
+    out = []
+    col = df["Stock Splits"] if "Stock Splits" in df.columns else []
+    for ts, ratio in (col.items() if len(col) else []):
+        try:
+            r = float(ratio)
+        except (TypeError, ValueError):
+            continue
+        if r > 0 and math.isfinite(r) and r != 1.0:
+            out.append({"date": ts.date().isoformat(), "ratio": r})
+    return sorted(out, key=lambda r: r["date"])
+
+
+async def _yahoo(fn, *args):
+    async with _yf_sem:
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(fn, *args), timeout=25)
+        except ProviderError:
+            raise
+        except Exception as e:
+            raise ProviderError(f"yahoo: {type(e).__name__}") from e
+
+
+async def daily_history_range_any(symbol: str, start: date, end: date) -> list[dict]:
+    """FMP first; Yahoo only if FMP refuses/fails/returns nothing. Rows carry src='fmp'|'yahoo'."""
+    if not _fmp_skipped(symbol):
+        try:
+            rows = await daily_history_range(symbol, start, end)
+            if rows:
+                for r in rows:
+                    r["src"] = "fmp"
+                return rows
+        except PlanRestricted:
+            _fmp_denied[symbol] = _time.time()
+        except ProviderError as e:                              # includes RateLimited
+            log.info("fmp eod failed for %s (%s); trying yahoo", symbol, type(e).__name__)
+    return await _yahoo(_yf_history_sync, symbol, start, end)
+
+
+async def stock_splits_any(symbol: str) -> list[dict]:
+    if not _fmp_skipped(symbol):
+        try:
+            return await stock_splits(symbol)
+        except PlanRestricted:
+            _fmp_denied[symbol] = _time.time()
+        except ProviderError as e:
+            log.info("fmp splits failed for %s (%s); trying yahoo", symbol, type(e).__name__)
+    return await _yahoo(_yf_splits_sync, symbol)
