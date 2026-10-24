@@ -10,6 +10,7 @@ from . import providers as p
 from .cache import ProviderError, RateLimited
 from .db import sb
 
+SECTOR_TTL = 7 * 24 * 3600
 BENCHMARK = "^GSPC"
 LOOKBACK_DAYS = 400
 MAX_SYMBOLS = 40
@@ -64,6 +65,12 @@ async def eod(symbol: str, start: date, end: date) -> list[dict]:
 async def splits(symbol: str) -> list[tuple[date, float]]:
     rows = await memo(f"split:{symbol}", SPLIT_TTL, lambda: p.stock_splits_any(symbol))
     return [(date.fromisoformat(r["date"]), r["ratio"]) for r in rows]
+
+
+async def sector(symbol: str) -> str | None:
+    """Finnhub industry label (NOT GICS)."""
+    d = await memo(f"sector:{symbol}", SECTOR_TTL, lambda: p.finnhub("/stock/profile2", symbol=symbol))
+    return ((d or {}).get("finnhubIndustry") or None) if isinstance(d, dict) else None
 
 
 async def risk_free(start: date, end: date) -> dict[date, float]:
