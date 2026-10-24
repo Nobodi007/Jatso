@@ -14,24 +14,24 @@ from . import ledger as L
 from . import risk_data as rd
 from .db import SbError, sb
 from .router import get_quote
-from .auth_sanitize import sanitize_401
 
 log = logging.getLogger("stocks.stock_book")
 
-@sanitize_401
+
 def get_current_email(authorization: str = Header(default="")) -> str:
     token = authorization.removeprefix("Bearer ").strip()
     if not token or token in ("null", "undefined"):
-        raise HTTPException(401, "frontend ไม่ได้ส่ง token มา (getStocksToken คืนค่าว่าง)")
+        raise HTTPException(401, "unauthorized")
     try:
         data = jwt.decode(token, os.environ["AUTH_JWT_SECRET"], algorithms=["HS256"])
     except KeyError:
-        raise HTTPException(401, "ไม่มี env AUTH_JWT_SECRET")
-    except Exception as e:
-        raise HTTPException(401, f"decode ไม่ผ่าน: {type(e).__name__}: {e}")
+        log.error("AUTH_JWT_SECRET is not set")
+        raise HTTPException(401, "unauthorized")
+    except Exception:
+        raise HTTPException(401, "unauthorized")       # never echo JWT errors/claims back to the caller
     email = data.get("email") or data.get("sub")
     if not email:
-        raise HTTPException(401, f"ไม่มีอีเมลใน token (claims: {list(data.keys())})")
+        raise HTTPException(401, "unauthorized")
     return str(email).lower()
 
 
