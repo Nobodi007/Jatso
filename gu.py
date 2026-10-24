@@ -3129,6 +3129,39 @@ def _normalize_loaded_sim_state (d :Any )->Optional[dict [str ,Any ]]:
             d .pop ("current_date",None )
     return d
 
+_SIM_DATA_CACHE: dict[tuple[str, str], Any] = {}
+
+
+def _fetch_sim_rows(sb, mode: str, actor) -> list[dict]:
+    """Fetch only actor/updated_at first; pull `data` only when not cached."""
+    q = sb.table("sim_state").select("actor,updated_at")
+    if mode == "exact":
+        q = q.eq("actor", actor)
+    elif mode == "ilike":
+        q = q.ilike("actor", actor)
+    metas = q.order("updated_at", desc=True).limit(3).execute().data or []
+
+    rows: list[dict] = []
+    for m in metas:
+        key = (str(m.get("actor")), str(m.get("updated_at")))
+        if key not in _SIM_DATA_CACHE:
+            r = (
+                sb.table("sim_state")
+                .select("data")
+                .eq("actor", m["actor"])
+                .eq("updated_at", m["updated_at"])
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if not r:
+                continue
+            if len(_SIM_DATA_CACHE) > 20:
+                _SIM_DATA_CACHE.clear()
+            _SIM_DATA_CACHE[key] = r[0].get("data")
+        rows.append({**m, "data": copy.deepcopy(_SIM_DATA_CACHE[key])})
+    return rows
 def load_sim_state (path :Optional [Path ]=None )->Optional[dict [str ,Any ]]:
     if is_guest_mode ():
         return None
@@ -3148,14 +3181,9 @@ def load_sim_state (path :Optional [Path ]=None )->Optional[dict [str ,Any ]]:
         for actor in candidates:
             actor_key =str (actor ).strip ().lower ()
             for mode in ("exact","ilike","broad"):
-                try:
-                    q =sb .table ("sim_state").select ("data,actor,updated_at")
-                    if mode == "exact":
-                        q =q .eq ("actor",actor )
-                    elif mode == "ilike":
-                        q =q .ilike ("actor",actor )
-                    res =q .order ("updated_at",desc=True ).limit (20 ).execute ()
-                    rows =res .data or []
+                  try:
+                    rows = _fetch_sim_rows(sb, mode, actor)
+                    # ...ตรวจ actor และ normalize data... (ของเดิม ไม่ต้องแก้)
                     if mode == "broad":
                         rows =[
                             r for r in rows
