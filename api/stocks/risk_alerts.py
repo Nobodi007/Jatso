@@ -27,6 +27,7 @@ router = APIRouter(prefix="/api/stocks/risk", tags=["stock-risk-alerts"])
 
 # evaluate เรียก FMP/Yahoo ทุกครั้ง: จำกัด 5 ครั้ง/นาที/ผู้ใช้
 _evaluate_limit = make_limiter(current_email, 5, 60, "evaluate")
+_limits_write = make_limiter(current_email, 20, 60, "limits")
 
 LIMIT_FIELDS = ("max_drawdown", "max_single_weight", "max_hhi", "min_cash_weight")
 MIN_DD_OBS = 20  # drawdown alert ต้องมีข้อมูลอย่างน้อยเท่านี้ ไม่งั้นข้าม
@@ -69,7 +70,7 @@ async def get_limits(email: str = Depends(current_email)):
 
 
 @router.put("/limits")
-async def put_limits(body: LimitsIn, email: str = Depends(current_email)):
+async def put_limits(body: LimitsIn, email: str = Depends(_limits_write)):
     changes = {k: getattr(body, k) for k in body.model_fields_set if k in LIMIT_FIELDS}
     if not changes:
         raise HTTPException(400, "no_fields")
@@ -140,9 +141,10 @@ def _find_conditions(exp: dict, analysis: dict | None, limits: dict):
                 "alert_type": "hhi", "symbol": None, "threshold": lim["max_hhi"],
                 "observed_value": h["value"],
                 "detail": {"n_positions": h.get("n_obs"), "basis": "equity weights"}}
+    elif h.get("status") == "undefined" and not exp.get("positions"):
+        evaluated.add("hhi")          # no positions: nothing can breach, so an active hhi alert may resolve
     else:
         skipped.append({"alert_type": "hhi", "reason": h.get("reason") or h.get("status")})
-
     # เงินสดต่ำ
     cw = exp.get("cash_weight")
     if lim["min_cash_weight"] is None:
@@ -193,8 +195,9 @@ def _plan(found: dict, evaluated: set, active_rows: list[dict]):
 
 @router.post("/alerts/evaluate")
 async def evaluate(email: str = Depends(_evaluate_limit)):
-    rep, ctx = await _ctx(email)
-    meta = (rep or {}).get("meta", {}) if isinstance(rep, dict) else {}
+    rep = await _report(email)
+    ctx = rep.get("exposure_ctx")
+    meta = rep.get("meta", {})
     status, as_of = meta.get("data_status"), meta.get("as_of")
     if ctx is None or status not in ("ok", "ok_with_warnings") or not as_of:
         return {"evaluated": False, "reason": "data_not_ready", "data_status": status,
