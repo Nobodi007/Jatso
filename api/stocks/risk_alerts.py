@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from . import risk_exposure as X
 from .db import sb
-from .risk_api import _ctx, current_email
+from .risk_api import _report, current_email
 from .risk_ratelimit import make_limiter
 
 log = logging.getLogger(__name__)
