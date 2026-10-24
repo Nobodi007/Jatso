@@ -20,9 +20,13 @@ from pydantic import BaseModel, Field
 from . import risk_exposure as X
 from .db import sb
 from .risk_api import _ctx, current_email
+from .risk_ratelimit import make_limiter
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/stocks/risk", tags=["stock-risk-alerts"])
+
+# evaluate เรียก FMP/Yahoo ทุกครั้ง: จำกัด 5 ครั้ง/นาที/ผู้ใช้
+_evaluate_limit = make_limiter(current_email, 5, 60, "evaluate")
 
 LIMIT_FIELDS = ("max_drawdown", "max_single_weight", "max_hhi", "min_cash_weight")
 MIN_DD_OBS = 20  # drawdown alert ต้องมีข้อมูลอย่างน้อยเท่านี้ ไม่งั้นข้าม
@@ -169,7 +173,7 @@ def _plan(found: dict, evaluated: set, active_rows: list[dict]):
 
 
 @router.post("/alerts/evaluate")
-async def evaluate(email: str = Depends(current_email)):
+async def evaluate(email: str = Depends(_evaluate_limit)):
     rep, ctx = await _ctx(email)
     meta = (rep or {}).get("meta", {}) if isinstance(rep, dict) else {}
     status, as_of = meta.get("data_status"), meta.get("as_of")
