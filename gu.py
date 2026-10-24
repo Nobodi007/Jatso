@@ -3181,7 +3181,7 @@ def load_sim_state (path :Optional [Path ]=None )->Optional[dict [str ,Any ]]:
         for actor in candidates:
             actor_key =str (actor ).strip ().lower ()
             for mode in ("exact","ilike","broad"):
-                  try:
+                try:
                     rows = _fetch_sim_rows(sb, mode, actor)
                     # ...ตรวจ actor และ normalize data... (ของเดิม ไม่ต้องแก้)
                     if mode == "broad":
