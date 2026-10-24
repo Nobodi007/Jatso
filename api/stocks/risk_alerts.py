@@ -95,6 +95,16 @@ async def put_limits(body: LimitsIn, email: str = Depends(current_email)):
 
 
 # ------------------------------------------------------------------ evaluation
+def _drawdown_metric(analysis: dict | None):
+    """ดึง max_drawdown จาก analysis["tail"]["max_drawdown"] (โครงสร้างจริงของ /overview)
+    คืน dict ของ metric หรือ None ถ้าไม่มีโครงสร้างนี้"""
+    tail = (analysis or {}).get("tail")
+    if not isinstance(tail, dict):
+        return None
+    md = tail.get("max_drawdown")
+    return md if isinstance(md, dict) else None
+
+
 def _find_conditions(exp: dict, analysis: dict | None, limits: dict):
     """คืน (found, evaluated, skipped)
     found: {(alert_type, symbol|""): cond}   เงื่อนไขที่ละเมิดลิมิตตอนนี้
@@ -145,11 +155,20 @@ def _find_conditions(exp: dict, analysis: dict | None, limits: dict):
         skipped.append({"alert_type": "low_cash", "reason": "cash_weight_unavailable"})
 
     # drawdown = max drawdown ของช่วงรายงาน (peak-to-trough) ไม่ใช่ drawdown ปัจจุบัน
-    md = ((analysis or {}).get("tail") or {}).get("max_drawdown")  # โครงสร้างจริง: analysis.tail.max_drawdown
+    # อ่านจาก analysis["tail"]["max_drawdown"]
+    # TODO: tail.current_drawdown ตรงกับความหมายของลิมิตมากกว่า ค่อยเปลี่ยนเมื่อเห็นรูปแบบค่าจริงจาก /metrics
+    md = _drawdown_metric(analysis)
     if lim["max_drawdown"] is None:
         evaluated.add("drawdown")
-    elif (isinstance(md, dict) and md.get("status") == "ok"
-          and md.get("value") is not None and (md.get("n_obs") or 0) >= MIN_DD_OBS):
+    elif md is None:
+        skipped.append({"alert_type": "drawdown", "reason": "analysis_unavailable"})
+    elif md.get("status") != "ok" or md.get("value") is None:
+        skipped.append({"alert_type": "drawdown",
+                        "reason": md.get("reason") or md.get("status") or "drawdown_unavailable"})
+    elif (md.get("n_obs") or 0) < MIN_DD_OBS:
+        skipped.append({"alert_type": "drawdown",
+                        "reason": f"insufficient_data: n_obs={md.get('n_obs') or 0} < {MIN_DD_OBS}"})
+    else:
         evaluated.add("drawdown")
         dd = abs(float(md["value"]))
         if dd > lim["max_drawdown"]:
@@ -157,14 +176,6 @@ def _find_conditions(exp: dict, analysis: dict | None, limits: dict):
                 "alert_type": "drawdown", "symbol": None, "threshold": lim["max_drawdown"],
                 "observed_value": dd,
                 "detail": {"n_obs": md.get("n_obs"), "basis": "max drawdown over report period"}}
-    else:
-        if not isinstance(md, dict):
-            reason = "analysis_unavailable"
-        elif md.get("status") == "ok" and md.get("value") is not None:
-            reason = f"need >={MIN_DD_OBS} observations (n_obs={md.get('n_obs')})"
-        else:
-            reason = md.get("reason") or md.get("status")
-        skipped.append({"alert_type": "drawdown", "reason": reason})
 
     return found, evaluated, skipped
 
