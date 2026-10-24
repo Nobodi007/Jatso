@@ -103,9 +103,10 @@ async def _start_screener():
 # ไม่เปิด credentials เพราะ API นี้ไม่ได้ใช้ cookie authentication
 # =========================================================
 
+_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_origins or ["*"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
