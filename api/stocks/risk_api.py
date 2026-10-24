@@ -16,6 +16,7 @@ from . import risk_engine as E
 from . import risk_exposure as X
 from .auth import current_email
 from .cache import ProviderError, RateLimited
+from .risk_ratelimit import make_limiter
 
 log = logging.getLogger("stocks.risk_api")
 router = APIRouter(prefix="/api/stocks/risk", tags=["stock-risk"])
@@ -213,9 +214,12 @@ async def _report(email: str) -> dict:
 
 PERIOD = Query("1y", pattern="^1y$")
 
+# จำกัด 30 ครั้ง/นาที/ผู้ใช้ รวมทุก endpoint ในไฟล์นี้ (หน้า Risk Center เปิดทีเดียวยิงหลายตัว)
+_heavy = make_limiter(current_email, 30, 60, "heavy")
+
 
 @router.get("/overview")
-async def overview(period: str = PERIOD, email: str = Depends(current_email)):
+async def overview(period: str = PERIOD, email: str = Depends(_heavy)):
     rep = await _report(email)
     a = rep.get("analysis") or {}
     perf, ra, tail = a.get("performance", {}), a.get("risk_adjusted", {}), a.get("tail", {})
@@ -231,7 +235,7 @@ async def overview(period: str = PERIOD, email: str = Depends(current_email)):
 
 
 @router.get("/performance")
-async def performance(period: str = PERIOD, email: str = Depends(current_email)):
+async def performance(period: str = PERIOD, email: str = Depends(_heavy)):
     rep = await _report(email)
     a = rep.get("analysis") or {}
     return {"meta": rep["meta"], "metrics": a.get("performance"), "series": a.get("series"),
@@ -240,7 +244,7 @@ async def performance(period: str = PERIOD, email: str = Depends(current_email))
 
 
 @router.get("/metrics")
-async def metrics(period: str = PERIOD, email: str = Depends(current_email)):
+async def metrics(period: str = PERIOD, email: str = Depends(_heavy)):
     rep = await _report(email)
     a = rep.get("analysis") or {}
     tail = a.get("tail") or {}
@@ -270,7 +274,7 @@ def _meta_with(rep: dict, ctx: dict, extra: list[dict] | None = None, **more) ->
 
 
 @router.get("/exposure")
-async def exposure(period: str = PERIOD, email: str = Depends(current_email)):
+async def exposure(period: str = PERIOD, email: str = Depends(_heavy)):
     rep, ctx = await _ctx(email)
     if ctx is None:
         return _no_ctx(rep, "exposure")
@@ -291,7 +295,7 @@ async def exposure(period: str = PERIOD, email: str = Depends(current_email)):
 
 
 @router.get("/risk-decomposition")
-async def risk_decomposition(period: str = PERIOD, email: str = Depends(current_email)):
+async def risk_decomposition(period: str = PERIOD, email: str = Depends(_heavy)):
     rep, ctx = await _ctx(email)
     if ctx is None:
         return _no_ctx(rep, "decomposition")
@@ -309,7 +313,7 @@ class StressIn(BaseModel):
 
 
 @router.post("/stress-test")
-async def stress_test(body: StressIn, email: str = Depends(current_email)):
+async def stress_test(body: StressIn, email: str = Depends(_heavy)):
     shocks = {k.strip().upper(): v for k, v in body.shocks.items()}
     if body.market_shock is None and not shocks:
         raise HTTPException(400, "Provide market_shock and/or shocks.")
