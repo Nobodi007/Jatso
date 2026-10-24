@@ -58,11 +58,11 @@ def window(today: date) -> tuple[date, date]:
 
 
 async def eod(symbol: str, start: date, end: date) -> list[dict]:
-    return await memo(f"eod:{symbol}:{start}:{end}", EOD_TTL, lambda: p.daily_history_range(symbol, start, end))
+    return await memo(f"eod:{symbol}:{start}:{end}", EOD_TTL, lambda: p.daily_history_range_any(symbol, start, end))
 
 
 async def splits(symbol: str) -> list[tuple[date, float]]:
-    rows = await memo(f"split:{symbol}", SPLIT_TTL, lambda: p.stock_splits(symbol))
+    rows = await memo(f"split:{symbol}", SPLIT_TTL, lambda: p.stock_splits_any(symbol))
     return [(date.fromisoformat(r["date"]), r["ratio"]) for r in rows]
 
 
