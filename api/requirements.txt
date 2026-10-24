@@ -13,4 +13,4 @@ PyYAML
 google-auth>=2.0
 PyJWT
 httpx
-
+tzdata
