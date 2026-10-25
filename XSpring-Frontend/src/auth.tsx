@@ -105,12 +105,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 /** แสดงหน้า login ถ้ายังไม่ล็อกอิน ถ้าล็อกอินแล้วค่อย render children */
 export function AuthGate({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(() => readUser())
-  const [showLogin, setShowLogin] = useState(false)
 
   const logout = useCallback(() => {
     clearSession()
     setUser(null)
-    setShowLogin(false)
   }, [])
 
   useEffect(() => {
@@ -119,10 +117,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, [logout])
 
   if (!user) return <LoginScreen onLoggedIn={setUser} onBack={() => {}} />
-  
+
   return <AuthContext.Provider value={{ user, logout }}>{children}</AuthContext.Provider>
 }
-
 /* ---------- login screen ---------- */
 
 function LoginScreen({
