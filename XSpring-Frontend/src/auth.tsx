@@ -119,6 +119,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, [logout])
 
   if (!user) return <LoginScreen onLoggedIn={setUser} onBack={() => {}} />
+  
+  return <AuthContext.Provider value={{ user, logout }}>{children}</AuthContext.Provider>
+}
 
 /* ---------- login screen ---------- */
 
