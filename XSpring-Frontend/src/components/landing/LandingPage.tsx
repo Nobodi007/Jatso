@@ -33,6 +33,7 @@ const MENU_KEY: Record<string, string> = {
   "เรียนรู้": "nav.learn",
   "ข่าว": "nav.news",
   "ลองลงทุนย้อนหลัง": "nav.backtest",
+  "ติดต่อเรา": "nav.contact",
 }
 
 // เมนูไหนเปิดหน้าอะไร (เมนูที่ไม่อยู่ในนี้ = พาไปล็อกอิน)
