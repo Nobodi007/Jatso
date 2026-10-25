@@ -269,7 +269,7 @@ async def metrics(period: str = PERIOD, email: str = Depends(_heavy)):
     rep = await _report(email)
     a = rep.get("analysis") or {}
     tail = a.get("tail") or {}
-        keep = ("max_drawdown", "current_drawdown", "drawdown_episode", "longest_underwater_trading_days",
+    keep = ("max_drawdown", "current_drawdown", "drawdown_episode", "longest_underwater_trading_days",
             "drawdown_series", "extremes", "var_95", "es_95", "downside_deviation")
     return {"meta": rep["meta"], "risk_adjusted": a.get("risk_adjusted"),
             "tail": {k: tail.get(k) for k in keep}, "conventions": a.get("conventions")}
