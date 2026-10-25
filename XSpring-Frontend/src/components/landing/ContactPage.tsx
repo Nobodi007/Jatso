@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { ArrowUpRight, Check, Copy, Mail, MapPin, Navigation, Phone } from "lucide-react"
+import { ArrowUpRight, Check, Copy, Mail, MapPin, MessageCircle, Navigation, Phone } from "lucide-react"
 import { useLanguage } from "../../i18n/LanguageContext"
 
 const CONTACT = {
@@ -8,6 +8,28 @@ const CONTACT = {
   phone: "0901556855",
   email: "teerapat30204@gmail.com",
   linkedin: "https://www.linkedin.com/in/thiraphat-niyom-11044727b/",
+  line: "https://line.me/ti/p/yQZavSfxhU",
+  instagram: "https://www.instagram.com/jatso007",
+  instagramHandle: "@jatso007",
+}
+
+function InstagramIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <rect x="3" y="3" width="18" height="18" rx="5" />
+      <circle cx="12" cy="12" r="4" />
+      <circle cx="17.5" cy="6.5" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  )
 }
 
 function LinkedinIcon({ className }: { className?: string }) {
@@ -116,6 +138,22 @@ export default function ContactPage() {
                 label={t("contact.linkedin")}
                 value={t("contact.linkedinDesc")}
                 href={CONTACT.linkedin}
+                external
+                action={<ArrowUpRight className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />}
+              />
+              <ContactRow
+                icon={<MessageCircle className="h-5 w-5" />}
+                label={t("contact.line")}
+                value={t("contact.lineDesc")}
+                href={CONTACT.line}
+                external
+                action={<ArrowUpRight className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />}
+              />
+              <ContactRow
+                icon={<InstagramIcon className="h-5 w-5" />}
+                label={t("contact.instagram")}
+                value={CONTACT.instagramHandle}
+                href={CONTACT.instagram}
                 external
                 action={<ArrowUpRight className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />}
               />
