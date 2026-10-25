@@ -77,7 +77,23 @@ def _exposure_ctx(adj, last: date, calendar: list[date], closes: dict, cash: flo
                       for i in range(1, len(px))]
     return {"as_of": last.isoformat(), "cash": cash, "holdings": holdings, "returns": returns,
             "skipped": skipped, "bench_returns": None}
-
+    
+def _realized_summary(adj) -> dict | None:
+    try:
+        pos = L.positions(adj)
+    except L.LedgerError:
+        return None
+    gross = sum(p.realized_pnl_gross for p in pos.values())
+    fees = sum(p.fees for p in pos.values())
+    return {
+        "basis": "average cost, fees not capitalized; split-adjusted; net = gross - all fees paid to date",
+        "realized_gross": round(gross, 2),
+        "fees_paid": round(fees, 2),
+        "realized_net_of_fees": round(gross - fees, 2),
+        "symbols": [{"symbol": s, "realized_gross": round(p.realized_pnl_gross, 2),
+                     "fees": round(p.fees, 2), "open_qty": p.qty}
+                    for s, p in sorted(pos.items())],
+    }
 
 async def _build(email: str) -> dict:
     today = datetime.now(L.ET).date()
@@ -94,6 +110,8 @@ async def _build(email: str) -> dict:
 
     def done(status: str, **body):
         extra = {"exposure_ctx": state["ctx"]} if "ctx" in state else {}
+        if "realized" in state:
+            extra["realized"] = state["realized"]
         return {"meta": {**meta, "data_status": status, "warnings": warnings}, **extra, **body}
 
     acc = await rd.account(email)
@@ -167,6 +185,7 @@ async def _build(email: str) -> dict:
         return done("ledger_integrity_error")
     warnings.extend(issues)
     state["ctx"] = _exposure_ctx(adj, last, calendar, closes, nav[-1].cash)
+    state["realized"] = _realized_summary(adj)
 
     for t in adj:                                            # price sanity vs daily range
         b = bars.get(t.symbol, {}).get(t.ts.astimezone(L.ET).date())
@@ -273,6 +292,15 @@ async def metrics(period: str = PERIOD, email: str = Depends(_heavy)):
             "drawdown_series", "extremes", "var_95", "es_95", "downside_deviation")
     return {"meta": rep["meta"], "risk_adjusted": a.get("risk_adjusted"),
             "tail": {k: tail.get(k) for k in keep}, "conventions": a.get("conventions")}
+
+@router.get("/realized")
+async def realized(period: str = PERIOD, email: str = Depends(_heavy)):
+    rep = await _report(email)
+    data = rep.get("realized")
+    if data is None:
+        return {"meta": rep["meta"], "realized": None, "status": "unavailable",
+                "reason": f"data_status={rep['meta'].get('data_status')}"}
+    return {"meta": rep["meta"], "realized": data}
 
 def compute_drawdown(points, min_points: int = 5) -> dict:
     """points: [(YYYY-MM-DD, nav)] เรียงเก่า -> ใหม่ ไม่ดึงข้อมูลเพิ่ม ใช้ NAV ที่มีอยู่แล้ว"""
