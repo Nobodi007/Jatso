@@ -158,6 +158,20 @@ def beta_r2(rp, rb, min_obs=MIN_OBS_RATIO) -> dict[str, Metric]:
         out["correlation"] = _ok(rho, "ratio", fc, n, MIN_OBS_FULL)
         out["r_squared"] = _ok(rho * rho, "ratio", fr, n, MIN_OBS_FULL)
     return out
+MIN_OBS_DOWN, LIMITED_DOWN = 20, 60
+
+def downside_beta(rp, rb, min_obs=MIN_OBS_DOWN) -> Metric:
+    f = "Cov(r_p,r_b | r_b<0)/Var(r_b | r_b<0)"
+    _validate(rp, rb)
+    sel = [(a, b) for a, b in zip(rp, rb) if b < 0]
+    n = len(sel)
+    if n < max(min_obs, 3):
+        return _insufficient("ratio", f, n, min_obs)
+    xp, xb = [a for a, _ in sel], [b for _, b in sel]
+    vb = _var(xb)
+    if vb < EPS:
+        return _na(UNDEFINED, "ratio", f, n, "benchmark variance on down days is zero")
+    return _ok(_cov(xp, xb) / vb, "ratio", f, n, LIMITED_DOWN)
 
 CAPM_KEYS = ("jensens_alpha", "alpha_t_stat", "beta_capm", "treynor", "appraisal_ratio")
 
@@ -360,6 +374,7 @@ def analyze(rp, rb, rf, dates: Sequence[date], mar_annual=0.0, rolling_window=63
     ve = historical_var_es(rp)
     ra = {"sharpe": sharpe_ratio(rp, rf), "sortino": sortino_ratio(rp, mar_annual),
           "information_ratio": information_ratio(rp, rb) if rb is not None else na_b(),
+          "downside_beta": downside_beta(rp, rb) if rb is not None else na_b(),
           "tracking_error": perf["tracking_error"], **capm_regression(rp, rb, rf),
           "calmar": calmar(perf["cagr"], dd["max_drawdown"].value, n)}
     tail = {"max_drawdown": dd["max_drawdown"], "current_drawdown": dd["current_drawdown"],
