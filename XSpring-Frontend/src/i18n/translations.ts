@@ -5,7 +5,7 @@ const th = {
     learn: "เรียนรู้",
     news: "ข่าว",
     backtest: "ลองลงทุนย้อนหลัง",
-    contact": "ติดต่อเรา,
+    contact: "ติดต่อเรา",
     login: "เข้าสู่ระบบ",
     register: "ลงทะเบียน",
     menu: "เมนู",
