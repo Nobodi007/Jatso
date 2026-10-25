@@ -71,6 +71,20 @@ interface AlertRow {
   opened_at?: string;
   resolved_at?: string | null;
 }
+interface DrawdownPoint { date: string; drawdown: number }
+interface Episode {
+  peak_date: string; trough_date: string; recovery_date: string | null;
+  duration_trading_days: number; recovery_trading_days: number | null;
+}
+interface Extreme { date?: string; period?: string; return: number; days?: number }
+interface Tail {
+  current_drawdown?: Metric; drawdown_episode?: Episode | null;
+  longest_underwater_trading_days?: number;
+  var_95?: Metric; es_95?: Metric; downside_deviation?: Metric;
+  extremes?: { worst_day?: Extreme; best_day?: Extreme; worst_week?: Extreme; worst_month?: Extreme };
+  drawdown_series?: DrawdownPoint[];
+}
+interface MetricsRes { risk_adjusted?: Record<string, Metric>; tail?: Tail }
 
 interface Props {
   getToken: () => string | null;
@@ -87,9 +101,11 @@ const usd = (n: number | null | undefined) =>
 const pct = (n: number | null | undefined, d = 2, sign = false) =>
   n == null ? "—" : `${sign && n > 0 ? "+" : ""}${(n * 100).toFixed(d)}%`;
 
+const PCT_UNIT = /^decimal(\/yr| \(1-day\))?$/;
 const fmtMetric = (m?: Metric, sign = false) => {
   if (!m || m.value == null) return "—";
-  return m.unit === "decimal" ? pct(m.value, 2, sign) : m.value.toFixed(2);
+  if (m.unit?.includes("display ×100 as pp")) return `${sign && m.value > 0 ? "+" : ""}${(m.value * 100).toFixed(2)} pp`;
+  return m.unit && PCT_UNIT.test(m.unit) ? pct(m.value, 2, sign) : m.value.toFixed(2);
 };
 
 const tone = (n: number | null | undefined) =>
@@ -183,12 +199,96 @@ function ReturnCard({ title, m, note }: { title: string; m?: Metric; note?: stri
   );
 }
 
+const MIN_DD_DAYS = 5;
+const show = (m?: Metric) => (!m ? "—" : m.value == null ? "ข้อมูลยังไม่พอ" : fmtMetric(m));
+const extremeText = (x?: Extreme) => (x ? `${pct(x.return, 2, true)} · ${x.date ?? x.period ?? ""}` : "—");
+
+function UnderwaterChart({ series }: { series: DrawdownPoint[] }) {
+  const W = 600, H = 140, P = 8;
+  const min = Math.min(...series.map((p) => p.drawdown), -0.0001);
+  const x = (i: number) => P + (i / Math.max(series.length - 1, 1)) * (W - 2 * P);
+  const y = (d: number) => P + (d / min) * (H - 2 * P);
+  const pts = series.map((p, i) => `${x(i)},${y(p.drawdown)}`).join(" ");
+  const area = `${x(0)},${P} ${pts} ${x(series.length - 1)},${P}`;
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-36 w-full" role="img" aria-label="กราฟ drawdown">
+        <line x1={P} x2={W - P} y1={P} y2={P} className="stroke-border" />
+        <polygon points={area} className="fill-rose-500/15" />
+        <polyline points={pts} fill="none" className="stroke-rose-500" strokeWidth={1.5} />
+      </svg>
+      <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+        {series[0]?.date} → {series[series.length - 1]?.date} · ลึกสุด {pct(min, 2)}
+      </p>
+    </div>
+  );
+}
+
+function TailSection({ m }: { m: MetricsRes | null }) {
+  if (!m) {
+    return (
+      <Card>
+        <h2 className="text-base font-medium">Drawdown และความเสี่ยงขาลง</h2>
+        <p className="mt-3 text-sm text-muted-foreground">โหลดข้อมูลส่วนนี้ไม่สำเร็จ</p>
+      </Card>
+    );
+  }
+  const t = m.tail ?? {};
+  const series = t.drawdown_series ?? [];
+  const enough = series.length >= MIN_DD_DAYS;
+  const ep = t.drawdown_episode ?? null;
+  const ex = t.extremes;
+  const rows: [string, string][] = [
+    ["Drawdown ปัจจุบัน", show(t.current_drawdown)],
+    ["VaR 95% (1 วัน)", show(t.var_95)],
+    ["ES 95% (1 วัน)", show(t.es_95)],
+    ["Downside deviation (รายปี)", show(t.downside_deviation)],
+    ["Downside beta", show(m.risk_adjusted?.downside_beta)],
+  ];
+  if (enough) {
+    rows.push(
+      ["ช่วงจมน้ำนานสุด", t.longest_underwater_trading_days != null ? `${t.longest_underwater_trading_days} วันทำการ` : "—"],
+      ["วันที่แย่สุด", extremeText(ex?.worst_day)],
+      ["สัปดาห์ที่แย่สุด", extremeText(ex?.worst_week)],
+      ["เดือนที่แย่สุด", extremeText(ex?.worst_month)],
+    );
+  }
+  return (
+    <Card>
+      <h2 className="text-base font-medium">Drawdown และความเสี่ยงขาลง</h2>
+      <div className="mt-4">
+        {enough ? (
+          <UnderwaterChart series={series} />
+        ) : (
+          <p className="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground">
+            ข้อมูลยังไม่พอสำหรับกราฟ (มี {series.length} จาก {MIN_DD_DAYS} วัน)
+          </p>
+        )}
+      </div>
+      {enough && ep && (
+        <p className="mt-3 text-sm text-muted-foreground">
+          ช่วงลึกสุด: ยอดเดิม {ep.peak_date} → จุดต่ำสุด {ep.trough_date} →{" "}
+          {ep.recovery_date ? `ฟื้นตัว ${ep.recovery_date}` : "ยังไม่ฟื้นตัว"} ({ep.duration_trading_days} วันทำการ)
+        </p>
+      )}
+      <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-border pt-4 text-sm md:grid-cols-3">
+        {rows.map(([k, v]) => (
+          <div key={k}>
+            <dt className="text-muted-foreground">{k}</dt>
+            <dd className="mt-0.5 tabular-nums">{v}</dd>
+          </div>
+        ))}
+      </dl>
+    </Card>
+  );
+}
 /* ───────── page ───────── */
 export default function StockRiskPage({ getToken, apiBase }: Props) {
   const [ov, setOv] = useState<Overview | null>(null);
   const [ex, setEx] = useState<Exposure | null>(null);
   const [limits, setLimits] = useState<Limits | null>(null);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
+  const [mx, setMx] = useState<MetricsRes | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [evaluating, setEvaluating] = useState(false);
@@ -214,11 +314,12 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const [o, e, l, a] = await Promise.all([
+      const [o, e, l, a, m] = await Promise.all([
         call<Overview>("/overview"),
         call<Exposure>("/exposure"),
         call<{ limits: Limits }>("/limits"),
         call<{ alerts: AlertRow[] }>("/alerts?limit=20"),
+        call<MetricsRes>("/metrics").catch(() => null),
       ]);
       setOv(o);
       setEx(e);
