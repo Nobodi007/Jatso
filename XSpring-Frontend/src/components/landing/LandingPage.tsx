@@ -14,16 +14,17 @@ import { useLanguage } from "../../i18n/LanguageContext";
 import { PriceTicker } from "./LandingEffects"
 import { GlobeHero } from "./GlobeHero"
 import TourGuide from "./TourGuide";
+import ContactPage from "./ContactPage";
 
 type LandingPageProps = {
   onLogin: () => void
   onRegister: () => void
 }
 
-type View = "home" | "market" | "news" | "coin" | "backtest" | "trade" | "learn" | "about"
+type View = "home" | "market" | "news" | "coin" | "backtest" | "trade" | "learn" | "about" | "contact"
 
 const BRAND = "Nobodi"
-const MENU = ["ตลาด", "การซื้อขาย", "เรียนรู้", "ข่าว", "ลองลงทุนย้อนหลัง"]
+const MENU = ["ตลาด", "การซื้อขาย", "เรียนรู้", "ข่าว", "ลองลงทุนย้อนหลัง", "ติดต่อเรา"]
 
 // ข้อความไทยด้านบนใช้เป็นรหัสอ้างอิงภายใน (ห้ามแปล) ตัวนี้แมปไปหาคำแปลที่แสดงจริง
 const MENU_KEY: Record<string, string> = {
@@ -42,6 +43,7 @@ const VIEW_OF: Record<string, View> = {
   "ข่าว": "news",
   "ลองลงทุนย้อนหลัง": "backtest",
   "ประวัติความเป็นมา": "about",
+  "ติดต่อเรา": "contact",
 }
 
 // หน้านี้อยู่นอก AppInner จึงตั้งธีมเองให้ตรงกับที่เคยเลือกไว้
@@ -202,7 +204,9 @@ const startTour = () => {
         )}
       </header>
 
-      {view === "market" ? (
+      {view === "contact" ? (
+        <ContactPage />
+      ) : view === "market" ? (
         <MarketSection onLogin={onLogin} onRegister={onRegister} />
       ) : view === "news" ? (
         <NewsSection />
