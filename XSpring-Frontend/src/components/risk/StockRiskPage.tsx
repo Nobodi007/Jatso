@@ -379,7 +379,7 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
       });
-      if (!r.ok) throw new Error(r.status === 401 ? "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่" : `เซิร์ฟเวอร์ตอบ ${r.status}`);
+      if (!r.ok) throw new Error(r.status === 401 ? "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่" : r.status === 429 ? "เรียกถี่เกินไป กรุณารอสักครู่แล้วลองใหม่" : `เซิร์ฟเวอร์ตอบ ${r.status}`);
       return (await r.json()) as T;
     },
     [getToken, apiBase],
@@ -416,12 +416,13 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
     setEvaluating(true);
     setEvalMsg(null);
     try {
-      const r = await call<{ opened: unknown[]; resolved: unknown[]; skipped: { alert_type: string; reason: string }[] }>(
-        "/alerts/evaluate",
-        { method: "POST" },
-      );
-      const skipped = r.skipped.length ? ` · ข้าม ${r.skipped.length} รายการ (${r.skipped.map((s) => s.reason).join("; ")})` : "";
-      setEvalMsg(`เปิดใหม่ ${r.opened.length} · แก้ไขแล้ว ${r.resolved.length}${skipped}`);
+      const r = await call<{ evaluated?: boolean; opened?: unknown[]; resolved?: unknown[]; skipped?: { reason: string }[] }>("/alerts/evaluate", { method: "POST" });
+      if (r.evaluated === false) {
+        setEvalMsg("ข้อมูลยังไม่พร้อมสำหรับการประเมิน จึงยังไม่เปิดหรือปิดการเตือนใด");
+        return;
+      }
+      const sk = r.skipped ?? [];
+      setEvalMsg(`เปิดใหม่ ${r.opened?.length ?? 0} · แก้ไขแล้ว ${r.resolved?.length ?? 0}${sk.length ? ` · ข้าม ${sk.length} รายการ (${sk.map((s) => s.reason).join("; ")})` : ""}`);
       await load();
     } catch (err) {
       setEvalMsg(err instanceof Error ? err.message : "ประเมินไม่สำเร็จ");
@@ -455,7 +456,7 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
   const c = ov.cards;
   const e = ex.exposure;
   const warnings = ov.meta.warnings ?? [];
-  const activeN = c.active_alerts?.value ?? null;
+  const activeN = alerts.filter((a) => a.status === "active").length;
   const top = [...e.positions].sort((a, b) => b.weight_nav - a.weight_nav);
   const maxW = limits?.max_single_weight ?? null;
   const mdd = c.max_drawdown;
