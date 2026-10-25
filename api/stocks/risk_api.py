@@ -273,6 +273,66 @@ async def metrics(period: str = PERIOD, email: str = Depends(_heavy)):
     return {"meta": rep["meta"], "risk_adjusted": a.get("risk_adjusted"),
             "tail": {k: tail.get(k) for k in keep}, "conventions": a.get("conventions")}
 
+def compute_drawdown(points, min_points: int = 5) -> dict:
+    """points: [(YYYY-MM-DD, nav)] เรียงเก่า -> ใหม่ ไม่ดึงข้อมูลเพิ่ม ใช้ NAV ที่มีอยู่แล้ว"""
+    clean = [(str(d)[:10], float(v)) for d, v in points if v is not None and float(v) > 0]
+    if len(clean) < min_points:
+        return {"status": "insufficient_data", "points": len(clean), "minPoints": min_points}
+
+    day = date.fromisoformat
+    peak, peak_date = clean[0][1], clean[0][0]
+    max_dd, max_dd_date, max_dd_peak_date = 0.0, clean[0][0], clean[0][0]
+    series, episodes = [], []  # episodes: [peak_date, end_date, recovered]
+    ep = None
+
+    for d, v in clean:
+        if v >= peak:
+            if ep:
+                ep[1], ep[2] = d, True
+                episodes.append(ep)
+                ep = None
+            peak, peak_date = v, d
+        elif ep is None:
+            ep = [peak_date, d, False]
+        dd = v / peak - 1
+        series.append({"date": d, "drawdownPercent": round(dd * 100, 4)})
+        if dd < max_dd:
+            max_dd, max_dd_date, max_dd_peak_date = dd, d, peak_date
+
+    if ep:
+        ep[1] = clean[-1][0]
+        episodes.append(ep)
+
+    days = lambda e: (day(e[1]) - day(e[0])).days
+    worst = next((e for e in episodes if e[0] == max_dd_peak_date and max_dd < 0), None)
+    current = episodes[-1] if episodes and not episodes[-1][2] else None
+
+    return {
+        "status": "ok",
+        "points": len(clean),
+        "series": series,
+        "currentDrawdownPercent": series[-1]["drawdownPercent"],
+        "maxDrawdownPercent": round(max_dd * 100, 4),
+        "maxDrawdownPeakDate": max_dd_peak_date if max_dd < 0 else None,
+        "maxDrawdownTroughDate": max_dd_date if max_dd < 0 else None,
+        "maxDrawdownRecoveryDate": worst[1] if worst and worst[2] else None,
+        "currentUnderwaterDays": days(current) if current else 0,
+        "longestUnderwaterDays": max((days(e) for e in episodes), default=0),
+    }
+
+@router.get("/drawdown")
+async def drawdown(period: str = PERIOD, email: str = Depends(_heavy)):
+    rep = await _report(email)
+    status = rep["meta"].get("data_status")
+    nav = rep.get("nav_series") or []
+    if status not in ("ok", "ok_with_warnings") or not nav:
+        return {"meta": rep["meta"], "drawdown": None, "status": "unavailable",
+                "reason": f"data_status={status}"}
+    tail = (rep.get("analysis") or {}).get("tail") or {}
+    return {"meta": rep["meta"],
+            "drawdown": compute_drawdown([(p["date"], p["nav"]) for p in nav]),
+            "engine": {k: tail.get(k) for k in ("max_drawdown", "current_drawdown", "drawdown_episode")}}
+
 
 # ---------------- Phase 2: exposure / risk decomposition / stress ----------------
 async def _ctx(email: str):
