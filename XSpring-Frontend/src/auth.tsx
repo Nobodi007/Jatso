@@ -1,7 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react"
 import type { ReactNode } from "react"
 import { GoogleLogin, GoogleOAuthProvider } from "@react-oauth/google"
-import LandingPage from "./components/landing/LandingPage"
 import AuthShell from "./components/ui/AuthShell"
 
 const API_BASE_URL = "https://xspring-api.onrender.com"
@@ -119,13 +118,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, logout)
   }, [logout])
 
-    if (!user && !showLogin) {
-    return <LandingPage onLogin={() => setShowLogin(true)} onRegister={() => setShowLogin(true)} />
-  }
-  if (!user) return <LoginScreen onLoggedIn={setUser} onBack={() => setShowLogin(false)} />
-
-  return <AuthContext.Provider value={{ user, logout }}>{children}</AuthContext.Provider>
-}
+  if (!user) return <LoginScreen onLoggedIn={setUser} onBack={() => {}} />
 
 /* ---------- login screen ---------- */
 
