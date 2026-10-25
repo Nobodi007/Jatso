@@ -124,7 +124,7 @@ const parseLimit = (key: keyof Limits, s: string): number | null | "bad" => {
   if (t === "") return null;
   const n = Number(t);
   if (!Number.isFinite(n)) return "bad";
-  const v = key === "max_hhi" ? n : n / 100;
+  const v = key === "max_hhi" ? n : Number((n / 100).toFixed(6));
   const ok = key === "min_cash_weight" ? v >= 0 && v < 1 : v > 0 && v <= 1;
   return ok ? v : "bad";
 };
@@ -466,7 +466,9 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
         setSaveMsg(`ค่าของ "${l.label}" ไม่ถูกต้อง`);
         return;
       }
-      if (p !== (limits[l.key] ?? null)) body[l.key] = p;
+      const cur = limits[l.key] ?? null;
+      const same = p === cur || (p !== null && cur !== null && Math.abs(p - cur) < 1e-9);
+      if (!same) body[l.key] = p;
     }
     if (Object.keys(body).length === 0) {
       setEditing(false);
