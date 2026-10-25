@@ -325,6 +325,7 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
       setEx(e);
       setLimits(l.limits);
       setAlerts(a.alerts);
+      setMx(m);
     } catch (err) {
       setError(err instanceof Error ? err.message : "โหลดข้อมูลไม่สำเร็จ");
     } finally {
@@ -473,7 +474,9 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
           )}
         </Card>
       </div>
-
+      
+      <TailSection m={mx} />
+      
       <div className="grid grid-cols-1 gap-4 md:grid-cols-[7fr_5fr]">
         {/* concentration */}
         <Card>
