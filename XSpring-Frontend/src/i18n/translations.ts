@@ -35,6 +35,9 @@ const th = {
   copy: "คัดลอก",
   copied: "คัดลอกแล้ว",
   rights: "สงวนลิขสิทธิ์",
+  line: "LINE",
+  lineDesc: "แอดไลน์เพื่อพูดคุยกับเรา",
+  instagram: "Instagram",
 },
   // ตลาดบนหน้าแรก
   market: {
@@ -530,6 +533,9 @@ const en: Translations = {
   copy: "Copy",
   copied: "Copied",
   rights: "All rights reserved.",
+  line: "LINE",
+  lineDesc: "Add us on LINE to chat",
+  instagram: "Instagram",
 },
   market: {
     title: "Market",
