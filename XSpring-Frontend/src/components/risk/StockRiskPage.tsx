@@ -84,7 +84,7 @@ interface Tail {
   extremes?: { worst_day?: Extreme; best_day?: Extreme; worst_week?: Extreme; worst_month?: Extreme };
   drawdown_series?: DrawdownPoint[];
 }
-interface MetricsRes { risk_adjusted?: Record<string, Metric>; tail?: Tail }
+interface MetricsRes { risk_adjusted?: Record<string, Metric>; performance?: Record<string, Metric>; tail?: Tail }
 
 interface Props {
   getToken: () => string | null;
@@ -101,7 +101,7 @@ const usd = (n: number | null | undefined) =>
 const pct = (n: number | null | undefined, d = 2, sign = false) =>
   n == null ? "—" : `${sign && n > 0 ? "+" : ""}${(n * 100).toFixed(d)}%`;
 
-const PCT_UNIT = /^decimal(\/yr| \(1-day\))?$/;
+const PCT_UNIT = /^(decimal(\/yr( per β)?| \(1-day\))?|share)$/;
 const fmtMetric = (m?: Metric, sign = false) => {
   if (!m || m.value == null) return "—";
   if (m.unit?.includes("display ×100 as pp")) return `${sign && m.value > 0 ? "+" : ""}${(m.value * 100).toFixed(2)} pp`;
@@ -235,7 +235,8 @@ function TailSection({ m }: { m: MetricsRes | null }) {
   }
   const t = m.tail ?? {};
   const series = t.drawdown_series ?? [];
-  const enough = series.length >= MIN_DD_DAYS;
+  const nDays = Math.max(series.length - 1, 0);
+  const enough = nDays >= MIN_DD_DAYS;
   const ep = t.drawdown_episode ?? null;
   const ex = t.extremes;
   const rows: [string, string][] = [
@@ -279,6 +280,80 @@ function TailSection({ m }: { m: MetricsRes | null }) {
           </div>
         ))}
       </dl>
+    </Card>
+  );
+}
+
+const RA_META: { key: string; label: string }[] = [
+  { key: "sharpe", label: "Sharpe ratio" },
+  { key: "sortino", label: "Sortino ratio" },
+  { key: "information_ratio", label: "Information ratio" },
+  { key: "tracking_error", label: "Tracking error" },
+  { key: "beta_capm", label: "Beta (CAPM)" },
+  { key: "jensens_alpha", label: "Alpha ของ Jensen (รายปี)" },
+  { key: "alpha_t_stat", label: "t-stat ของ Alpha" },
+  { key: "treynor", label: "Treynor ratio" },
+  { key: "appraisal_ratio", label: "Appraisal ratio" },
+  { key: "calmar", label: "Calmar ratio" },
+  { key: "downside_beta", label: "Downside beta" },
+  { key: "beta", label: "Beta เทียบดัชนี" },
+  { key: "r_squared", label: "R²" },
+  { key: "up_capture", label: "Up capture" },
+  { key: "down_capture", label: "Down capture" },
+  { key: "hit_rate", label: "สัดส่วนวันที่ชนะดัชนี" },
+];
+
+const needFrom = (m: Metric) => Number(/≥(\d+)/.exec(m.reason ?? "")?.[1]) || null;
+
+function RaItem({ label, m }: { label: string; m: Metric }) {
+  const need = needFrom(m);
+  const n = m.n_obs ?? 0;
+  const why =
+    m.status === "unavailable"
+      ? "ไม่มีข้อมูลต้นทาง"
+      : m.reason?.includes("period < 1 year")
+        ? "ต้องมีข้อมูลครบ 1 ปี"
+        : "คำนวณไม่ได้";
+  return (
+    <div title={m.formula}>
+      <dt className="text-muted-foreground">{label}</dt>
+      {m.value != null ? (
+        <dd className="mt-0.5 flex items-center gap-2 tabular-nums">
+          {fmtMetric(m)}
+          {m.status === "limited_sample" && <Chip kind="warn">ตัวอย่างน้อย</Chip>}
+        </dd>
+      ) : m.status === "insufficient_data" && need ? (
+        <dd className="mt-1.5">
+          <Bar value={n} max={need} />
+          <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+            มีข้อมูล {n} จาก {need} วัน
+          </p>
+        </dd>
+      ) : (
+        <dd className="mt-0.5 text-muted-foreground" title={m.reason ?? undefined}>
+          {why}
+        </dd>
+      )}
+    </div>
+  );
+}
+
+function RiskAdjustedSection({ m }: { m: MetricsRes | null }) {
+  if (!m) return null;
+  const items = RA_META.flatMap(({ key, label }) => {
+    const metric = m.risk_adjusted?.[key] ?? m.performance?.[key];
+    return metric ? [{ key, label, metric }] : [];
+  });
+  if (items.length === 0) return null;
+  return (
+    <Card>
+      <h2 className="text-base font-medium">ตัวชี้วัดปรับตามความเสี่ยง</h2>
+      <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-5 text-sm md:grid-cols-4">
+        {items.map((i) => (
+          <RaItem key={i.key} label={i.label} m={i.metric} />
+        ))}
+      </dl>
+      <p className="mt-4 text-xs text-muted-foreground">วางเมาส์บนชื่อตัวชี้วัดเพื่อดูสูตร · ตัวที่ข้อมูลไม่พอจะไม่แสดงตัวเลข</p>
     </Card>
   );
 }
@@ -474,7 +549,7 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
           )}
         </Card>
       </div>
-      
+      <RiskAdjustedSection m={mx} />
       <TailSection m={mx} />
       
       <div className="grid grid-cols-1 gap-4 md:grid-cols-[7fr_5fr]">
