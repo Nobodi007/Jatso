@@ -119,7 +119,6 @@ const LIMIT_META: { key: keyof Limits; label: string; hint: string }[] = [
 ];
 
 const ALERT_LABEL: Record<string, string> = {
-  low_cash: "เงินสดต่ำกว่าลิมิต",
   drawdown: "Drawdown เกินลิมิต",
   single_weight: "หุ้นตัวเดียวเกินลิมิต",
   hhi: "HHI เกินลิมิต",
