@@ -101,7 +101,7 @@ const usd = (n: number | null | undefined) =>
 const pct = (n: number | null | undefined, d = 2, sign = false) =>
   n == null ? "—" : `${sign && n > 0 ? "+" : ""}${(n * 100).toFixed(d)}%`;
 
-const PCT_UNIT = /^(decimal(\/yr( per β)?| \(1-day\))?|share)$/;
+const PCT_UNIT = /^(decimal(\/yr( per β)?| \(1-day\))?|share( of equity)?)$/;
 const fmtMetric = (m?: Metric, sign = false) => {
   if (!m || m.value == null) return "—";
   if (m.unit?.includes("display ×100 as pp")) return `${sign && m.value > 0 ? "+" : ""}${(m.value * 100).toFixed(2)} pp`;
@@ -112,18 +112,20 @@ const tone = (n: number | null | undefined) =>
   n == null || n === 0 ? "text-foreground" : n > 0 ? "text-emerald-500" : "text-rose-500";
 
 const LIMIT_META: { key: keyof Limits; label: string; hint: string }[] = [
-  { key: "max_drawdown", label: "ขาดทุนจากจุดสูงสุดสูงสุด", hint: "เตือนเมื่อ drawdown ปัจจุบันลึกกว่านี้" },
+  { key: "max_drawdown", label: "Drawdown สูงสุดที่ยอมรับได้", hint: "เตือนเมื่อ drawdown ปัจจุบันลึกกว่านี้" },
   { key: "max_single_weight", label: "น้ำหนักหุ้นตัวเดียวสูงสุด", hint: "เตือนเมื่อหุ้นตัวใดเกินสัดส่วนของ NAV" },
   { key: "max_hhi", label: "ความกระจุกตัว (HHI) สูงสุด", hint: "ยิ่งใกล้ 1 ยิ่งกระจุกตัว" },
   { key: "min_cash_weight", label: "เงินสดขั้นต่ำ", hint: "เตือนเมื่อเงินสดต่ำกว่าสัดส่วนของ NAV" },
 ];
 
 const ALERT_LABEL: Record<string, string> = {
+  low_cash: "เงินสดต่ำกว่าลิมิต",
   drawdown: "Drawdown เกินลิมิต",
   single_weight: "หุ้นตัวเดียวเกินลิมิต",
   hhi: "HHI เกินลิมิต",
   low_cash: "เงินสดต่ำกว่าลิมิต",
 };
+const alertVal = (type: string, v: number) => (type === "hhi" ? v.toFixed(2) : pct(v, 2));
 
 const WARNING_TEXT = (w: Warning): string => {
   const syms = w.symbols?.length ? ` (${w.symbols.join(", ")})` : "";
@@ -422,7 +424,7 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
         return;
       }
       const sk = r.skipped ?? [];
-      setEvalMsg(`เปิดใหม่ ${r.opened?.length ?? 0} · แก้ไขแล้ว ${r.resolved?.length ?? 0}${sk.length ? ` · ข้าม ${sk.length} รายการ (${sk.map((s) => s.reason).join("; ")})` : ""}`);
+      setEvalMsg(`เปิดใหม่ ${r.opened?.length ?? 0} · ปิดแล้ว ${r.resolved?.length ?? 0}${sk.length ? ` · ข้าม ${sk.length} รายการ (${sk.map((s) => s.reason).join("; ")})` : ""}`);
       await load();
     } catch (err) {
       setEvalMsg(err instanceof Error ? err.message : "ประเมินไม่สำเร็จ");
@@ -586,8 +588,8 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
           </div>
           {e.sectors && e.sectors.length > 0 && (
             <p className="mt-3 text-xs text-muted-foreground">
-              อุตสาหกรรม: {e.sectors.map((s) => `${s.sector} ${pct(s.weight_nav, 1)}`).join(" · ")}
-              {ex.meta?.sector_classification ? ` (${ex.meta.sector_classification})` : ""}
+              อุตสาหกรรม (สัดส่วนของ NAV): {e.sectors.map((s) => `${s.sector} ${pct(s.weight_nav, 1)}`).join(" · ")}
+              {" "}(ค่าประมาณจาก Finnhub ไม่ใช่มาตรฐาน GICS)
             </p>
           )}
         </Card>
@@ -629,8 +631,14 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
                     <span>
                       {ALERT_LABEL[a.alert_type] ?? a.alert_type}
                       {a.symbol ? ` · ${a.symbol}` : ""}
+                      <span className="block text-xs text-muted-foreground tabular-nums">
+                        {a.observed_value != null && a.threshold != null
+                          ? `${alertVal(a.alert_type, a.observed_value)} / ลิมิต ${alertVal(a.alert_type, a.threshold)} · `
+                          : ""}
+                        {a.opened_at ? a.opened_at.slice(0, 10) : ""}
+                      </span>
                     </span>
-                    <Chip kind={a.status === "active" ? "bad" : "ok"}>{a.status === "active" ? "เปิดอยู่" : "แก้ไขแล้ว"}</Chip>
+                    <Chip kind={a.status === "active" ? "bad" : "ok"}>{a.status === "active" ? "เปิดอยู่" : "ปิดแล้ว"}</Chip>
                   </li>
                 ))}
               </ul>
