@@ -45,6 +45,9 @@ def _now() -> str:
 def _num(x):
     return None if x is None else float(x)
 
+def _same(a, b) -> bool:
+    return (a is None and b is None) or (a is not None and b is not None and abs(a - b) < 1e-9)
+
 
 # ------------------------------------------------------------------ limits
 class LimitsIn(BaseModel):
@@ -77,7 +80,7 @@ async def put_limits(body: LimitsIn, email: str = Depends(_limits_write)):
     if not changes:
         raise HTTPException(400, "no_fields")
     old = await _get_limits(email)
-    diff = {k: v for k, v in changes.items() if _num(old.get(k)) != v}
+    diff = {k: v for k, v in changes.items() if not _same(_num(old.get(k)), v)}
     if not diff:
         return {"ok": True, "changed": [], "limits": _public_limits(old), "audit_written": True}
 
