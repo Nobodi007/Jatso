@@ -118,6 +118,16 @@ const LIMIT_META: { key: keyof Limits; label: string; hint: string }[] = [
   { key: "min_cash_weight", label: "เงินสดขั้นต่ำ", hint: "เตือนเมื่อเงินสดต่ำกว่าสัดส่วนของ NAV" },
 ];
 
+/** แปลงข้อความที่ผู้ใช้กรอกเป็นค่าที่ API ต้องการ: null = ไม่ตั้ง, "bad" = ค่าผิด */
+const parseLimit = (key: keyof Limits, s: string): number | null | "bad" => {
+  const t = s.trim();
+  if (t === "") return null;
+  const n = Number(t);
+  if (!Number.isFinite(n)) return "bad";
+  const v = key === "max_hhi" ? n : n / 100;
+  const ok = key === "min_cash_weight" ? v >= 0 && v < 1 : v > 0 && v <= 1;
+  return ok ? v : "bad";
+};
 const ALERT_LABEL: Record<string, string> = {
   drawdown: "Drawdown เกินลิมิต",
   single_weight: "หุ้นตัวเดียวเกินลิมิต",
@@ -369,6 +379,10 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [evaluating, setEvaluating] = useState(false);
   const [evalMsg, setEvalMsg] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
   const call = useCallback(
     async <T,>(path: string, init?: RequestInit): Promise<T> => {
@@ -431,7 +445,50 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
       setEvaluating(false);
     }
   };
+  
+  const startEdit = () => {
+    const d: Record<string, string> = {};
+    for (const l of LIMIT_META) {
+      const v = limits?.[l.key] ?? null;
+      d[l.key] = v == null ? "" : String(l.key === "max_hhi" ? v : Number((v * 100).toFixed(2)));
+    }
+    setDraft(d);
+    setSaveMsg(null);
+    setEditing(true);
+  };
 
+  const saveLimits = async () => {
+    if (!limits) return;
+    const body: Record<string, number | null> = {};
+    for (const l of LIMIT_META) {
+      const p = parseLimit(l.key, draft[l.key] ?? "");
+      if (p === "bad") {
+        setSaveMsg(`ค่าของ "${l.label}" ไม่ถูกต้อง`);
+        return;
+      }
+      if (p !== (limits[l.key] ?? null)) body[l.key] = p;
+    }
+    if (Object.keys(body).length === 0) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      await call("/limits", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      setEditing(false);
+      await load();
+      await evaluate();
+    } catch (err) {
+      setSaveMsg(err instanceof Error ? err.message : "บันทึกไม่สำเร็จ");
+    } finally {
+      setSaving(false);
+    }
+  };
   if (loading && !ov) {
     return <div className="p-8 text-sm text-muted-foreground">กำลังโหลด Risk Center…</div>;
   }
@@ -606,6 +663,58 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
             </button>
           </div>
           {evalMsg && <p className="mt-2 text-xs text-muted-foreground">{evalMsg}</p>}
+                    {editing ? (
+            <div className="mt-4 space-y-3 rounded-2xl border border-border p-4">
+              {LIMIT_META.map((l) => (
+                <div key={l.key} className="flex items-center justify-between gap-3 text-sm">
+                  <label htmlFor={`lim-${l.key}`} title={l.hint}>
+                    {l.label}
+                  </label>
+                  <span className="flex items-center gap-1.5">
+                    <input
+                      id={`lim-${l.key}`}
+                      inputMode="decimal"
+                      value={draft[l.key] ?? ""}
+                      onChange={(ev) => setDraft({ ...draft, [l.key]: ev.target.value })}
+                      placeholder="ไม่ตั้ง"
+                      className="w-24 rounded-lg border border-border bg-background px-2 py-1 text-right tabular-nums"
+                    />
+                    <span className="w-8 text-xs text-muted-foreground">{l.key === "max_hhi" ? "0–1" : "%"}</span>
+                  </span>
+                </div>
+              ))}
+              <p className="text-xs text-muted-foreground">
+                เว้นว่าง = ไม่ตั้งลิมิตข้อนั้น · HHI ใส่เป็นทศนิยม 0–1 (เช่น 0.5) · ข้ออื่นใส่เป็นเปอร์เซ็นต์ (เช่น 20)
+              </p>
+              {saveMsg && <p className="text-xs text-rose-500">{saveMsg}</p>}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => void saveLimits()}
+                  disabled={saving}
+                  className="rounded-full bg-foreground px-4 py-1.5 text-xs font-medium text-background disabled:opacity-50"
+                >
+                  {saving ? "กำลังบันทึก…" : "บันทึกและประเมิน"}
+                </button>
+                <button
+                  onClick={() => {
+                    setEditing(false);
+                    setSaveMsg(null);
+                  }}
+                  disabled={saving}
+                  className="rounded-full border border-border px-4 py-1.5 text-xs hover:bg-muted"
+                >
+                  ยกเลิก
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={startEdit}
+              className="mt-3 rounded-full border border-border px-3 py-1 text-xs hover:bg-muted"
+            >
+              ตั้งค่าลิมิต
+            </button>
+          )}
 
           <div className="mt-4 space-y-3">
             {LIMIT_META.map((l) => {
