@@ -403,7 +403,6 @@ function AppInner() {
             )}
           </div>
 
-          {isAdmin && (
           <div className={`grid gap-1 p-2 pb-0 ${sidebarOpen ? "grid-cols-2" : "grid-cols-1"}`}>
             <button
               onClick={() => {
@@ -432,7 +431,6 @@ function AppInner() {
               {sidebarOpen ? "หุ้นสหรัฐ" : "S"}
             </button>
           </div>
-        )}
                 <nav className="space-y-1 p-2">
           {navigation.map((item) => {
             const Icon = item.icon
