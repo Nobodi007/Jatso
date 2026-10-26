@@ -21,6 +21,9 @@ const LABELS: Record<string, string> = {
   tokyo: "Tokyo",
   sydney: "Sydney",
 }
+// ป้ายชื่อเมืองใช้ CSS Anchor Positioning: เบราว์เซอร์ที่ไม่รองรับจะไม่แสดงป้าย (ลูกโลกยังทำงานปกติ)
+const CAN_ANCHOR =
+  typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports("anchor-name: --a")
 
 const ARCS: Arc[] = [
   { id: "bkk-nyc", from: [13.7563, 100.5018], to: [40.7128, -74.006] },
