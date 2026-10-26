@@ -515,7 +515,7 @@ const en: Translations = {
     themeDark: "Switch to dark mode",
   },
   hero: {
-    title: "Start investing in crypto and US stocks systematically with Nobodi",
+    title: "Start investing in crypto and US stocks with Nobodi",
     desc: "Watch live market prices, backtest strategies, and practice trading with a demo account before going real. Crypto and US stocks, all in one place.",
     cta: "Sign up now",
     usMarket: "US stock market",
