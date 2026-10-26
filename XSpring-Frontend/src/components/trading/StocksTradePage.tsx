@@ -129,7 +129,7 @@ export default function StocksTradePage({
         .then((x) => { if (alive && x) { setQuote(x); setQuoteErr(""); } })
         .catch((e) => alive && setQuoteErr(ERR[e.message] ?? "โหลดราคาไม่สำเร็จ"));
     loadQ();
-    const id = setInterval(loadQ, 10000);
+    const id = setInterval(() => { if (!document.hidden) void loadQ(); }, 15000);
     api<Profile>(`/${symbol}/profile`).then((p) => alive && setProfile(p)).catch(() => {});
     return () => { alive = false; clearInterval(id); };
   }, [symbol, api]);
@@ -176,8 +176,14 @@ export default function StocksTradePage({
   }, [book, authed]);
   useEffect(() => {
     refresh();
-    const id = setInterval(refresh, 10000);
-    return () => clearInterval(id);
+    // 30s and only while the tab is visible: keeps Supabase egress and API quota low under public traffic
+    const tick = () => { if (!document.hidden) void refresh(); };
+    const id = setInterval(tick, 30000);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", tick);
+    };
   }, [refresh]);
 
   /* order ticket */
