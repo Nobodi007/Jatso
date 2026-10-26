@@ -237,6 +237,7 @@ const startTour = () => {
                   <MarketStatusBadge />
                 </div>
               }
+            />
             <PriceTicker />
           </>
         )}
