@@ -8,37 +8,26 @@ type Arc = { id: string; from: [number, number]; to: [number, number] }
 /* ---------- ข้อมูลบนโลก (อยู่นอกคอมโพเนนต์ เพื่อไม่ให้สร้างโลกใหม่ทุกครั้งที่ render) ---------- */
 const MARKERS: Marker[] = [
   { id: "bkk", location: [13.7563, 100.5018] },
-  { id: "sf", location: [37.7595, -122.4367] },
   { id: "nyc", location: [40.7128, -74.006] },
-  { id: "tokyo", location: [35.6762, 139.6503] },
   { id: "london", location: [51.5074, -0.1278] },
+  { id: "tokyo", location: [35.6762, 139.6503] },
   { id: "sydney", location: [-33.8688, 151.2093] },
-  { id: "dubai", location: [25.2048, 55.2708] },
-  { id: "saopaulo", location: [-23.5505, -46.6333] },
 ]
 
 const LABELS: Record<string, string> = {
   bkk: "Bangkok",
-  sf: "San Francisco",
-  nyc: "New York",
-  tokyo: "Tokyo",
+  nyc: "NYSE · NASDAQ",
   london: "London",
+  tokyo: "Tokyo",
   sydney: "Sydney",
-  dubai: "Dubai",
-  saopaulo: "São Paulo",
 }
 
-// ป้ายชื่อเมืองใช้ CSS Anchor Positioning: เบราว์เซอร์ที่ไม่รองรับจะไม่แสดงป้าย (ลูกโลกยังทำงานปกติ)
-const CAN_ANCHOR =
-  typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports("anchor-name: --a")
-
 const ARCS: Arc[] = [
-  { id: "bkk-tokyo", from: [13.7563, 100.5018], to: [35.6762, 139.6503] },
-  { id: "bkk-london", from: [13.7563, 100.5018], to: [51.5074, -0.1278] },
+  { id: "bkk-nyc", from: [13.7563, 100.5018], to: [40.7128, -74.006] },
   { id: "nyc-london", from: [40.7128, -74.006], to: [51.5074, -0.1278] },
-  { id: "sf-tokyo", from: [37.7595, -122.4367], to: [35.6762, 139.6503] },
+  { id: "bkk-london", from: [13.7563, 100.5018], to: [51.5074, -0.1278] },
+  { id: "bkk-tokyo", from: [13.7563, 100.5018], to: [35.6762, 139.6503] },
 ]
-
 /* ---------- สีตามธีม: แก้ตรงนี้ที่เดียว ---------- */
 const THEME = {
   dark: {
