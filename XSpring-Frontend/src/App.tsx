@@ -264,7 +264,6 @@ function AppInner() {
   const [portfolioLoading, setPortfolioLoading] = useState(false)
   const [portfolioError, setPortfolioError] = useState("")
   const [orderRefreshKey, setOrderRefreshKey] = useState(0)
-  const isAdmin = (user as unknown as { role?: string } | null)?.role === "admin"
   const navigation = market === "stocks" ? stockNavigation : cryptoNavigation
   const currentPage = navigation.find((item) => item.id === page)
   useEffect(() => {
