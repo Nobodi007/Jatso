@@ -86,6 +86,42 @@ interface Tail {
 }
 interface MetricsRes { risk_adjusted?: Record<string, Metric>; performance?: Record<string, Metric>; tail?: Tail }
 
+/* Phase 2: risk decomposition + stress test (ตรงกับ /risk-decomposition และ /stress-test) */
+interface Contribution {
+  symbol: string; weight_nav: number; volatility: number; mcr: number; ccr: number; pct_of_risk: number;
+}
+interface Decomp {
+  decomposition: null | {
+    portfolio_volatility?: Metric;
+    diversification_ratio?: Metric;
+    avg_pairwise_correlation?: Metric;
+    contributions: Contribution[];
+    correlation: { symbols: string[]; matrix: (number | null)[][] } | null;
+    top_pairs?: { a: string; b: string; correlation: number }[];
+    excluded?: { symbol: string; reason: string }[];
+  };
+  status?: string;
+  reason?: string;
+}
+interface StressPos { symbol: string; market_value: number; shock: number; pnl: number; basis: string }
+interface StressRes {
+  stress: null | {
+    hypothetical: boolean;
+    disclaimer: string;
+    nav_before: number;
+    pnl: number;
+    pnl_pct_nav: number | null;
+    nav_after: number;
+    positions: StressPos[];
+    skipped: { symbol: string; reason: string }[];
+    unknown_symbols?: string[];
+    betas?: Record<string, Metric>;
+  };
+  status?: string;
+  reason?: string;
+}
+type Caller = <T>(path: string, init?: RequestInit) => Promise<T>;
+
 interface Props {
   getToken: () => string | null;
   apiBase: string;
@@ -368,6 +404,327 @@ function RiskAdjustedSection({ m }: { m: MetricsRes | null }) {
     </Card>
   );
 }
+/* ───────── Phase 2 UI: ความเสี่ยงรายตัวและความสัมพันธ์ / Stress test ───────── */
+const MIN_DECOMP = 60;
+const EXCLUDE_TEXT: Record<string, string> = {
+  "incomplete price history in window": "ประวัติราคาในช่วงไม่ครบ",
+  "no return history": "ไม่มีประวัติผลตอบแทน",
+};
+
+const corrBg = (v: number | null): string | undefined =>
+  v == null
+    ? undefined
+    : v >= 0
+      ? `rgba(244,63,94,${(Math.abs(v) * 0.45).toFixed(2)})`
+      : `rgba(16,185,129,${(Math.abs(v) * 0.45).toFixed(2)})`;
+
+function DecompositionSection({ d }: { d: Decomp | null }) {
+  const title = <h2 className="text-base font-medium">ความเสี่ยงรายตัวและความสัมพันธ์</h2>;
+  if (!d) {
+    return (
+      <Card>
+        {title}
+        <p className="mt-3 text-sm text-muted-foreground">โหลดข้อมูลส่วนนี้ไม่สำเร็จ</p>
+      </Card>
+    );
+  }
+  const x = d.decomposition;
+  if (!x) {
+    return (
+      <Card>
+        {title}
+        <p className="mt-3 text-sm text-muted-foreground">
+          ยังไม่มีข้อมูล ({d.reason ?? d.status ?? "unavailable"})
+        </p>
+      </Card>
+    );
+  }
+  const pv = x.portfolio_volatility;
+  const excluded = x.excluded ?? [];
+  if (!pv || pv.value == null) {
+    const n = pv?.n_obs ?? 0;
+    return (
+      <Card className="border-dashed">
+        {title}
+        <p className="mt-3 text-lg text-muted-foreground">ยังคำนวณไม่ได้</p>
+        <div className="mt-4">
+          <Bar value={n} max={MIN_DECOMP} />
+          <p className="mt-2 text-xs text-muted-foreground tabular-nums">
+            มีข้อมูล {n} จาก {MIN_DECOMP} วัน (ต้องมีราคาย้อนหลังของทุกตัวที่ถืออยู่)
+          </p>
+        </div>
+        {excluded.length > 0 && (
+          <p className="mt-3 text-xs text-muted-foreground">
+            ตัดออก: {excluded.map((e) => `${e.symbol} (${EXCLUDE_TEXT[e.reason] ?? e.reason})`).join(", ")}
+          </p>
+        )}
+      </Card>
+    );
+  }
+  const dr = x.diversification_ratio?.value ?? null;
+  const ac = x.avg_pairwise_correlation?.value ?? null;
+  const syms = x.correlation?.symbols ?? [];
+  const mat = x.correlation?.matrix ?? [];
+  return (
+    <Card>
+      {title}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Chip>ความผันผวนพอร์ต {pct(pv.value, 2)}</Chip>
+        {pv.status === "limited_sample" && <Chip kind="warn">ตัวอย่างน้อย (มี {pv.n_obs ?? 0} วัน)</Chip>}
+        {dr != null && <Chip>Diversification ratio {dr.toFixed(2)}</Chip>}
+        {ac != null && <Chip>correlation เฉลี่ย {ac.toFixed(2)}</Chip>}
+      </div>
+
+      <div className="mt-4 space-y-3">
+        {x.contributions.map((c) => (
+          <div key={c.symbol}>
+            <div className="mb-1 flex justify-between text-sm">
+              <span>{c.symbol}</span>
+              <span className="tabular-nums text-muted-foreground">
+                น้ำหนัก {pct(c.weight_nav, 1)} · สัดส่วนความเสี่ยง {pct(c.pct_of_risk, 1)}
+              </span>
+            </div>
+            <Bar value={Math.max(c.pct_of_risk, 0)} />
+          </div>
+        ))}
+      </div>
+
+      {syms.length >= 2 && syms.length <= 12 && (
+        <div className="mt-5 overflow-x-auto">
+          <table className="text-xs tabular-nums">
+            <thead>
+              <tr>
+                <th className="p-1" />
+                {syms.map((s) => (
+                  <th key={s} className="p-1 font-normal text-muted-foreground">{s}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {syms.map((a, i) => (
+                <tr key={a}>
+                  <th className="p-1 pr-2 text-left font-normal text-muted-foreground">{a}</th>
+                  {syms.map((b, j) => {
+                    const v = mat[i]?.[j] ?? null;
+                    return (
+                      <td key={b} className="p-1 text-center" style={{ background: i === j ? undefined : corrBg(v) }}>
+                        {v == null ? "—" : v.toFixed(2)}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {(x.top_pairs ?? []).length > 0 && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          คู่ที่สัมพันธ์กันสูงสุด: {(x.top_pairs ?? []).map((p) => `${p.a}/${p.b} ${p.correlation.toFixed(2)}`).join(" · ")}
+        </p>
+      )}
+      {excluded.length > 0 && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          ตัดออกจากการคำนวณ: {excluded.map((e) => `${e.symbol} (${EXCLUDE_TEXT[e.reason] ?? e.reason})`).join(", ")}
+        </p>
+      )}
+      <p className="mt-3 text-xs text-muted-foreground">
+        คำนวณจากน้ำหนักปัจจุบันกับประวัติราคาย้อนหลัง ไม่ใช่ความผันผวนที่เกิดขึ้นจริงของพอร์ต · สูตร: σ = √(wᵀΣw)
+      </p>
+    </Card>
+  );
+}
+
+const PRESETS = [-5, -10, -20];
+
+function StressSection({ call, symbols }: { call: Caller; symbols: string[] }) {
+  const [mkt, setMkt] = useState("");
+  const [per, setPer] = useState<Record<string, string>>({});
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [res, setRes] = useState<StressRes | null>(null);
+
+  const toShock = (s: string): number | null | "bad" => {
+    const t = s.trim();
+    if (t === "") return null;
+    const n = Number(t);
+    if (!Number.isFinite(n) || n < -100 || n > 100) return "bad";
+    return Number((n / 100).toFixed(6));
+  };
+
+  const run = async () => {
+    const body: { market_shock?: number; shocks?: Record<string, number> } = {};
+    const m = toShock(mkt);
+    if (m === "bad") {
+      setMsg("ค่าของตลาดต้องอยู่ระหว่าง -100 ถึง 100");
+      return;
+    }
+    if (m !== null) body.market_shock = m;
+    const shocks: Record<string, number> = {};
+    for (const s of symbols) {
+      const v = toShock(per[s] ?? "");
+      if (v === "bad") {
+        setMsg(`ค่าของ ${s} ต้องอยู่ระหว่าง -100 ถึง 100`);
+        return;
+      }
+      if (v !== null) shocks[s] = v;
+    }
+    if (Object.keys(shocks).length > 0) body.shocks = shocks;
+    if (body.market_shock === undefined && !body.shocks) {
+      setMsg("ใส่ค่าอย่างน้อยหนึ่งช่อง");
+      return;
+    }
+    setBusy(true);
+    setMsg(null);
+    try {
+      setRes(
+        await call<StressRes>("/stress-test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "คำนวณไม่สำเร็จ");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const s = res?.stress ?? null;
+  const skipText = (r: string) =>
+    r.includes("beta unavailable") ? "ไม่มี beta (ข้อมูลไม่พอ) และไม่ได้กำหนดค่ารายตัว" : r;
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-base font-medium">จำลองสถานการณ์ (Stress test)</h2>
+        <Chip kind="warn">สถานการณ์สมมติ ไม่ใช่การพยากรณ์</Chip>
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        สมมติว่าราคาเปลี่ยนทันที ผลกระทบ = มูลค่าตำแหน่ง × การเปลี่ยนแปลง · ตลาดที่ลดจะส่งผลกับแต่ละตัวผ่านค่า beta · ไม่ได้จำลอง correlation หรือ volatility ที่เปลี่ยนไป
+      </p>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">
+        <label htmlFor="stress-mkt">ตลาด (S&amp;P 500) เปลี่ยน</label>
+        <input
+          id="stress-mkt"
+          inputMode="decimal"
+          value={mkt}
+          onChange={(ev) => setMkt(ev.target.value)}
+          placeholder="เช่น -10"
+          className="w-24 rounded-lg border border-border bg-background px-2 py-1 text-right tabular-nums"
+        />
+        <span className="text-xs text-muted-foreground">%</span>
+        {PRESETS.map((p) => (
+          <button
+            key={p}
+            onClick={() => setMkt(String(p))}
+            className="rounded-full border border-border px-2.5 py-0.5 text-xs hover:bg-muted"
+          >
+            {p}%
+          </button>
+        ))}
+      </div>
+
+      {symbols.length > 0 && (
+        <div className="mt-3">
+          <button onClick={() => setOpen(!open)} className="text-xs text-muted-foreground underline">
+            {open ? "ซ่อนการกำหนดรายตัว" : "กำหนดรายตัว (ไม่บังคับ ใช้แทนค่าจากตลาด)"}
+          </button>
+          {open && (
+            <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4">
+              {symbols.map((s2) => (
+                <label key={s2} className="flex items-center justify-between gap-2 text-sm">
+                  <span>{s2}</span>
+                  <span className="flex items-center gap-1">
+                    <input
+                      inputMode="decimal"
+                      value={per[s2] ?? ""}
+                      onChange={(ev) => setPer({ ...per, [s2]: ev.target.value })}
+                      placeholder="—"
+                      className="w-16 rounded-lg border border-border bg-background px-2 py-1 text-right tabular-nums"
+                    />
+                    <span className="text-xs text-muted-foreground">%</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {msg && <p className="mt-3 text-xs text-rose-500">{msg}</p>}
+      <button
+        onClick={() => void run()}
+        disabled={busy}
+        className="mt-4 rounded-full bg-foreground px-4 py-1.5 text-xs font-medium text-background disabled:opacity-50"
+      >
+        {busy ? "กำลังคำนวณ…" : "คำนวณ"}
+      </button>
+
+      {res && !s && (
+        <p className="mt-4 text-sm text-muted-foreground">
+          ยังคำนวณไม่ได้ ({res.reason ?? res.status ?? "unavailable"})
+        </p>
+      )}
+      {s && (
+        <div className="mt-5 border-t border-border pt-4">
+          <dl className="grid grid-cols-3 gap-3 text-sm">
+            <div>
+              <dt className="text-muted-foreground">NAV ก่อน</dt>
+              <dd className="mt-0.5 tabular-nums">{usd(s.nav_before)}</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">NAV ประมาณหลัง</dt>
+              <dd className="mt-0.5 tabular-nums">{usd(s.nav_after)}</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">กำไร/ขาดทุนโดยประมาณ</dt>
+              <dd className={`mt-0.5 tabular-nums ${tone(s.pnl)}`}>
+                {usd(s.pnl)} ({pct(s.pnl_pct_nav, 2, true)})
+              </dd>
+            </div>
+          </dl>
+          <ul className="mt-4 space-y-2">
+            {s.positions.map((p) => (
+              <li key={p.symbol} className="flex items-center justify-between gap-2 text-sm">
+                <span>
+                  {p.symbol}
+                  <span className="block text-xs text-muted-foreground">
+                    {p.basis.startsWith("explicit") ? "กำหนดเอง" : "ผ่านค่า beta"}
+                    {p.basis.includes("limited_sample") ? " · beta จากข้อมูลน้อย" : ""} · {pct(p.shock, 1, true)}
+                  </span>
+                </span>
+                <span className={`tabular-nums ${tone(p.pnl)}`}>{usd(p.pnl)}</span>
+              </li>
+            ))}
+          </ul>
+          {s.skipped.length > 0 && (
+            <p className="mt-3 text-xs text-muted-foreground">
+              ข้าม: {s.skipped.map((k) => `${k.symbol} (${skipText(k.reason)})`).join(", ")}
+            </p>
+          )}
+          {(s.unknown_symbols ?? []).length > 0 && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              ไม่ได้ถืออยู่ จึงไม่นับ: {(s.unknown_symbols ?? []).join(", ")}
+            </p>
+          )}
+          {s.betas && Object.keys(s.betas).length > 0 && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              beta เทียบ S&amp;P 500:{" "}
+              {Object.entries(s.betas)
+                .map(([k, m]) => `${k} ${m.value == null ? "—" : m.value.toFixed(2)}`)
+                .join(" · ")}
+            </p>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 /* ───────── page ───────── */
 export default function StockRiskPage({ getToken, apiBase }: Props) {
   const [ov, setOv] = useState<Overview | null>(null);
@@ -375,6 +732,7 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
   const [limits, setLimits] = useState<Limits | null>(null);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [mx, setMx] = useState<MetricsRes | null>(null);
+  const [dc, setDc] = useState<Decomp | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [evaluating, setEvaluating] = useState(false);
@@ -404,18 +762,20 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const [o, e, l, a, m] = await Promise.all([
+      const [o, e, l, a, m, dcr] = await Promise.all([
         call<Overview>("/overview"),
         call<Exposure>("/exposure"),
         call<{ limits: Limits }>("/limits"),
         call<{ alerts: AlertRow[] }>("/alerts?limit=20"),
         call<MetricsRes>("/metrics").catch(() => null),
+        call<Decomp>("/risk-decomposition").catch(() => null),
       ]);
       setOv(o);
       setEx(e);
       setLimits(l.limits);
       setAlerts(a.alerts);
       setMx(m);
+      setDc(dcr);
     } catch (err) {
       setError(err instanceof Error ? err.message : "โหลดข้อมูลไม่สำเร็จ");
     } finally {
@@ -612,6 +972,8 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
       </div>
       <RiskAdjustedSection m={mx} />
       <TailSection m={mx} />
+      <DecompositionSection d={dc} />
+      <StressSection call={call} symbols={top.map((p) => p.symbol)} />
       
       <div className="grid grid-cols-1 gap-4 md:grid-cols-[7fr_5fr]">
         {/* concentration */}
