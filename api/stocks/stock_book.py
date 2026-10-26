@@ -66,12 +66,15 @@ async def _quote(sym: str) -> tuple[float, str | None]:
     try:
         q = await get_quote(sym)
         price = float(q["price"])
+    except HTTPException as e:
+        if e.status_code == 404:
+            raise HTTPException(404, f"ไม่พบสัญลักษณ์ {sym}")
+        raise HTTPException(503, f"ดึงราคา {sym} ไม่ได้ ปฏิเสธคำสั่ง")
     except Exception:
-        price = 0.0
-        q = {}
+        raise HTTPException(503, f"ดึงราคา {sym} ไม่ได้ ปฏิเสธคำสั่ง")
     if not math.isfinite(price) or price <= 0:
         raise HTTPException(503, f"ดึงราคา {sym} ไม่ได้ ปฏิเสธคำสั่ง")
-    ts = q.get("t") or q.get("timestamp")
+    ts = q.get("timestamp")
     quote_ts = (datetime.fromtimestamp(int(ts), timezone.utc).isoformat()
                 if isinstance(ts, (int, float)) and ts > 0 else None)
     return price, quote_ts
