@@ -64,7 +64,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install test dependencies
-        run: pip install pytest fastapi httpx pyjwt
+        run: pip install pytest fastapi httpx pyjwt numpy
 
       - name: Run tests
         run: python -m pytest tests -q
