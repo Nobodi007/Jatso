@@ -26,7 +26,6 @@ const CAN_ANCHOR =
   typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports("anchor-name: --a")
 
 const ARCS: Arc[] = [
-  { id: "bkk-nyc", from: [13.7563, 100.5018], to: [40.7128, -74.006] },
   { id: "nyc-london", from: [40.7128, -74.006], to: [51.5074, -0.1278] },
   { id: "bkk-london", from: [13.7563, 100.5018], to: [51.5074, -0.1278] },
   { id: "bkk-tokyo", from: [13.7563, 100.5018], to: [35.6762, 139.6503] },
