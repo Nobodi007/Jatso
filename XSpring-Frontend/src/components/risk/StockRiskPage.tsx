@@ -122,6 +122,22 @@ interface StressRes {
 }
 type Caller = <T>(path: string, init?: RequestInit) => Promise<T>;
 
+/* Phase 3: attribution แบบบางส่วน (ตรงกับ /attribution) */
+interface AttrRow { symbol: string; contribution: number; avg_weight_nav: number; days_held: number; held_now: boolean }
+interface AttrRes {
+  attribution: null | {
+    partial: boolean;
+    partial_note: string;
+    n_obs: number;
+    portfolio_return: number;
+    positions: AttrRow[];
+    execution_and_fees: { value: number; note: string };
+    sum_check: { positions: number; execution_and_fees: number; portfolio_return: number; residual: number; ok: boolean };
+  };
+  status?: string;
+  reason?: string;
+}
+
 interface Props {
   getToken: () => string | null;
   apiBase: string;
@@ -725,6 +741,79 @@ function StressSection({ call, symbols }: { call: Caller; symbols: string[] }) {
   );
 }
 
+/* ───────── Phase 3 UI: ที่มาของผลตอบแทน (บางส่วน) ───────── */
+const ppFmt = (v: number) => `${v > 0 ? "+" : ""}${(v * 100).toFixed(2)} pp`;
+
+function AttributionSection({ a }: { a: AttrRes | null }) {
+  const title = <h2 className="text-base font-medium">ที่มาของผลตอบแทน</h2>;
+  if (!a) {
+    return (
+      <Card>
+        {title}
+        <p className="mt-3 text-sm text-muted-foreground">โหลดข้อมูลส่วนนี้ไม่สำเร็จ</p>
+      </Card>
+    );
+  }
+  const x = a.attribution;
+  if (!x) {
+    return (
+      <Card>
+        {title}
+        <p className="mt-3 text-sm text-muted-foreground">ยังคำนวณไม่ได้ ({a.reason ?? a.status ?? "unavailable"})</p>
+      </Card>
+    );
+  }
+  const maxAbs = Math.max(...x.positions.map((p) => Math.abs(p.contribution)), Math.abs(x.execution_and_fees.value), 1e-9);
+  return (
+    <Card>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {title}
+        <Chip kind="warn">แบบบางส่วน: ส่วนร่วมรายตัวเท่านั้น</Chip>
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        ไม่มีน้ำหนักรายอุตสาหกรรมของ S&amp;P 500 จึงไม่คำนวณ allocation/selection effect (Brinson) · หน่วยเป็น pp ของมูลค่าพอร์ตตอนเริ่มช่วง
+      </p>
+      <p className={`mt-3 text-2xl font-medium tabular-nums ${tone(x.portfolio_return)}`}>
+        {pct(x.portfolio_return, 2, true)}
+        <span className="ml-2 text-sm font-normal text-muted-foreground">ผลตอบแทนพอร์ต · {x.n_obs} วันทำการ</span>
+      </p>
+
+      <ul className="mt-4 space-y-3">
+        {x.positions.map((p) => (
+          <li key={p.symbol}>
+            <div className="mb-1 flex items-center justify-between gap-2 text-sm">
+              <span className="flex items-center gap-2">
+                {p.symbol}
+                {!p.held_now && <Chip>ขายแล้ว</Chip>}
+              </span>
+              <span className={`tabular-nums ${tone(p.contribution)}`}>{ppFmt(p.contribution)}</span>
+            </div>
+            <Bar value={Math.abs(p.contribution)} max={maxAbs} kind={p.contribution >= 0 ? "ok" : "bad"} />
+            <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+              น้ำหนักเฉลี่ย {pct(p.avg_weight_nav, 1)} · ถือ {p.days_held} วัน
+            </p>
+          </li>
+        ))}
+        <li>
+          <div className="mb-1 flex items-center justify-between gap-2 text-sm" title={x.execution_and_fees.note}>
+            <span>ราคาที่ซื้อขายจริงเทียบราคาปิด และค่าธรรมเนียม</span>
+            <span className={`tabular-nums ${tone(x.execution_and_fees.value)}`}>{ppFmt(x.execution_and_fees.value)}</span>
+          </div>
+          <Bar value={Math.abs(x.execution_and_fees.value)} max={maxAbs} kind={x.execution_and_fees.value >= 0 ? "ok" : "bad"} />
+        </li>
+      </ul>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-3 text-xs text-muted-foreground">
+        <Chip kind={x.sum_check.ok ? "ok" : "bad"}>{x.sum_check.ok ? "ผลรวมตรงกับผลตอบแทนพอร์ต" : "ผลรวมไม่ตรง"}</Chip>
+        <span className="tabular-nums">
+          ส่วนร่วมรายตัว {ppFmt(x.sum_check.positions)} + ซื้อขาย/ค่าธรรมเนียม {ppFmt(x.sum_check.execution_and_fees)} ={" "}
+          {ppFmt(x.sum_check.portfolio_return)}
+        </span>
+      </div>
+    </Card>
+  );
+}
+
 /* ───────── page ───────── */
 export default function StockRiskPage({ getToken, apiBase }: Props) {
   const [ov, setOv] = useState<Overview | null>(null);
@@ -733,6 +822,7 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [mx, setMx] = useState<MetricsRes | null>(null);
   const [dc, setDc] = useState<Decomp | null>(null);
+  const [attr, setAttr] = useState<AttrRes | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [evaluating, setEvaluating] = useState(false);
@@ -762,13 +852,14 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const [o, e, l, a, m, dcr] = await Promise.all([
+      const [o, e, l, a, m, dcr, atr] = await Promise.all([
         call<Overview>("/overview"),
         call<Exposure>("/exposure"),
         call<{ limits: Limits }>("/limits"),
         call<{ alerts: AlertRow[] }>("/alerts?limit=20"),
         call<MetricsRes>("/metrics").catch(() => null),
         call<Decomp>("/risk-decomposition").catch(() => null),
+        call<AttrRes>("/attribution").catch(() => null),
       ]);
       setOv(o);
       setEx(e);
@@ -776,6 +867,7 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
       setAlerts(a.alerts);
       setMx(m);
       setDc(dcr);
+      setAttr(atr);
     } catch (err) {
       setError(err instanceof Error ? err.message : "โหลดข้อมูลไม่สำเร็จ");
     } finally {
@@ -973,6 +1065,7 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
       <RiskAdjustedSection m={mx} />
       <TailSection m={mx} />
       <DecompositionSection d={dc} />
+      <AttributionSection a={attr} />
       <StressSection call={call} symbols={top.map((p) => p.symbol)} />
       
       <div className="grid grid-cols-1 gap-4 md:grid-cols-[7fr_5fr]">
