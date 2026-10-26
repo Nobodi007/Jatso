@@ -15,6 +15,7 @@ import { PriceTicker } from "./LandingEffects"
 import { GlobeHero } from "./GlobeHero"
 import TourGuide from "./TourGuide";
 import ContactPage from "./ContactPage";
+import MarketStatusBadge from "./MarketStatusBadge"
 
 type LandingPageProps = {
   onLogin: () => void
@@ -230,8 +231,12 @@ const startTour = () => {
               onGo={go}
               heroTitle={t("hero.title")}
               heroSub={t("hero.desc")}
-              heroArt={<GlobeHero />}
-            />
+              heroArt={
+                <div className="flex w-full flex-col items-center gap-4">
+                  <GlobeHero />
+                  <MarketStatusBadge />
+                </div>
+              }
             <PriceTicker />
           </>
         )}
