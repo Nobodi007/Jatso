@@ -48,4 +48,23 @@ jobs:
           python-version: "3.11"
 
       - name: Compile API
-        run: python -m py_compile api/server.py
+        run: python -m compileall -q api
+
+  backend-tests:
+    name: Backend tests (stock risk)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: pip install pytest fastapi httpx pyjwt
+
+      - name: Run tests
+        run: python -m pytest tests -q
