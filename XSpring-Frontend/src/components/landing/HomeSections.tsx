@@ -7,15 +7,19 @@ import { useEffect, useState } from "react"
 import { BarChart3, Newspaper, Scale, ShieldCheck, TestTube2, UserPlus } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { useLanguage } from "../../i18n/LanguageContext"
+import { useAssetTab } from "../../hooks/useAssetTab"
+import AssetToggle from "./AssetToggle"
 
 const API_BASE_URL = "https://xspring-api.onrender.com"
 
 type Row = { asset: string; name: string; price: number; change: number }
+type StockRow = { symbol: string; name: string; price: number; changePercent: number }
 type Props = {
   onLogin: () => void
   onRegister: () => void
   onOpenCoin: (asset: string) => void
   onGo: (label: string) => void
+  onSelectStock: (symbol: string) => void
   heroTitle: string
   heroSub: string
   heroArt: React.ReactNode
@@ -74,11 +78,14 @@ const TOOLS: { icon: LucideIcon; title: string; text: string; go: string }[] = [
   { icon: TestTube2, title: "tools.t3Title", text: "tools.t3Desc", go: "ลองลงทุนย้อนหลัง" },
 ]
 
-export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, heroTitle, heroSub, heroArt }: Props) {
+export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, onSelectStock, heroTitle, heroSub, heroArt }: Props) {
   const { t, lang } = useLanguage()
   const locale = lang === "th" ? "th-TH" : "en-US"
   const [rows, setRows] = useState<Row[] | null>(null)
   const [sparks, setSparks] = useState<Record<string, number[]>>({})
+  const [assetTab] = useAssetTab()
+  const [stockRows, setStockRows] = useState<StockRow[] | null>(null)
+  const [stockSparks, setStockSparks] = useState<Record<string, number[]>>({})
   const [page, setPage] = useState<
   "home" | "about" | "guide" | "privacy" | "disclosure">("home")
   const openPage = (p: string) => {
@@ -104,8 +111,41 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
       clearInterval(id)
     }
   }, [])
-  
-   if (page !== "home") {
+
+  // หุ้นสหรัฐ 5 ตัวแรกของตารางสาธารณะ: โหลดเมื่อเลือกแท็บหุ้น (เซิร์ฟเวอร์ cache 90 วินาที)
+  useEffect(() => {
+    if (assetTab !== "stocks") return
+    let alive = true
+    const load = () =>
+      fetch(`${API_BASE_URL}/api/stocks/public/market`)
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then((d) => {
+          if (!alive) return
+          const rows: StockRow[] = (Array.isArray(d.rows) ? d.rows : [])
+            .filter((x: StockRow & { price: number | null }) => typeof x.price === "number")
+            .slice(0, 5)
+            .map((x: { symbol: string; name: string; price: number; changePercent: number | null }) => ({
+              symbol: x.symbol,
+              name: x.name,
+              price: x.price,
+              changePercent: Number(x.changePercent ?? 0),
+            }))
+          setStockRows(rows)
+        })
+        .catch(() => alive && setStockRows((p) => p ?? []))
+    load()
+    fetch(`${API_BASE_URL}/api/stocks/public/market/sparks`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => alive && d && setStockSparks(d.sparks ?? {}))
+      .catch(() => {})
+    const id = setInterval(load, 90000)
+    return () => {
+      alive = false
+      clearInterval(id)
+    }
+  }, [assetTab])
+
+  if (page !== "home") {
     return (
       <>
         {page === "privacy" && <PrivacyPolicy onBack={() => setPage("home")} />}
@@ -138,9 +178,52 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, he
       {/* ตลาด */}
       <section id="tour-market" className="mx-auto max-w-4xl px-4 py-12">
         <h2 className="text-center text-3xl font-extrabold tracking-tight">{t("market.title")}</h2>
-        <p className="mt-2 text-center text-sm text-muted-foreground">{t("market.subtitle")}</p>
+        <p className="mt-2 text-center text-sm text-muted-foreground">
+          {assetTab === "stocks" ? t("market.subtitleStocks") : t("market.subtitle")}
+        </p>
+        <div className="mt-5 flex justify-center">
+          <AssetToggle />
+        </div>
 
-        <div className="mt-8 overflow-hidden rounded-2xl border">
+        {assetTab === "stocks" && (
+          <div className="mt-8 overflow-hidden rounded-2xl border">
+            <div className="grid grid-cols-[1.4fr_1fr_0.8fr_0.8fr] gap-2 bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
+              <span>{t("market.colName")}</span>
+              <span className="text-right">{t("market.colPrice")}</span>
+              <span className="text-right">{t("market.colChangeToday")}</span>
+              <span className="text-right">{t("market.colTrend")}</span>
+            </div>
+            {stockRows === null && <p className="px-4 py-8 text-center text-sm text-muted-foreground">{t("market.loading")}</p>}
+            {stockRows?.length === 0 && <p className="px-4 py-8 text-center text-sm text-muted-foreground">{t("market.loadFailed")}</p>}
+            {stockRows?.map((r) => {
+              const up = r.changePercent >= 0
+              const sp = stockSparks[r.symbol] ?? []
+              return (
+                <button
+                  key={r.symbol}
+                  type="button"
+                  onClick={() => onSelectStock(r.symbol)}
+                  className="grid w-full grid-cols-[1.4fr_1fr_0.8fr_0.8fr] items-center gap-2 border-t px-4 py-3 text-left text-sm hover:bg-accent"
+                >
+                  <span>
+                    <span className="font-semibold">{r.symbol}</span>{" "}
+                    <span className="text-xs text-muted-foreground">{r.name}</span>
+                  </span>
+                  <span className="text-right font-semibold">${fmtPrice(r.price, locale)}</span>
+                  <span className={`text-right font-semibold ${up ? "text-emerald-500" : "text-red-500"}`}>
+                    {up ? "+" : ""}
+                    {r.changePercent.toFixed(2)}%
+                  </span>
+                  <span className="flex justify-end">
+                    <Spark data={sp} up={sp.length > 1 ? sp[sp.length - 1] >= sp[0] : up} />
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        )}
+
+        <div className={`mt-8 overflow-hidden rounded-2xl border ${assetTab === "stocks" ? "hidden" : ""}`}>
           <div className="grid grid-cols-[1.4fr_1fr_0.8fr_0.8fr] gap-2 bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
             <span>{t("market.colName")}</span>
             <span className="text-right">{t("market.colPrice")}</span>
