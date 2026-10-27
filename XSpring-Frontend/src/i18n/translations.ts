@@ -56,6 +56,15 @@ const th = {
     subtitleStocks: "หุ้นสหรัฐยอดนิยม ราคาเป็นดอลลาร์ (USD) อัปเดตอัตโนมัติ",
     colChangeToday: "เปลี่ยนแปลงวันนี้",
   },
+  showcase: {
+    title: "ใช้ได้ทั้งคริปโตและหุ้นสหรัฐ ในเว็บเดียว",
+    subtitle: "เปิดจากเบราว์เซอร์ได้เลย ไม่ต้องติดตั้งอะไร",
+    text: "สลับดูตลาดคริปโตราคาเป็นบาท กับหุ้นสหรัฐราคาเป็นดอลลาร์ ได้ในหน้าเว็บเดียว แล้วฝึกซื้อขายด้วยบัญชีจำลองก่อนตัดสินใจจริง",
+    p1: "ตลาดคริปโต: ราคาสดเป็นบาท พร้อมเทียบกระดานไทย",
+    p2: "หุ้นสหรัฐ: คัดกรองหุ้น ปฏิทินงบ และวิเคราะห์ความเสี่ยงพอร์ต",
+    altCrypto: "หน้าซื้อขายคริปโตของ Nobodi",
+    altStocks: "หน้าหุ้นสหรัฐของ Nobodi",
+  },
   // หน้าตลาดหุ้นสหรัฐ (StockMarketSection)
   smkt: {
     title: "ตลาดหุ้นสหรัฐ",
@@ -591,6 +600,15 @@ const en: Translations = {
     viewMore: "View more ›",
     subtitleStocks: "Popular US stocks in US dollars (USD), updated automatically",
     colChangeToday: "Change today",
+  },
+  showcase: {
+    title: "Crypto and US stocks, in one website",
+    subtitle: "Open it right in your browser, nothing to install",
+    text: "Switch between the crypto market in Thai baht and US stocks in US dollars on one site, then practice trading in a demo account before you decide for real.",
+    p1: "Crypto: live prices in baht, with Thai exchange comparison",
+    p2: "US stocks: screener, earnings calendar and portfolio risk analysis",
+    altCrypto: "Nobodi crypto trading page",
+    altStocks: "Nobodi US stocks page",
   },
   // US stock market page (StockMarketSection)
   smkt: {
