@@ -7,7 +7,16 @@ const initials = (name: string) => {
   return (words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? "?").slice(0, 2)).toUpperCase()
 }
 
-export default function BrokerLogo({ name, src }: { name: string; src?: string | null }) {
+// bg="dark": สำหรับโลโก้ที่ใช้ตัวหนังสือสีขาว (เช่น Liberator) จะวางบนแผ่นสีเข้มแทนแผ่นสีขาว
+export default function BrokerLogo({
+  name,
+  src,
+  bg = "light",
+}: {
+  name: string
+  src?: string | null
+  bg?: "light" | "dark"
+}) {
   const [failed, setFailed] = useState(false)
 
   if (!src || failed) {
@@ -22,7 +31,11 @@ export default function BrokerLogo({ name, src }: { name: string; src?: string |
   }
 
   return (
-    <div className="inline-flex h-11 shrink-0 items-center rounded-lg bg-white px-2.5 ring-1 ring-border">
+    <div
+      className={`inline-flex h-11 shrink-0 items-center rounded-lg px-2.5 ring-1 ${
+        bg === "dark" ? "bg-zinc-900 ring-white/15" : "bg-white ring-border"
+      }`}
+    >
       <img
         src={src}
         alt={`${name} logo`}
