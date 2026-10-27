@@ -3,6 +3,7 @@ import type { ReactNode } from "react"
 import { ExternalLink, Info, Search } from "lucide-react"
 import { useLanguage } from "../../i18n/LanguageContext"
 import brokerData from "../../data/brokers-us.json"
+import BrokerLogo from "./BrokerLogo"
 
 type Bi = { th: string; en: string }
 
@@ -18,6 +19,7 @@ type Broker = {
   commission: Bi
   otherFees: Bi
   extras: Bi
+  logo?: string | null
   // internalNote ในไฟล์ JSON เป็นโน้ตของทีม ไม่แสดงให้ผู้ใช้เห็น
 }
 
@@ -44,6 +46,7 @@ const STR = {
     site: "เว็บโบรกเกอร์",
     feeSource: "ที่มาของค่าธรรมเนียม",
     asOf: "ข้อมูล ณ",
+    logoNote: "โลโก้และชื่อเป็นเครื่องหมายการค้าของเจ้าของ แสดงเพื่อระบุตัวโบรกเกอร์เท่านั้น ไม่ได้เป็นการรับรองหรือความร่วมมือ",
     flags: {
       commission: "ยังไม่ยืนยันอัตรานี้",
       fractionalUnit: "หน่วยของเศษหุ้นไม่ระบุในตาราง",
@@ -70,6 +73,7 @@ const STR = {
     site: "Broker site",
     feeSource: "Fee source",
     asOf: "Data as of",
+    logoNote: "โลโก้และชื่อเป็นเครื่องหมายการค้าของเจ้าของ แสดงเพื่อระบุตัวโบรกเกอร์เท่านั้น ไม่ได้เป็นการรับรองหรือความร่วมมือ",
     flags: {
       commission: "This rate is not confirmed",
       fractionalUnit: "Fractional-share unit not shown in the table",
@@ -205,6 +209,9 @@ export default function BrokerComparePage() {
               className={`grid gap-x-6 gap-y-4 border-b px-5 py-5 last:border-b-0 ${COLS}`}
             >
               <div>
+                <div className="mb-3">
+                  <BrokerLogo name={b.name} src={b.logo} />
+                </div>
                 <h2 className="text-base font-semibold">{b.name}</h2>
                 {b.entity && <p className="mt-0.5 text-xs text-muted-foreground">{b.entity}</p>}
                 {b.dataAsOf && (
@@ -257,6 +264,7 @@ export default function BrokerComparePage() {
           )
         })}
       </div>
+    <p className="mt-3 text-xs text-muted-foreground">{s.logoNote}</p>
     </section>
   )
 }
