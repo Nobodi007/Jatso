@@ -48,6 +48,8 @@ const STR = {
     feeSource: "ที่มาของค่าธรรมเนียม",
     asOf: "ข้อมูล ณ",
     logoNote: "โลโก้และชื่อเป็นเครื่องหมายการค้าของเจ้าของ แสดงเพื่อระบุตัวโบรกเกอร์เท่านั้น ไม่ได้เป็นการรับรองหรือความร่วมมือ",
+    orderNote:
+      "เรียงตามตัวอักษร A–Z ของชื่อโบรกเกอร์เท่านั้น ไม่ใช่การจัดอันดับ ไม่ได้เรียงตามคะแนน ความนิยม หรือค่าตอบแทน และไม่มีโบรกเกอร์รายใดจ่ายเงินให้ Nobodi เพื่อเปลี่ยนตำแหน่งหรือเนื้อหาในหน้านี้",
     flags: {
       commission: "ยังไม่ยืนยันอัตรานี้",
       fractionalUnit: "หน่วยของเศษหุ้นไม่ระบุในตาราง",
@@ -74,7 +76,9 @@ const STR = {
     site: "Broker site",
     feeSource: "Fee source",
     asOf: "Data as of",
-    logoNote: "โลโก้และชื่อเป็นเครื่องหมายการค้าของเจ้าของ แสดงเพื่อระบุตัวโบรกเกอร์เท่านั้น ไม่ได้เป็นการรับรองหรือความร่วมมือ",
+    logoNote: "Logos and names are trademarks of their owners, shown only to identify each broker, not as an endorsement or partnership.",
+    orderNote:
+      "Brokers are listed alphabetically (A–Z) by name. The order is not a ranking and reflects no score, popularity or payment. No broker has paid Nobodi to change its position or content on this page.",
     flags: {
       commission: "This rate is not confirmed",
       fractionalUnit: "Fractional-share unit not shown in the table",
