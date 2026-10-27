@@ -1,6 +1,7 @@
 const th = {
   nav: {
     market: "ตลาด",
+    brokers: "โบรกเกอร์",
     trade: "การซื้อขาย",
     learn: "เรียนรู้",
     news: "ข่าว",
@@ -547,6 +548,7 @@ type Translations = typeof th;
 const en: Translations = {
   nav: {
     market: "Market",
+    brokers: "Brokers",
     trade: "Trade",
     learn: "Learn",
     news: "News",
