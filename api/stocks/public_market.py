@@ -9,12 +9,13 @@
 """
 import asyncio
 import logging
+import re
 import time
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Query, Response
 
 from . import providers as p
-from .cache import ProviderError, RateLimited, cached
+from .cache import ProviderError, RateLimited, cached, take_quota
 
 log = logging.getLogger("stocks.public_market")
 
@@ -136,3 +137,38 @@ async def public_market_sparks(response: Response):
     # ได้ครบหรือเกือบครบค่อยให้เบราว์เซอร์ cache ยาว ถ้าขาดเยอะให้ลองใหม่เร็วขึ้น
     response.headers["Cache-Control"] = "public, max-age=3600" if len(sparks) >= len(UNIVERSE) - 2 else "public, max-age=120"
     return {"sparks": sparks, "days": SPARK_DAYS}
+
+
+# ---------- ค้นหาหุ้นนอกรายการ 20 ตัว (ช่องค้นหาหน้า landing) ----------
+# งบเฉพาะของหน้าสาธารณะ: ยิง Finnhub /search ได้ไม่เกิน 10 ครั้ง/นาที รวมทุกผู้เข้าชม
+# จะได้ไม่ไปแย่งโควต้า 55 ครั้ง/นาทีที่ผู้ใช้ในแอปใช้ร่วมกัน (คำที่เคยค้นแล้วอ่านจาก cache ไม่นับงบ)
+_SEARCH_RE = re.compile(r"^[A-Za-z0-9 .&'\-]{1,20}$")
+SEARCH_BUDGET = (10, 60)
+SEARCH_TTL = 3600
+
+
+@router.get("/search")
+async def public_market_search(response: Response, q: str = Query(min_length=1, max_length=20)):
+    q = q.strip()
+    if not _SEARCH_RE.match(q):  # ตัวอักษรไทย/สัญลักษณ์แปลกๆ ไม่ต้องไปถาม provider
+        return []
+
+    async def fetch():
+        if not take_quota("public_search", *SEARCH_BUDGET):
+            raise RateLimited("public_search")
+        return await p.finnhub("/search", q=q)
+
+    try:
+        data = await cached(f"pubsearch:{q.lower()}", SEARCH_TTL, fetch)
+    except RateLimited:
+        raise HTTPException(503, "rate_limited")
+    except ProviderError:
+        raise HTTPException(502, "provider_error")
+    response.headers["Cache-Control"] = "public, max-age=300"
+    out = []
+    for x in (data or {}).get("result", []):
+        sym = x.get("symbol") or ""
+        if not sym or "." in sym:  # ตัดหุ้นต่างตลาด (มีจุด) เหมือน /api/stocks/search
+            continue
+        out.append({"symbol": sym, "name": x.get("description") or "", "type": x.get("type") or ""})
+    return out[:8]
