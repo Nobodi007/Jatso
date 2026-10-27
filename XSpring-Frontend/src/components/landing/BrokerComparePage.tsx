@@ -20,6 +20,7 @@ type Broker = {
   otherFees: Bi
   extras: Bi
   logo?: string | null
+  logoBg?: "light" | "dark"
   // internalNote ในไฟล์ JSON เป็นโน้ตของทีม ไม่แสดงให้ผู้ใช้เห็น
 }
 
@@ -145,9 +146,10 @@ export default function BrokerComparePage() {
   const [q, setQ] = useState("")
 
   const rows = useMemo(() => {
+    const sorted = [...data.brokers].sort((a, b) => a.name.localeCompare(b.name, "en"))
     const needle = q.trim().toLowerCase()
-    if (!needle) return data.brokers
-    return data.brokers.filter((b) => `${b.name} ${b.entity ?? ""}`.toLowerCase().includes(needle))
+    if (!needle) return sorted
+    return sorted.filter((b) => `${b.name} ${b.entity ?? ""}`.toLowerCase().includes(needle))
   }, [q])
 
   const flagsOf = (b: Broker, group: string[]) => {
@@ -210,7 +212,7 @@ export default function BrokerComparePage() {
             >
               <div>
                 <div className="mb-3">
-                  <BrokerLogo name={b.name} src={b.logo} />
+                  <BrokerLogo name={b.name} src={b.logo} bg={b.logoBg} />
                 </div>
                 <h2 className="text-base font-semibold">{b.name}</h2>
                 {b.entity && <p className="mt-0.5 text-xs text-muted-foreground">{b.entity}</p>}
