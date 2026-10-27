@@ -283,6 +283,23 @@ function AppInner() {
     window.removeEventListener("stocks:open-trade", toTrade);
   };
 }, []);
+  // กดหุ้นจากช่องค้นหาหน้า landing แล้วสมัคร/ล็อกอิน ให้เด้งมาที่หน้าหุ้นตัวนั้น
+  useEffect(() => {
+    if (!user) return
+    try {
+      const raw = localStorage.getItem("landing_pending_stock")
+      if (!raw) return
+      localStorage.removeItem("landing_pending_stock")
+      const { symbol, ts } = JSON.parse(raw)
+      if (typeof symbol !== "string" || !/^[A-Z][A-Z.\-]{0,9}$/.test(symbol)) return
+      if (Date.now() - Number(ts) > 60 * 60 * 1000) return // เกิน 1 ชม. ถือว่าหมดอายุ ไม่ลากผู้ใช้ไปหน้าที่ลืมไปแล้ว
+      localStorage.setItem("stocks_pending_symbol", symbol)
+      setMarket("stocks")
+      setPage("markets")
+    } catch {
+      /* ข้าม */
+    }
+  }, [user])  
 
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try {
