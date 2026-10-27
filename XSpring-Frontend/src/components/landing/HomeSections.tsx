@@ -9,6 +9,7 @@ import type { LucideIcon } from "lucide-react"
 import { useLanguage } from "../../i18n/LanguageContext"
 import { useAssetTab } from "../../hooks/useAssetTab"
 import AssetToggle from "./AssetToggle"
+import DeviceShowcase from "./DeviceShowcase"
 
 const API_BASE_URL = "https://xspring-api.onrender.com"
 
@@ -361,6 +362,8 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
           })}
         </div>
       </section>
+
+      <DeviceShowcase onRegister={onRegister} />
 
             {/* ปิดท้าย */}
       <section id="tour-cta" className="mx-auto max-w-4xl px-4 py-16 text-center">
