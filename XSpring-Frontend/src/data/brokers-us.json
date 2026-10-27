@@ -30,7 +30,7 @@
         "th": "มี 2 ระบบให้เลือก บริษัทสงวนสิทธิ์เปลี่ยนอัตราได้ตามประกาศ",
         "en": "Two platforms to choose from; the company reserves the right to change rates"
       },
-      "logo": "/brokers/bualuang.svg"
+      "logo": "/brokers/bualuang.png"
     },
     {
       "id": "dime",
@@ -54,7 +54,7 @@
         "th": "มีแพ็กเกจเสริม Dime! Fan (39 บาท/เดือน) และ Dime! Club ดูรายละเอียดที่เว็บ",
         "en": "Optional Dime! Fan (THB 39/month) and Dime! Club packages, see site"
       },
-      "logo": "/brokers/dime.svg"
+      "logo": "/brokers/dime.png"
     },
     {
       "id": "finansia",
@@ -109,7 +109,7 @@
         "th": "ซื้อขายได้ทั้ง NYSE, NASDAQ, AMEX, ARCA, BATS",
         "en": "NYSE, NASDAQ, AMEX, ARCA, BATS"
       },
-      "logo": "/brokers/innovestx.svg"
+      "logo": "/brokers/innovestx.png"
     },
     {
       "id": "liberator",
@@ -133,7 +133,8 @@
         "th": "เทรด Pre-Market ถึง After-Hours ได้ มีคำสั่งตามเงื่อนไขและ GTC",
         "en": "Pre-market to after-hours trading, conditional and GTC orders"
       },
-      "logo": "/brokers/liberator.svg"
+      "logo": "/brokers/liberator.png",
+      "logoBg": "dark"
     },
     {
       "id": "pi",
@@ -157,7 +158,7 @@
         "th": "แปลงเงินบาทเป็น USD อัตโนมัติ",
         "en": "Automatic THB to USD conversion"
       },
-      "logo": "/brokers/pi.svg"
+      "logo": "/brokers/pi.png"
     },
     {
       "id": "sbito",
@@ -184,7 +185,7 @@
         "th": "โปรโมชันฝาก 10,000 บาท รับหุ้นอเมริกาฟรีมูลค่า 200 บาท (ตามหน้าเว็บ)",
         "en": "Promotion: deposit THB 10,000 to pick a free US stock worth THB 200 (per the site)"
       },
-      "logo": "/brokers/sbito.svg"
+      "logo": "/brokers/sbito.png"
     },
     {
       "id": "webull",
@@ -208,7 +209,7 @@
         "th": "ซื้อขายนอกเวลาและ Overnight ได้",
         "en": "Extended-hours and overnight trading"
       },
-      "logo": "/brokers/webull.svg"
+      "logo": "/brokers/webull.png"
     },
     {
       "id": "yuanta",
@@ -238,7 +239,7 @@
         "taxServiceFees"
       ],
       "internalNote": "วันที่ 9 มี.ค. 2569 อ่านจากข้อความที่ถูกครอปในภาพ ควรยืนยัน เอกสาร PDF รุ่น ส.ค. 2568 เคยระบุ US Tax Reporting 40 USD/ปี, Tax Treaty 30 USD/3 ปี และค่าโอนเงินกลับไทย (ฟรีถ้า >= 1,001 USD ไม่งั้น 50 USD) ตารางปัจจุบันไม่แสดงรายการเหล่านี้ จึงยังไม่ใส่ ต้องเช็คว่ายังเก็บอยู่หรือไม่",
-      "logo": "/brokers/yuanta.svg"
+      "logo": "/brokers/yuanta.png"
     }
   ]
 }
