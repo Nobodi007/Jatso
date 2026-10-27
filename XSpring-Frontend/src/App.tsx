@@ -419,45 +419,32 @@ function AppInner() {
             )}
           </div>
 
-          {/* MARKET SWITCHER: one app, two separate market workspaces */}
-          <div
-            className={`grid gap-1.5 p-2 pb-2 ${sidebarOpen ? "grid-cols-2" : "grid-cols-1"}`}
-            role="group"
-            aria-label="เลือกตลาดลงทุน"
-          >
+          <div className={`grid gap-1 p-2 pb-0 ${sidebarOpen ? "grid-cols-2" : "grid-cols-1"}`}>
             <button
-              type="button"
-              aria-pressed={market === "crypto"}
-              title="สลับไปยังระบบคริปโต"
               onClick={() => {
                 setMarket("crypto")
                 setPage("dashboard")
               }}
-              className={`flex min-w-0 items-center justify-center gap-1.5 rounded-xl border px-2 py-2 text-xs font-semibold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+              className={`rounded-lg px-2 py-1.5 text-xs font-medium ${
                 market === "crypto"
-                  ? "border-emerald-500/60 bg-emerald-500 text-black shadow-sm shadow-emerald-500/10"
-                  : "border-border bg-muted/60 text-muted-foreground hover:border-emerald-500/40 hover:bg-accent hover:text-foreground"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:bg-accent"
               }`}
             >
-              <CandlestickChart className="size-3.5 shrink-0" />
-              {sidebarOpen && <span className="truncate">คริปโต</span>}
+              {sidebarOpen ? "คริปโต" : "C"}
             </button>
             <button
-              type="button"
-              aria-pressed={market === "stocks"}
-              title="สลับไปยังระบบหุ้นสหรัฐฯ"
               onClick={() => {
                 setMarket("stocks")
                 setPage("dashboard")
               }}
-              className={`flex min-w-0 items-center justify-center gap-1.5 rounded-xl border px-2 py-2 text-xs font-semibold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+              className={`rounded-lg px-2 py-1.5 text-xs font-medium ${
                 market === "stocks"
-                  ? "border-sky-500/60 bg-sky-500 text-slate-950 shadow-sm shadow-sky-500/10"
-                  : "border-border bg-muted/60 text-muted-foreground hover:border-sky-500/40 hover:bg-accent hover:text-foreground"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:bg-accent"
               }`}
             >
-              <TrendingUp className="size-3.5 shrink-0" />
-              {sidebarOpen && <span className="truncate">หุ้นสหรัฐ</span>}
+              {sidebarOpen ? "หุ้นสหรัฐ" : "S"}
             </button>
           </div>
                 <nav className="space-y-1 p-2">
@@ -510,17 +497,8 @@ function AppInner() {
               <Menu className="size-5" />
             </button>
 
-            <div className="flex min-w-0 flex-1 items-center gap-2.5">
-              <h1 className="truncate text-sm font-semibold">{currentPage?.label}</h1>
-              <span
-                className={`hidden rounded-full border px-2 py-0.5 text-[10px] font-semibold sm:inline-flex ${
-                  market === "crypto"
-                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-500"
-                    : "border-sky-500/30 bg-sky-500/10 text-sky-500"
-                }`}
-              >
-                {market === "crypto" ? "CRYPTO MARKET" : "US STOCKS"}
-              </span>
+            <div className="flex-1">
+              <h1 className="text-sm font-semibold">{currentPage?.label}</h1>
             </div>
 
             <button className="rounded-lg p-2 text-muted-foreground hover:bg-accent" aria-label="Search">
