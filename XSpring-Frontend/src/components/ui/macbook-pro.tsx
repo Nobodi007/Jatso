@@ -1,21 +1,26 @@
-import { useId } from "react"
-import type { SVGProps } from "react"
+import type { CSSProperties } from "react"
 
-export interface MacbookProProps extends SVGProps<SVGSVGElement> {
+export interface MacbookProProps {
   src?: string
+  alt?: string
+  className?: string
+  style?: CSSProperties
 }
 
-// MacBook Pro วาดด้วย SVG: ขนาดจริงกำหนดด้วย className (เช่น w-full) ส่วน viewBox คงที่
-// ใส่ภาพลงจอผ่าน src / id ของ clipPath สร้างใหม่ทุกอินสแตนซ์ เพื่อไม่ให้ชนกันเมื่อวางหลายเครื่อง
-export function MacbookPro({ src, ...props }: MacbookProProps) {
-  const clipId = `mbp-clip-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`
+// MacBook Pro: ตัวเครื่องวาดด้วย SVG ส่วนภาพหน้าจอวางเป็นแท็ก <img> ทับพื้นที่จอ
+// (เบราว์เซอร์ย่อ <img> ได้คมกว่า <image> ใน SVG) ขนาดคุมด้วย className เช่น w-full
+// พิกัดของจอ (เทียบ viewBox 650x400): x 74.52, y 21.32, กว้าง 501.22, สูง 323.85
+const SCREEN = {
+  left: `${(74.52 / 650) * 100}%`,
+  top: `${(21.32 / 400) * 100}%`,
+  width: `${(501.22 / 650) * 100}%`,
+  height: `${(323.85 / 400) * 100}%`,
+}
+
+export function MacbookPro({ src, alt = "", className, style }: MacbookProProps) {
   return (
-    <svg
-      viewBox="0 0 650 400"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      {...props}
-    >
+    <div className={`relative ${className ?? ""}`} style={style}>
+      <svg viewBox="0 0 650 400" fill="none" xmlns="http://www.w3.org/2000/svg" className="block h-auto w-full" aria-hidden="true">
       <path
         fill="#a4a5a7"
         d="M79.56,13.18h491.32c7.23,0,13.1,5.87,13.1,13.1v336.61H66.46V26.28c0-7.23,5.87-13.1,13.1-13.1Z"
@@ -29,17 +34,6 @@ export function MacbookPro({ src, ...props }: MacbookProProps) {
         d="M570.25,15.74H80.34c-6.12,0-11.08,4.96-11.08,11.08v336.07h512.08V26.82c0-6.12-4.96-11.08-11.08-11.08ZM575.74,345.17H74.52V27.31c0-3.31,2.68-5.99,5.99-5.99h489.24c3.31,0,5.99,2.68,5.99,5.99v317.86Z"
       />
       <rect fill="#0b0b0b" x="74.52" y="21.32" width="501.22" rx="5" ry="5" height="323.85" />
-      {src && (
-        <image
-          href={src}
-          x="74.52"
-          y="21.32"
-          width="501.22"
-          height="323.85"
-          preserveAspectRatio="xMidYMid slice"
-          clipPath={`url(#${clipId})`}
-        />
-      )}
       <rect fill="#1d1d1d" x="69.09" y="350.51" width="512.11" height="12.48" />
       <path
         fill="#000"
@@ -58,11 +52,18 @@ export function MacbookPro({ src, ...props }: MacbookProProps) {
         fill="#8f9091"
         d="M278.11,362.6h94.05c0,3.63-2.95,6.58-6.58,6.58h-80.89c-3.63,0-6.58-2.95-6.58-6.58h0Z"
       />
-      <defs>
-        <clipPath id={clipId}>
-          <rect x="74.52" y="21.32" width="501.22" height="323.85" rx="5" ry="5" />
-        </clipPath>
-      </defs>
-    </svg>
+      </svg>
+      {src && (
+        <img
+          src={src}
+          alt={alt}
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          className="absolute rounded-[5px] object-cover object-left-top"
+          style={SCREEN}
+        />
+      )}
+    </div>
   )
 }
