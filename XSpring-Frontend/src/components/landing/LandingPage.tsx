@@ -110,6 +110,16 @@ const startTour = () => {
     setView("coin")
     window.scrollTo({ top: 0 })
   }
+  
+  const openStock = (symbol: string) => {
+    // จำหุ้นที่เลือกไว้ แล้วพาไปสมัคร หลังล็อกอินแอปจะเปิดหน้าหุ้นตัวนั้นให้ (ดู App.tsx)
+    try {
+      localStorage.setItem("landing_pending_stock", JSON.stringify({ symbol, ts: Date.now() }))
+    } catch {
+      /* ข้ามถ้า localStorage ใช้ไม่ได้ */
+    }
+    onRegister()
+  }
 
     return (
     <div className="min-h-screen bg-background text-foreground">
