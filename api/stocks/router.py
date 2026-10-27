@@ -8,6 +8,9 @@ from fastapi import APIRouter, HTTPException, Query
 from . import providers as p
 from .cache import ProviderError, RateLimited, cached
 
+from .public_market import router as public_market_router
+router.include_router(public_market_router)
+
 router = APIRouter(prefix="/api/stocks", tags=["stocks"])
 SYMBOL_RE = re.compile(r"^[A-Z][A-Z.\-]{0,9}$")
 INDEX_ETFS = {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "DIA": "Dow Jones"}
