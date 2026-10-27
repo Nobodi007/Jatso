@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { Menu, Moon, Sparkles, Sun, X } from "lucide-react"
 import MarketPage from "./MarketPage"
+import BrokerComparePage from "./BrokerComparePage"
 import NewsSection from "./NewsSection"
 import SearchBox from "./SearchBox"
 import CoinDetail from "./CoinDetail"
@@ -22,14 +23,15 @@ type LandingPageProps = {
   onRegister: () => void
 }
 
-type View = "home" | "market" | "news" | "coin" | "backtest" | "trade" | "learn" | "about" | "contact"
+type View = "home" | "market" | "news" | "coin" | "backtest" | "trade" | "learn" | "about" | "contact" | "brokers"
 
 const BRAND = "Nobodi"
-const MENU = ["ตลาด", "การซื้อขาย", "เรียนรู้", "ข่าว", "ลองลงทุนย้อนหลัง", "ติดต่อเรา"]
+const MENU = ["ตลาด", "โบรกเกอร์", "การซื้อขาย", "เรียนรู้", "ข่าว", "ลองลงทุนย้อนหลัง", "ติดต่อเรา"]
 
 // ข้อความไทยด้านบนใช้เป็นรหัสอ้างอิงภายใน (ห้ามแปล) ตัวนี้แมปไปหาคำแปลที่แสดงจริง
 const MENU_KEY: Record<string, string> = {
   "ตลาด": "nav.market",
+  "โบรกเกอร์": "nav.brokers",
   "การซื้อขาย": "nav.trade",
   "เรียนรู้": "nav.learn",
   "ข่าว": "nav.news",
@@ -40,6 +42,7 @@ const MENU_KEY: Record<string, string> = {
 // เมนูไหนเปิดหน้าอะไร (เมนูที่ไม่อยู่ในนี้ = พาไปล็อกอิน)
 const VIEW_OF: Record<string, View> = {
   "ตลาด": "market",
+  "โบรกเกอร์": "brokers",
   "การซื้อขาย": "trade",
   "เรียนรู้": "learn",
   "ข่าว": "news",
@@ -220,6 +223,8 @@ const startTour = () => {
         <ContactPage />
       ) : view === "market" ? (
         <MarketPage onLogin={onLogin} onRegister={onRegister} onSelectStock={openStock} />
+      ) : view === "brokers" ? (
+        <BrokerComparePage />
       ) : view === "news" ? (
         <NewsSection />
       ) : view === "backtest" ? (
