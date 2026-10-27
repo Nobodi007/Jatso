@@ -156,7 +156,7 @@ const startTour = () => {
             <Sparkles className="h-4 w-4" />
             <span className="hidden sm:inline">{t("tour.start")}</span>
           </button>
-          <SearchBox onSelect={openCoin} />
+          <SearchBox onSelect={openCoin} onSelectStock={openStock} />
           <button
             type="button"
             onClick={onLogin}
