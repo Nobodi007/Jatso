@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { Menu, Moon, Sparkles, Sun, X } from "lucide-react"
-import MarketSection from "./MarketSection"
+import MarketPage from "./MarketPage"
 import NewsSection from "./NewsSection"
 import SearchBox from "./SearchBox"
 import CoinDetail from "./CoinDetail"
@@ -219,7 +219,7 @@ const startTour = () => {
       {view === "contact" ? (
         <ContactPage />
       ) : view === "market" ? (
-        <MarketSection onLogin={onLogin} onRegister={onRegister} />
+        <MarketPage onLogin={onLogin} onRegister={onRegister} onSelectStock={openStock} />
       ) : view === "news" ? (
         <NewsSection />
       ) : view === "backtest" ? (
@@ -239,6 +239,7 @@ const startTour = () => {
               onRegister={onRegister}
               onOpenCoin={openCoin}
               onGo={go}
+              onSelectStock={openStock}
               heroTitle={t("hero.title")}
               heroSub={t("hero.desc")}
               heroArt={
