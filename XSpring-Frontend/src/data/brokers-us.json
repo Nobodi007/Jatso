@@ -1,0 +1,235 @@
+{
+  "checkedAt": "2026-10-27",
+  "note": "เฉพาะโบรกเกอร์ที่ยืนยันจากเอกสารหรือหน้าทางการแล้วว่ามีบริการหุ้นสหรัฐ ค่าธรรมเนียมส่วนใหญ่ยังไม่รวม VAT 7% (บางเจ้าไม่ได้ระบุในเอกสารที่ตรวจ) ตัวเลขเปลี่ยนได้ ให้ผู้ใช้เช็คที่ sourceUrl ก่อนตัดสินใจ",
+  "brokers": [
+    {
+      "id": "bualuang",
+      "name": "Bualuang Securities",
+      "entity": "บริษัทหลักทรัพย์ บัวหลวง จำกัด (มหาชน)",
+      "url": "https://www.bualuang.co.th/",
+      "sourceUrl": "https://www.bualuang.co.th/",
+      "dataAsOf": "2026-04-06",
+      "needsConfirm": [
+        "sourceUrl",
+        "vat"
+      ],
+      "internalNote": "ข้อมูลจากประกาศค่าธรรมเนียมซื้อขายหลักทรัพย์ต่างประเทศ (มีผล 6 เม.ย. 2569) ที่ผู้ดูแลส่งมาเป็นภาพ ยังไม่มีลิงก์ตรงของประกาศ และไม่เห็นหมายเหตุเรื่อง VAT ในภาพ",
+      "minInvest": {
+        "th": "ประกาศไม่ระบุเงินขั้นต่ำ ซื้อเศษหุ้นสหรัฐได้ในระบบ Global Trade Master",
+        "en": "No minimum stated in the announcement; US fractional shares available on Global Trade Master"
+      },
+      "commission": {
+        "th": "ระบบ Global Invest: 8 เซนต์/หุ้น ขั้นต่ำ 10 USD/รายการ | ระบบ Global Trade Master: 8 เซนต์/หุ้น ขั้นต่ำ 3 USD/รายการ และเศษหุ้นสหรัฐ 1 USD/รายการ",
+        "en": "Global Invest: 8 cents/share, USD 10 minimum per trade | Global Trade Master: 8 cents/share, USD 3 minimum per trade, and US fractional shares USD 1 per trade"
+      },
+      "otherFees": {
+        "th": "Global Invest: ADR fee แล้วแต่ ADR, SEC fee (ขายเท่านั้น) 0.00206% | Global Trade Master: ADR fee แล้วแต่ ADR, TAF (ขายเท่านั้น) 0.0195 เซนต์/หุ้น, ค่าซื้อขายก่อน/หลังตลาดและ Overnight (ECN) 0.001 เซนต์/หุ้น, SEC fee (ขายเท่านั้น) 0.00206%",
+        "en": "Global Invest: ADR fee varies, SEC fee (sell only) 0.00206% | Global Trade Master: ADR fee varies, TAF (sell only) 0.0195 cents/share, pre/post/overnight market (ECN) fee 0.001 cents/share, SEC fee (sell only) 0.00206%"
+      },
+      "extras": {
+        "th": "มี 2 ระบบให้เลือก บริษัทสงวนสิทธิ์เปลี่ยนอัตราได้ตามประกาศ",
+        "en": "Two platforms to choose from; the company reserves the right to change rates"
+      }
+    },
+    {
+      "id": "dime",
+      "name": "Dime!",
+      "entity": "บริษัทหลักทรัพย์ เคเคพี ไดม์ จำกัด",
+      "url": "https://dime.co.th/",
+      "sourceUrl": "https://dime.co.th/invest/stock-us",
+      "minInvest": {
+        "th": "เริ่ม 50 บาท (หรือ 1.50 USD) ซื้อเศษหุ้นได้",
+        "en": "From THB 50 (or USD 1.50), fractional shares"
+      },
+      "commission": {
+        "th": "ฟรี 1 รายการต่อเดือน (นับรวมหุ้นไทยและออปชันสหรัฐ) รายการถัดไป 0.01 USD/หุ้น ถ้าราคาหุ้นต่ำกว่า 6.67 USD หรือ 0.15% ของมูลค่า ถ้าราคาตั้งแต่ 6.67 USD",
+        "en": "1 free trade per month (shared with Thai stocks and US options); after that USD 0.01/share if price < USD 6.67, otherwise 0.15% of value"
+      },
+      "otherFees": {
+        "th": "แลกเงิน/โอนเงิน 0 USD, W-8BEN 0 USD, CAT fee 0.000003 USD/หุ้น (ซื้อและขาย), SEC fee 0.00206% ของมูลค่าขาย, TAF 0, โอนหุ้นออก 50 USD ต่อชื่อย่อ",
+        "en": "FX/transfer USD 0, W-8BEN USD 0, CAT fee USD 0.000003/share (buy and sell), SEC fee 0.00206% of sell value, TAF 0, stock transfer out USD 50 per symbol"
+      },
+      "extras": {
+        "th": "มีแพ็กเกจเสริม Dime! Fan (39 บาท/เดือน) และ Dime! Club ดูรายละเอียดที่เว็บ",
+        "en": "Optional Dime! Fan (THB 39/month) and Dime! Club packages, see site"
+      }
+    },
+    {
+      "id": "finansia",
+      "name": "Finansia Syrus Securities",
+      "entity": "Finansia Syrus Securities Public Company Limited",
+      "url": "https://www.fnsyrus.com/",
+      "sourceUrl": "https://www.fnsyrus.com/",
+      "dataAsOf": "2026-10-27",
+      "needsConfirm": [
+        "sourceUrl",
+        "fractionalUnit",
+        "otherFees"
+      ],
+      "internalNote": "จากภาพตาราง 'อัตราค่าธรรมเนียม' ที่ผู้ดูแลส่งมา ไม่เห็น URL เต็ม เศษหุ้นแสดงเป็นเลข 1 ไม่มีหน่วย (สกุลซื้อขาย USD) ส่วนอื่นของตารางยังไม่เห็น",
+      "minInvest": {
+        "th": "ตารางไม่ระบุเงินขั้นต่ำ ซื้อเศษหุ้นสหรัฐได้",
+        "en": "No minimum stated in the table; US fractional shares available"
+      },
+      "commission": {
+        "th": "หุ้นสหรัฐปกติ: 8 เซนต์/หุ้น ไม่มีค่าคอมขั้นต่ำ | เศษหุ้นสหรัฐ: 1 (ตารางไม่ระบุหน่วย สกุลซื้อขาย USD)",
+        "en": "US normal shares: 8 cents/share, no minimum commission | US fractional shares: 1 (unit not shown in the table; trading currency USD)"
+      },
+      "otherFees": {
+        "th": "ดูค่าธรรมเนียมอื่นที่เว็บ Finansia",
+        "en": "See Finansia's website for other fees"
+      },
+      "extras": {
+        "th": "ซื้อขายด้วยสกุล USD",
+        "en": "Trades in USD"
+      }
+    },
+    {
+      "id": "innovestx",
+      "name": "InnovestX",
+      "entity": null,
+      "url": "https://www.innovestx.co.th/",
+      "sourceUrl": "https://www.innovestx.co.th/th/products/stock/offshore/offshore-exchange-fees-new",
+      "minInvest": {
+        "th": "ขั้นต่ำ 1 หุ้นต่อออเดอร์ (มีโปรโมชันเทรดเศษหุ้นเป็นครั้งคราว)",
+        "en": "1 share minimum per order (occasional fractional-share promotions)"
+      },
+      "commission": {
+        "th": "0.08 USD ต่อหุ้น ขั้นต่ำ 4.99 USD ต่อรายการ (ไม่รวม VAT 7%)",
+        "en": "USD 0.08 per share, USD 4.99 minimum per trade (excl. 7% VAT)"
+      },
+      "otherFees": {
+        "th": "SEC fee 0.00206% ของมูลค่าขาย, ADR fee แล้วแต่กรณี, ชำระราคา T+1, ฟรี W-8BEN และไม่มีค่าธรรมเนียมแลกเงินตามที่หน้าเว็บระบุ",
+        "en": "SEC fee 0.00206% of sell value, ADR fee varies, settlement T+1, free W-8BEN and no FX fee as stated on the site"
+      },
+      "extras": {
+        "th": "ซื้อขายได้ทั้ง NYSE, NASDAQ, AMEX, ARCA, BATS",
+        "en": "NYSE, NASDAQ, AMEX, ARCA, BATS"
+      }
+    },
+    {
+      "id": "liberator",
+      "name": "Liberator",
+      "entity": null,
+      "url": "https://www.liberator.co.th/",
+      "sourceUrl": "https://www.liberator.co.th/us-stock",
+      "minInvest": {
+        "th": "เริ่ม 1 USD ซื้อเศษหุ้นได้ เปิดบัญชีฟรีไม่มีขั้นต่ำ (ต้องมีบัญชี Cash Balance ของ Liberator ก่อน)",
+        "en": "From USD 1, fractional shares, free account opening with no minimum (a Liberator Cash Balance account is required first)"
+      },
+      "commission": {
+        "th": "0.10% ของมูลค่า (หุ้นอเมริกา)",
+        "en": "0.10% of value (US stocks)"
+      },
+      "otherFees": {
+        "th": "มีค่าธรรมเนียม US SEC และ TAF (หน้าเว็บไม่ระบุอัตรา) ฟรี W-8BEN 3 ปี และต่ออายุให้ฟรี",
+        "en": "US SEC fee and TAF apply (rates not listed on the page), free W-8BEN for 3 years with free renewal"
+      },
+      "extras": {
+        "th": "เทรด Pre-Market ถึง After-Hours ได้ มีคำสั่งตามเงื่อนไขและ GTC",
+        "en": "Pre-market to after-hours trading, conditional and GTC orders"
+      }
+    },
+    {
+      "id": "pi",
+      "name": "Pi Securities (Pi Financial)",
+      "entity": "บริษัทหลักทรัพย์ พาย จำกัด (มหาชน)",
+      "url": "https://www.pi.financial/",
+      "sourceUrl": "https://support.pi.financial/hc/en-us/articles/29600953147161-What-are-the-fees-associated-with-Global-Equity-trading",
+      "minInvest": {
+        "th": "ซื้อเศษหุ้นได้ (ทศนิยม 2 ตำแหน่ง) หน้าเว็บไม่ระบุเงินขั้นต่ำ ต้องมีบัญชี SET Cash Balance",
+        "en": "Fractional shares (2 decimals), no minimum stated, a SET Cash Balance account is required"
+      },
+      "commission": {
+        "th": "0.20% ของมูลค่าต่อรายการ ไม่มีค่าคอมขั้นต่ำ (ไม่รวม VAT 7%)",
+        "en": "0.20% of value per trade, no minimum commission (excl. 7% VAT)"
+      },
+      "otherFees": {
+        "th": "ADR fee 0.02-0.05% เฉพาะหุ้น ADR ฝาก/ถอนผ่านแอปไม่มีค่าธรรมเนียม ตลอด 24 ชม.",
+        "en": "ADR fee 0.02-0.05% for ADRs only, deposits/withdrawals in the app are free, 24/7"
+      },
+      "extras": {
+        "th": "แปลงเงินบาทเป็น USD อัตโนมัติ",
+        "en": "Automatic THB to USD conversion"
+      }
+    },
+    {
+      "id": "sbito",
+      "name": "SBITO",
+      "entity": null,
+      "url": "https://www.sbito.co.th/global-trade/",
+      "sourceUrl": "https://www.sbito.co.th/global-trade/",
+      "needsConfirm": [
+        "commission"
+      ],
+      "minInvest": {
+        "th": "ฝากขั้นต่ำ 10,000 บาท ซื้อเศษหุ้นสหรัฐได้ (ต้องมีบัญชี Cash Balance กับ SBITO ก่อน)",
+        "en": "THB 10,000 minimum deposit, US fractional shares available (an SBITO Cash Balance account is required first)"
+      },
+      "commission": {
+        "th": "ยังไม่ยืนยัน อัตราค่าคอมสหรัฐอยู่ในรูปภาพบนหน้าเว็บ ข้อความในหน้าระบุเฉพาะญี่ปุ่นและเวียดนาม",
+        "en": "Not confirmed: the US rate is in an image on the page; the page text lists Japan and Vietnam only"
+      },
+      "otherFees": {
+        "th": "ฝากหรือโอนเงินไปต่างประเทศไม่เสียค่าธรรมเนียม ยื่น W-8BEN ไม่มีค่าบริการ (ต่อ 3 ปีปฏิทิน) ต้องสมัคร W-8BEN ให้สำเร็จก่อนเทรดสหรัฐ",
+        "en": "No fee to deposit or transfer abroad, W-8BEN filing is free (per 3 calendar years), W-8BEN must be approved before trading US stocks"
+      },
+      "extras": {
+        "th": "โปรโมชันฝาก 10,000 บาท รับหุ้นอเมริกาฟรีมูลค่า 200 บาท (ตามหน้าเว็บ)",
+        "en": "Promotion: deposit THB 10,000 to pick a free US stock worth THB 200 (per the site)"
+      }
+    },
+    {
+      "id": "webull",
+      "name": "Webull Thailand",
+      "entity": "บริษัทหลักทรัพย์ วีบูลล์ (ประเทศไทย) จำกัด",
+      "url": "https://www.webull.co.th/",
+      "sourceUrl": "https://www.webull.co.th/pricing",
+      "minInvest": {
+        "th": "ซื้อเศษหุ้นได้ ขั้นต่ำ 5 USD ต่อออเดอร์ตามหน้าหุ้นอเมริกา (บางหน้าของ Webull ระบุ 1 USD ควรยืนยัน)",
+        "en": "Fractional shares, USD 5 minimum per order per the US stocks page (other Webull pages say USD 1, to be confirmed)"
+      },
+      "commission": {
+        "th": "0.10% ของมูลค่า ไม่มีค่าคอมขั้นต่ำ ช่วง 04:00-20:00 EST ส่วนช่วง Overnight 20:00-04:00 EST คิด 0.10% ไปก่อน แล้วเปลี่ยนเป็น 0.15% ภายหลังตามประกาศ (ไม่รวม VAT 7%)",
+        "en": "0.10% of value, no minimum commission, 04:00-20:00 EST; overnight 20:00-04:00 EST is 0.10% until further notice, then 0.15% (excl. 7% VAT)"
+      },
+      "otherFees": {
+        "th": "SEC fee 0.0000206 USD x มูลค่าขาย, FINRA CAT 0.000003 USD x ปริมาณ, ADR 0.01-0.03 USD/หุ้น, ฝาก/ถอนไม่มีค่าธรรมเนียม, โอนหุ้นสหรัฐออก 50 USD ต่อหลักทรัพย์",
+        "en": "SEC fee 0.0000206 x sell value, FINRA CAT 0.000003 USD x quantity, ADR USD 0.01-0.03/share, no deposit/withdrawal fee, US stock transfer out USD 50 per security"
+      },
+      "extras": {
+        "th": "ซื้อขายนอกเวลาและ Overnight ได้",
+        "en": "Extended-hours and overnight trading"
+      }
+    },
+    {
+      "id": "yuanta",
+      "name": "Yuanta Securities (Thailand)",
+      "entity": "Yuanta Securities (Thailand) Co., Ltd.",
+      "url": "https://www.yuanta.co.th/",
+      "sourceUrl": "https://global.yuanta.co.th/",
+      "dataAsOf": "2026-03-09",
+      "minInvest": {
+        "th": "ไม่ระบุเงินขั้นต่ำ ซื้อเศษหุ้นสหรัฐ (ต่ำกว่า 1 หุ้น) ได้",
+        "en": "No minimum stated, US fractional shares (below 1 share) available"
+      },
+      "commission": {
+        "th": "อัตราปกติ: 0.05 USD/หุ้น ขั้นต่ำ 1.5 USD/รายการ | แพลตฟอร์ม Offline: 0.10% ขั้นต่ำ 30 USD/รายการ | เศษหุ้นสหรัฐ: 1 USD/รายการ (ขั้นต่ำ 1 USD)",
+        "en": "Standard: USD 0.05/share, USD 1.5 minimum per trade | Offline platform: 0.10%, USD 30 minimum per trade | US fractional shares: USD 1 per trade (USD 1 minimum)"
+      },
+      "otherFees": {
+        "th": "ADR fee แล้วแต่แต่ละ ADR, TAF (ขายเท่านั้น) 0.0195 เซนต์/หุ้น, ค่าซื้อขายก่อน/หลังตลาด (ECN) 0.003 เซนต์/หุ้น, ค่าปันผล/โบนัสสูงสุด 10 USD ต่อรายการ",
+        "en": "ADR fee varies by ADR, TAF (sell only) 0.0195 cents/share, pre/post-market (ECN) 0.003 cents/share, dividend/bonus fee up to USD 10 per item"
+      },
+      "extras": {
+        "th": "อัตราจากตารางปัจจุบันบนหน้า Yuanta Global",
+        "en": "Rates from the current table on Yuanta Global"
+      },
+      "needsConfirm": [
+        "dataAsOf",
+        "taxServiceFees"
+      ],
+      "internalNote": "วันที่ 9 มี.ค. 2569 อ่านจากข้อความที่ถูกครอปในภาพ ควรยืนยัน เอกสาร PDF รุ่น ส.ค. 2568 เคยระบุ US Tax Reporting 40 USD/ปี, Tax Treaty 30 USD/3 ปี และค่าโอนเงินกลับไทย (ฟรีถ้า >= 1,001 USD ไม่งั้น 50 USD) ตารางปัจจุบันไม่แสดงรายการเหล่านี้ จึงยังไม่ใส่ ต้องเช็คว่ายังเก็บอยู่หรือไม่"
+    }
+  ]
+}
