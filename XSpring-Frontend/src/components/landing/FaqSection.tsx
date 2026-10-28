@@ -1,6 +1,8 @@
 import { useState } from "react"
 import { ChevronDown } from "lucide-react"
 import { useLanguage } from "../../i18n/LanguageContext"
+import { ArrowLeft, ChevronDown } from "lucide-react"
+
 
 type QA = { q: string; a: string }
 
@@ -83,7 +85,7 @@ const FAQ = {
   },
 }
 
-export default function FaqSection() {
+export default function FaqSection({ onBack }: { onBack?: () => void }) {
   const { lang } = useLanguage()
   const content = lang === "th" ? FAQ.th : FAQ.en
   const [open, setOpen] = useState<number | null>(0)
@@ -91,6 +93,15 @@ export default function FaqSection() {
   return (
     <section id="faq" className="border-t py-20">
       <div className="mx-auto max-w-3xl px-6">
+        {onBack && (
+          <button
+            type="button"
+            onClick={onBack}
+            className="mb-6 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft className="h-4 w-4" /> {lang === "th" ? "กลับ" : "Back"}
+          </button>
+        )}
         <h2 className="text-center text-3xl font-bold tracking-tight md:text-4xl">{content.title}</h2>
         <p className="mx-auto mt-4 max-w-xl text-center text-sm text-muted-foreground md:text-base">
           {content.desc}
