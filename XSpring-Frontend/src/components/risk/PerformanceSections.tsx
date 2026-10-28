@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { PointerEvent as RPointerEvent, ReactNode } from "react";
+import { InfoTip } from "./InfoTip";
 import { dailyFromCumulative, histogram, labelIndexes, linePath, nearestIndex, niceTicks } from "./chartMath";
 
 /* ───────── types (ตรงกับ /api/stocks/risk/performance และ /metrics) ───────── */
@@ -49,10 +50,13 @@ function Progress({ have, need, unit = "วัน" }: { have: number; need: numb
     </div>
   );
 }
-function Stat({ label, value, cls = "", note }: { label: string; value: string; cls?: string; note?: string }) {
+function Stat({ label, value, cls = "", note, help }: { label: string; value: string; cls?: string; note?: string; help?: string }) {
   return (
     <div>
-      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="text-xs text-muted-foreground">
+        {label}
+        {help && <InfoTip k={help} />}
+      </p>
       <p className={`mt-1 text-xl font-medium tabular-nums ${cls}`}>{value}</p>
       {note && <p className="mt-0.5 text-[11px] text-muted-foreground">{note}</p>}
     </div>
@@ -177,13 +181,13 @@ export function PerformanceSection({ p }: { p: PerfRes | null }) {
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-5">
-        <Stat label="ผลตอบแทนพอร์ต" value={pctS(m.portfolio_return?.value, 2, true)} cls={toneCls(m.portfolio_return?.value)} />
-        <Stat label={`ผลตอบแทน ${bench}`} value={pctS(m.benchmark_return?.value, 2, true)} cls={toneCls(m.benchmark_return?.value)} />
-        <Stat label="ส่วนเกินสะสม" value={ppS(m.active_return?.value)} cls={toneCls(m.active_return?.value)} />
+        <Stat label="ผลตอบแทนพอร์ต" value={pctS(m.portfolio_return?.value, 2, true)} cls={toneCls(m.portfolio_return?.value)} help="portfolio_return" />
+        <Stat label={`ผลตอบแทน ${bench}`} value={pctS(m.benchmark_return?.value, 2, true)} cls={toneCls(m.benchmark_return?.value)} help="benchmark_return" />
+        <Stat label="ส่วนเกินสะสม" value={ppS(m.active_return?.value)} cls={toneCls(m.active_return?.value)} help="active_return" />
         <Stat label="Relative wealth" value={pctS(m.relative_wealth?.value, 2, true)} cls={toneCls(m.relative_wealth?.value)}
-          note="(1+Rp)/(1+Rb) − 1" />
+          note="(1+Rp)/(1+Rb) − 1" help="relative_wealth" />
         <Stat label="CAGR" value={m.cagr?.value == null ? "—" : pctS(m.cagr.value, 2, true)} cls={toneCls(m.cagr?.value)}
-          note={insufficient(m.cagr) ?? "ผลตอบแทนต่อปีแบบทบต้น"} />
+          note={insufficient(m.cagr) ?? "ผลตอบแทนต่อปีแบบทบต้น"} help="cagr" />
       </div>
 
       <div className="mt-5">
