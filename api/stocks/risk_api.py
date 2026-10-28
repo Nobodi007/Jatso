@@ -385,6 +385,18 @@ def _meta_with(rep: dict, ctx: dict, extra: list[dict] | None = None, **more) ->
     return {**rep["meta"], "as_of": ctx["as_of"], "warnings": w, **more}
 
 
+async def _sector_map(syms: list[str]) -> dict:
+    """Finnhub industry ต่อสัญลักษณ์ (cache 7 วันใน risk_data) ดึงไม่ได้ = None ไม่เดา"""
+    async def sec(s):
+        try:
+            return await rd.sector(s)
+        except (ProviderError, RateLimited):
+            return None
+
+    got = await asyncio.gather(*[sec(s) for s in syms])
+    return dict(zip(syms, got))
+
+
 @router.get("/exposure")
 async def exposure(period: str = PERIOD, email: str = Depends(_heavy)):
     rep, ctx = await _ctx(email)
@@ -392,14 +404,7 @@ async def exposure(period: str = PERIOD, email: str = Depends(_heavy)):
         return _no_ctx(rep, "exposure")
     syms = list(ctx["holdings"])
 
-    async def sec(s):
-        try:
-            return await rd.sector(s)
-        except ProviderError:
-            return None
-
-    got = await asyncio.gather(*[sec(s) for s in syms])
-    sectors = dict(zip(syms, got))
+    sectors = await _sector_map(syms)
     missing = [{"code": "sector_unavailable", "symbol": s} for s, v in sectors.items() if not v]
     return {"meta": _meta_with(rep, ctx, missing,
                                sector_classification="Finnhub industry (not GICS); approximate"),
@@ -433,20 +438,30 @@ _SYM = re.compile(r"^[A-Za-z0-9.\-]{1,12}$")
 class StressIn(BaseModel):
     market_shock: float | None = Field(default=None, ge=-1.0, le=1.0)
     shocks: dict[str, float] = Field(default_factory=dict)
+    sector_shocks: dict[str, float] = Field(default_factory=dict)  # ชื่ออุตสาหกรรมตามที่ /exposure คืน
 
 
 @router.post("/stress-test")
 async def stress_test(body: StressIn, email: str = Depends(_heavy)):
     shocks = {k.strip().upper(): v for k, v in body.shocks.items()}
-    if body.market_shock is None and not shocks:
-        raise HTTPException(400, "Provide market_shock and/or shocks.")
+    sector_shocks = {k.strip(): v for k, v in body.sector_shocks.items()}
+    if body.market_shock is None and not shocks and not sector_shocks:
+        raise HTTPException(400, "Provide market_shock, shocks and/or sector_shocks.")
+    if (len(sector_shocks) > 30 or any(not k or len(k) > 60 or not -1.0 <= v <= 1.0 for k, v in sector_shocks.items())):
+        raise HTTPException(400, "Invalid sector_shocks (name 1-60 chars, values within -1..1).")
     if len(shocks) > rd.MAX_SYMBOLS or any(not _SYM.match(k) or not -1.0 <= v <= 1.0 for k, v in shocks.items()):
         raise HTTPException(400, "Invalid shocks (symbols A-Z0-9.-, values within -1..1).")
     rep, ctx = await _ctx(email)
     if ctx is None:
         return _no_ctx(rep, "stress")
     betas = X.holding_betas(ctx["returns"], ctx["bench_returns"])
-    out = X.stress(ctx["holdings"], ctx["cash"], betas, body.market_shock, shocks)
+    sectors = await _sector_map(list(ctx["holdings"]))
+    names = {(v or "Unknown") for v in sectors.values()}
+    fold = {n.casefold(): n for n in names}
+    matched = {fold[k.casefold()]: v for k, v in sector_shocks.items() if k.casefold() in fold}
+    out = X.stress(ctx["holdings"], ctx["cash"], betas, body.market_shock, shocks, sectors, matched)
     out["unknown_symbols"] = sorted(set(shocks) - set(ctx["holdings"]))
+    out["unknown_sectors"] = sorted(k for k in sector_shocks if k.casefold() not in fold)
+    out["sector_classification"] = "Finnhub industry (not GICS); approximate"
     out["betas"] = {s: m.to_dict() for s, m in betas.items()}
     return {"meta": _meta_with(rep, ctx), "stress": out}
