@@ -218,7 +218,7 @@
 | Factor exposure | **ไม่ทำ** ไม่มีข้อมูล factor |
 | Stress: การเปลี่ยน correlation / volatility | **ไม่ได้จำลอง** |
 | กฎเตือน earnings | **ยังไม่ทำ** ยังไม่ยืนยันแหล่งข้อมูลปฏิทิน earnings |
-| Corporate actions นอกจาก split | **ยังไม่จัดการ**: เปลี่ยนชื่อสัญลักษณ์, หุ้นถูก delist, spin-off, ควบรวม ผลคือราคาอาจหายและขึ้นเป็นเตือน/NAV ไม่สมบูรณ์ |
+| Corporate actions นอกจาก split | **ยังไม่จัดการ**: เปลี่ยนชื่อสัญลักษณ์, หุ้นถูก delist, spin-off, ควบรวม ระบบไม่ตีมูลค่าให้และไม่เดา ถ้าหุ้นที่ถืออยู่ไม่มีราคาเกิน 5 วันทำการ NAV วันนั้นเป็น `null` และรายงานเป็น `incomplete` แต่จะแจ้งสาเหตุที่เป็นไปได้ใน `meta.warnings[].likely` (`provider_error`, `no_data`, `history_ends_early` พร้อมวันที่ราคาล่าสุดใน `last_close`, `gap_in_history`) spin-off ตรวจไม่ได้เลย (ราคาที่ตกลงจะถูกนับเป็นขาดทุนจริง) |
 | ปันผล | ไม่รวม (ผลตอบแทนเป็นแบบราคา ทั้งพอร์ตและดัชนี) |
 | sector | Finnhub industry ไม่ใช่ GICS |
 | ตารางบันทึกผลคำนวณ (calculation snapshot), ราคาดัชนีและ corporate actions ใน DB | ยังไม่มี: ดึงสดและแคชในหน่วยความจำ จึงตรวจย้อนหลังและทำซ้ำผลเก่าไม่ได้ |
