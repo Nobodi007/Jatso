@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { MacbookPro } from "../ui/macbook-pro"
 import { useLanguage } from "../../i18n/LanguageContext"
+import CoinsOverlay from "./CoinsOverlay";
 
 // ภาพหน้าจอจริงของ Nobodi: วางไฟล์ไว้ที่ XSpring-Frontend/public/mockups/
 const SHOTS = {
@@ -67,18 +68,20 @@ export default function DeviceShowcase({ onRegister }: { onRegister: () => void 
         {/* MacBook 2 เครื่องซ้อนกัน (ไม่เอียง 3 มิติ เพราะการเอียงทำให้เบราว์เซอร์ย่อภาพจนเบลอ):
             เครื่องหลัง (หุ้นสหรัฐ) เล็กกว่าและอยู่ขวาบน เครื่องหน้า (คริปโต) ใหญ่กว่าอยู่ซ้ายล่าง
             บนจอเล็กแสดงเครื่องหน้าเครื่องเดียว เพราะซ้อนกันแล้วตัวหนังสือในจอเล็กเกินอ่าน */}
-        <div className="relative mx-auto w-full max-w-3xl sm:aspect-[16/11]">
-          <MacbookPro
-            src={SHOTS.stocks}
-            alt={t("showcase.altStocks")}
-            className="hidden drop-shadow-[0_20px_30px_rgba(0,0,0,0.35)] sm:absolute sm:right-0 sm:top-0 sm:block sm:w-[62%]"
-          />
-          <MacbookPro
-            src={SHOTS.crypto}
-            alt={t("showcase.altCrypto")}
-            className="drop-shadow-[0_25px_35px_rgba(0,0,0,0.45)] sm:absolute sm:bottom-0 sm:left-0 sm:w-[78%]"
-          />
-        </div>
+     
+      <div className="hero-visual relative mx-auto w-full max-w-3xl sm:aspect-[16/11]">
+        <MacbookPro
+          src={SHOTS.stocks}
+          alt={t("showcase.altStocks")}
+          className="hidden drop-shadow-[0_20px_30px_rgba(0,0,0,0.35)] sm:absolute sm:right-0 sm:top-0 sm:block sm:w-[62%]"
+        />
+        <MacbookPro
+          src={SHOTS.crypto}
+          alt={t("showcase.altCrypto")}
+          className="drop-shadow-[0_25px_35px_rgba(0,0,0,0.45)] sm:absolute sm:bottom-0 sm:left-0 sm:w-[78%]"
+        />
+        <CoinsOverlay />
+      </div>
       </div>
     </section>
   )
