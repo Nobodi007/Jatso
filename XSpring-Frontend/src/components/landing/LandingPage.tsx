@@ -17,13 +17,14 @@ import { GlobeHero } from "./GlobeHero"
 import TourGuide from "./TourGuide";
 import ContactPage from "./ContactPage";
 import MarketStatusBadge from "./MarketStatusBadge"
+import StockDetailPage from "../stocks/StockDetailPage"
 
 type LandingPageProps = {
   onLogin: () => void
   onRegister: () => void
 }
 
-type View = "home" | "market" | "news" | "coin" | "backtest" | "trade" | "learn" | "about" | "contact" | "brokers"
+type View = "home" | "market" | "news" | "coin" | "stock" | "backtest" | "trade" | "learn" | "about" | "contact" | "brokers"
 
 const BRAND = "Nobodi"
 const MENU = ["ตลาด", "โบรกเกอร์", "การซื้อขาย", "เรียนรู้", "ข่าว", "ลองลงทุนย้อนหลัง", "ติดต่อเรา"]
@@ -70,6 +71,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
   const [dark, setDark] = useState(initialDark)
   const { t } = useLanguage()
   const [tour, setTour] = useState(false)
+  const [stockSym, setStockSym] = useState("")
 
 // ออกจากหน้าแรก = ปิดทัวร์
 useEffect(() => {
@@ -115,11 +117,16 @@ const startTour = () => {
   }
   
   const openStock = (symbol: string) => {
-    // จำหุ้นที่เลือกไว้ แล้วพาไปสมัคร หลังล็อกอินแอปจะเปิดหน้าหุ้นตัวนั้นให้ (ดู App.tsx)
+  setStockSym(symbol.toUpperCase())
+  setView("stock")
+  window.scrollTo({ top: 0 })
+}
+
+  const stockToAuth = (symbol: string) => {
     try {
       localStorage.setItem("landing_pending_stock", JSON.stringify({ symbol, ts: Date.now() }))
     } catch {
-      /* ข้ามถ้า localStorage ใช้ไม่ได้ */
+      /* ข้าม */
     }
     onRegister()
   }
