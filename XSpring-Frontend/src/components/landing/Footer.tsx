@@ -29,7 +29,7 @@ type Props = {
 }
 
 export default function Footer({ onGo, onOpenCoin, onPage }: Props) {
-  const { t } = useLanguage()
+  const { t, lang } = useLanguage()
   const click = (l: FooterLink) => {
     if (l.page) onPage?.(l.page)
     else if (l.asset) onOpenCoin(l.asset)
@@ -84,6 +84,13 @@ export default function Footer({ onGo, onOpenCoin, onPage }: Props) {
           <p className="mt-3 text-xs leading-5 text-muted-foreground">
             {t("footer.notice")}
           </p>
+          <button
+            type="button"
+            onClick={() => onPage?.("faq")}
+            className="mt-4 text-left text-muted-foreground hover:text-foreground"
+          >
+            {lang === "th" ? "คำถามที่พบบ่อย" : "FAQ"}
+          </button>
         </div>
       </div>
       <p className="border-t py-4 text-center text-xs text-muted-foreground">© Nobodi</p>
