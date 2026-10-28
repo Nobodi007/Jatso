@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2, RefreshCw, ShieldAlert } from "lucide-reac
 import { LossDistributionSection, PerformanceSection, RollingSection } from "./PerformanceSections";
 import type { PerfRes } from "./PerformanceSections";
 import { CashDragNote, PnlSection, SectorContributionSection } from "./AttributionExtras";
+import { InfoTip } from "./InfoTip";
 import type { CashDrag, PnlBreakdown, SectorContribution } from "./AttributionExtras";
 
 /* ───────── types (ตรงกับ /api/stocks/risk/*) ───────── */
@@ -299,11 +300,14 @@ function Bar({ value, max = 1, kind = "muted" }: { value: number; max?: number; 
 }
 
 /** การ์ดที่ข้อมูลไม่พอ: ขอบประ + แถบความคืบหน้าจาก n_obs จริง */
-function PendingCard({ title, m, need }: { title: string; m?: Metric; need: number }) {
+function PendingCard({ title, m, need, help }: { title: string; m?: Metric; need: number; help?: string }) {
   const n = m?.n_obs ?? 0;
   return (
     <Card className="border-dashed">
-      <p className="text-sm text-muted-foreground">{title}</p>
+      <p className="text-sm text-muted-foreground">
+        {title}
+        {help && <InfoTip k={help} />}
+      </p>
       <p className="mt-3 text-lg text-muted-foreground">ยังคำนวณไม่ได้</p>
       <div className="mt-4">
         <Bar value={n} max={need} />
@@ -315,7 +319,7 @@ function PendingCard({ title, m, need }: { title: string; m?: Metric; need: numb
   );
 }
 
-function ReturnCard({ title, m, note }: { title: string; m?: Metric; note?: string }) {
+function ReturnCard({ title, m, note, help }: { title: string; m?: Metric; note?: string; help?: string }) {
   const v = m?.value ?? null;
   const grad =
     v == null
@@ -325,7 +329,10 @@ function ReturnCard({ title, m, note }: { title: string; m?: Metric; note?: stri
         : "bg-gradient-to-l from-emerald-500/10 to-card to-80%";
   return (
     <Card className={grad}>
-      <p className="text-sm text-muted-foreground">{title}</p>
+      <p className="text-sm text-muted-foreground">
+        {title}
+        {help && <InfoTip k={help} />}
+      </p>
       <p className={`mt-3 text-3xl font-medium tabular-nums ${tone(v)}`}>{fmtMetric(m, true)}</p>
       {note && <p className="mt-2 text-xs text-muted-foreground">{note}</p>}
     </Card>
@@ -372,16 +379,16 @@ function TailSection({ m }: { m: MetricsRes | null }) {
   const enough = nDays >= MIN_DD_DAYS;
   const ep = t.drawdown_episode ?? null;
   const ex = t.extremes;
-  const rows: [string, string][] = [
-    ["Drawdown ปัจจุบัน", show(t.current_drawdown)],
-    ["VaR 95% (1 วัน)", show(t.var_95)],
-    ["ES 95% (1 วัน)", show(t.es_95)],
-    ["Downside deviation (รายปี)", show(t.downside_deviation)],
-    ["Downside beta", show(m.risk_adjusted?.downside_beta)],
+  const rows: [string, string, string?][] = [
+    ["Drawdown ปัจจุบัน", show(t.current_drawdown), "current_drawdown"],
+    ["VaR 95% (1 วัน)", show(t.var_95), "var_95"],
+    ["ES 95% (1 วัน)", show(t.es_95), "es_95"],
+    ["Downside deviation (รายปี)", show(t.downside_deviation), "downside_deviation"],
+    ["Downside beta", show(m.risk_adjusted?.downside_beta), "downside_beta"],
   ];
   if (enough) {
     rows.push(
-      ["ช่วงจมน้ำนานสุด", t.longest_underwater_trading_days != null ? `${t.longest_underwater_trading_days} วันทำการ` : "—"],
+      ["ช่วงจมน้ำนานสุด", t.longest_underwater_trading_days != null ? `${t.longest_underwater_trading_days} วันทำการ` : "—", "longest_underwater"],
       ["วันที่แย่สุด", extremeText(ex?.worst_day)],
       ["สัปดาห์ที่แย่สุด", extremeText(ex?.worst_week)],
       ["เดือนที่แย่สุด", extremeText(ex?.worst_month)],
@@ -406,9 +413,12 @@ function TailSection({ m }: { m: MetricsRes | null }) {
         </p>
       )}
       <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-border pt-4 text-sm md:grid-cols-3">
-        {rows.map(([k, v]) => (
+        {rows.map(([k, v, help]) => (
           <div key={k}>
-            <dt className="text-muted-foreground">{k}</dt>
+            <dt className="text-muted-foreground">
+              {k}
+              {help && <InfoTip k={help} />}
+            </dt>
             <dd className="mt-0.5 tabular-nums">{v}</dd>
           </div>
         ))}
@@ -438,7 +448,7 @@ const RA_META: { key: string; label: string }[] = [
 
 const needFrom = (m: Metric) => Number(/≥(\d+)/.exec(m.reason ?? "")?.[1]) || null;
 
-function RaItem({ label, m }: { label: string; m: Metric }) {
+function RaItem({ k, label, m }: { k: string; label: string; m: Metric }) {
   const need = needFrom(m);
   const n = m.n_obs ?? 0;
   const why =
@@ -449,7 +459,10 @@ function RaItem({ label, m }: { label: string; m: Metric }) {
         : "คำนวณไม่ได้";
   return (
     <div title={m.formula}>
-      <dt className="text-muted-foreground">{label}</dt>
+      <dt className="text-muted-foreground">
+        {label}
+        <InfoTip k={k} />
+      </dt>
       {m.value != null ? (
         <dd className="mt-0.5 flex items-center gap-2 tabular-nums">
           {fmtMetric(m)}
@@ -483,10 +496,10 @@ function RiskAdjustedSection({ m }: { m: MetricsRes | null }) {
       <h2 className="text-base font-medium">ตัวชี้วัดปรับตามความเสี่ยง</h2>
       <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-5 text-sm md:grid-cols-4">
         {items.map((i) => (
-          <RaItem key={i.key} label={i.label} m={i.metric} />
+          <RaItem key={i.key} k={i.key} label={i.label} m={i.metric} />
         ))}
       </dl>
-      <p className="mt-4 text-xs text-muted-foreground">วางเมาส์บนชื่อตัวชี้วัดเพื่อดูสูตร · ตัวที่ข้อมูลไม่พอจะไม่แสดงตัวเลข</p>
+      <p className="mt-4 text-xs text-muted-foreground">กดปุ่ม i ข้างชื่อเพื่อดูความหมายและวิธีอ่าน (วางเมาส์บนชื่อเพื่อดูสูตร) · ตัวที่ข้อมูลไม่พอจะไม่แสดงตัวเลข</p>
     </Card>
   );
 }
@@ -579,6 +592,7 @@ function DecompositionSection({ d }: { d: Decomp | null }) {
       <p className="mt-3 text-xs text-muted-foreground">
         MCR (marginal contribution to risk) = ความผันผวนพอร์ตเปลี่ยนเท่าไรต่อน้ำหนักที่เพิ่มของตัวนั้น เช่น 0.35 แปลว่าเพิ่มน้ำหนัก 1 จุดเปอร์เซ็นต์ (ลดเงินสดลง)
         ความผันผวนพอร์ตเพิ่มประมาณ 0.35 จุด · คำนวณจากความแปรปรวนร่วมในอดีตและน้ำหนักปัจจุบัน
+        <InfoTip k="mcr" />
       </p>
 
       {syms.length >= 2 && syms.length <= 12 && (
@@ -1224,23 +1238,29 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
             </span>
           </div>
         </Card>
-        <ReturnCard title="ผลตอบแทนพอร์ต" m={c.portfolio_return} note={ov.meta.period?.label} />
-        <ReturnCard title={ov.meta.benchmark?.name ?? "S&P 500"} m={c.benchmark_return} note="ดัชนีราคา (^GSPC)" />
+        <ReturnCard title="ผลตอบแทนพอร์ต" m={c.portfolio_return} note={ov.meta.period?.label} help="portfolio_return" />
+        <ReturnCard title={ov.meta.benchmark?.name ?? "S&P 500"} m={c.benchmark_return} note="ดัชนีราคา (^GSPC)" help="benchmark_return" />
 
-        <ReturnCard title="ผลตอบแทนส่วนเกิน" m={c.active_return} note="พอร์ต − ดัชนี" />
+        <ReturnCard title="ผลตอบแทนส่วนเกิน" m={c.active_return} note="พอร์ต − ดัชนี" help="active_return" />
         {c.volatility?.value == null ? (
-          <PendingCard title="ความผันผวน (รายปี)" m={c.volatility} need={MIN_VOL} />
+          <PendingCard title="ความผันผวน (รายปี)" m={c.volatility} need={MIN_VOL} help="volatility" />
         ) : (
           <Card>
-            <p className="text-sm text-muted-foreground">ความผันผวน (รายปี)</p>
+            <p className="text-sm text-muted-foreground">
+              ความผันผวน (รายปี)
+              <InfoTip k="volatility" />
+            </p>
             <p className="mt-3 text-3xl font-medium tabular-nums">{fmtMetric(c.volatility)}</p>
           </Card>
         )}
         {c.sharpe?.value == null ? (
-          <PendingCard title="Sharpe ratio" m={c.sharpe} need={MIN_SHARPE} />
+          <PendingCard title="Sharpe ratio" m={c.sharpe} need={MIN_SHARPE} help="sharpe" />
         ) : (
           <Card>
-            <p className="text-sm text-muted-foreground">Sharpe ratio</p>
+            <p className="text-sm text-muted-foreground">
+              Sharpe ratio
+              <InfoTip k="sharpe" />
+            </p>
             <p className="mt-3 text-3xl font-medium tabular-nums">{fmtMetric(c.sharpe)}</p>
           </Card>
         )}
@@ -1272,7 +1292,10 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-[7fr_5fr]">
         {/* concentration */}
         <Card>
-          <h2 className="text-base font-medium">ความกระจุกตัว</h2>
+          <h2 className="text-base font-medium">
+            ความกระจุกตัว
+            <InfoTip k="hhi" />
+          </h2>
           <div className="mt-4 space-y-3">
             {top.map((p) => (
               <div key={p.symbol}>
