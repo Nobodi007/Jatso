@@ -155,6 +155,11 @@ export default function SearchBox({
     setQ("")
     onSelectStock(symbol)
   }
+  const pickStock = (symbol: string) => {
+  setOpen(false)
+  setQ("")
+  onSelectStock(symbol)
+}
 
   const onEnter = () => {
     if (tab === "crypto") {
