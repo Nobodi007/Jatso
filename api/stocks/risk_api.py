@@ -47,6 +47,28 @@ def _daily_rf(rf_map: dict[date, float] | None, dates: list[date], max_gap=7) ->
     return out
 
 
+def _diagnose_price_gaps(issues: list[dict], closes: dict, calendar: list[date], failed: set[str]) -> list[dict]:
+    """เติมสาเหตุที่เป็นไปได้ให้ปัญหาราคาขาดของหุ้นที่ถืออยู่ (ไม่เปลี่ยน NAV ไม่เดามูลค่า แค่บอกให้ชัด)
+    likely: provider_error = ดึงราคาไม่สำเร็จ · no_data = ผู้ให้บริการไม่มีข้อมูลเลย (เปลี่ยนชื่อ/ไม่ครอบคลุม)
+            history_ends_early = ราคาหยุดก่อนวันล่าสุด (delist/เปลี่ยนชื่อ/พักซื้อขาย) · gap_in_history = ขาดช่วงกลาง"""
+    out = []
+    for it in issues:
+        sym = it.get("symbol")
+        if not sym:
+            out.append(it)
+            continue
+        have = [d for d, c in (closes.get(sym) or {}).items() if c and c > 0]
+        if sym in failed:
+            likely, last = "provider_error", max(have) if have else None
+        elif not have:
+            likely, last = "no_data", None
+        else:
+            last = max(have)
+            likely = "history_ends_early" if last < calendar[-1] else "gap_in_history"
+        out.append({**it, "likely": likely, "last_close": last.isoformat() if last else None})
+    return out
+
+
 def _nav_json(points):
     return [{"date": p.date.isoformat(), "nav": p.nav, "cash": p.cash,
              "market_value": p.market_value, "stale_symbols": list(p.stale)} for p in points]
@@ -185,7 +207,8 @@ async def _build(email: str) -> dict:
     except L.LedgerError as e:
         warnings.append({"code": "ledger_invalid", "detail": str(e)})
         return done("ledger_integrity_error")
-    warnings.extend(issues)
+    failed = {w.get("symbol") for w in warnings if w.get("code") == "prices_unavailable"}
+    warnings.extend(_diagnose_price_gaps(issues, closes, calendar, failed))
     state["ctx"] = _exposure_ctx(adj, last, calendar, closes, nav[-1].cash)
     state["realized"] = _realized_summary(adj)
     try:
