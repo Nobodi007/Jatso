@@ -67,3 +67,34 @@ def test_stress_floor_and_no_benchmark():
     big = {"AAA": E.Metric(5.0, "ok", "", "", 100)}
     out = X.stress({"AAA": {"qty": 1, "price": 100.0}}, 0.0, big, -0.5, {})
     assert out["positions"][0]["shock"] == -1.0 and out["pnl"] == ap(-100.0)
+
+
+def _flat_betas(*syms):
+    return {s: E.Metric(1.0, "ok", "", "", 100) for s in syms}
+
+def test_stress_sector_shock_priority_and_by_sector():
+    h = {"AAA": {"qty": 10, "price": 100.0}, "BBB": {"qty": 5, "price": 200.0}, "CCC": {"qty": 1, "price": 50.0}}
+    sec = {"AAA": "Tech", "BBB": "Tech", "CCC": None}
+    out = X.stress(h, 0.0, _flat_betas("AAA", "BBB", "CCC"), -0.10, {"BBB": -0.5}, sec, {"Tech": -0.2})
+    by = {r["symbol"]: r for r in out["positions"]}
+    assert by["BBB"]["pnl"] == ap(-500.0) and by["BBB"]["basis"] == "explicit symbol shock"   # รายตัวชนะ sector
+    assert by["AAA"]["pnl"] == ap(-200.0) and by["AAA"]["basis"] == "sector shock"            # sector ชนะ beta
+    assert by["CCC"]["basis"].startswith("β") and by["CCC"]["sector"] == "Unknown"            # ที่เหลือใช้ beta × ตลาด
+    bs = {r["sector"]: r for r in out["by_sector"]}
+    assert bs["Tech"]["pnl"] == ap(-700.0) and bs["Tech"]["market_value"] == ap(2000.0)
+    assert bs["Unknown"]["pnl"] == ap(-5.0)
+    assert sum(r["pnl"] for r in out["by_sector"]) == ap(out["pnl"])
+    assert out["by_sector"][0]["sector"] == "Tech"                                            # เรียงขาดทุนมากสุดก่อน
+    assert out["scenario"]["sector_shocks"] == {"Tech": -0.2}
+
+def test_stress_without_sectors_has_no_by_sector_and_ignores_sector_shocks():
+    h = {"AAA": {"qty": 10, "price": 100.0}}
+    out = X.stress(h, 0.0, _flat_betas("AAA"), -0.10, {}, None, {"Tech": -0.9})
+    assert "by_sector" not in out and out["positions"][0]["sector"] is None
+    assert out["positions"][0]["shock"] == ap(-0.10)
+
+def test_stress_sector_only_scenario_skips_unshocked_sectors():
+    h = {"AAA": {"qty": 10, "price": 100.0}, "BBB": {"qty": 1, "price": 100.0}}
+    out = X.stress(h, 0.0, {}, None, {}, {"AAA": "Tech", "BBB": "Energy"}, {"Tech": -0.3})
+    assert [r["symbol"] for r in out["positions"]] == ["AAA"] and out["skipped"][0]["symbol"] == "BBB"
+    assert out["pnl"] == ap(-300.0)
