@@ -265,12 +265,12 @@ function AppInner() {
   const [portfolioError, setPortfolioError] = useState("")
   const [orderRefreshKey, setOrderRefreshKey] = useState(0)
   const navigation = market === "stocks" ? stockNavigation : cryptoNavigation
-  const [stockSymbol, setStockSymbol] = useState<string>('');
   const [stockQuery, setStockQuery] = useState<string>('');
 
   const openStock = (sym: string) => {
-    setStockSymbol(sym.toUpperCase())
-    setPage("stock")
+    localStorage.setItem("stocks_pending_symbol", sym.toUpperCase())
+    setMarket("stocks")
+    setPage("markets")
     window.scrollTo({ top: 0 })
   }
 
