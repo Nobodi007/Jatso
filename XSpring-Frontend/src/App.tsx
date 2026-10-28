@@ -268,6 +268,7 @@ function AppInner() {
   const [orderRefreshKey, setOrderRefreshKey] = useState(0)
   const navigation = market === "stocks" ? stockNavigation : cryptoNavigation
   const [stockSymbol, setStockSymbol] = useState<string>('');
+  const [stockQuery, setStockQuery] = useState<string>('');
 
   const openStock = (sym: string) => {
     setStockSymbol(sym.toUpperCase())
