@@ -53,7 +53,7 @@ const FAQ = {
       },
       {
         q: "Who created Nobodi?",
-        a: "Nobodi was created by Teerapat Niyom, 22, a graduate of the University of the Thai Chamber of Commerce with a degree in Finance and Investment. He built the platform so people can practice investing with a simulated account before using real money.",
+        a: "Nobodi was created by Thiraphat Niyom, 22, a graduate of the University of the Thai Chamber of Commerce with a degree in Finance and Investment. He built the platform so people can practice investing with a simulated account before using real money.",
       },
       {
         q: "Does it use real money?",
