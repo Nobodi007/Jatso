@@ -89,9 +89,9 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
   const [stockRows, setStockRows] = useState<StockRow[] | null>(null)
   const [stockSparks, setStockSparks] = useState<Record<string, number[]>>({})
   const [page, setPage] = useState<
-  "home" | "about" | "guide" | "privacy" | "disclosure">("home")
+  "home" | "about" | "guide" | "privacy" | "disclosure" | "faq">("home")
   const openPage = (p: string) => {
-    if (p === "about" || p === "guide" || p === "privacy" || p === "disclosure") setPage(p)
+    if (p === "about" || p === "guide" || p === "privacy" || p === "disclosure" || p === "faq") setPage(p)
   }
 
 
@@ -154,6 +154,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
         {page === "about" && <AboutSystem onBack={() => setPage("home")} />}
         {page === "guide" && <UserGuide onBack={() => setPage("home")} />}
         {page === "disclosure" && <Disclosure onBack={() => setPage("home")} />}
+        {page === "faq" && <FaqSection onBack={() => setPage("home")} />}
         <Footer onGo={onGo} onOpenCoin={onOpenCoin} onPage={openPage} />
       </>
     )
@@ -366,7 +367,6 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
 
       <DeviceShowcase onRegister={onRegister} />
   
-      <FaqSection />
 
             {/* ปิดท้าย */}
       <section id="tour-cta" className="mx-auto max-w-4xl px-4 py-16 text-center">
@@ -386,7 +386,6 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
         </div>
         </section>
 
-        <FaqSection />
 
         <Footer onGo={onGo} onOpenCoin={onOpenCoin} onPage={openPage} />
       </>
