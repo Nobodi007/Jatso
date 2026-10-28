@@ -267,7 +267,7 @@ function AppInner() {
   const [portfolioError, setPortfolioError] = useState("")
   const [orderRefreshKey, setOrderRefreshKey] = useState(0)
   const navigation = market === "stocks" ? stockNavigation : cryptoNavigation
-  const [stockSymbol, setStockSymbol] = useState("")
+  const [stockQuery, setStockQuery] = useState("")
 
   const openStock = (sym: string) => {
     setStockSymbol(sym.toUpperCase())
@@ -510,9 +510,27 @@ function AppInner() {
               <h1 className="text-sm font-semibold">{currentPage?.label}</h1>
             </div>
 
-            <button className="rounded-lg p-2 text-muted-foreground hover:bg-accent" aria-label="Search">
-              <Search className="size-5" />
-            </button>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (stockQuery.trim()) openStock(stockQuery.trim())
+              }}
+              className="flex items-center gap-2"
+            >
+              <input
+                value={stockQuery}
+                onChange={(e) => setStockQuery(e.target.value)}
+                placeholder="Search stock symbol..."
+                className="rounded-lg border px-3 py-2"
+              />
+              <button
+                type="submit"
+                className="rounded-lg p-2 text-muted-foreground hover:bg-accent"
+                aria-label="Search"
+              >
+                <Search className="size-5" />
+              </button>
+            </form>
 
             <button className="rounded-lg p-2 text-muted-foreground hover:bg-accent" aria-label="Notifications">
               <Bell className="size-5" />
@@ -592,9 +610,8 @@ function AppInner() {
           {page === "stock" && stockSymbol && (
             <StockDetailPage
               symbol={stockSymbol}
-              onBack={() => setPage("home")}
+              onBack={() => setPage("dashboard")}
               onTrade={() => setPage("trade")}
-              onSignup={() => setPage("register")}
             />
           )}
           
