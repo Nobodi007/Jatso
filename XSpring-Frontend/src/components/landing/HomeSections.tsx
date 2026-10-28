@@ -10,7 +10,7 @@ import { useLanguage } from "../../i18n/LanguageContext"
 import { useAssetTab } from "../../hooks/useAssetTab"
 import AssetToggle from "./AssetToggle"
 import DeviceShowcase from "./DeviceShowcase"
-import FaqSection from "./FaqSection
+import FaqSection from "./FaqSection"
 
 const API_BASE_URL = "https://xspring-api.onrender.com"
 
@@ -365,6 +365,8 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
       </section>
 
       <DeviceShowcase onRegister={onRegister} />
+  
+      <FaqSection />
 
             {/* ปิดท้าย */}
       <section id="tour-cta" className="mx-auto max-w-4xl px-4 py-16 text-center">
@@ -382,9 +384,11 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
             {t("cta.login")}
           </button>
         </div>
-      </section>
+        </section>
 
-      <Footer onGo={onGo} onOpenCoin={onOpenCoin} onPage={openPage} />
-    </>
-  )
-}
+        <FaqSection />
+
+        <Footer onGo={onGo} onOpenCoin={onOpenCoin} onPage={openPage} />
+      </>
+    )
+  }
