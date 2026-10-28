@@ -19,8 +19,14 @@ interface Metric {
 interface Warning {
   code: string;
   symbols?: string[];
+  symbol?: string | null;
   inception_session?: string;
   detail?: unknown;
+  likely?: "provider_error" | "no_data" | "history_ends_early" | "gap_in_history";
+  last_close?: string | null;
+  days?: number;
+  ledger?: number;
+  account?: number;
 }
 interface Overview {
   meta: {
@@ -261,7 +267,51 @@ function openCompany(symbol: string) {
 
 const WARNING_TEXT = (w: Warning): string => {
   const syms = w.symbols?.length ? ` (${w.symbols.join(", ")})` : "";
+  const sym = w.symbol ?? "บางตัว";
+  const detail = typeof w.detail === "string" ? ` · ${w.detail}` : "";
   switch (w.code) {
+    case "missing_price":
+    case "stale_price_beyond_limit": {
+      const why =
+        w.likely === "provider_error"
+          ? "ดึงราคาจากผู้ให้บริการไม่สำเร็จ (ลองรีเฟรชภายหลัง)"
+          : w.likely === "no_data"
+            ? "ผู้ให้บริการไม่มีข้อมูลราคาเลย อาจเปลี่ยนชื่อสัญลักษณ์ ถูก delist หรือไม่อยู่ในแพ็กเกจข้อมูล"
+            : w.likely === "history_ends_early"
+              ? `ราคาหยุดที่ ${w.last_close ?? "—"} อาจถูก delist เปลี่ยนชื่อสัญลักษณ์ หรือถูกพักการซื้อขาย`
+              : "ราคาขาดหายเกิน 5 วันทำการ";
+      return `ไม่มีราคาล่าสุดของ ${sym}: ${why} · ระบบไม่เดามูลค่าให้ จึงคำนวณ NAV และตัวชี้วัดที่ใช้ NAV ไม่ได้จนกว่าจะมีราคา`;
+    }
+    case "prices_unavailable":
+      return `ดึงราคาของ ${sym} ไม่สำเร็จจากผู้ให้บริการข้อมูล`;
+    case "benchmark_unavailable":
+      return "ดึงดัชนี S&P 500 ไม่สำเร็จ จึงไม่แสดงตัวชี้วัดที่เทียบดัชนี";
+    case "risk_free_unavailable":
+      return "ไม่มีอัตราปลอดความเสี่ยง (พันธบัตร 3 เดือน) จึงไม่แสดง Sharpe และ Alpha";
+    case "risk_free_gap":
+      return "ข้อมูลอัตราปลอดความเสี่ยงขาดช่วงเกิน 7 วัน จึงไม่แสดง Sharpe และ Alpha";
+    case "splits_unavailable":
+      return `ดึงข้อมูล split ของ ${sym} ไม่สำเร็จ`;
+    case "split_adjustment_incomplete":
+      return "ข้อมูล split ไม่ครบ ถ้าบางตัวเคยแตกพาร์ ตัวเลขอาจคลาดเคลื่อน";
+    case "calendar_from_holdings":
+      return "ไม่มีปฏิทินจากดัชนี ใช้วันซื้อขายของหุ้นที่ถือแทน";
+    case "position_unpriced":
+      return `${sym} ไม่มีราคา จึงไม่นับในส่วนการกระจุกตัวและความเสี่ยงรายตัว`;
+    case "sector_unavailable":
+      return `ไม่ทราบอุตสาหกรรมของ${syms || ` ${sym}`}`;
+    case "cash_reconciliation_mismatch":
+      return `เงินสดจากรายการซื้อขาย (${w.ledger ?? "—"}) ไม่ตรงกับบัญชี (${w.account ?? "—"}) ควรตรวจรายการ`;
+    case "trade_price_outside_daily_range":
+      return `ราคาซื้อขายของ ${sym} อยู่นอกช่วงต่ำสุด-สูงสุดของวันนั้น ควรตรวจรายการ`;
+    case "attribution_unavailable":
+      return "คำนวณที่มาของผลตอบแทนไม่ได้ในรอบนี้";
+    case "attribution_residual":
+      return "ผลรวมที่มาของผลตอบแทนไม่ตรงกับผลตอบแทนพอร์ตภายในค่าคลาดเคลื่อนที่กำหนด";
+    case "too_many_symbols":
+      return `จำนวนหุ้นเกินที่ระบบรองรับ${detail}`;
+    case "ledger_invalid":
+      return `รายการซื้อขายไม่ถูกต้อง${detail}`;
     case "unofficial_price_source":
       return `ราคาของบางตัวมาจากแหล่งสำรองที่ไม่เป็นทางการ${syms}`;
     case "portfolio_younger_than_period":
