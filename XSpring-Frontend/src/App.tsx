@@ -275,17 +275,25 @@ function AppInner() {
     setPage("stock")
     window.scrollTo({ top: 0 })
   }
+
+  useEffect(() => {
+    if (!user) return
+    const pending = sessionStorage.getItem("pendingStock")
+    if (pending) {
+      sessionStorage.removeItem("pendingStock")
+      setMarket("stocks")
+      openStock(pending)
+    }
+  }, [user])
+
   const currentPage = navigation.find((item) => item.id === page)
   useEffect(() => {
-  if (!user) return
-  const pending = sessionStorage.getItem("pendingStock")
-  if (pending) {
-    sessionStorage.removeItem("pendingStock")
-    setMarket("stocks")
-    openStock(pending)
-  }
-}, [user])
-}, [market])
+    try {
+      localStorage.setItem("market", market)
+    } catch {
+      // ไม่ขัดขวาง
+    }
+  }, [market])
   useEffect(() => {
   const toCompany = () => setPage("markets");
   const toTrade = () => setPage("trade");
