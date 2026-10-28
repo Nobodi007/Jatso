@@ -316,7 +316,7 @@ function AppInner() {
       if (Date.now() - Number(ts) > 60 * 60 * 1000) return // เกิน 1 ชม. ถือว่าหมดอายุ ไม่ลากผู้ใช้ไปหน้าที่ลืมไปแล้ว
       localStorage.setItem("stocks_pending_symbol", symbol)
       setMarket("stocks")
-      setPage("markets")
+      openStock(symbol)
     } catch {
       /* ข้าม */
     }
@@ -732,6 +732,8 @@ function AppInner() {
 
             {page !== "dashboard" &&
               page !== "markets" &&
+              page !== "stock" &&
+              page !== "stocks" &&
               page !== "trade" &&
               page !== "orderbook" &&
               page !== "portfolio" &&
