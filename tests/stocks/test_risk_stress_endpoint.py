@@ -45,3 +45,23 @@ def test_requires_at_least_one_shock_and_validates_sector_values(monkeypatch):
         with pytest.raises(A.HTTPException) as e:
             asyncio.run(A.stress_test(bad, email="a@b.c"))
         assert e.value.status_code == 400
+
+
+def test_attribution_endpoint_adds_sector_and_pnl(monkeypatch):
+    attr = {"positions": [{"symbol": "AAA", "contribution": 0.03, "avg_weight_nav": 0.5, "days_held": 5, "held_now": True},
+                          {"symbol": "BBB", "contribution": -0.01, "avg_weight_nav": 0.2, "days_held": 3, "held_now": False}],
+            "sum_check": {"ok": True}}
+
+    async def fake_report(email):
+        return {"meta": {"data_status": "ok"}, "attribution": attr, "pnl": {"total_net": 12.5}}
+
+    async def fake_sectors(syms):
+        assert sorted(syms) == ["AAA", "BBB"]                 # รวมตัวที่ขายแล้วด้วย
+        return {"AAA": "Technology", "BBB": None}
+
+    monkeypatch.setattr(A, "_report", fake_report)
+    monkeypatch.setattr(A, "_sector_map", fake_sectors)
+    out = asyncio.run(A.attribution_view(email="a@b.c"))
+    assert out["pnl"] == {"total_net": 12.5} and out["attribution"] is attr
+    assert [r["sector"] for r in out["by_sector"]] == ["Technology", "Unknown"]
+    assert out["sector_classification"].startswith("Finnhub")
