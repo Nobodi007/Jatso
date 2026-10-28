@@ -257,12 +257,14 @@ export default function StockDetailPage({ symbol, onBack, onTrade, onSignup }: P
           >
             ซื้อขาย {sym}
           </button>
+          {onSignup && (
           <button
             onClick={onSignup}
             className="rounded-lg bg-emerald-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-600"
           >
             สมัครตอนนี้
           </button>
+        )}
         </div>
       </div>
 
