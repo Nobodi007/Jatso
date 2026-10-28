@@ -3,6 +3,8 @@ import type { ReactNode } from "react";
 import { AlertTriangle, CheckCircle2, RefreshCw, ShieldAlert } from "lucide-react";
 import { LossDistributionSection, PerformanceSection, RollingSection } from "./PerformanceSections";
 import type { PerfRes } from "./PerformanceSections";
+import { CashDragNote, PnlSection, SectorContributionSection } from "./AttributionExtras";
+import type { CashDrag, PnlBreakdown, SectorContribution } from "./AttributionExtras";
 
 /* ───────── types (ตรงกับ /api/stocks/risk/*) ───────── */
 interface Metric {
@@ -151,8 +153,14 @@ interface AttrRes {
     portfolio_return: number;
     positions: AttrRow[];
     execution_and_fees: { value: number; note: string };
+    execution?: { value: number; note: string };
+    fees?: { value: number; note: string };
+    cash_drag?: CashDrag;
     sum_check: { positions: number; execution_and_fees: number; portfolio_return: number; residual: number; ok: boolean };
   };
+  pnl?: PnlBreakdown | null;
+  by_sector?: SectorContribution[];
+  sector_classification?: string;
   status?: string;
   reason?: string;
 }
@@ -926,14 +934,35 @@ function AttributionSection({ a }: { a: AttrRes | null }) {
             </p>
           </li>
         ))}
-        <li>
-          <div className="mb-1 flex items-center justify-between gap-2 text-sm" title={x.execution_and_fees.note}>
-            <span>ราคาที่ซื้อขายจริงเทียบราคาปิด และค่าธรรมเนียม</span>
-            <span className={`tabular-nums ${tone(x.execution_and_fees.value)}`}>{ppFmt(x.execution_and_fees.value)}</span>
-          </div>
-          <Bar value={Math.abs(x.execution_and_fees.value)} max={maxAbs} kind={x.execution_and_fees.value >= 0 ? "ok" : "bad"} />
-        </li>
+        {x.execution && x.fees ? (
+          <>
+            <li>
+              <div className="mb-1 flex items-center justify-between gap-2 text-sm" title={x.execution.note}>
+                <span>ราคาที่ซื้อขายจริงเทียบราคาปิด</span>
+                <span className={`tabular-nums ${tone(x.execution.value)}`}>{ppFmt(x.execution.value)}</span>
+              </div>
+              <Bar value={Math.abs(x.execution.value)} max={maxAbs} kind={x.execution.value >= 0 ? "ok" : "bad"} />
+            </li>
+            <li>
+              <div className="mb-1 flex items-center justify-between gap-2 text-sm" title={x.fees.note}>
+                <span>ค่าธรรมเนียม</span>
+                <span className={`tabular-nums ${tone(x.fees.value)}`}>{ppFmt(x.fees.value)}</span>
+              </div>
+              <Bar value={Math.abs(x.fees.value)} max={maxAbs} kind={x.fees.value >= 0 ? "ok" : "bad"} />
+            </li>
+          </>
+        ) : (
+          <li>
+            <div className="mb-1 flex items-center justify-between gap-2 text-sm" title={x.execution_and_fees.note}>
+              <span>ราคาที่ซื้อขายจริงเทียบราคาปิด และค่าธรรมเนียม</span>
+              <span className={`tabular-nums ${tone(x.execution_and_fees.value)}`}>{ppFmt(x.execution_and_fees.value)}</span>
+            </div>
+            <Bar value={Math.abs(x.execution_and_fees.value)} max={maxAbs} kind={x.execution_and_fees.value >= 0 ? "ok" : "bad"} />
+          </li>
+        )}
       </ul>
+
+      <CashDragNote c={x.cash_drag} />
 
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-3 text-xs text-muted-foreground">
         <Chip kind={x.sum_check.ok ? "ok" : "bad"}>{x.sum_check.ok ? "ผลรวมตรงกับผลตอบแทนพอร์ต" : "ผลรวมไม่ตรง"}</Chip>
@@ -1232,6 +1261,8 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
       <LossDistributionSection p={perf} tail={mx?.tail} />
       <DecompositionSection d={dc} />
       <AttributionSection a={attr} />
+      <SectorContributionSection rows={attr?.by_sector} note={attr?.sector_classification} />
+      {attr?.attribution && <PnlSection p={attr.pnl} />}
       <StressSection
         call={call}
         symbols={top.map((p) => p.symbol)}
