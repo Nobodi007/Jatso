@@ -151,10 +151,15 @@ export default function SearchBox({
     onSelect(asset)
   }
   const pickStock = (symbol: string) => {
-    setOpen(false)
-    setQ("")
-    onSelectStock(symbol)
+  try {
+    sessionStorage.setItem("pendingStock", symbol)
+  } catch {
+    /* sessionStorage ใช้ไม่ได้ก็ข้ามไป */
   }
+  setOpen(false)
+  setQ("")
+  onSelectStock(symbol)
+}
 
   const onEnter = () => {
     if (tab === "crypto") {
