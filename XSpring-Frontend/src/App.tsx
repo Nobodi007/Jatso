@@ -39,6 +39,7 @@ import StocksTradePage from "./components/trading/StocksTradePage"
 import StockNewsPage from "./components/stocks/StockNewsPage"
 import { TOKEN_KEY } from "./auth";
 import StockBook from "./components/stocks/StockPortfolioPage";
+import StockDetailPage from "./components/stocks/StockDetailPage"
 
 type Page =
   | "dashboard"
@@ -57,6 +58,7 @@ type Page =
   | "watchlist"
   | "screener"
   | "earnings"
+  | "stock"
 
 
 type Asset = string
@@ -265,6 +267,13 @@ function AppInner() {
   const [portfolioError, setPortfolioError] = useState("")
   const [orderRefreshKey, setOrderRefreshKey] = useState(0)
   const navigation = market === "stocks" ? stockNavigation : cryptoNavigation
+  const [stockSymbol, setStockSymbol] = useState("")
+
+  const openStock = (sym: string) => {
+    setStockSymbol(sym.toUpperCase())
+    setPage("stock")
+    window.scrollTo({ top: 0 })
+  }
   const currentPage = navigation.find((item) => item.id === page)
   useEffect(() => {
   try {
@@ -578,6 +587,15 @@ function AppInner() {
           
           {page === "dashboard" && market === "stocks" && (
             <StocksPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" view="market" />
+          )}
+
+          {page === "stock" && stockSymbol && (
+            <StockDetailPage
+              symbol={stockSymbol}
+              onBack={() => setPage("home")}
+              onTrade={() => setPage("trade")}
+              onSignup={() => setPage("register")}
+            />
           )}
           
           {page === "markets" && market === "crypto" && (
