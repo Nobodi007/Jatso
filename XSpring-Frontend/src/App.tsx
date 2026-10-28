@@ -277,11 +277,14 @@ function AppInner() {
   }
   const currentPage = navigation.find((item) => item.id === page)
   useEffect(() => {
-  try {
-    localStorage.setItem("market", market)
-  } catch {
-    // ไม่ขัดขวางการทำงาน หาก localStorage ใช้งานไม่ได้
+  if (!user) return
+  const pending = sessionStorage.getItem("pendingStock")
+  if (pending) {
+    sessionStorage.removeItem("pendingStock")
+    setMarket("stocks")
+    openStock(pending)
   }
+}, [user])
 }, [market])
   useEffect(() => {
   const toCompany = () => setPage("markets");
