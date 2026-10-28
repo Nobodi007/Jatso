@@ -112,6 +112,8 @@ async def _build(email: str) -> dict:
         extra = {"exposure_ctx": state["ctx"]} if "ctx" in state else {}
         if "realized" in state:
             extra["realized"] = state["realized"]
+        if "pnl" in state:
+            extra["pnl"] = state["pnl"]
         return {"meta": {**meta, "data_status": status, "warnings": warnings}, **extra, **body}
 
     acc = await rd.account(email)
@@ -186,6 +188,12 @@ async def _build(email: str) -> dict:
     warnings.extend(issues)
     state["ctx"] = _exposure_ctx(adj, last, calendar, closes, nav[-1].cash)
     state["realized"] = _realized_summary(adj)
+    try:
+        state["pnl"] = A.pnl_breakdown(
+            L.positions(adj), {s: h["price"] for s, h in state["ctx"]["holdings"].items()},
+            float(acc["initial_cash"]), nav[-1].nav)
+    except (L.LedgerError, KeyError, ValueError) as e:
+        log.warning("pnl breakdown unavailable: %s", e)
 
     for t in adj:                                            # price sanity vs daily range
         b = bars.get(t.symbol, {}).get(t.ts.astimezone(L.ET).date())
@@ -429,7 +437,9 @@ async def attribution_view(period: str = PERIOD, email: str = Depends(_heavy)):
         st = rep["meta"].get("data_status")
         return {"meta": rep["meta"], "attribution": None, "status": "unavailable",
                 "reason": f"attribution not computed (data_status={st})"}
-    return {"meta": rep["meta"], "attribution": attr}
+    sectors = await _sector_map([r["symbol"] for r in attr["positions"]])
+    return {"meta": rep["meta"], "attribution": attr, "pnl": rep.get("pnl"),
+            "by_sector": A.by_sector(attr["positions"], sectors), "sector_classification": A.SECTOR_NOTE}
 
 
 _SYM = re.compile(r"^[A-Za-z0-9.\-]{1,12}$")
