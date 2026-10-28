@@ -39,7 +39,6 @@ import StocksTradePage from "./components/trading/StocksTradePage"
 import StockNewsPage from "./components/stocks/StockNewsPage"
 import { TOKEN_KEY } from "./auth";
 import StockBook from "./components/stocks/StockPortfolioPage";
-import StockDetailPage from "./components/stocks/StockDetailPage"
 
 type Page =
   | "dashboard"
@@ -58,7 +57,6 @@ type Page =
   | "watchlist"
   | "screener"
   | "earnings"
-  | "stock"
 
 
 type Asset = string
@@ -619,14 +617,6 @@ function AppInner() {
             <StocksPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" view="market" />
           )}
 
-          {page === "stock" && stockSymbol && (
-            <StockDetailPage
-              symbol={stockSymbol}
-              onBack={() => setPage("dashboard")}
-              onTrade={() => setPage("trade")}
-            />
-          )}
-          
           {page === "markets" && market === "crypto" && (
             <MarketsPage
               portfolio={portfolio}
@@ -732,7 +722,6 @@ function AppInner() {
 
             {page !== "dashboard" &&
               page !== "markets" &&
-              page !== "stock" &&
               page !== "stocks" &&
               page !== "trade" &&
               page !== "orderbook" &&
