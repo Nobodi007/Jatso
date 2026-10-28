@@ -1,7 +1,6 @@
 import { useState } from "react"
 import { ChevronDown } from "lucide-react"
 import { useLanguage } from "../../i18n/LanguageContext"
-import { ArrowLeft, ChevronDown } from "lucide-react"
 
 
 type QA = { q: string; a: string }
