@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { AlertTriangle, CheckCircle2, RefreshCw, ShieldAlert } from "lucide-react";
+import { LossDistributionSection, PerformanceSection, RollingSection } from "./PerformanceSections";
+import type { PerfRes } from "./PerformanceSections";
 
 /* ───────── types (ตรงกับ /api/stocks/risk/*) ───────── */
 interface Metric {
@@ -881,6 +883,7 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
   const [ackBusy, setAckBusy] = useState<number | string | null>(null);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [mx, setMx] = useState<MetricsRes | null>(null);
+  const [perf, setPerf] = useState<PerfRes | null>(null);
   const [dc, setDc] = useState<Decomp | null>(null);
   const [attr, setAttr] = useState<AttrRes | null>(null);
   const [loading, setLoading] = useState(true);
@@ -912,12 +915,13 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const [o, e, l, a, m, dcr, atr] = await Promise.all([
+      const [o, e, l, a, m, pf, dcr, atr] = await Promise.all([
         call<Overview>("/overview"),
         call<Exposure>("/exposure"),
         call<LimitsRes>("/limits"),
         call<{ alerts: AlertRow[] }>("/alerts?limit=50"),
         call<MetricsRes>("/metrics").catch(() => null),
+        call<PerfRes>("/performance").catch(() => null),
         call<Decomp>("/risk-decomposition").catch(() => null),
         call<AttrRes>("/attribution").catch(() => null),
       ]);
@@ -928,6 +932,7 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
       setLimitDefaults(l.defaults ?? null);
       setAlerts(a.alerts);
       setMx(m);
+      setPerf(pf);
       setDc(dcr);
       setAttr(atr);
     } catch (err) {
@@ -1147,8 +1152,11 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
           )}
         </Card>
       </div>
+      <PerformanceSection p={perf} />
       <RiskAdjustedSection m={mx} />
+      <RollingSection p={perf} />
       <TailSection m={mx} />
+      <LossDistributionSection p={perf} tail={mx?.tail} />
       <DecompositionSection d={dc} />
       <AttributionSection a={attr} />
       <StressSection call={call} symbols={top.map((p) => p.symbol)} />
