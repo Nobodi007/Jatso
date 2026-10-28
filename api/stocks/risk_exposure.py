@@ -126,14 +126,22 @@ def holding_betas(returns: Mapping[str, Sequence[float | None]], bench: Sequence
 
 
 def stress(holdings: Mapping[str, dict], cash: float, betas: Mapping[str, E.Metric],
-           market_shock: float | None, shocks: Mapping[str, float]) -> dict:
-    """Instantaneous shock: P&L_i = MV_i × shock_i. shock_i = explicit override, else β_i × market_shock."""
+           market_shock: float | None, shocks: Mapping[str, float],
+           sectors: Mapping[str, str | None] | None = None,
+           sector_shocks: Mapping[str, float] | None = None) -> dict:
+    """Instantaneous shock: P&L_i = MV_i × shock_i.
+    shock_i = explicit symbol override > sector shock (needs `sectors`) > β_i × market_shock.
+    `sectors` given → each row carries its sector and the result has `by_sector` (sum over priced rows only)."""
+    sector_shocks = sector_shocks or {}
     nav = cash + math.fsum(h["qty"] * h["price"] for h in holdings.values())
     rows, skipped, total = [], [], 0.0
     for s, h in holdings.items():
         mv = h["qty"] * h["price"]
+        sec = ((sectors.get(s) if sectors is not None else None) or "Unknown") if sectors is not None else None
         if s in shocks:
             sh, basis = shocks[s], "explicit symbol shock"
+        elif sec is not None and sec in sector_shocks:
+            sh, basis = sector_shocks[sec], "sector shock"
         elif market_shock is not None and betas.get(s) is not None and betas[s].value is not None:
             sh, basis = betas[s].value * market_shock, f"β ({betas[s].status}) × market shock"
         else:
@@ -142,9 +150,21 @@ def stress(holdings: Mapping[str, dict], cash: float, betas: Mapping[str, E.Metr
         sh = max(SHOCK_MIN, sh)                      # a long position cannot lose more than 100%
         pnl = mv * sh
         total += pnl
-        rows.append({"symbol": s, "market_value": mv, "shock": sh, "pnl": pnl, "basis": basis})
+        rows.append({"symbol": s, "market_value": mv, "shock": sh, "pnl": pnl, "basis": basis, "sector": sec})
     rows.sort(key=lambda r: r["pnl"])
-    return {"hypothetical": True, "disclaimer": HYPOTHETICAL,
-            "scenario": {"market_shock": market_shock, "symbol_shocks": dict(shocks)},
-            "nav_before": nav, "pnl": total, "pnl_pct_nav": total / nav if nav > 0 else None,
-            "nav_after": nav + total, "positions": rows, "skipped": skipped}
+    out = {"hypothetical": True, "disclaimer": HYPOTHETICAL,
+           "scenario": {"market_shock": market_shock, "symbol_shocks": dict(shocks),
+                        "sector_shocks": dict(sector_shocks)},
+           "nav_before": nav, "pnl": total, "pnl_pct_nav": total / nav if nav > 0 else None,
+           "nav_after": nav + total, "positions": rows, "skipped": skipped}
+    if sectors is not None:
+        agg: dict[str, list[float]] = {}
+        for r in rows:
+            a = agg.setdefault(r["sector"], [0.0, 0.0])
+            a[0] += r["market_value"]
+            a[1] += r["pnl"]
+        out["by_sector"] = sorted(
+            ({"sector": k, "market_value": v[0], "pnl": v[1],
+              "pnl_pct_nav": v[1] / nav if nav > 0 else None} for k, v in agg.items()),
+            key=lambda r: r["pnl"])
+    return out
