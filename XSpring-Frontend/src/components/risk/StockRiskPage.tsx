@@ -53,7 +53,7 @@ interface Exposure {
     hhi?: Metric;
     effective_n?: Metric;
     top1?: Metric;
-    sectors?: { sector: string; weight_nav: number }[];
+    sectors?: { sector: string; weight_nav: number; market_value?: number }[];
   };
   meta?: { sector_classification?: string };
 }
@@ -119,7 +119,8 @@ interface Decomp {
   status?: string;
   reason?: string;
 }
-interface StressPos { symbol: string; market_value: number; shock: number; pnl: number; basis: string }
+interface StressPos { symbol: string; market_value: number; shock: number; pnl: number; basis: string; sector?: string | null }
+interface StressSector { sector: string; market_value: number; pnl: number; pnl_pct_nav: number | null }
 interface StressRes {
   stress: null | {
     hypothetical: boolean;
@@ -131,6 +132,8 @@ interface StressRes {
     positions: StressPos[];
     skipped: { symbol: string; reason: string }[];
     unknown_symbols?: string[];
+    unknown_sectors?: string[];
+    by_sector?: StressSector[];
     betas?: Record<string, Metric>;
   };
   status?: string;
@@ -556,13 +559,19 @@ function DecompositionSection({ d }: { d: Decomp | null }) {
             <div className="mb-1 flex justify-between text-sm">
               <span>{c.symbol}</span>
               <span className="tabular-nums text-muted-foreground">
-                น้ำหนัก {pct(c.weight_nav, 1)} · สัดส่วนความเสี่ยง {pct(c.pct_of_risk, 1)}
+                น้ำหนัก {pct(c.weight_nav, 1)} · สัดส่วนความเสี่ยง {pct(c.pct_of_risk, 1)} ·{" "}
+                <span title="MCR: ความผันผวนพอร์ตเปลี่ยนเท่าไรเมื่อเพิ่มน้ำหนักตัวนี้ (ลดเงินสดลง)">MCR {c.mcr.toFixed(2)}</span>
               </span>
             </div>
             <Bar value={Math.max(c.pct_of_risk, 0)} />
           </div>
         ))}
       </div>
+
+      <p className="mt-3 text-xs text-muted-foreground">
+        MCR (marginal contribution to risk) = ความผันผวนพอร์ตเปลี่ยนเท่าไรต่อน้ำหนักที่เพิ่มของตัวนั้น เช่น 0.35 แปลว่าเพิ่มน้ำหนัก 1 จุดเปอร์เซ็นต์ (ลดเงินสดลง)
+        ความผันผวนพอร์ตเพิ่มประมาณ 0.35 จุด · คำนวณจากความแปรปรวนร่วมในอดีตและน้ำหนักปัจจุบัน
+      </p>
 
       {syms.length >= 2 && syms.length <= 12 && (
         <div className="mt-5 overflow-x-auto">
@@ -612,10 +621,12 @@ function DecompositionSection({ d }: { d: Decomp | null }) {
 
 const PRESETS = [-5, -10, -20];
 
-function StressSection({ call, symbols }: { call: Caller; symbols: string[] }) {
+function StressSection({ call, symbols, sectorNames }: { call: Caller; symbols: string[]; sectorNames: string[] }) {
   const [mkt, setMkt] = useState("");
   const [per, setPer] = useState<Record<string, string>>({});
+  const [perSec, setPerSec] = useState<Record<string, string>>({});
   const [open, setOpen] = useState(false);
+  const [openSec, setOpenSec] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [res, setRes] = useState<StressRes | null>(null);
@@ -629,7 +640,7 @@ function StressSection({ call, symbols }: { call: Caller; symbols: string[] }) {
   };
 
   const run = async () => {
-    const body: { market_shock?: number; shocks?: Record<string, number> } = {};
+    const body: { market_shock?: number; shocks?: Record<string, number>; sector_shocks?: Record<string, number> } = {};
     const m = toShock(mkt);
     if (m === "bad") {
       setMsg("ค่าของตลาดต้องอยู่ระหว่าง -100 ถึง 100");
@@ -646,7 +657,17 @@ function StressSection({ call, symbols }: { call: Caller; symbols: string[] }) {
       if (v !== null) shocks[s] = v;
     }
     if (Object.keys(shocks).length > 0) body.shocks = shocks;
-    if (body.market_shock === undefined && !body.shocks) {
+    const secShocks: Record<string, number> = {};
+    for (const n of sectorNames) {
+      const v = toShock(perSec[n] ?? "");
+      if (v === "bad") {
+        setMsg(`ค่าของ ${n} ต้องอยู่ระหว่าง -100 ถึง 100`);
+        return;
+      }
+      if (v !== null) secShocks[n] = v;
+    }
+    if (Object.keys(secShocks).length > 0) body.sector_shocks = secShocks;
+    if (body.market_shock === undefined && !body.shocks && !body.sector_shocks) {
       setMsg("ใส่ค่าอย่างน้อยหนึ่งช่อง");
       return;
     }
@@ -730,6 +751,36 @@ function StressSection({ call, symbols }: { call: Caller; symbols: string[] }) {
         </div>
       )}
 
+      {sectorNames.length > 0 && (
+        <div className="mt-3">
+          <button onClick={() => setOpenSec(!openSec)} className="text-xs text-muted-foreground underline">
+            {openSec ? "ซ่อนการกำหนดรายอุตสาหกรรม" : "กำหนดรายอุตสาหกรรม (ไม่บังคับ ใช้แทนค่าจากตลาด แต่รายตัวยังมาก่อน)"}
+          </button>
+          {openSec && (
+            <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-3">
+              {sectorNames.map((n) => (
+                <label key={n} className="flex items-center justify-between gap-2 text-sm">
+                  <span className="truncate" title={n}>{n}</span>
+                  <span className="flex shrink-0 items-center gap-1">
+                    <input
+                      inputMode="decimal"
+                      value={perSec[n] ?? ""}
+                      onChange={(ev) => setPerSec({ ...perSec, [n]: ev.target.value })}
+                      placeholder="—"
+                      className="w-16 rounded-lg border border-border bg-background px-2 py-1 text-right tabular-nums"
+                    />
+                    <span className="text-xs text-muted-foreground">%</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+          {openSec && (
+            <p className="mt-1 text-xs text-muted-foreground">อุตสาหกรรมจาก Finnhub (ประมาณ ไม่ใช่ GICS)</p>
+          )}
+        </div>
+      )}
+
       {msg && <p className="mt-3 text-xs text-rose-500">{msg}</p>}
       <button
         onClick={() => void run()}
@@ -768,7 +819,8 @@ function StressSection({ call, symbols }: { call: Caller; symbols: string[] }) {
                 <span>
                   {p.symbol}
                   <span className="block text-xs text-muted-foreground">
-                    {p.basis.startsWith("explicit") ? "กำหนดเอง" : "ผ่านค่า beta"}
+                    {p.sector && p.sector !== "Unknown" ? `${p.sector} · ` : ""}
+                    {p.basis.startsWith("explicit") ? "กำหนดเอง" : p.basis.startsWith("sector") ? "กำหนดตามอุตสาหกรรม" : "ผ่านค่า beta"}
                     {p.basis.includes("limited_sample") ? " · beta จากข้อมูลน้อย" : ""} · {pct(p.shock, 1, true)}
                   </span>
                 </span>
@@ -776,6 +828,27 @@ function StressSection({ call, symbols }: { call: Caller; symbols: string[] }) {
               </li>
             ))}
           </ul>
+          {(s.by_sector ?? []).length > 0 && (
+            <div className="mt-4 border-t border-border pt-3">
+              <p className="mb-2 text-sm text-muted-foreground">ผลขาดทุนแยกตามอุตสาหกรรม</p>
+              <ul className="space-y-1.5">
+                {(s.by_sector ?? []).map((b) => (
+                  <li key={b.sector} className="flex items-center justify-between gap-2 text-sm">
+                    <span>{b.sector === "Unknown" ? "ไม่ทราบอุตสาหกรรม" : b.sector}</span>
+                    <span className={`tabular-nums ${tone(b.pnl)}`}>
+                      {usd(b.pnl)} ({pct(b.pnl_pct_nav, 2, true)} ของ NAV)
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1 text-xs text-muted-foreground">รวมเฉพาะตำแหน่งที่คำนวณได้ · อุตสาหกรรมจาก Finnhub (ประมาณ ไม่ใช่ GICS)</p>
+            </div>
+          )}
+          {(s.unknown_sectors ?? []).length > 0 && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              ไม่มีอุตสาหกรรมนี้ในพอร์ต จึงไม่นับ: {(s.unknown_sectors ?? []).join(", ")}
+            </p>
+          )}
           {s.skipped.length > 0 && (
             <p className="mt-3 text-xs text-muted-foreground">
               ข้าม: {s.skipped.map((k) => `${k.symbol} (${skipText(k.reason)})`).join(", ")}
@@ -1159,7 +1232,11 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
       <LossDistributionSection p={perf} tail={mx?.tail} />
       <DecompositionSection d={dc} />
       <AttributionSection a={attr} />
-      <StressSection call={call} symbols={top.map((p) => p.symbol)} />
+      <StressSection
+        call={call}
+        symbols={top.map((p) => p.symbol)}
+        sectorNames={(e.sectors ?? []).map((x) => x.sector).filter((n) => n !== "Unknown" && n !== "n/a")}
+      />
       
       <div className="grid grid-cols-1 gap-4 md:grid-cols-[7fr_5fr]">
         {/* concentration */}
@@ -1193,10 +1270,28 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
             <Chip>ตัวใหญ่สุด {fmtMetric(e.top1)}</Chip>
           </div>
           {e.sectors && e.sectors.length > 0 && (
-            <p className="mt-3 text-xs text-muted-foreground">
-              อุตสาหกรรม (สัดส่วนของ NAV): {e.sectors.map((s) => `${s.sector} ${pct(s.weight_nav, 1)}`).join(" · ")}
-              {" "}(ค่าประมาณจาก Finnhub ไม่ใช่มาตรฐาน GICS)
-            </p>
+            <div className="mt-4 border-t border-border pt-3">
+              <p className="mb-2 text-sm text-muted-foreground">อุตสาหกรรม (สัดส่วนของ NAV)</p>
+              <div className="space-y-2">
+                {e.sectors.map((sc) => {
+                  const unk = sc.sector === "Unknown" || sc.sector === "n/a";
+                  return (
+                    <div key={sc.sector}>
+                      <div className="mb-1 flex justify-between text-sm">
+                        <span className={unk ? "text-muted-foreground" : ""}>{unk ? "ไม่ทราบอุตสาหกรรม" : sc.sector}</span>
+                        <span className="tabular-nums text-muted-foreground">
+                          {pct(sc.weight_nav, 1)}{sc.market_value != null ? ` · ${usd(sc.market_value)}` : ""}
+                        </span>
+                      </div>
+                      <Bar value={sc.weight_nav} kind={unk ? "muted" : "ok"} />
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                ค่าประมาณจาก Finnhub ไม่ใช่มาตรฐาน GICS · ตัวที่ไม่ทราบอุตสาหกรรมไม่ถูกนับรวมในกฎ sector
+              </p>
+            </div>
           )}
         </Card>
 
