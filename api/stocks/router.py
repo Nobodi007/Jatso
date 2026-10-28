@@ -16,6 +16,9 @@ from .stock_heatmap import router as heatmap_router
 router.include_router(heatmap_router)
 from .public_market import router as public_market_router
 router.include_router(public_market_router)
+from .stock_detail import router as stock_detail_router
+router.include_router(stock_detail_router)
+
 
 
 def norm(symbol: str) -> str:
