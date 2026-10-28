@@ -240,6 +240,8 @@ const startTour = () => {
         <TradePage symbol="BTCUSDT" onLogin={onLogin} onRegister={onRegister} />
       ) : view === "about" ? (
         <AboutSection onBack={() => setView("home")} onRegister={onRegister} />
+      ) : view === "stock" ? (
+        <StockDetailPage symbol={stockSym} onBack={() => setView("home")} onTrade={stockToAuth} onSignup={() => stockToAuth(stockSym)} />
       ) : view === "coin" ? (
         <CoinDetail asset={coin} onBack={() => setView("market")} onLogin={onLogin} onRegister={onRegister} />
       ) : view === "learn" ? (
