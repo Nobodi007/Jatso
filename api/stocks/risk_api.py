@@ -252,10 +252,12 @@ async def _active_alerts(email: str) -> dict:
     """จำนวน alert ที่เปิดอยู่ ณ การประเมินล่าสุด (POST /alerts/evaluate) ไม่ใช่ตามราคาสด"""
     try:
         rows = await sb("GET", "stock_risk_alerts",
-                        params={"email": f"eq.{email}", "status": "eq.active", "select": "id"}) or []
+                        params={"email": f"eq.{email}", "status": "eq.active", "select": "id,severity,acknowledged_at"}) or []
     except HTTPException:
         return {"value": None, "status": "unavailable", "reason": "alerts_unavailable"}
-    return {"value": len(rows), "status": "ok", "unit": "count", "basis": "as of last alerts evaluation"}
+    return {"value": len(rows), "status": "ok", "unit": "count", "basis": "as of last alerts evaluation",
+            "unacknowledged": sum(1 for r in rows if not r.get("acknowledged_at")),
+            "critical": sum(1 for r in rows if r.get("severity") == "critical")}
 
 
 @router.get("/overview")
