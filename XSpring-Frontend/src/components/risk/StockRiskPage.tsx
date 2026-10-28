@@ -60,16 +60,30 @@ interface Limits {
   max_single_weight: number | null;
   max_hhi: number | null;
   min_cash_weight: number | null;
+  max_sector_weight: number | null;
+  max_daily_loss: number | null;
+  max_volatility: number | null;
+  max_tracking_error: number | null;
+}
+type LimitSource = "default" | "custom" | "off";
+interface LimitsRes {
+  limits: Limits;
+  source: Record<keyof Limits, LimitSource>;
+  defaults: Limits;
 }
 interface AlertRow {
   id: number | string;
   alert_type: string;
   symbol?: string | null;
+  sector?: string | null;
+  severity?: "info" | "warning" | "critical" | null;
   threshold?: number | null;
   observed_value?: number | null;
   status: string;
   opened_at?: string;
   resolved_at?: string | null;
+  acknowledged_at?: string | null;
+  detail?: { stale?: boolean; missing?: { code: string; symbol?: string | null }[]; classification?: string } | null;
 }
 interface DrawdownPoint { date: string; drawdown: number }
 interface Episode {
@@ -168,7 +182,27 @@ const LIMIT_META: { key: keyof Limits; label: string; hint: string }[] = [
   { key: "max_single_weight", label: "น้ำหนักหุ้นตัวเดียวสูงสุด", hint: "เตือนเมื่อหุ้นตัวใดเกินสัดส่วนของ NAV" },
   { key: "max_hhi", label: "ความกระจุกตัว (HHI) สูงสุด", hint: "ยิ่งใกล้ 1 ยิ่งกระจุกตัว" },
   { key: "min_cash_weight", label: "เงินสดขั้นต่ำ", hint: "เตือนเมื่อเงินสดต่ำกว่าสัดส่วนของ NAV" },
+  { key: "max_sector_weight", label: "น้ำหนัก sector สูงสุด", hint: "เตือนเมื่อ sector ใดเกินสัดส่วนของ NAV (sector จาก Finnhub ไม่ใช่ GICS)" },
+  { key: "max_daily_loss", label: "ขาดทุนรายวันสูงสุด", hint: "เตือนเมื่อ NAV ของวันซื้อขายล่าสุดลดลงเกินนี้" },
+  { key: "max_volatility", label: "ความผันผวนสูงสุด (ต่อปี)", hint: "เตือนเมื่อความผันผวนต่อปีของพอร์ตสูงกว่านี้ (ต้องมีข้อมูลอย่างน้อย 20 วัน)" },
+  { key: "max_tracking_error", label: "Tracking error สูงสุด (ต่อปี)", hint: "เตือนเมื่อผลตอบแทนต่างจากดัชนีเกณฑ์เกินนี้ (ต้องมีข้อมูลอย่างน้อย 20 วัน)" },
 ];
+
+/** ช่วงค่าที่ API/DB ยอมรับ (หน่วยทศนิยม ไม่ใช่ %) */
+const LIMIT_RANGE: Record<keyof Limits, { min: number; max: number; minInclusive?: boolean; maxInclusive?: boolean }> = {
+  max_drawdown: { min: 0, max: 1, maxInclusive: true },
+  max_single_weight: { min: 0, max: 1, maxInclusive: true },
+  max_hhi: { min: 0, max: 1, maxInclusive: true },
+  min_cash_weight: { min: 0, max: 1, minInclusive: true },
+  max_sector_weight: { min: 0, max: 1, maxInclusive: true },
+  max_daily_loss: { min: 0, max: 1, maxInclusive: true },
+  max_volatility: { min: 0, max: 5, maxInclusive: true },
+  max_tracking_error: { min: 0, max: 5, maxInclusive: true },
+};
+const isDecimalLimit = (key: keyof Limits) => key === "max_hhi";
+const limitText = (key: keyof Limits, v: number) => (isDecimalLimit(key) ? v.toFixed(2) : pct(v, 0));
+const limitDraft = (key: keyof Limits, v: number | null) =>
+  v == null ? "" : String(isDecimalLimit(key) ? v : Number((v * 100).toFixed(2)));
 
 /** แปลงข้อความที่ผู้ใช้กรอกเป็นค่าที่ API ต้องการ: null = ไม่ตั้ง, "bad" = ค่าผิด */
 const parseLimit = (key: keyof Limits, s: string): number | null | "bad" => {
@@ -176,17 +210,40 @@ const parseLimit = (key: keyof Limits, s: string): number | null | "bad" => {
   if (t === "") return null;
   const n = Number(t);
   if (!Number.isFinite(n)) return "bad";
-  const v = key === "max_hhi" ? n : Number((n / 100).toFixed(6));
-  const ok = key === "min_cash_weight" ? v >= 0 && v < 1 : v > 0 && v <= 1;
+  const v = isDecimalLimit(key) ? n : Number((n / 100).toFixed(6));
+  const r = LIMIT_RANGE[key];
+  const ok = (r.minInclusive ? v >= r.min : v > r.min) && (r.maxInclusive ? v <= r.max : v < r.max);
   return ok ? v : "bad";
 };
+
 const ALERT_LABEL: Record<string, string> = {
   drawdown: "Drawdown เกินลิมิต",
   single_weight: "หุ้นตัวเดียวเกินลิมิต",
   hhi: "HHI เกินลิมิต",
   low_cash: "เงินสดต่ำกว่าลิมิต",
+  sector_weight: "Sector เกินลิมิต",
+  daily_loss: "ขาดทุนรายวันเกินลิมิต",
+  volatility: "ความผันผวนเกินลิมิต",
+  tracking_error: "Tracking error เกินลิมิต",
+  stale_data: "ข้อมูลเก่าหรือไม่ครบ",
 };
-const alertVal = (type: string, v: number) => (type === "hhi" ? v.toFixed(2) : pct(v, 2));
+const SEVERITY_META: Record<string, { label: string; kind: "muted" | "warn" | "bad" }> = {
+  info: { label: "แจ้งทราบ", kind: "muted" },
+  warning: { label: "เฝ้าระวัง", kind: "warn" },
+  critical: { label: "รุนแรง", kind: "bad" },
+};
+const alertVal = (type: string, v: number) =>
+  type === "hhi" ? v.toFixed(2) : type === "stale_data" ? `${v.toFixed(0)} วัน` : pct(v, 2);
+
+/** เปิดหน้า Company ด้วยกลไกเดียวกับหน้า Screener */
+function openCompany(symbol: string) {
+  try {
+    localStorage.setItem("stocks_pending_symbol", symbol);
+  } catch {
+    // เก็บไม่ได้ก็ยังกดได้ แต่หน้า Company จะไม่เปิดหุ้นตัวนั้นให้
+  }
+  window.dispatchEvent(new CustomEvent("stocks:open-company", { detail: symbol }));
+}
 
 const WARNING_TEXT = (w: Warning): string => {
   const syms = w.symbols?.length ? ` (${w.symbols.join(", ")})` : "";
@@ -819,6 +876,9 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
   const [ov, setOv] = useState<Overview | null>(null);
   const [ex, setEx] = useState<Exposure | null>(null);
   const [limits, setLimits] = useState<Limits | null>(null);
+  const [limitSrc, setLimitSrc] = useState<LimitsRes["source"] | null>(null);
+  const [limitDefaults, setLimitDefaults] = useState<Limits | null>(null);
+  const [ackBusy, setAckBusy] = useState<number | string | null>(null);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [mx, setMx] = useState<MetricsRes | null>(null);
   const [dc, setDc] = useState<Decomp | null>(null);
@@ -855,8 +915,8 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
       const [o, e, l, a, m, dcr, atr] = await Promise.all([
         call<Overview>("/overview"),
         call<Exposure>("/exposure"),
-        call<{ limits: Limits }>("/limits"),
-        call<{ alerts: AlertRow[] }>("/alerts?limit=20"),
+        call<LimitsRes>("/limits"),
+        call<{ alerts: AlertRow[] }>("/alerts?limit=50"),
         call<MetricsRes>("/metrics").catch(() => null),
         call<Decomp>("/risk-decomposition").catch(() => null),
         call<AttrRes>("/attribution").catch(() => null),
@@ -864,6 +924,8 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
       setOv(o);
       setEx(e);
       setLimits(l.limits);
+      setLimitSrc(l.source ?? null);
+      setLimitDefaults(l.defaults ?? null);
       setAlerts(a.alerts);
       setMx(m);
       setDc(dcr);
@@ -901,8 +963,7 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
   const startEdit = () => {
     const d: Record<string, string> = {};
     for (const l of LIMIT_META) {
-      const v = limits?.[l.key] ?? null;
-      d[l.key] = v == null ? "" : String(l.key === "max_hhi" ? v : Number((v * 100).toFixed(2)));
+      d[l.key] = limitDraft(l.key, limits?.[l.key] ?? null);
     }
     setDraft(d);
     setSaveMsg(null);
@@ -943,6 +1004,26 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
       setSaving(false);
     }
   };
+  const fillDefaults = () => {
+    if (!limitDefaults) return;
+    const d: Record<string, string> = {};
+    for (const l of LIMIT_META) d[l.key] = limitDraft(l.key, limitDefaults[l.key] ?? null);
+    setDraft(d);
+  };
+
+  const acknowledge = async (id: number | string) => {
+    setAckBusy(id);
+    try {
+      await call(`/alerts/${id}/acknowledge`, { method: "POST" });
+      const now = new Date().toISOString();
+      setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, acknowledged_at: now } : a)));
+    } catch (err) {
+      setEvalMsg(err instanceof Error ? err.message : "รับทราบไม่สำเร็จ");
+    } finally {
+      setAckBusy(null);
+    }
+  };
+
   if (loading && !ov) {
     return <div className="p-8 text-sm text-muted-foreground">กำลังโหลด Risk Center…</div>;
   }
@@ -968,7 +1049,10 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
   const c = ov.cards;
   const e = ex.exposure;
   const warnings = ov.meta.warnings ?? [];
-  const activeN = alerts.filter((a) => a.status === "active").length;
+  const activeList = alerts.filter((a) => a.status === "active");
+  const activeN = activeList.length;
+  const unackN = activeList.filter((a) => !a.acknowledged_at).length;
+  const criticalN = activeList.filter((a) => a.severity === "critical").length;
   const top = [...e.positions].sort((a, b) => b.weight_nav - a.weight_nav);
   const maxW = limits?.max_single_weight ?? null;
   const mdd = c.max_drawdown;
@@ -989,6 +1073,7 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
             <Chip kind={activeN > 0 ? "bad" : "ok"}>
               {activeN > 0 ? <AlertTriangle className="size-3" /> : <CheckCircle2 className="size-3" />}
               การเตือนที่เปิดอยู่ {activeN}
+              {activeN > 0 && ` (ยังไม่รับทราบ ${unackN}${criticalN ? ` · รุนแรง ${criticalN}` : ""})`}
             </Chip>
           )}
           <button
@@ -1136,7 +1221,7 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
                       placeholder="ไม่ตั้ง"
                       className="w-24 rounded-lg border border-border bg-background px-2 py-1 text-right tabular-nums"
                     />
-                    <span className="w-8 text-xs text-muted-foreground">{l.key === "max_hhi" ? "0–1" : "%"}</span>
+                    <span className="w-8 text-xs text-muted-foreground">{isDecimalLimit(l.key) ? "0–1" : "%"}</span>
                   </span>
                 </div>
               ))}
@@ -1145,6 +1230,16 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
               </p>
               {saveMsg && <p className="text-xs text-rose-500">{saveMsg}</p>}
               <div className="flex gap-2">
+                {limitDefaults && (
+                  <button
+                    onClick={fillDefaults}
+                    disabled={saving}
+                    title="เติมค่าเริ่มต้นของระบบ (ตัวอย่างทั่วไป ไม่ใช่คำแนะนำการลงทุน) ยังไม่บันทึกจนกว่าจะกดบันทึก"
+                    className="rounded-full border border-border px-4 py-1.5 text-xs hover:bg-muted"
+                  >
+                    เติมค่าเริ่มต้น
+                  </button>
+                )}
                 <button
                   onClick={() => void saveLimits()}
                   disabled={saving}
@@ -1179,7 +1274,10 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
               return (
                 <div key={l.key} className="flex items-center justify-between gap-3 text-sm" title={l.hint}>
                   <span>{l.label}</span>
-                  {v == null ? <Chip>ยังไม่ตั้ง</Chip> : <Chip kind="ok">{l.key === "max_hhi" ? v.toFixed(2) : pct(v, 0)}</Chip>}
+                  <span className="flex items-center gap-1.5">
+                    {limitSrc?.[l.key] === "default" && <Chip>ค่าเริ่มต้น</Chip>}
+                    {v == null ? <Chip>ยังไม่ตั้ง</Chip> : <Chip kind="ok">{limitText(l.key, v)}</Chip>}
+                  </span>
                 </div>
               );
             })}
@@ -1191,21 +1289,63 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
               <p className="text-sm text-muted-foreground">ยังไม่มีการเตือน</p>
             ) : (
               <ul className="space-y-2">
-                {alerts.map((a) => (
-                  <li key={a.id} className="flex items-center justify-between gap-2 text-sm">
-                    <span>
-                      {ALERT_LABEL[a.alert_type] ?? a.alert_type}
-                      {a.symbol ? ` · ${a.symbol}` : ""}
-                      <span className="block text-xs text-muted-foreground tabular-nums">
-                        {a.observed_value != null && a.threshold != null
-                          ? `${alertVal(a.alert_type, a.observed_value)} / ลิมิต ${alertVal(a.alert_type, a.threshold)} · `
-                          : ""}
-                        {a.opened_at ? a.opened_at.slice(0, 10) : ""}
+                {alerts.map((a) => {
+                  const active = a.status === "active";
+                  const sev = SEVERITY_META[a.severity ?? "warning"] ?? SEVERITY_META.warning;
+                  const missing = a.detail?.missing ?? [];
+                  return (
+                    <li key={a.id} className="flex items-start justify-between gap-2 text-sm">
+                      <span>
+                        {ALERT_LABEL[a.alert_type] ?? a.alert_type}
+                        {a.sector ? ` · ${a.sector}` : ""}
+                        {a.symbol && (
+                          <>
+                            {" · "}
+                            <button
+                              type="button"
+                              onClick={() => openCompany(a.symbol as string)}
+                              className="underline underline-offset-2 hover:text-foreground"
+                              title={`เปิดหน้า ${a.symbol}`}
+                            >
+                              {a.symbol}
+                            </button>
+                          </>
+                        )}
+                        <span className="block text-xs text-muted-foreground tabular-nums">
+                          {a.observed_value != null && a.threshold != null
+                            ? a.alert_type === "stale_data"
+                              ? `เก่า ${alertVal(a.alert_type, a.observed_value)} (เกณฑ์ ${alertVal(a.alert_type, a.threshold)}) · `
+                              : `${alertVal(a.alert_type, a.observed_value)} / ลิมิต ${alertVal(a.alert_type, a.threshold)} · `
+                            : ""}
+                          {a.opened_at ? a.opened_at.slice(0, 10) : ""}
+                        </span>
+                        {a.alert_type === "stale_data" && missing.length > 0 && (
+                          <span className="block text-xs text-muted-foreground">
+                            ข้อมูลไม่ครบ: {missing.map((m) => m.symbol ?? m.code).join(", ")}
+                          </span>
+                        )}
+                        {a.alert_type === "sector_weight" && (
+                          <span className="block text-xs text-muted-foreground">sector จาก Finnhub (ประมาณ ไม่ใช่ GICS)</span>
+                        )}
                       </span>
-                    </span>
-                    <Chip kind={a.status === "active" ? "bad" : "ok"}>{a.status === "active" ? "เปิดอยู่" : "ปิดแล้ว"}</Chip>
-                  </li>
-                ))}
+                      <span className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                        {active && <Chip kind={sev.kind}>{sev.label}</Chip>}
+                        {active && a.acknowledged_at ? (
+                          <Chip>รับทราบแล้ว</Chip>
+                        ) : active ? (
+                          <button
+                            onClick={() => void acknowledge(a.id)}
+                            disabled={ackBusy === a.id}
+                            className="rounded-full border border-border px-2.5 py-0.5 text-xs hover:bg-muted disabled:opacity-50"
+                          >
+                            {ackBusy === a.id ? "กำลังบันทึก…" : "รับทราบ"}
+                          </button>
+                        ) : null}
+                        <Chip kind={active ? "bad" : "ok"}>{active ? "เปิดอยู่" : "ปิดแล้ว"}</Chip>
+                      </span>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
