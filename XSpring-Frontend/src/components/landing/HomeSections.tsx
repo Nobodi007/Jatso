@@ -10,6 +10,7 @@ import { useLanguage } from "../../i18n/LanguageContext"
 import { useAssetTab } from "../../hooks/useAssetTab"
 import AssetToggle from "./AssetToggle"
 import DeviceShowcase from "./DeviceShowcase"
+import FaqSection from "./FaqSection
 
 const API_BASE_URL = "https://xspring-api.onrender.com"
 
