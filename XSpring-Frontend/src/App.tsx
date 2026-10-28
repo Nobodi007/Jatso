@@ -267,7 +267,7 @@ function AppInner() {
   const [portfolioError, setPortfolioError] = useState("")
   const [orderRefreshKey, setOrderRefreshKey] = useState(0)
   const navigation = market === "stocks" ? stockNavigation : cryptoNavigation
-  const [stockQuery, setStockQuery] = useState("")
+  const [stockSymbol, setStockSymbol] = useState<string>('');
 
   const openStock = (sym: string) => {
     setStockSymbol(sym.toUpperCase())
