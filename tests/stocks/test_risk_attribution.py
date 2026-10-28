@@ -67,3 +67,65 @@ def test_attribution_rejects_missing_price_and_bad_nav():
         A.attribution(trades, cal, bad, nav)
     with pytest.raises(ValueError):
         A.attribution(trades, cal[:1], px, nav[:1])
+
+
+def test_execution_and_fees_are_split_but_still_reconcile():
+    trades, cal, px, nav = _setup()
+    out = A.attribution(trades, cal, px, nav)
+    assert out["execution_and_fees"]["value"] == pytest.approx(out["execution"]["value"] + out["fees"]["value"], abs=1e-15)
+    assert out["fees"]["value"] < 0                                   # มีค่าธรรมเนียมจริงในสถานการณ์ทดสอบ
+    sc = out["sum_check"]
+    assert sc["ok"] and sc["execution"] == out["execution"]["value"] and sc["fees"] == out["fees"]["value"]
+    # ไม่มีค่าธรรมเนียม: fees = 0 และผลรวมยังตรง
+    free = [L.Trade(t.id, t.symbol, t.side, t.qty, t.price, 0.0, t.ts, t.session_date) for t in trades]
+    nav0, _ = L.build_nav(free, 100000.0, cal, {s: dict(zip(cal, v)) for s, v in px.items()})
+    z = A.attribution(free, cal, px, nav0)
+    assert z["fees"]["value"] == 0.0 and z["sum_check"]["ok"]
+
+
+def test_cash_drag_simple_case_and_fully_invested_identity():
+    cal = _cal(3)
+    prices = {"AAA": [100.0, 110.0, 110.0]}
+    closes = {"AAA": dict(zip(cal, prices["AAA"]))}
+    rows = [{"id": 1, "symbol": "AAA", "side": "buy", "qty": 5, "fee": 0, "price": 100.0,
+             "ts": f"{cal[0].isoformat()}T15:00:00+00:00"}]
+    trades = L.to_trades(rows)
+    nav, _ = L.build_nav(trades, 1000.0, cal, closes)
+    out = A.attribution(trades, cal, {"AAA": prices["AAA"]}, nav)
+    # วันที่ 1: เงินสด 50% ของ NAV หุ้นขึ้น 10% → ส่วนร่วมของหุ้น +5pp, cash drag −5pp
+    assert out["positions"][0]["contribution"] == pytest.approx(0.05)
+    assert out["cash_drag"]["value"] == pytest.approx(-0.05) and out["cash_drag"]["memo"] is True
+    assert 0.47 < out["cash_drag"]["avg_cash_weight"] < 0.5
+    # ถ้าลงทุนเต็ม: ส่วนร่วม = positions − cash_drag = ผลตอบแทนหุ้น 10%
+    assert out["positions"][0]["contribution"] - out["cash_drag"]["value"] == pytest.approx(0.10)
+    assert out["sum_check"]["ok"]
+
+
+def test_pnl_breakdown_reconciles_to_nav_change():
+    trades, cal, px, nav = _setup()
+    prices = {s: v[-1] for s, v in px.items()}
+    out = A.pnl_breakdown(L.positions(trades), prices, 100000.0, nav[-1].nav)
+    assert out["check"]["ok"] and abs(out["check"]["difference"]) < 0.01
+    assert out["total_net"] == pytest.approx(out["realized_gross"] + out["unrealized"] - out["fees_paid"])
+    by = {r["symbol"]: r for r in out["symbols"]}
+    assert by["BBB"]["unrealized"] == 0.0 and by["BBB"]["open_qty"] == 0 and by["BBB"]["avg_cost"] is None   # ขายหมดแล้ว
+    assert by["AAA"]["unrealized"] is not None and by["AAA"]["fees"] == pytest.approx(1.5 + 2 + 2)
+
+
+def test_pnl_breakdown_missing_price_is_incomplete_not_guessed():
+    trades, cal, px, nav = _setup()
+    prices = {s: v[-1] for s, v in px.items()}
+    prices["AAA"] = None
+    out = A.pnl_breakdown(L.positions(trades), prices, 100000.0, nav[-1].nav)
+    assert out["incomplete_symbols"] == ["AAA"] and "check" not in out
+    assert {r["symbol"]: r["unrealized"] for r in out["symbols"]}["AAA"] is None
+
+
+def test_by_sector_sums_to_position_total_and_buckets_unknown():
+    trades, cal, px, nav = _setup()
+    out = A.attribution(trades, cal, px, nav)
+    sec = A.by_sector(out["positions"], {"AAA": "Tech", "CCC": "Tech", "BBB": None})
+    assert {r["sector"] for r in sec} == {"Tech", "Unknown"}
+    assert sum(r["contribution"] for r in sec) == pytest.approx(out["sum_check"]["positions"], abs=1e-12)
+    assert next(r for r in sec if r["sector"] == "Tech")["symbols"] == ["AAA", "CCC"]
+    assert sec[0]["contribution"] >= sec[-1]["contribution"]
