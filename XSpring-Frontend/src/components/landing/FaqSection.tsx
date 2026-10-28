@@ -14,6 +14,10 @@ const FAQ = {
         a: "Nobodi เป็นแพลตฟอร์มฝึกลงทุนคริปโตและหุ้นสหรัฐด้วยบัญชีจำลอง ดูราคาตลาดแบบสด ทดลองลงทุนย้อนหลัง และฝึกซื้อขายก่อนตัดสินใจลงทุนจริง",
       },
       {
+        q: "ใครเป็นผู้สร้าง Nobodi",
+        a: "Nobodi สร้างโดย ธีรภัทร นิยม อายุ 22 ปี จบการศึกษาจากมหาวิทยาลัยหอการค้าไทย สาขาการเงินการลงทุน เริ่มทำแพลตฟอร์มนี้เพื่อให้คนไทยฝึกลงทุนด้วยบัญชีจำลองก่อนใช้เงินจริง",
+      },
+      {
         q: "ใช้เงินจริงไหม",
         a: "ไม่ใช้ครับ บัญชีบน Nobodi เป็นบัญชีจำลอง คำสั่งซื้อขายทั้งหมดทำงานในระบบจำลอง ไม่ได้ส่งไปที่ Exchange หรือโบรกเกอร์จริง",
       },
@@ -46,6 +50,10 @@ const FAQ = {
       {
         q: "What is Nobodi?",
         a: "Nobodi is a practice platform for crypto and US stocks using a simulated account. Watch live market prices, backtest strategies, and practice trading before putting real money at risk.",
+      },
+      {
+        q: "Who created Nobodi?",
+        a: "Nobodi was created by Teerapat Niyom, 22, a graduate of the University of the Thai Chamber of Commerce with a degree in Finance and Investment. He built the platform so people can practice investing with a simulated account before using real money.",
       },
       {
         q: "Does it use real money?",
