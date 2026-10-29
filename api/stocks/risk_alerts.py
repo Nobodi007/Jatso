@@ -7,8 +7,8 @@
 - GET  /api/stocks/risk/alerts            ดูประวัติ alert (กรอง status / acknowledged ได้)
 - POST /api/stocks/risk/alerts/{id}/acknowledge  รับทราบ alert ที่ยัง active (ไม่ปิด alert)
 
-กฎ 9 ข้อ: drawdown, single_weight, hhi, low_cash, sector_weight, daily_loss, volatility,
-tracking_error, stale_data (earnings ยังไม่ทำ: ยังไม่ยืนยันแหล่งข้อมูล)
+กฎ 10 ข้อ: drawdown, single_weight, hhi, low_cash, sector_weight, daily_loss, volatility,
+tracking_error, stale_data, earnings (ประกาศงบของหุ้นที่ถืออยู่ภายใน N วัน จาก Finnhub ตัวเดียวกับหน้า Earnings)
 ลิมิตของผู้ใช้ที่ยังไม่มีแถวเลยใช้ค่าเริ่มต้น DEFAULT_LIMITS (GET /limits ระบุ source ว่า default/custom/off)
 
 alert ทั้งหมดอิงสถานะ ณ ราคาปิดล่าสุด (as_of) ไม่ใช่ราคาสด
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -40,13 +40,14 @@ _evaluate_limit = make_limiter(current_email, 5, 60, "evaluate")
 _limits_write = make_limiter(current_email, 20, 60, "limits")
 
 LIMIT_FIELDS = ("max_drawdown", "max_single_weight", "max_hhi", "min_cash_weight",
-                "max_sector_weight", "max_daily_loss", "max_volatility", "max_tracking_error")
+                "max_sector_weight", "max_daily_loss", "max_volatility", "max_tracking_error",
+                "earnings_lookahead_days")
 ALERT_TYPES = ("drawdown", "single_weight", "hhi", "low_cash",
-               "sector_weight", "daily_loss", "volatility", "tracking_error", "stale_data")
+               "sector_weight", "daily_loss", "volatility", "tracking_error", "stale_data", "earnings")
 # ค่าเริ่มต้นสำหรับผู้ใช้ที่ยังไม่เคยตั้งลิมิตเลย (ตัวอย่างทั่วไป ไม่ใช่คำแนะนำการลงทุน: ผู้ใช้ปรับได้)
 DEFAULT_LIMITS = {"max_drawdown": 0.20, "max_single_weight": 0.25, "max_hhi": 0.40, "min_cash_weight": 0.05,
                   "max_sector_weight": 0.40, "max_daily_loss": 0.03, "max_volatility": 0.30,
-                  "max_tracking_error": 0.10}
+                  "max_tracking_error": 0.10, "earnings_lookahead_days": 7}
 SEVERITIES = ("info", "warning", "critical")
 _SEV_RANK = {s: i for i, s in enumerate(SEVERITIES)}
 CRITICAL_RATIO = 1.25  # ค่าที่วัดได้เลยลิมิตตั้งแต่ 25% ขึ้นไป = critical (low_cash กลับด้าน)
@@ -79,6 +80,7 @@ class LimitsIn(BaseModel):
     max_daily_loss: float | None = Field(default=None, gt=0, le=1)
     max_volatility: float | None = Field(default=None, gt=0, le=5)
     max_tracking_error: float | None = Field(default=None, gt=0, le=5)
+    earnings_lookahead_days: int | None = Field(default=None, ge=1, le=30)
 
 
 async def _get_limits(email: str) -> dict:
@@ -173,6 +175,8 @@ def _find_conditions(exp: dict, analysis: dict | None, limits: dict, extras: dic
       sector_fetched: bool            exp["sectors"] มาจากการดึง sector จริง (ไม่ใช่ "n/a")
       daily_return: {date, value}|None  ผลตอบแทน NAV ของวันล่าสุด
       data: {freshness, days_old, missing: [{code, symbol}]}  สุขภาพข้อมูล สำหรับ stale_data
+      earnings: {symbol: {date, hour, days, ...}} | None  ประกาศงบของหุ้นที่ถืออยู่ในช่วง N วัน (None = ดึงปฏิทินไม่ได้)
+                ไม่มี key นี้ = ไม่ได้ดึง ไม่ประเมิน
     """
     ex = extras or {}
     lim = {k: _num(limits.get(k)) for k in LIMIT_FIELDS}
@@ -308,6 +312,24 @@ def _find_conditions(exp: dict, analysis: dict | None, limits: dict, extras: dic
                     "alert_type": a_type, "symbol": None, "threshold": lim[field], "observed_value": v,
                     "detail": {"n_obs": m.get("n_obs"), "basis": basis}}
 
+    # ประกาศงบที่ใกล้เข้ามา (ข้อมูลล่วงหน้า ไม่ใช่การละเมิดลิมิต) ลิมิต = จำนวนวันที่มองล่วงหน้า
+    if lim["earnings_lookahead_days"] is None:
+        evaluated.add("earnings")
+    elif "earnings" not in ex:
+        pass
+    elif ex["earnings"] is None:
+        skipped.append({"alert_type": "earnings", "reason": "earnings_calendar_unavailable"})
+    else:
+        evaluated.add("earnings")
+        for sym, e in sorted(ex["earnings"].items()):
+            if e["days"] <= lim["earnings_lookahead_days"]:
+                found[("earnings", sym)] = {
+                    "alert_type": "earnings", "symbol": sym, "threshold": float(lim["earnings_lookahead_days"]),
+                    "observed_value": float(e["days"]),
+                    "severity": "warning" if e["days"] <= 1 else "info",   # วันนี้/พรุ่งนี้ = เฝ้าระวัง
+                    "detail": {k: e.get(k) for k in ("date", "hour", "quarter", "year", "epsEstimate", "revenueEstimate")}
+                              | {"basis": "Finnhub earnings calendar (US dates, ET)"}}
+
     # ข้อมูลเก่า/ขาด: เปิดตลอด ไม่มีลิมิตให้ตั้ง (threshold = จำนวนวันที่ยอมรับได้ STALE_AFTER_DAYS)
     d = ex.get("data")
     if isinstance(d, dict) and d.get("days_old") is not None:
@@ -367,6 +389,35 @@ def _data_health(meta: dict, ctx: dict, as_of: str | None) -> dict | None:
     return {"freshness": meta.get("freshness"), "days_old": max(days_old, 0), "missing": missing}
 
 
+def _earnings_by_symbol(rows: list[dict], held: list[str], today: date, lookahead: int) -> dict:
+    """ประกาศงบที่ยังไม่ประกาศ (epsActual ว่าง) ของหุ้นที่ถืออยู่ ภายใน [วันนี้, วันนี้+lookahead] ตัวที่ใกล้สุดต่อหุ้น"""
+    want = {s.upper(): s for s in held}
+    out: dict[str, dict] = {}
+    for r in rows or []:
+        sym = want.get(str(r.get("symbol") or "").upper())
+        if not sym or r.get("epsActual") is not None:
+            continue
+        try:
+            days = (date.fromisoformat(r["date"]) - today).days
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 0 <= days <= lookahead and (sym not in out or days < out[sym]["days"]):
+            out[sym] = {"date": r["date"], "hour": r.get("hour"), "days": days, "quarter": r.get("quarter"),
+                        "year": r.get("year"), "epsEstimate": r.get("epsEstimate"),
+                        "revenueEstimate": r.get("revenueEstimate")}
+    return out
+
+
+async def _fetch_earnings(held: list[str], today: date, lookahead: int) -> dict | None:
+    if not held:
+        return {}
+    try:
+        rows = await rd.earnings(today, today + timedelta(days=lookahead))
+    except (ProviderError, RateLimited):
+        return None
+    return _earnings_by_symbol(rows, held, today, lookahead)
+
+
 def _plan(found: dict, evaluated: set, active_rows: list[dict]):
     active = {(r["alert_type"], r.get("symbol") or r.get("sector") or ""): r for r in active_rows}
     to_open = [c for k, c in found.items() if k not in active]
@@ -395,9 +446,12 @@ async def evaluate(email: str = Depends(_evaluate_limit)):
         sectors = (await _fetch_sectors(list(ctx["holdings"])) if sector_fetched
                    else {s: "n/a" for s in ctx["holdings"]})
         exp = X.exposure(ctx["holdings"], ctx["cash"], sectors)
+        lookahead = limits.get("earnings_lookahead_days")
         extras = {"sector_fetched": sector_fetched,
                   "daily_return": _last_daily_return(rep.get("nav_series")),
                   "data": _data_health(meta, ctx, as_of)}
+        if lookahead is not None:   # เรียกปฏิทินเฉพาะเมื่อเปิดกฎนี้ (1 call ต่อช่วง ไม่ว่าถือกี่ตัว cache 6 ชม.)
+            extras["earnings"] = await _fetch_earnings(list(ctx["holdings"]), datetime.now(ET).date(), int(lookahead))
         found, evaluated, skipped = _find_conditions(exp, rep.get("analysis"), limits, extras)
 
     active_rows = await sb("GET", "stock_risk_alerts",
