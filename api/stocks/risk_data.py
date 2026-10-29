@@ -11,6 +11,7 @@ from .cache import ProviderError, RateLimited
 from .db import sb
 
 SECTOR_TTL = 7 * 24 * 3600
+EARN_TTL = 6 * 3600
 BENCHMARK = "^GSPC"
 LOOKBACK_DAYS = 400
 MAX_SYMBOLS = 40
@@ -71,6 +72,14 @@ async def sector(symbol: str) -> str | None:
     """Finnhub industry label (NOT GICS)."""
     d = await memo(f"sector:{symbol}", SECTOR_TTL, lambda: p.finnhub("/stock/profile2", symbol=symbol))
     return ((d or {}).get("finnhubIndustry") or None) if isinstance(d, dict) else None
+
+
+async def earnings(start: date, end: date) -> list[dict]:
+    """Finnhub earnings calendar for [start, end] (all companies; filter by holdings in the caller).
+    One call regardless of how many symbols are held. Same source as the Earnings page."""
+    d = await memo(f"earn:{start}:{end}", EARN_TTL,
+                   lambda: p.finnhub("/calendar/earnings", **{"from": start.isoformat(), "to": end.isoformat()}))
+    return list((d or {}).get("earningsCalendar") or []) if isinstance(d, dict) else []
 
 
 async def risk_free(start: date, end: date) -> dict[date, float]:
