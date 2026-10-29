@@ -31,6 +31,22 @@ class ApiError extends Error {
   }
 }
 
+/** คำตอบจากเซิร์ฟเวอร์ไม่ตรงรูปแบบที่คาด (เช่น deploy หลังบ้านไม่ตรงเวอร์ชัน) */
+class ShapeError extends Error {}
+
+const looksLikeSummary = (s: unknown): s is Summary => {
+  const x = s as Partial<Summary> | null;
+  return !!x && typeof x === "object" && !!x.counts && Array.isArray(x.positions) && Array.isArray(x.warnings) &&
+    typeof x.cash_balance === "number";
+};
+const sample = (v: unknown) => {
+  try {
+    return JSON.stringify(v)?.slice(0, 160) ?? String(v);
+  } catch {
+    return String(v);
+  }
+};
+
 const ERR_TEXT: Record<string, string> = {
   invalid_symbol: "สัญลักษณ์ไม่ถูกต้อง (ตัวอักษรภาษาอังกฤษ เช่น MU, META, BRK.B)",
   invalid_side: "ต้องเลือกซื้อหรือขาย",
@@ -143,6 +159,7 @@ function RealPortfolioInner({ getToken, apiBase = "" }: { getToken?: () => strin
   );
 
   const msgOf = (e: unknown): string => {
+    if (e instanceof ShapeError) return `เซิร์ฟเวอร์ตอบข้อมูลไม่ตรงรูปแบบที่คาด (อาจ deploy หลังบ้านไม่ครบหรือคนละเวอร์ชัน): ${e.message}`;
     if (!(e instanceof ApiError)) return "เกิดข้อผิดพลาด ลองใหม่อีกครั้ง";
     if (e.code === "session_expired") return "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่";
     if (e.code === "rate_limited") return "เรียกถี่เกินไป กรุณารอสักครู่แล้วลองใหม่";
@@ -159,6 +176,9 @@ function RealPortfolioInner({ getToken, apiBase = "" }: { getToken?: () => strin
         call<{ trades: Trade[] }>("/trades?limit=500"),
         call<{ cash_flows: Flow[] }>("/cash-flows?limit=500"),
       ]);
+      if (!looksLikeSummary(s)) throw new ShapeError(`/summary → ${sample(s)}`);
+      if (!Array.isArray(tr?.trades)) throw new ShapeError(`/trades → ${sample(tr)}`);
+      if (!Array.isArray(fl?.cash_flows)) throw new ShapeError(`/cash-flows → ${sample(fl)}`);
       setSum(s);
       setTrades(tr.trades);
       setFlows(fl.cash_flows);
