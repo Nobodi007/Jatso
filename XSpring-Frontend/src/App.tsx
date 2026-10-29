@@ -42,6 +42,7 @@ import { TOKEN_KEY } from "./auth";
 import StockBook from "./components/stocks/StockPortfolioPage";
 import BacktestPage from "./components/backtest/BacktestPage"
 import SuperInvestorsPage from "./components/SuperInvestorsPage"
+import RealPortfolioPage from "./components/stocks/RealPortfolioPage";
 
 type Page =
   | "dashboard"
@@ -62,6 +63,7 @@ type Page =
   | "earnings"
   | "stock-backtest"
   | "super-investors"
+  | "realportfolio"
 
 
 type Asset = string
@@ -197,6 +199,7 @@ const stockNavigation: NavigationItem[] = [
   { id: "super-investors", label: "Super Investors", icon: Users },
   { id: "news", label: "News", icon: Newspaper },
   { id: "settings", label: "Settings", icon: Settings },
+  { id: "realportfolio", label: "พอร์ตจริง", icon: Wallet },
 ]
 
 
@@ -644,6 +647,10 @@ function AppInner() {
 
           {page === "earnings" && market === "stocks" && (
             <StocksPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" view="earnings" />
+          )}
+
+          {page === "realportfolio" && market === "stocks" && (
+            <RealPortfolioPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" />
           )}
 
             {page === "trade" && market === "crypto" && (
