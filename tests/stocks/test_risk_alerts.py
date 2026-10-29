@@ -234,6 +234,11 @@ def test_evaluate_uses_default_limits_fetches_sector_and_writes_severity(monkeyp
     monkeypatch.setattr(RA, "_report", fake_report)
     monkeypatch.setattr(RA, "sb", _fake_sb(calls))          # ไม่มีแถวลิมิต = ค่าเริ่มต้น
     monkeypatch.setattr(RA.rd, "sector", fake_sector)
+
+    async def fake_earn(a, b):
+        return []                                           # ไม่มีประกาศงบในช่วงนี้ (ไม่เรียก Finnhub จริง)
+
+    monkeypatch.setattr(RA.rd, "earnings", fake_earn)
     out = asyncio.run(RA.evaluate(email="a@b.c"))
     posted = {c[3][0]["alert_type"]: c[3][0] for c in calls if c[0] == "POST"}
     assert {"single_weight", "hhi", "sector_weight", "daily_loss"} <= set(posted)
@@ -296,3 +301,85 @@ def test_put_limits_seeds_defaults_for_a_new_user_only(monkeypatch):
     out = asyncio.run(RA.put_limits(body, email="a@b.c"))
     row = [c for c in calls if c[0] == "POST" and c[1] == "stock_risk_limits"][0][3][0]
     assert "max_hhi" not in row and out["seeded_defaults"] == []
+
+
+# ---------------------------------------------------------------- กฎ earnings
+import datetime as _dt
+
+_TODAY = _dt.date(2026, 10, 29)
+
+
+def _er(sym, d, **kw):
+    return {"symbol": sym, "date": d, "hour": "amc", "epsActual": None, "epsEstimate": 1.5, "quarter": 3, "year": 2026, **kw}
+
+
+def test_earnings_by_symbol_filters_held_window_and_already_reported():
+    rows = [_er("MU", "2026-10-30"), _er("META", "2026-11-04"), _er("AMZN", "2026-10-29"),   # AMZN ไม่ได้ถือ
+            _er("MU", "2026-12-20"),                                    # นอกช่วง
+            _er("NVDA", "2026-10-28"),                                  # ผ่านไปแล้ว
+            _er("AAPL", "2026-10-29", epsActual=1.9),                   # ประกาศแล้ว
+            {"symbol": "TSLA", "date": "bad"}, {"symbol": None, "date": "2026-10-30"}]
+    out = RA._earnings_by_symbol(rows, ["MU", "meta", "NVDA", "AAPL", "TSLA"], _TODAY, 7)
+    assert set(out) == {"MU", "meta"} and out["MU"]["days"] == 1 and out["meta"]["days"] == 6   # key ตามชื่อที่ถือ
+    near = RA._earnings_by_symbol([_er("MU", "2026-11-03"), _er("MU", "2026-10-31")], ["MU"], _TODAY, 7)
+    assert near["MU"]["days"] == 2                                      # เลือกวันที่ใกล้สุด
+
+
+def test_earnings_rule_severity_and_detail():
+    e = _exp({}, 1000.0)
+    ex = {"earnings": {"MU": {"date": "2026-10-30", "hour": "amc", "days": 1, "quarter": 3, "year": 2026, "epsEstimate": 1.5},
+                       "META": {"date": "2026-11-04", "hour": "amc", "days": 6}}}
+    found, evaluated, _ = RA._find_conditions(e, None, {"earnings_lookahead_days": 7}, ex)
+    assert "earnings" in evaluated and found[("earnings", "MU")]["severity"] == "warning"
+    assert found[("earnings", "META")]["severity"] == "info" and found[("earnings", "META")]["symbol"] == "META"
+    assert found[("earnings", "MU")]["observed_value"] == 1.0 and found[("earnings", "MU")]["threshold"] == 7.0
+    assert found[("earnings", "MU")]["detail"]["date"] == "2026-10-30"
+    # ลิมิตแคบลง: META (6 วัน) หลุดช่วง
+    found, _, _ = RA._find_conditions(e, None, {"earnings_lookahead_days": 3}, ex)
+    assert set(found) == {("earnings", "MU")}
+
+
+def test_earnings_rule_unavailable_off_and_not_fetched():
+    e = _exp({}, 1000.0)
+    found, evaluated, skipped = RA._find_conditions(e, None, {"earnings_lookahead_days": 7}, {"earnings": None})
+    assert found == {} and "earnings" not in evaluated and skipped[0]["reason"] == "earnings_calendar_unavailable"
+    assert "earnings" in RA._find_conditions(e, None, {}, {"earnings": None})[1]          # ปิดกฎ = ประเมิน (ปิด alert เก่า)
+    assert "earnings" not in RA._find_conditions(e, None, {"earnings_lookahead_days": 7}, {})[1]   # ไม่ได้ดึง = ไม่ประเมิน
+    assert "earnings" in RA._find_conditions(e, None, {"earnings_lookahead_days": 7}, {"earnings": {}})[1]
+
+
+def test_fetch_earnings_handles_provider_failure_and_empty_holdings(monkeypatch):
+    async def boom(a, b):
+        raise RA.ProviderError("down")
+
+    monkeypatch.setattr(RA.rd, "earnings", boom)
+    assert asyncio.run(RA._fetch_earnings(["MU"], _TODAY, 7)) is None                    # ล้มเหลว = None ไม่ใช่ {}
+    assert asyncio.run(RA._fetch_earnings([], _TODAY, 7)) == {}                          # ไม่ถืออะไรเลย ไม่เรียกปฏิทิน
+
+
+def test_evaluate_opens_earnings_alert_for_held_symbol(monkeypatch):
+    calls = []
+    seen = {}
+
+    async def fake_report(email):
+        return {"meta": {"data_status": "ok", "as_of": "2026-10-28", "freshness": "fresh", "warnings": []},
+                "exposure_ctx": {"holdings": {"MU": {"qty": 1, "price": 100.0}}, "cash": 900.0, "skipped": []},
+                "analysis": {"performance": {}}, "nav_series": []}
+
+    async def fake_earn(a, b):
+        seen["range"] = (a, b)
+        return [_er("MU", (a + _dt.timedelta(days=2)).isoformat()), _er("ZZZ", a.isoformat())]
+
+    monkeypatch.setattr(RA, "_report", fake_report)
+    monkeypatch.setattr(RA, "sb", _fake_sb(calls, limits_rows=[{"email": "a@b.c", "earnings_lookahead_days": 5}]))
+    monkeypatch.setattr(RA.rd, "earnings", fake_earn)
+    asyncio.run(RA.evaluate(email="a@b.c"))
+    posted = [c[3][0] for c in calls if c[0] == "POST"]
+    assert [p["alert_type"] for p in posted] == ["earnings"] and posted[0]["symbol"] == "MU"
+    assert posted[0]["severity"] == "info" and posted[0]["threshold"] == 5.0
+    assert (seen["range"][1] - seen["range"][0]).days == 5                               # ช่วงเรียกตามลิมิต
+
+
+def test_earnings_constants_are_registered():
+    assert RA.DEFAULT_LIMITS["earnings_lookahead_days"] == 7 and "earnings_lookahead_days" in RA.LIMIT_FIELDS
+    assert "earnings" in RA.ALERT_TYPES
