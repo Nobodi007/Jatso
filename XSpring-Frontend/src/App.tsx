@@ -194,12 +194,12 @@ const stockNavigation: NavigationItem[] = [
   { id: "orders", label: "Orders", icon: ClipboardList, count: 3 },
   { id: "positions", label: "Positions", icon: BarChart3 },
   { id: "earnings", label: "Earnings", icon: CalendarDays },
+  { id: "realportfolio", label: "พอร์ตจริง", icon: Wallet },
   { id: "risk", label: "Risk Center", icon: ShieldAlert },
   { id: "stock-backtest", label: "Backtest Lab", icon: FlaskConical },
   { id: "super-investors", label: "Super Investors", icon: Users },
   { id: "news", label: "News", icon: Newspaper },
   { id: "settings", label: "Settings", icon: Settings },
-  { id: "realportfolio", label: "พอร์ตจริง", icon: Wallet },
 ]
 
 
@@ -751,6 +751,7 @@ function AppInner() {
               page !== "wallet" &&
               page !== "orders" &&
               page !== "positions" &&
+              page !== "realportfolio" &&
               page !== "risk" &&
               page !== "quant" &&
               page !== "screener" &&
