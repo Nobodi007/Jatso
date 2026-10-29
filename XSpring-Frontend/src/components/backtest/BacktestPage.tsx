@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ApiError, createRun, deleteRun, fetchMeta, getRun, listRuns } from "./api"
 import type { Brief, Meta, Metric, Result, Run, Spec, RebalanceFreq, RebalanceMode } from "./types"
+import { DonutChart } from "../ui/donut-chart"
+import type { DonutChartSegment } from "../ui/donut-chart"
+import TickerInput from "./TickerInput"
+import type { TickerHit } from "./TickerInput"
 
 // หน้า Backtest Lab (หุ้นสหรัฐ) — คอมโพเนนต์ใหม่ทั้งหมด ไม่ import/ไม่แตะโค้ด Backtest เดิม
 type Props = { getToken: () => string | null; apiBase: string }
@@ -16,6 +20,28 @@ const signCls = (v: number | null | undefined) => (v == null ? "text-muted-foreg
 
 function today(): string {
   return new Date().toISOString().slice(0, 10)
+}
+const r2 = (n: number) => Math.round(n * 100) / 100
+const wnum = (s: string) => {
+  const n = Number(s)
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+const colorOf = (i: number) => `hsl(${(i * 137.508 + 210) % 360} 70% 55%)`
+const CASH_COLOR = "hsl(0 0% 55%)"
+
+// ปรับน้ำหนักของแถว idx ให้รวมเป็น target พอดี (คงสัดส่วนเดิม ถ้ารวมเดิมเป็น 0 จะแบ่งเท่ากัน)
+function scaleRows(rs: Row[], idx: number[], target: number): Row[] {
+  if (idx.length === 0) return rs
+  const cur = idx.reduce((a, i) => a + wnum(rs[i].weightPct), 0)
+  const next = idx.map((i) => r2(cur > 0 ? (wnum(rs[i].weightPct) / cur) * target : target / idx.length))
+  const diff = r2(target - next.reduce((a, b) => a + b, 0))
+  const big = next.indexOf(Math.max(...next))
+  next[big] = r2(next[big] + diff)
+  const out = rs.slice()
+  idx.forEach((i, k) => {
+    out[i] = { ...out[i], weightPct: String(next[k]) }
+  })
+  return out
 }
 
 function MetricCell({ m, kind }: { m: Metric; kind: "pct" | "ratio" }) {
@@ -356,6 +382,30 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
   }, [apiBase, getToken, fail, refreshHistory])
 
   const totalPct = rows.reduce((a, r) => a + (Number(r.weightPct) || 0), 0)
+  const cashPct = Math.max(0, r2(100 - totalPct))
+  const [cashDraft, setCashDraft] = useState<string | null>(null)
+  const [hoverLabel, setHoverLabel] = useState<string | null>(null)
+
+  const donutData: DonutChartSegment[] = [
+    ...rows
+      .map((r, i) => ({ label: r.symbol.trim() || `#${i + 1}`, value: wnum(r.weightPct), color: colorOf(i) }))
+      .filter((s) => s.value > 0),
+    ...(cashPct > 0 ? [{ label: "เงินสด", value: cashPct, color: CASH_COLOR }] : []),
+  ]
+  const hoverSeg = donutData.find((s) => s.label === hoverLabel)
+
+  // ⚠️ ต้องแก้ให้ตรงกับ endpoint ที่ช่องค้นหาหุ้นด้านบนใช้จริง (ดูหมายเหตุด้านล่าง)
+  const searchTickers = useCallback(async (q: string): Promise<TickerHit[]> => {
+    const res = await fetch(`${apiBase}/api/stocks/search?q=${encodeURIComponent(q)}`, {
+      headers: { Authorization: `Bearer ${getToken() ?? ""}` },
+    })
+    if (!res.ok) return []
+    const data = await res.json()
+    const list: any[] = Array.isArray(data) ? data : data.results ?? data.items ?? []
+    return list
+      .map((x) => ({ symbol: String(x.symbol ?? x.ticker ?? ""), name: String(x.name ?? x.company ?? x.title ?? "") }))
+      .filter((x) => x.symbol)
+  }, [apiBase, getToken])
 
   const buildSpec = (): Spec | string => {
     const positions = rows.filter((r) => r.symbol.trim() !== "").map((r) => ({ symbol: r.symbol.trim().toUpperCase(), weight: Number(r.weightPct) / 100 }))
@@ -392,9 +442,27 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
 
   const setRow = (i: number, patch: Partial<Row>) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)))
   const maxSymbols = meta?.limits.max_symbols ?? 30
+    // ออกจากช่อง/กด Enter แล้วปรับให้รวมไม่เกิน 100% (ส่วนที่เกินจะถูกหักจากตัวอื่นตามสัดส่วน)
+  const balanceFrom = (i: number) =>
+    setRows((rs) => {
+      if (!rs[i]) return rs
+      const v = Math.min(100, wnum(rs[i].weightPct))
+      const others = rs.map((_, j) => j).filter((j) => j !== i)
+      const othersSum = others.reduce((a, j) => a + wnum(rs[j].weightPct), 0)
+      const next = rs.map((r, j) => (j === i ? { ...r, weightPct: v > 0 ? String(v) : "" } : r))
+      return v + othersSum > 100 ? scaleRows(next, others, r2(100 - v)) : next
+    })
+
+  // แก้ช่องเงินสด แล้วหุ้นทุกตัวถูกปรับตามสัดส่วนให้รวมกับเงินสดได้ 100 พอดี
+  const applyCash = (raw: string) => {
+    setRows((rs) => scaleRows(rs, rs.map((_, j) => j), r2(100 - Math.min(100, wnum(raw)))))
+    setCashDraft(null)
+  }
+  const equalWeight = () => setRows((rs) => scaleRows(rs.map((r) => ({ ...r, weightPct: "1" })), rs.map((_, j) => j), 100))
+  const fillTo100 = () => setRows((rs) => scaleRows(rs, rs.map((_, j) => j), 100))
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-24">
       <div>
         <h2 className="text-2xl font-bold">Backtest Lab · หุ้นสหรัฐ</h2>
         <p className="mt-1 text-sm text-muted-foreground">{meta?.notice ?? "ผลจำลองย้อนหลัง ไม่ใช่ผลงานจริงและไม่ใช่การพยากรณ์"}</p>
@@ -402,39 +470,86 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
 
       <div className={card}>
         <div className="grid gap-4 md:grid-cols-2">
-          <div>
-            <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
-              <span>หุ้นและสัดส่วน (เงินสด {(100 - totalPct).toFixed(2)}%)</span>
+            <div>
+            <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
+              <span>หุ้นและสัดส่วน (เงินสด {cashPct.toFixed(2)}%)</span>
               <span>{rows.length}/{maxSymbols}</span>
             </div>
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               {rows.map((r, i) => (
-                <div key={i} className="flex gap-2">
-                  <input className={input} placeholder="สัญลักษณ์ เช่น AAPL" value={r.symbol} onChange={(e) => setRow(i, { symbol: e.target.value.toUpperCase() })} />
-                  <input className={`${input} w-24`} inputMode="decimal" value={r.weightPct} onChange={(e) => setRow(i, { weightPct: e.target.value })} aria-label="น้ำหนัก %" />
-                  <span className="self-center text-xs text-muted-foreground">%</span>
-                  <button type="button" className="px-2 text-muted-foreground hover:text-red-500" onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))} aria-label="ลบ">✕</button>
+                <div key={i} className="flex items-center gap-2">
+                  <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: colorOf(i) }} />
+                  <TickerInput
+                    className={input}
+                    placeholder="พิมพ์ชื่อย่อหรือชื่อบริษัท"
+                    value={r.symbol}
+                    onChange={(v) => setRow(i, { symbol: v })}
+                    search={searchTickers}
+                  />
+                  <input
+                    className={`${input} w-24`}
+                    inputMode="decimal"
+                    value={r.weightPct}
+                    aria-label="น้ำหนัก %"
+                    onChange={(e) => setRow(i, { weightPct: e.target.value })}
+                    onBlur={() => balanceFrom(i)}
+                    onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur() }}
+                  />
+                  <span className="text-xs text-muted-foreground">%</span>
+                  <button type="button" className="px-2 text-muted-foreground hover:text-red-500"
+                    onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))} aria-label="ลบ">✕</button>
                 </div>
               ))}
-            </div>
-            <button type="button" disabled={rows.length >= maxSymbols} className="mt-2 text-xs text-primary hover:underline disabled:opacity-40"
-              onClick={() => setRows((rs) => [...rs, { symbol: "", weightPct: "" }])}>+ เพิ่มหุ้น</button>
-          </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className={label}>วันเริ่ม</label><input type="date" className={input} value={start} max={today()} onChange={(e) => setStart(e.target.value)} /></div>
-            <div><label className={label}>วันสิ้นสุด</label><input type="date" className={input} value={end} max={today()} onChange={(e) => setEnd(e.target.value)} /></div>
-            <div><label className={label}>เงินทุนเริ่มต้น (USD)</label><input className={input} inputMode="decimal" value={capital} onChange={(e) => setCapital(e.target.value)} /></div>
-            <div><label className={label}>Risk-free ต่อปี % (ไม่ใส่ = ไม่คำนวณ Sharpe)</label><input className={input} inputMode="decimal" value={rf} placeholder="เช่น 4" onChange={(e) => setRf(e.target.value)} /></div>
-            <div>
-              <label className={label}>Rebalance</label>
-              <select className={input} value={mode} onChange={(e) => setMode(e.target.value as RebalanceMode)}>
-                <option value="none">ไม่ปรับ (น้ำหนักลอยตามราคา)</option>
-                <option value="calendar">ตามปฏิทิน</option>
-                <option value="threshold">เมื่อน้ำหนักเบี่ยงเกินเกณฑ์</option>
-                <option value="hybrid">ผสม (ตรวจสิ้นงวด ปรับเมื่อเกินเกณฑ์)</option>
-              </select>
+              <div className="flex items-center gap-2">
+                <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: CASH_COLOR }} />
+                <div className={`${input} min-w-0 flex-1 text-muted-foreground`}>เงินสด</div>
+                <input
+                  className={`${input} w-24`}
+                  inputMode="decimal"
+                  aria-label="เงินสด %"
+                  value={cashDraft ?? String(cashPct)}
+                  onChange={(e) => setCashDraft(e.target.value)}
+                  onBlur={(e) => { if (cashDraft !== null) applyCash(e.target.value) }}
+                  onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur() }}
+                />
+                <span className="text-xs text-muted-foreground">%</span>
+                <span className="px-2 opacity-0" aria-hidden>✕</span>
+              </div>
             </div>
+
+            {totalPct > 100.0001 && (
+              <p className="mt-1 text-xs text-red-500">
+                รวม {totalPct.toFixed(2)}% เกิน 100% — กด Enter หรือคลิกออกจากช่อง ระบบจะปรับให้อัตโนมัติ
+              </p>
+            )}
+
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+              <button type="button" disabled={rows.length >= maxSymbols} className="rounded-md border px-2.5 py-1 hover:bg-accent disabled:opacity-40"
+                onClick={() => setRows((rs) => [...rs, { symbol: "", weightPct: "" }])}>+ เพิ่มหุ้น</button>
+              <button type="button" className="rounded-md border px-2.5 py-1 hover:bg-accent" onClick={equalWeight}>เฉลี่ยเท่ากัน</button>
+              <button type="button" className="rounded-md border px-2.5 py-1 hover:bg-accent" onClick={fillTo100}>ปรับให้ครบ 100% (ไม่เหลือเงินสด)</button>
+            </div>
+
+            {donutData.length > 0 && (
+              <div className="mt-5 flex justify-center">
+                <DonutChart
+                  data={donutData}
+                  size={190}
+                  strokeWidth={24}
+                  onSegmentHover={(s) => setHoverLabel(s ? s.label : null)}
+                  centerContent={
+                    <div className="text-center">
+                      <p className="max-w-[90px] truncate text-xs text-muted-foreground">{hoverSeg ? hoverSeg.label : "รวม"}</p>
+                      <p className="text-xl font-bold">
+                        {hoverSeg ? hoverSeg.value.toFixed(2) : Math.max(100, totalPct).toFixed(0)}%
+                      </p>
+                    </div>
+                  }
+                />
+              </div>
+            )}
+          </div>
             <div className="grid grid-cols-2 gap-2">
               {(mode === "calendar" || mode === "hybrid") && (
                 <div><label className={label}>ความถี่</label>
