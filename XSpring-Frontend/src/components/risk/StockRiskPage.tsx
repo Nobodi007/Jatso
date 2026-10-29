@@ -75,6 +75,7 @@ interface Limits {
   max_daily_loss: number | null;
   max_volatility: number | null;
   max_tracking_error: number | null;
+  earnings_lookahead_days: number | null;
 }
 type LimitSource = "default" | "custom" | "off";
 interface LimitsRes {
@@ -94,7 +95,14 @@ interface AlertRow {
   opened_at?: string;
   resolved_at?: string | null;
   acknowledged_at?: string | null;
-  detail?: { stale?: boolean; missing?: { code: string; symbol?: string | null }[]; classification?: string } | null;
+  detail?: {
+    stale?: boolean;
+    missing?: { code: string; symbol?: string | null }[];
+    classification?: string;
+    date?: string;
+    hour?: string | null;
+    epsEstimate?: number | null;
+  } | null;
 }
 interface DrawdownPoint { date: string; drawdown: number }
 interface Episode {
@@ -206,6 +214,7 @@ const LIMIT_META: { key: keyof Limits; label: string; hint: string }[] = [
   { key: "max_daily_loss", label: "ขาดทุนรายวันสูงสุด", hint: "เตือนเมื่อ NAV ของวันซื้อขายล่าสุดลดลงเกินนี้" },
   { key: "max_volatility", label: "ความผันผวนสูงสุด (ต่อปี)", hint: "เตือนเมื่อความผันผวนต่อปีของพอร์ตสูงกว่านี้ (ต้องมีข้อมูลอย่างน้อย 20 วัน)" },
   { key: "max_tracking_error", label: "Tracking error สูงสุด (ต่อปี)", hint: "เตือนเมื่อผลตอบแทนต่างจากดัชนีเกณฑ์เกินนี้ (ต้องมีข้อมูลอย่างน้อย 20 วัน)" },
+  { key: "earnings_lookahead_days", label: "แจ้งเตือนประกาศงบล่วงหน้า (วัน)", hint: "เตือนเมื่อหุ้นที่ถืออยู่จะประกาศงบภายในกี่วัน (1–30) ข้อมูลจาก Finnhub ตัวเดียวกับหน้า Earnings เว้นว่างเพื่อปิด" },
 ];
 
 /** ช่วงค่าที่ API/DB ยอมรับ (หน่วยทศนิยม ไม่ใช่ %) */
@@ -218,11 +227,17 @@ const LIMIT_RANGE: Record<keyof Limits, { min: number; max: number; minInclusive
   max_daily_loss: { min: 0, max: 1, maxInclusive: true },
   max_volatility: { min: 0, max: 5, maxInclusive: true },
   max_tracking_error: { min: 0, max: 5, maxInclusive: true },
+  earnings_lookahead_days: { min: 1, max: 30, minInclusive: true, maxInclusive: true },
 };
+/** ลิมิตที่ไม่ใช่เปอร์เซ็นต์: HHI (ทศนิยม 0–1) และจำนวนวันล่วงหน้าของประกาศงบ (จำนวนเต็ม) */
 const isDecimalLimit = (key: keyof Limits) => key === "max_hhi";
-const limitText = (key: keyof Limits, v: number) => (isDecimalLimit(key) ? v.toFixed(2) : pct(v, 0));
+const isDaysLimit = (key: keyof Limits) => key === "earnings_lookahead_days";
+const isPlainLimit = (key: keyof Limits) => isDecimalLimit(key) || isDaysLimit(key);
+const limitUnit = (key: keyof Limits) => (isDaysLimit(key) ? "วัน" : isDecimalLimit(key) ? "0–1" : "%");
+const limitText = (key: keyof Limits, v: number) =>
+  isDaysLimit(key) ? `${v} วัน` : isDecimalLimit(key) ? v.toFixed(2) : pct(v, 0);
 const limitDraft = (key: keyof Limits, v: number | null) =>
-  v == null ? "" : String(isDecimalLimit(key) ? v : Number((v * 100).toFixed(2)));
+  v == null ? "" : String(isPlainLimit(key) ? v : Number((v * 100).toFixed(2)));
 
 /** แปลงข้อความที่ผู้ใช้กรอกเป็นค่าที่ API ต้องการ: null = ไม่ตั้ง, "bad" = ค่าผิด */
 const parseLimit = (key: keyof Limits, s: string): number | null | "bad" => {
@@ -230,7 +245,8 @@ const parseLimit = (key: keyof Limits, s: string): number | null | "bad" => {
   if (t === "") return null;
   const n = Number(t);
   if (!Number.isFinite(n)) return "bad";
-  const v = isDecimalLimit(key) ? n : Number((n / 100).toFixed(6));
+  if (isDaysLimit(key) && !Number.isInteger(n)) return "bad";
+  const v = isPlainLimit(key) ? n : Number((n / 100).toFixed(6));
   const r = LIMIT_RANGE[key];
   const ok = (r.minInclusive ? v >= r.min : v > r.min) && (r.maxInclusive ? v <= r.max : v < r.max);
   return ok ? v : "bad";
@@ -246,7 +262,9 @@ const ALERT_LABEL: Record<string, string> = {
   volatility: "ความผันผวนเกินลิมิต",
   tracking_error: "Tracking error เกินลิมิต",
   stale_data: "ข้อมูลเก่าหรือไม่ครบ",
+  earnings: "ประกาศงบใกล้เข้ามา",
 };
+const EARN_HOUR: Record<string, string> = { bmo: "ก่อนตลาดเปิด", amc: "หลังตลาดปิด", dmh: "ระหว่างวัน" };
 const SEVERITY_META: Record<string, { label: string; kind: "muted" | "warn" | "bad" }> = {
   info: { label: "แจ้งทราบ", kind: "muted" },
   warning: { label: "เฝ้าระวัง", kind: "warn" },
@@ -1428,7 +1446,7 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
                       placeholder="ไม่ตั้ง"
                       className="w-24 rounded-lg border border-border bg-background px-2 py-1 text-right tabular-nums"
                     />
-                    <span className="w-8 text-xs text-muted-foreground">{isDecimalLimit(l.key) ? "0–1" : "%"}</span>
+                    <span className="w-8 text-xs text-muted-foreground">{limitUnit(l.key)}</span>
                   </span>
                 </div>
               ))}
@@ -1519,7 +1537,11 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
                           </>
                         )}
                         <span className="block text-xs text-muted-foreground tabular-nums">
-                          {a.observed_value != null && a.threshold != null
+                          {a.alert_type === "earnings" && a.observed_value != null
+                            ? `${a.observed_value === 0 ? "วันนี้" : `อีก ${a.observed_value.toFixed(0)} วัน`} · ${a.detail?.date ?? ""}${
+                                a.detail?.hour ? ` ${EARN_HOUR[a.detail.hour] ?? ""}` : ""
+                              }${a.detail?.epsEstimate != null ? ` · EPS คาด ${a.detail.epsEstimate}` : ""} · `
+                            : a.observed_value != null && a.threshold != null
                             ? a.alert_type === "stale_data"
                               ? `เก่า ${alertVal(a.alert_type, a.observed_value)} (เกณฑ์ ${alertVal(a.alert_type, a.threshold)}) · `
                               : `${alertVal(a.alert_type, a.observed_value)} / ลิมิต ${alertVal(a.alert_type, a.threshold)} · `
