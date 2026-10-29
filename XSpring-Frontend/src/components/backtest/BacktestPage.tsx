@@ -12,6 +12,8 @@ type Row = { symbol: string; weightPct: string }
 
 const card = "rounded-xl border bg-card p-5"
 const input = "w-full rounded-lg border bg-background px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary"
+const numInput = "w-24 shrink-0 rounded-lg border bg-background px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary"
+const cashLabel = "min-w-0 flex-1 rounded-lg border bg-background px-3 py-2.5 text-sm text-muted-foreground"
 const label = "mb-2 block text-xs text-muted-foreground"
 
 const pct = (v: number | null | undefined, d = 2) => (v == null ? "—" : `${(v * 100).toFixed(d)}%`)
@@ -487,7 +489,7 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
                     search={searchTickers}
                   />
                   <input
-                    className={`${input} w-24`}
+                    className={numInput}
                     inputMode="decimal"
                     value={r.weightPct}
                     aria-label="น้ำหนัก %"
@@ -503,9 +505,9 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
 
               <div className="flex items-center gap-2">
                 <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: CASH_COLOR }} />
-                <div className={`${input} min-w-0 flex-1 text-muted-foreground`}>เงินสด</div>
+                <div className={cashLabel}>เงินสด</div>
                 <input
-                  className={`${input} w-24`}
+                  className={numInput}
                   inputMode="decimal"
                   aria-label="เงินสด %"
                   value={cashDraft ?? String(cashPct)}
