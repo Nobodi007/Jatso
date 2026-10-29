@@ -34,6 +34,10 @@ const openPicker = (e: React.MouseEvent<HTMLInputElement>) => {
 }
 const colorOf = (i: number) => `hsl(${(i * 137.508 + 210) % 360} 70% 55%)`
 const CASH_COLOR = "hsl(0 0% 55%)"
+const r2 = (n: number) => Math.round(n * 100) / 100
+const wnum = (s: string) => {
+  const n = Number(s)
+  return Number.isFinite(n) && n > 0 ? n : 0
 
 // ปรับน้ำหนักของแถว idx ให้รวมเป็น target พอดี (คงสัดส่วนเดิม ถ้ารวมเดิมเป็น 0 จะแบ่งเท่ากัน)
 function scaleRows(rs: Row[], idx: number[], target: number): Row[] {
