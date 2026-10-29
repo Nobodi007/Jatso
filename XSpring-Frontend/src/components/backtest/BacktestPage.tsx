@@ -550,6 +550,23 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
               </div>
             )}
           </div>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-2">
+              <div><label className={label}>วันเริ่มต้น</label><input type="date" className={input} value={start} max={today()} onChange={(e) => setStart(e.target.value)} /></div>
+              <div><label className={label}>วันสิ้นสุด</label><input type="date" className={input} value={end} max={today()} onChange={(e) => setEnd(e.target.value)} /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div><label className={label}>เงินทุนเริ่มต้น (USD)</label><input className={input} inputMode="decimal" value={capital} onChange={(e) => setCapital(e.target.value)} /></div>
+              <div><label className={label}>Risk-free ต่อปี % (เว้นว่าง = 0)</label><input className={input} inputMode="decimal" value={rf} onChange={(e) => setRf(e.target.value)} /></div>
+            </div>
+            <div><label className={label}>โหมด Rebalance</label>
+              <select className={input} value={mode} onChange={(e) => setMode(e.target.value as RebalanceMode)}>
+                <option value="none">ไม่ปรับสัดส่วน (Buy-and-Hold)</option>
+                <option value="calendar">ตามรอบเวลา</option>
+                <option value="threshold">ตามเกณฑ์เบี่ยง</option>
+                <option value="hybrid">ผสม (เวลา + เกณฑ์)</option>
+              </select>
+            </div>
             <div className="grid grid-cols-2 gap-2">
               {(mode === "calendar" || mode === "hybrid") && (
                 <div><label className={label}>ความถี่</label>
@@ -561,8 +578,10 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
                 <div><label className={label}>เกณฑ์เบี่ยง (pp)</label><input className={input} inputMode="decimal" value={thr} onChange={(e) => setThr(e.target.value)} /></div>
               )}
             </div>
+            <div className="grid grid-cols-2 gap-2">
             <div><label className={label}>ค่าคอมมิชชัน (bps)</label><input className={input} inputMode="decimal" value={comm} onChange={(e) => setComm(e.target.value)} /></div>
             <div><label className={label}>Slippage (bps)</label><input className={input} inputMode="decimal" value={slip} onChange={(e) => setSlip(e.target.value)} /></div>
+            </div>
           </div>
         </div>
 
