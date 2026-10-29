@@ -30,6 +30,35 @@ const initials = (n: string) =>
   n.replace(/\(.*?\)/g, "").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase()
 
 const card = "rounded-2xl border bg-card"
+// ชื่อในระบบที่ไม่ตรงกับชื่อไฟล์รูป
+const PHOTO_FILE: Record<string, string> = {
+  "Stan Druckenmiller": "Stanley Druckenmiller",
+  "Jim Simons (RenTech)": "Jim Simons",
+}
+const photoUrl = (person: string) =>
+  `/investors/${encodeURIComponent(PHOTO_FILE[person] ?? person)}.jpg`
+
+function Avatar({ person, className = "", fallbackClassName = "" }: {
+  person: string; className?: string; fallbackClassName?: string
+}) {
+  const [broken, setBroken] = useState(false)
+  if (broken) {
+    return (
+      <span className={`${className} ${fallbackClassName} flex shrink-0 items-center justify-center font-bold`}>
+        {initials(person)}
+      </span>
+    )
+  }
+  return (
+    <img
+      src={photoUrl(person)}
+      alt={person}
+      loading="lazy"
+      onError={() => setBroken(true)}
+      className={`${className} shrink-0 object-cover object-top`}
+    />
+  )
+}
 
 // ---------- small components ----------
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
@@ -186,13 +215,11 @@ export default function SuperInvestorsPage() {
                   : "hover:border-foreground/40 hover:bg-accent"
               }`}
             >
-              <span
-                className={`flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold ${
-                  active ? "bg-background text-foreground" : "bg-muted text-muted-foreground group-hover:text-foreground"
-                }`}
-              >
-                {initials(i.person)}
-              </span>
+              <Avatar
+                person={i.person}
+                className={`h-6 w-6 rounded-full text-[10px] ${active ? "ring-2 ring-background" : ""}`}
+                fallbackClassName={active ? "bg-background text-foreground" : "bg-muted text-muted-foreground"}
+              />
               {i.person}
             </button>
           )
@@ -207,7 +234,12 @@ export default function SuperInvestorsPage() {
               <div className="flex flex-col gap-5 lg:col-span-3">
                 <div className="flex items-center gap-4">
                   <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 to-amber-500 text-lg font-bold text-white">
-                    {initials(inv.person)}
+                  <Avatar
+                    key={inv.id}
+                    person={inv.person}
+                    className="h-16 w-16 rounded-2xl text-lg ring-1 ring-border"
+                    fallbackClassName="bg-gradient-to-br from-blue-500 to-amber-500 text-white"
+                  />
                   </div>
                   <div>
                     <h3 className="text-2xl font-bold">{inv.person}</h3>
