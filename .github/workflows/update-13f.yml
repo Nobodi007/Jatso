@@ -1,0 +1,29 @@
+name: Update 13F superinvestors
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 3 20 2,5,8,11 *"   # วันที่ 20 ของ ก.พ./พ.ค./ส.ค./พ.ย. (หลังเส้นตาย 13F)
+permissions:
+  contents: write
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch 13F
+        run: python XSpring-Frontend/scripts/fetch_13f.py
+        env:
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          OPENFIGI_KEY: ${{ secrets.OPENFIGI_KEY }}
+      - name: Commit
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add XSpring-Frontend/public/data/superinvestors.json XSpring-Frontend/scripts/cusip_cache.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: update 13F data"
+            git push
+          fi
