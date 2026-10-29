@@ -6,13 +6,13 @@ import type { Brief, Meta, Metric, Result, Run, Spec, RebalanceFreq, RebalanceMo
 type Props = { getToken: () => string | null; apiBase: string }
 type Row = { symbol: string; weightPct: string }
 
-const card = "rounded-2xl border border-white/10 bg-white/[0.04] p-4"
-const input = "w-full rounded-lg border border-white/10 bg-black/30 px-2 py-1.5 text-sm text-white outline-none focus:border-white/30"
-const label = "mb-1 block text-xs text-white/50"
+const card = "rounded-xl border bg-card p-5"
+const input = "w-full rounded-lg border bg-background px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary"
+const label = "mb-2 block text-xs text-muted-foreground"
 
 const pct = (v: number | null | undefined, d = 2) => (v == null ? "—" : `${(v * 100).toFixed(d)}%`)
 const usd = (v: number) => v.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })
-const signCls = (v: number | null | undefined) => (v == null ? "text-white/50" : v >= 0 ? "text-emerald-400" : "text-rose-400")
+const signCls = (v: number | null | undefined) => (v == null ? "text-muted-foreground" : v >= 0 ? "text-emerald-500" : "text-red-500")
 
 function today(): string {
   return new Date().toISOString().slice(0, 10)
@@ -21,14 +21,14 @@ function today(): string {
 function MetricCell({ m, kind }: { m: Metric; kind: "pct" | "ratio" }) {
   if (m.value == null) {
     return (
-      <span className="text-white/40" title={m.reason ?? m.status}>
+      <span className="text-muted-foreground" title={m.reason ?? m.status}>
         {m.status === "insufficient_data" ? "ข้อมูลไม่พอ" : "ไม่มีค่า"}
       </span>
     )
   }
   const text = kind === "pct" ? pct(m.value) : m.value.toFixed(2)
   return (
-    <span className={kind === "pct" ? signCls(m.value) : "text-white"} title={m.formula}>
+    <span className={kind === "pct" ? signCls(m.value) : "text-foreground"} title={m.formula}>
       {text}
       {m.status === "limited_sample" && <span className="ml-1 text-[10px] text-amber-400">ตัวอย่างน้อย</span>}
     </span>
@@ -54,7 +54,7 @@ function Comparison({ r }: { r: Result }) {
     <div className="overflow-x-auto">
       <table className="w-full min-w-[640px] text-sm">
         <thead>
-          <tr className="text-left text-xs text-white/50">
+          <tr className="text-left text-xs text-muted-foreground">
             <th className="py-1 pr-3 font-normal" />
             {cols.map((c) => (
               <th key={c.key} className="px-2 py-1 text-right font-normal">
@@ -65,8 +65,8 @@ function Comparison({ r }: { r: Result }) {
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={row.name} className="border-t border-white/5">
-              <td className="py-1.5 pr-3 text-white/80">{row.name}</td>
+            <tr key={row.name} className="border-t border-border">
+              <td className="py-1.5 pr-3 text-muted-foreground">{row.name}</td>
               {cols.map((c) => (
                 <td key={c.key} className="px-2 py-1.5 text-right tabular-nums">
                   <MetricCell m={row.b[c.key]} kind={c.kind} />
@@ -107,23 +107,23 @@ function EquityChart({ series }: { series: Result["series"] }) {
   }, [series])
   return (
     <div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="ผลตอบแทนสะสม พอร์ต เทียบ Buy-and-Hold และ S&P 500">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full text-muted-foreground" role="img" aria-label="ผลตอบแทนสะสม พอร์ต เทียบ Buy-and-Hold และ S&P 500">
         {ticks.map((t) => (
           <g key={t.v}>
-            <line x1={P.l} x2={W - P.r} y1={t.y} y2={t.y} stroke="rgba(255,255,255,0.06)" />
-            <text x={P.l - 6} y={t.y + 3} textAnchor="end" fontSize="10" fill="rgba(255,255,255,0.5)">
+            <line x1={P.l} x2={W - P.r} y1={t.y} y2={t.y} stroke="currentColor" strokeOpacity="0.15" />
+            <text x={P.l - 6} y={t.y + 3} textAnchor="end" fontSize="10" fill="currentColor">
               {(t.v * 100).toFixed(0)}%
             </text>
           </g>
         ))}
-        <line x1={P.l} x2={W - P.r} y1={y0} y2={y0} stroke="rgba(255,255,255,0.3)" strokeDasharray="4 3" />
+        <line x1={P.l} x2={W - P.r} y1={y0} y2={y0} stroke="currentColor" strokeOpacity="0.5" strokeDasharray="4 3" />
         <path d={paths.benchmark} fill="none" stroke="#a1a1aa" strokeWidth="1.5" strokeDasharray="5 3" />
         <path d={paths.buy_hold} fill="none" stroke="#f59e0b" strokeWidth="1.5" />
         <path d={paths.portfolio} fill="none" stroke="#38bdf8" strokeWidth="2" />
-        <text x={P.l} y={H - 6} fontSize="10" fill="rgba(255,255,255,0.5)">{first}</text>
-        <text x={W - P.r} y={H - 6} textAnchor="end" fontSize="10" fill="rgba(255,255,255,0.5)">{last}</text>
+        <text x={P.l} y={H - 6} fontSize="10" fill="currentColor">{first}</text>
+        <text x={W - P.r} y={H - 6} textAnchor="end" fontSize="10" fill="currentColor">{last}</text>
       </svg>
-      <div className="mt-1 flex flex-wrap gap-4 text-xs text-white/60">
+      <div className="mt-1 flex flex-wrap gap-4 text-xs text-muted-foreground">
         <span><i className="mr-1 inline-block h-0.5 w-4 bg-sky-400 align-middle" />พอร์ต</span>
         <span><i className="mr-1 inline-block h-0.5 w-4 bg-amber-500 align-middle" />Buy-and-Hold</span>
         <span><i className="mr-1 inline-block h-0.5 w-4 bg-zinc-400 align-middle" />S&P 500 (Price)</span>
@@ -138,14 +138,14 @@ function Results({ run }: { run: Run }) {
   if (!r) return null
   const s = r.stats
   const sev: Record<string, string> = {
-    high: "border-rose-500/40 bg-rose-500/10 text-rose-200",
-    medium: "border-amber-500/40 bg-amber-500/10 text-amber-200",
-    low: "border-white/10 bg-white/5 text-white/70",
-    info: "border-white/10 bg-white/5 text-white/60",
+    high: "border-rose-500/40 bg-rose-500/10 text-red-500",
+    medium: "border-amber-500/40 bg-amber-500/10 text-amber-500",
+    low: "border-border bg-muted/50 text-muted-foreground",
+    info: "border-border bg-muted/50 text-muted-foreground",
   }
   return (
     <div className="space-y-4">
-      <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+      <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
         ผลจำลองย้อนหลัง (Hypothetical Backtest) ไม่ใช่ผลงานจริงและไม่ใช่การพยากรณ์ · Price Return ไม่รวมปันผล ·
         ช่วง {r.period.first_trade_date} → {r.period.last_date} ({r.period.trading_days} วันทำการ) · engine {r.engine_version}
       </div>
@@ -158,31 +158,31 @@ function Results({ run }: { run: Run }) {
       </div>
 
       <div className={card}>
-        <h3 className="mb-2 text-sm font-medium text-white">เปรียบเทียบ</h3>
+        <h3 className="mb-2 text-sm font-medium text-foreground">เปรียบเทียบ</h3>
         <Comparison r={r} />
         <div className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-          <div><div className="text-xs text-white/50">มูลค่าสุดท้าย</div><div className="tabular-nums">{usd(s.final_value)}</div></div>
-          <div><div className="text-xs text-white/50">Buy-and-Hold</div><div className="tabular-nums">{usd(s.buy_hold_final_value)}</div></div>
-          <div><div className="text-xs text-white/50">ต้นทุนรวม</div><div className="tabular-nums">{usd(s.total_cost)} ({pct(s.total_cost_pct_of_initial)})</div></div>
-          <div><div className="text-xs text-white/50">Turnover/ปี (ฝั่งเดียว)</div><div className="tabular-nums">{pct(s.turnover_annual_one_way, 1)}</div></div>
-          <div><div className="text-xs text-white/50">จำนวนครั้ง Rebalance</div><div>{s.rebalance_count}</div></div>
-          <div><div className="text-xs text-white/50">จำนวนคำสั่งหลังซื้อเริ่มต้น</div><div>{s.trade_count}</div></div>
-          <div><div className="text-xs text-white/50">เวลาที่ลงทุนในหุ้น</div><div className="tabular-nums">{pct(s.time_in_market, 1)}</div></div>
+          <div><div className="text-xs text-muted-foreground">มูลค่าสุดท้าย</div><div className="tabular-nums">{usd(s.final_value)}</div></div>
+          <div><div className="text-xs text-muted-foreground">Buy-and-Hold</div><div className="tabular-nums">{usd(s.buy_hold_final_value)}</div></div>
+          <div><div className="text-xs text-muted-foreground">ต้นทุนรวม</div><div className="tabular-nums">{usd(s.total_cost)} ({pct(s.total_cost_pct_of_initial)})</div></div>
+          <div><div className="text-xs text-muted-foreground">Turnover/ปี (ฝั่งเดียว)</div><div className="tabular-nums">{pct(s.turnover_annual_one_way, 1)}</div></div>
+          <div><div className="text-xs text-muted-foreground">จำนวนครั้ง Rebalance</div><div>{s.rebalance_count}</div></div>
+          <div><div className="text-xs text-muted-foreground">จำนวนคำสั่งหลังซื้อเริ่มต้น</div><div>{s.trade_count}</div></div>
+          <div><div className="text-xs text-muted-foreground">เวลาที่ลงทุนในหุ้น</div><div className="tabular-nums">{pct(s.time_in_market, 1)}</div></div>
         </div>
       </div>
 
       <div className={card}>
-        <h3 className="mb-2 text-sm font-medium text-white">ผลตอบแทนสะสม</h3>
+        <h3 className="mb-2 text-sm font-medium text-foreground">ผลตอบแทนสะสม</h3>
         <EquityChart series={r.series} />
       </div>
 
       <div className={card}>
-        <h3 className="mb-2 text-sm font-medium text-white">วันที่พอร์ตบวก/ลบมากที่สุด เทียบ S&P 500 ในวันเดียวกัน</h3>
+        <h3 className="mb-2 text-sm font-medium text-foreground">วันที่พอร์ตบวก/ลบมากที่สุด เทียบ S&P 500 ในวันเดียวกัน</h3>
         <div className="grid gap-4 md:grid-cols-2">
           {([["บวกสุด", r.extremes.days.best], ["ลบสุด", r.extremes.days.worst]] as const).map(([title, rows]) => (
             <table key={title} className="w-full text-sm">
               <thead>
-                <tr className="text-left text-xs text-white/50">
+                <tr className="text-left text-xs text-muted-foreground">
                   <th className="py-1 font-normal">{title}</th>
                   <th className="text-right font-normal">พอร์ต</th>
                   <th className="text-right font-normal">S&P 500</th>
@@ -191,8 +191,8 @@ function Results({ run }: { run: Run }) {
               </thead>
               <tbody>
                 {rows.map((d) => (
-                  <tr key={d.date} className="border-t border-white/5 tabular-nums">
-                    <td className="py-1 text-white/80">{d.date}</td>
+                  <tr key={d.date} className="border-t border-border tabular-nums">
+                    <td className="py-1 text-muted-foreground">{d.date}</td>
                     <td className={`text-right ${signCls(d.portfolio)}`}>{pct(d.portfolio)}</td>
                     <td className={`text-right ${signCls(d.benchmark)}`}>{pct(d.benchmark)}</td>
                     <td className={`text-right ${signCls(d.active)}`}>{pct(d.active)}</td>
@@ -202,7 +202,7 @@ function Results({ run }: { run: Run }) {
             </table>
           ))}
         </div>
-        <p className="mt-2 text-xs text-white/50">
+        <p className="mt-2 text-xs text-muted-foreground">
           สัปดาห์ที่ดี/แย่สุด: {r.extremes.weeks.best.period} ({pct(r.extremes.weeks.best.portfolio)}) / {r.extremes.weeks.worst.period} ({pct(r.extremes.weeks.worst.portfolio)}) ·
           เดือนที่ดี/แย่สุด: {r.extremes.months.best.period} ({pct(r.extremes.months.best.portfolio)}) / {r.extremes.months.worst.period} ({pct(r.extremes.months.worst.portfolio)}) ·
           งวดแรก/ท้ายอาจไม่เต็ม
@@ -210,10 +210,10 @@ function Results({ run }: { run: Run }) {
       </div>
 
       <div className={card}>
-        <h3 className="mb-2 text-sm font-medium text-white">ผลรายปีปฏิทิน</h3>
+        <h3 className="mb-2 text-sm font-medium text-foreground">ผลรายปีปฏิทิน</h3>
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-left text-xs text-white/50">
+            <tr className="text-left text-xs text-muted-foreground">
               <th className="py-1 font-normal">ปี</th>
               <th className="text-right font-normal">พอร์ต</th>
               <th className="text-right font-normal">Buy-and-Hold</th>
@@ -223,12 +223,12 @@ function Results({ run }: { run: Run }) {
           </thead>
           <tbody>
             {r.calendar_years.map((y) => (
-              <tr key={y.year} className="border-t border-white/5 tabular-nums">
-                <td className="py-1 text-white/80">{y.year}</td>
+              <tr key={y.year} className="border-t border-border tabular-nums">
+                <td className="py-1 text-muted-foreground">{y.year}</td>
                 <td className={`text-right ${signCls(y.portfolio)}`}>{pct(y.portfolio)}</td>
                 <td className={`text-right ${signCls(y.buy_hold)}`}>{pct(y.buy_hold)}</td>
                 <td className={`text-right ${signCls(y.benchmark)}`}>{pct(y.benchmark)}</td>
-                <td className="text-right text-white/50">{y.days}</td>
+                <td className="text-right text-muted-foreground">{y.days}</td>
               </tr>
             ))}
           </tbody>
@@ -237,27 +237,27 @@ function Results({ run }: { run: Run }) {
 
       <div className={card}>
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-medium text-white">รายการซื้อขาย ({r.trades.length}{r.trades_truncated ? "+" : ""})</h3>
-          <button type="button" className="text-xs text-sky-300 hover:underline" onClick={() => setShowTrades((v) => !v)}>
+          <h3 className="text-sm font-medium text-foreground">รายการซื้อขาย ({r.trades.length}{r.trades_truncated ? "+" : ""})</h3>
+          <button type="button" className="text-xs text-primary hover:underline" onClick={() => setShowTrades((v) => !v)}>
             {showTrades ? "ซ่อน" : "แสดง"}
           </button>
         </div>
         {showTrades && (
           <div className="mt-2 max-h-80 overflow-auto">
             <table className="w-full min-w-[560px] text-xs tabular-nums">
-              <thead className="sticky top-0 bg-zinc-900 text-left text-white/50">
+              <thead className="sticky top-0 bg-zinc-900 text-left text-muted-foreground">
                 <tr><th className="py-1 font-normal">วันที่</th><th className="font-normal">หุ้น</th><th className="font-normal">ด้าน</th>
                   <th className="text-right font-normal">จำนวน</th><th className="text-right font-normal">ราคา</th>
                   <th className="text-right font-normal">มูลค่า</th><th className="text-right font-normal">ค่าคอม</th><th className="pl-3 font-normal">เหตุผล</th></tr>
               </thead>
               <tbody>
                 {r.trades.map((t, i) => (
-                  <tr key={`${t.date}-${t.symbol}-${i}`} className="border-t border-white/5">
+                  <tr key={`${t.date}-${t.symbol}-${i}`} className="border-t border-border">
                     <td className="py-1">{t.date}</td><td>{t.symbol}</td>
-                    <td className={t.side === "buy" ? "text-emerald-400" : "text-rose-400"}>{t.side === "buy" ? "ซื้อ" : "ขาย"}</td>
+                    <td className={t.side === "buy" ? "text-emerald-500" : "text-red-500"}>{t.side === "buy" ? "ซื้อ" : "ขาย"}</td>
                     <td className="text-right">{t.shares.toFixed(4)}</td><td className="text-right">{t.price.toFixed(2)}</td>
                     <td className="text-right">{t.notional.toFixed(0)}</td><td className="text-right">{t.commission.toFixed(2)}</td>
-                    <td className="pl-3 text-white/60">{t.reason === "initial" ? "ซื้อเริ่มต้น" : "ปรับสัดส่วน"}</td>
+                    <td className="pl-3 text-muted-foreground">{t.reason === "initial" ? "ซื้อเริ่มต้น" : "ปรับสัดส่วน"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -267,8 +267,8 @@ function Results({ run }: { run: Run }) {
       </div>
 
       <div className={card}>
-        <h3 className="mb-2 text-sm font-medium text-white">แหล่งข้อมูลที่ใช้</h3>
-        <ul className="space-y-0.5 text-xs text-white/60">
+        <h3 className="mb-2 text-sm font-medium text-foreground">แหล่งข้อมูลที่ใช้</h3>
+        <ul className="space-y-0.5 text-xs text-muted-foreground">
           {r.data_snapshot.map((d) => (
             <li key={d.symbol}>
               {d.symbol} · {d.source} · ข้อมูล {d.first_date} → {d.last_date} · ดึงเมื่อ {d.fetched_at.slice(0, 16).replace("T", " ")} UTC
@@ -394,16 +394,16 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
   const maxSymbols = meta?.limits.max_symbols ?? 30
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4 p-4 text-white">
+    <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-semibold">Backtest Lab · หุ้นสหรัฐ</h1>
-        <p className="text-xs text-white/50">{meta?.notice ?? "ผลจำลองย้อนหลัง ไม่ใช่ผลงานจริงและไม่ใช่การพยากรณ์"}</p>
+        <h2 className="text-2xl font-bold">Backtest Lab · หุ้นสหรัฐ</h2>
+        <p className="mt-1 text-sm text-muted-foreground">{meta?.notice ?? "ผลจำลองย้อนหลัง ไม่ใช่ผลงานจริงและไม่ใช่การพยากรณ์"}</p>
       </div>
 
       <div className={card}>
         <div className="grid gap-4 md:grid-cols-2">
           <div>
-            <div className="mb-1 flex items-center justify-between text-xs text-white/50">
+            <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
               <span>หุ้นและสัดส่วน (เงินสด {(100 - totalPct).toFixed(2)}%)</span>
               <span>{rows.length}/{maxSymbols}</span>
             </div>
@@ -412,12 +412,12 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
                 <div key={i} className="flex gap-2">
                   <input className={input} placeholder="สัญลักษณ์ เช่น AAPL" value={r.symbol} onChange={(e) => setRow(i, { symbol: e.target.value.toUpperCase() })} />
                   <input className={`${input} w-24`} inputMode="decimal" value={r.weightPct} onChange={(e) => setRow(i, { weightPct: e.target.value })} aria-label="น้ำหนัก %" />
-                  <span className="self-center text-xs text-white/50">%</span>
-                  <button type="button" className="px-2 text-white/40 hover:text-rose-400" onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))} aria-label="ลบ">✕</button>
+                  <span className="self-center text-xs text-muted-foreground">%</span>
+                  <button type="button" className="px-2 text-muted-foreground hover:text-red-500" onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))} aria-label="ลบ">✕</button>
                 </div>
               ))}
             </div>
-            <button type="button" disabled={rows.length >= maxSymbols} className="mt-2 text-xs text-sky-300 hover:underline disabled:opacity-40"
+            <button type="button" disabled={rows.length >= maxSymbols} className="mt-2 text-xs text-primary hover:underline disabled:opacity-40"
               onClick={() => setRows((rs) => [...rs, { symbol: "", weightPct: "" }])}>+ เพิ่มหุ้น</button>
           </div>
 
@@ -451,19 +451,19 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
           </div>
         </div>
 
-        <p className="mt-3 text-xs text-white/40">
+        <p className="mt-3 text-xs text-muted-foreground">
           คำสั่งซื้อขายจับคู่ที่ราคาเปิดวันทำการถัดไป · เงินสดไม่ได้ดอกเบี้ย · ข้อมูลไม่รวมหุ้นที่ถูกถอนจากตลาด (ผลอาจดีกว่าความจริง) · Benchmark = S&P 500 Price Index (^GSPC)
         </p>
         <div className="mt-3 flex items-center gap-3">
           <button type="button" disabled={busy} onClick={() => void submit()}
-            className="rounded-lg bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-50">
+            className="rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
             {busy ? "กำลังรัน…" : "รัน Backtest"}
           </button>
-          {run && (run.status === "queued" || run.status === "running") && <span className="text-xs text-white/60">สถานะ: {run.status === "queued" ? "รอคิว" : "กำลังคำนวณ"}</span>}
+          {run && (run.status === "queued" || run.status === "running") && <span className="text-xs text-muted-foreground">สถานะ: {run.status === "queued" ? "รอคิว" : "กำลังคำนวณ"}</span>}
         </div>
-        {error && <div className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</div>}
+        {error && <div className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-red-500">{error}</div>}
         {run?.status === "failed" && run.error && (
-          <div className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{run.error.message}</div>
+          <div className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-red-500">{run.error.message}</div>
         )}
       </div>
 
@@ -472,16 +472,16 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
       {history.length > 0 && (
         <div className={card}>
           <h3 className="mb-2 text-sm font-medium">ประวัติการรัน</h3>
-          <ul className="divide-y divide-white/5 text-xs">
+          <ul className="divide-y divide-border text-xs">
             {history.map((h) => (
               <li key={h.id} className="flex items-center justify-between gap-2 py-1.5">
-                <button type="button" className="truncate text-left text-sky-300 hover:underline"
+                <button type="button" className="truncate text-left text-primary hover:underline"
                   onClick={async () => { try { setError(null); setRun(await getRun(apiBase, getToken(), h.id)) } catch (e) { fail(e) } }}>
                   {h.created_at.slice(0, 16).replace("T", " ")} · {h.spec.positions.map((p) => p.symbol).join(", ")} · {h.spec.start} → {h.spec.end}
                 </button>
                 <span className="flex shrink-0 items-center gap-3">
-                  <span className={h.status === "done" ? "text-emerald-400" : h.status === "failed" ? "text-rose-400" : "text-white/50"}>{h.status}</span>
-                  <button type="button" className="text-white/40 hover:text-rose-400"
+                  <span className={h.status === "done" ? "text-emerald-500" : h.status === "failed" ? "text-red-500" : "text-muted-foreground"}>{h.status}</span>
+                  <button type="button" className="text-muted-foreground hover:text-red-500"
                     onClick={async () => { try { await deleteRun(apiBase, getToken(), h.id); if (run?.id === h.id) setRun(null); await refreshHistory() } catch (e) { fail(e) } }}>ลบ</button>
                 </span>
               </li>
