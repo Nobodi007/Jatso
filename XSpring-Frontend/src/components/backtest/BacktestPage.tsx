@@ -20,13 +20,17 @@ const pct = (v: number | null | undefined, d = 2) => (v == null ? "—" : `${(v 
 const usd = (v: number) => v.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })
 const signCls = (v: number | null | undefined) => (v == null ? "text-muted-foreground" : v >= 0 ? "text-emerald-500" : "text-red-500")
 
+const ymd = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+
 function today(): string {
-  return new Date().toISOString().slice(0, 10)
+  return ymd(new Date())
 }
-const r2 = (n: number) => Math.round(n * 100) / 100
-const wnum = (s: string) => {
-  const n = Number(s)
-  return Number.isFinite(n) && n > 0 ? n : 0
+
+const dateInput = `${input} [color-scheme:dark] cursor-pointer`
+const chip = "rounded-md border px-2.5 py-1 text-xs hover:bg-accent"
+const openPicker = (e: React.MouseEvent<HTMLInputElement>) => {
+  try { e.currentTarget.showPicker() } catch { /* เบราว์เซอร์ที่ไม่รองรับ ใช้พิมพ์ตามปกติ */ }
 }
 const colorOf = (i: number) => `hsl(${(i * 137.508 + 210) % 360} 70% 55%)`
 const CASH_COLOR = "hsl(0 0% 55%)"
@@ -316,7 +320,7 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
   const [end, setEnd] = useState(() => {
     const d = new Date()
     d.setDate(d.getDate() - 1)
-    return d.toISOString().slice(0, 10)
+    return ymd(d)
   })
   const [capital, setCapital] = useState("100000")
   const [mode, setMode] = useState<RebalanceMode>("none")
@@ -412,6 +416,8 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
   const buildSpec = (): Spec | string => {
     const positions = rows.filter((r) => r.symbol.trim() !== "").map((r) => ({ symbol: r.symbol.trim().toUpperCase(), weight: Number(r.weightPct) / 100 }))
     if (positions.length === 0) return "ใส่หุ้นอย่างน้อย 1 ตัว"
+    if (!start || !end) return "เลือกวันเริ่มต้นและวันสิ้นสุด"
+    if (start >= end) return "วันเริ่มต้นต้องมาก่อนวันสิ้นสุด"
     if (positions.some((p) => !Number.isFinite(p.weight) || p.weight <= 0)) return "น้ำหนักของทุกตัวต้องมากกว่า 0"
     if (totalPct > 100.0001) return `น้ำหนักรวม ${totalPct.toFixed(2)}% เกิน 100%`
     const spec: Spec = {
@@ -462,6 +468,29 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
   }
   const equalWeight = () => setRows((rs) => scaleRows(rs.map((r) => ({ ...r, weightPct: "1" })), rs.map((_, j) => j), 100))
   const fillTo100 = () => setRows((rs) => scaleRows(rs, rs.map((_, j) => j), 100))
+  const onStartChange = (v: string) => {
+  setStart(v)
+  if (v && end && v > end) setEnd(v) // ถ้าเริ่มเลยวันสิ้นสุด ดันวันสิ้นสุดตาม
+}
+const onEndChange = (v: string) => {
+  setEnd(v)
+  if (v && start && v < start) setStart(v)
+}
+const applyRange = (years: number | "ytd") => {
+  const e = new Date()
+  e.setDate(e.getDate() - 1)
+  const s = years === "ytd" ? new Date(e.getFullYear(), 0, 1) : new Date(e)
+  if (years !== "ytd") s.setFullYear(e.getFullYear() - years)
+  setStart(ymd(s))
+  setEnd(ymd(e))
+}
+const rangeText = (() => {
+  if (!start || !end || start > end) return null
+  const days = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000) + 1
+  const y = Math.floor(days / 365.25)
+  const m = Math.floor((days - y * 365.25) / 30.44)
+  return `ช่วงทดสอบ ${y > 0 ? `${y} ปี ` : ""}${m > 0 ? `${m} เดือน` : y === 0 ? `${days} วัน` : ""}`.trim()
+})()
 
   return (
     <div className="space-y-6 pb-24">
@@ -553,9 +582,26 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
             )}
           </div>
           <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-2">
-              <div><label className={label}>วันเริ่มต้น</label><input type="date" className={input} value={start} max={today()} onChange={(e) => setStart(e.target.value)} /></div>
-              <div><label className={label}>วันสิ้นสุด</label><input type="date" className={input} value={end} max={today()} onChange={(e) => setEnd(e.target.value)} /></div>
+            <div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className={label}>วันเริ่มต้น</label>
+                  <input type="date" className={dateInput} value={start} max={end || today()}
+                    onClick={openPicker} onChange={(e) => onStartChange(e.target.value)} />
+                </div>
+                <div>
+                  <label className={label}>วันสิ้นสุด</label>
+                  <input type="date" className={dateInput} value={end} min={start || undefined} max={today()}
+                    onClick={openPicker} onChange={(e) => onEndChange(e.target.value)} />
+                </div>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {([1, 3, 5, 10] as const).map((y) => (
+                  <button key={y} type="button" className={chip} onClick={() => applyRange(y)}>{y} ปี</button>
+                ))}
+                <button type="button" className={chip} onClick={() => applyRange("ytd")}>ปีนี้</button>
+                {rangeText && <span className="ml-auto text-xs text-muted-foreground">{rangeText}</span>}
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div><label className={label}>เงินทุนเริ่มต้น (USD)</label><input className={input} inputMode="decimal" value={capital} onChange={(e) => setCapital(e.target.value)} /></div>
