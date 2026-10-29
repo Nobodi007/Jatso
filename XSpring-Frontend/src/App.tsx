@@ -39,6 +39,7 @@ import StocksTradePage from "./components/trading/StocksTradePage"
 import StockNewsPage from "./components/stocks/StockNewsPage"
 import { TOKEN_KEY } from "./auth";
 import StockBook from "./components/stocks/StockPortfolioPage";
+import BacktestPage from "./components/backtest/BacktestPage"
 
 type Page =
   | "dashboard"
@@ -57,6 +58,7 @@ type Page =
   | "watchlist"
   | "screener"
   | "earnings"
+  | "stock-backtest"
 
 
 type Asset = string
@@ -191,6 +193,7 @@ const stockNavigation: NavigationItem[] = [
   { id: "quant", label: "Quant Lab", icon: FlaskConical },
   { id: "news", label: "News", icon: Newspaper },
   { id: "settings", label: "Settings", icon: Settings },
+  { id: "stock-backtest", label: "Backtest Lab", icon: FlaskConical },
 ]
 
 
@@ -713,6 +716,11 @@ function AppInner() {
             {page === "risk" && market === "stocks" && (
               <StockRiskPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" />
             )}
+            
+            {page === "stock-backtest" && market === "stocks" && (
+              <BacktestPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" />
+            )}
+            
             {page === "stocks" && (
             <StocksPage
             getToken={getStocksToken}
