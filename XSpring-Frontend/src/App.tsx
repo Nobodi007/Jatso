@@ -40,6 +40,7 @@ import StockNewsPage from "./components/stocks/StockNewsPage"
 import { TOKEN_KEY } from "./auth";
 import StockBook from "./components/stocks/StockPortfolioPage";
 import BacktestPage from "./components/backtest/BacktestPage"
+import SuperInvestorsPage from "./components/SuperInvestorsPage"
 
 type Page =
   | "dashboard"
@@ -59,6 +60,7 @@ type Page =
   | "screener"
   | "earnings"
   | "stock-backtest"
+  | "super-investors"
 
 
 type Asset = string
@@ -191,6 +193,7 @@ const stockNavigation: NavigationItem[] = [
   { id: "earnings", label: "Earnings", icon: CalendarDays },
   { id: "risk", label: "Risk Center", icon: ShieldAlert },
   { id: "stock-backtest", label: "Backtest Lab", icon: FlaskConical },
+  { id: "super-investors", label: "Super Investors", icon: Users },
   { id: "news", label: "News", icon: Newspaper },
   { id: "settings", label: "Settings", icon: Settings },
 ]
@@ -718,6 +721,10 @@ function AppInner() {
             
             {page === "stock-backtest" && market === "stocks" && (
               <BacktestPage getToken={getStocksToken} apiBase="https://xspring-api.onrender.com" />
+            )}
+
+            {page === "super-investors" && market === "stocks" && (
+              <SuperInvestorsPage />
             )}
             
             {page === "stocks" && (
