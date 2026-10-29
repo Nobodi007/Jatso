@@ -1,0 +1,494 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { ApiError, createRun, deleteRun, fetchMeta, getRun, listRuns } from "./api"
+import type { Brief, Meta, Metric, Result, Run, Spec, RebalanceFreq, RebalanceMode } from "./types"
+
+// หน้า Backtest Lab (หุ้นสหรัฐ) — คอมโพเนนต์ใหม่ทั้งหมด ไม่ import/ไม่แตะโค้ด Backtest เดิม
+type Props = { getToken: () => string | null; apiBase: string }
+type Row = { symbol: string; weightPct: string }
+
+const card = "rounded-2xl border border-white/10 bg-white/[0.04] p-4"
+const input = "w-full rounded-lg border border-white/10 bg-black/30 px-2 py-1.5 text-sm text-white outline-none focus:border-white/30"
+const label = "mb-1 block text-xs text-white/50"
+
+const pct = (v: number | null | undefined, d = 2) => (v == null ? "—" : `${(v * 100).toFixed(d)}%`)
+const usd = (v: number) => v.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })
+const signCls = (v: number | null | undefined) => (v == null ? "text-white/50" : v >= 0 ? "text-emerald-400" : "text-rose-400")
+
+function today(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function MetricCell({ m, kind }: { m: Metric; kind: "pct" | "ratio" }) {
+  if (m.value == null) {
+    return (
+      <span className="text-white/40" title={m.reason ?? m.status}>
+        {m.status === "insufficient_data" ? "ข้อมูลไม่พอ" : "ไม่มีค่า"}
+      </span>
+    )
+  }
+  const text = kind === "pct" ? pct(m.value) : m.value.toFixed(2)
+  return (
+    <span className={kind === "pct" ? signCls(m.value) : "text-white"} title={m.formula}>
+      {text}
+      {m.status === "limited_sample" && <span className="ml-1 text-[10px] text-amber-400">ตัวอย่างน้อย</span>}
+    </span>
+  )
+}
+
+function Comparison({ r }: { r: Result }) {
+  const cols: { key: keyof Brief; name: string; kind: "pct" | "ratio" }[] = [
+    { key: "total_return", name: "ผลตอบแทนรวม", kind: "pct" },
+    { key: "cagr", name: "CAGR", kind: "pct" },
+    { key: "volatility", name: "ความผันผวน/ปี", kind: "pct" },
+    { key: "max_drawdown", name: "Max Drawdown", kind: "pct" },
+    { key: "sharpe", name: "Sharpe", kind: "ratio" },
+    { key: "sortino", name: "Sortino", kind: "ratio" },
+    { key: "calmar", name: "Calmar", kind: "ratio" },
+  ]
+  const rows: { name: string; b: Brief }[] = [
+    { name: "พอร์ตที่ทดสอบ", b: r.comparison.portfolio },
+    { name: "Buy-and-Hold (หุ้นชุดเดียวกัน)", b: r.comparison.buy_hold },
+    { name: "S&P 500 Price Index", b: r.comparison.benchmark },
+  ]
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[640px] text-sm">
+        <thead>
+          <tr className="text-left text-xs text-white/50">
+            <th className="py-1 pr-3 font-normal" />
+            {cols.map((c) => (
+              <th key={c.key} className="px-2 py-1 text-right font-normal">
+                {c.name}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.name} className="border-t border-white/5">
+              <td className="py-1.5 pr-3 text-white/80">{row.name}</td>
+              {cols.map((c) => (
+                <td key={c.key} className="px-2 py-1.5 text-right tabular-nums">
+                  <MetricCell m={row.b[c.key]} kind={c.kind} />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function EquityChart({ series }: { series: Result["series"] }) {
+  const W = 800
+  const H = 260
+  const P = { l: 48, r: 12, t: 10, b: 22 }
+  const { paths, y0, ticks, first, last } = useMemo(() => {
+    const keys = ["portfolio", "buy_hold", "benchmark"] as const
+    let lo = 0
+    let hi = 0
+    for (const s of series) for (const k of keys) {
+      lo = Math.min(lo, s[k])
+      hi = Math.max(hi, s[k])
+    }
+    const span = hi - lo || 1
+    const x = (i: number) => P.l + (i / Math.max(series.length - 1, 1)) * (W - P.l - P.r)
+    const y = (v: number) => P.t + (1 - (v - lo) / span) * (H - P.t - P.b)
+    const mk = (k: (typeof keys)[number]) => series.map((s, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(s[k]).toFixed(1)}`).join(" ")
+    const t = [0, 1, 2, 3, 4].map((n) => lo + (span * n) / 4)
+    return {
+      paths: { portfolio: mk("portfolio"), buy_hold: mk("buy_hold"), benchmark: mk("benchmark") },
+      y0: y(0),
+      ticks: t.map((v) => ({ v, y: y(v) })),
+      first: series[0]?.date ?? "",
+      last: series[series.length - 1]?.date ?? "",
+    }
+  }, [series])
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="ผลตอบแทนสะสม พอร์ต เทียบ Buy-and-Hold และ S&P 500">
+        {ticks.map((t) => (
+          <g key={t.v}>
+            <line x1={P.l} x2={W - P.r} y1={t.y} y2={t.y} stroke="rgba(255,255,255,0.06)" />
+            <text x={P.l - 6} y={t.y + 3} textAnchor="end" fontSize="10" fill="rgba(255,255,255,0.5)">
+              {(t.v * 100).toFixed(0)}%
+            </text>
+          </g>
+        ))}
+        <line x1={P.l} x2={W - P.r} y1={y0} y2={y0} stroke="rgba(255,255,255,0.3)" strokeDasharray="4 3" />
+        <path d={paths.benchmark} fill="none" stroke="#a1a1aa" strokeWidth="1.5" strokeDasharray="5 3" />
+        <path d={paths.buy_hold} fill="none" stroke="#f59e0b" strokeWidth="1.5" />
+        <path d={paths.portfolio} fill="none" stroke="#38bdf8" strokeWidth="2" />
+        <text x={P.l} y={H - 6} fontSize="10" fill="rgba(255,255,255,0.5)">{first}</text>
+        <text x={W - P.r} y={H - 6} textAnchor="end" fontSize="10" fill="rgba(255,255,255,0.5)">{last}</text>
+      </svg>
+      <div className="mt-1 flex flex-wrap gap-4 text-xs text-white/60">
+        <span><i className="mr-1 inline-block h-0.5 w-4 bg-sky-400 align-middle" />พอร์ต</span>
+        <span><i className="mr-1 inline-block h-0.5 w-4 bg-amber-500 align-middle" />Buy-and-Hold</span>
+        <span><i className="mr-1 inline-block h-0.5 w-4 bg-zinc-400 align-middle" />S&P 500 (Price)</span>
+      </div>
+    </div>
+  )
+}
+
+function Results({ run }: { run: Run }) {
+  const r = run.result
+  const [showTrades, setShowTrades] = useState(false)
+  if (!r) return null
+  const s = r.stats
+  const sev: Record<string, string> = {
+    high: "border-rose-500/40 bg-rose-500/10 text-rose-200",
+    medium: "border-amber-500/40 bg-amber-500/10 text-amber-200",
+    low: "border-white/10 bg-white/5 text-white/70",
+    info: "border-white/10 bg-white/5 text-white/60",
+  }
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+        ผลจำลองย้อนหลัง (Hypothetical Backtest) ไม่ใช่ผลงานจริงและไม่ใช่การพยากรณ์ · Price Return ไม่รวมปันผล ·
+        ช่วง {r.period.first_trade_date} → {r.period.last_date} ({r.period.trading_days} วันทำการ) · engine {r.engine_version}
+      </div>
+      <div className="space-y-1.5">
+        {r.warnings.map((w, i) => (
+          <div key={`${w.code}-${i}`} className={`rounded-lg border px-3 py-1.5 text-xs ${sev[w.severity] ?? sev.info}`}>
+            {w.message}
+          </div>
+        ))}
+      </div>
+
+      <div className={card}>
+        <h3 className="mb-2 text-sm font-medium text-white">เปรียบเทียบ</h3>
+        <Comparison r={r} />
+        <div className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+          <div><div className="text-xs text-white/50">มูลค่าสุดท้าย</div><div className="tabular-nums">{usd(s.final_value)}</div></div>
+          <div><div className="text-xs text-white/50">Buy-and-Hold</div><div className="tabular-nums">{usd(s.buy_hold_final_value)}</div></div>
+          <div><div className="text-xs text-white/50">ต้นทุนรวม</div><div className="tabular-nums">{usd(s.total_cost)} ({pct(s.total_cost_pct_of_initial)})</div></div>
+          <div><div className="text-xs text-white/50">Turnover/ปี (ฝั่งเดียว)</div><div className="tabular-nums">{pct(s.turnover_annual_one_way, 1)}</div></div>
+          <div><div className="text-xs text-white/50">จำนวนครั้ง Rebalance</div><div>{s.rebalance_count}</div></div>
+          <div><div className="text-xs text-white/50">จำนวนคำสั่งหลังซื้อเริ่มต้น</div><div>{s.trade_count}</div></div>
+          <div><div className="text-xs text-white/50">เวลาที่ลงทุนในหุ้น</div><div className="tabular-nums">{pct(s.time_in_market, 1)}</div></div>
+        </div>
+      </div>
+
+      <div className={card}>
+        <h3 className="mb-2 text-sm font-medium text-white">ผลตอบแทนสะสม</h3>
+        <EquityChart series={r.series} />
+      </div>
+
+      <div className={card}>
+        <h3 className="mb-2 text-sm font-medium text-white">วันที่พอร์ตบวก/ลบมากที่สุด เทียบ S&P 500 ในวันเดียวกัน</h3>
+        <div className="grid gap-4 md:grid-cols-2">
+          {([["บวกสุด", r.extremes.days.best], ["ลบสุด", r.extremes.days.worst]] as const).map(([title, rows]) => (
+            <table key={title} className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-white/50">
+                  <th className="py-1 font-normal">{title}</th>
+                  <th className="text-right font-normal">พอร์ต</th>
+                  <th className="text-right font-normal">S&P 500</th>
+                  <th className="text-right font-normal">ส่วนต่าง</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((d) => (
+                  <tr key={d.date} className="border-t border-white/5 tabular-nums">
+                    <td className="py-1 text-white/80">{d.date}</td>
+                    <td className={`text-right ${signCls(d.portfolio)}`}>{pct(d.portfolio)}</td>
+                    <td className={`text-right ${signCls(d.benchmark)}`}>{pct(d.benchmark)}</td>
+                    <td className={`text-right ${signCls(d.active)}`}>{pct(d.active)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ))}
+        </div>
+        <p className="mt-2 text-xs text-white/50">
+          สัปดาห์ที่ดี/แย่สุด: {r.extremes.weeks.best.period} ({pct(r.extremes.weeks.best.portfolio)}) / {r.extremes.weeks.worst.period} ({pct(r.extremes.weeks.worst.portfolio)}) ·
+          เดือนที่ดี/แย่สุด: {r.extremes.months.best.period} ({pct(r.extremes.months.best.portfolio)}) / {r.extremes.months.worst.period} ({pct(r.extremes.months.worst.portfolio)}) ·
+          งวดแรก/ท้ายอาจไม่เต็ม
+        </p>
+      </div>
+
+      <div className={card}>
+        <h3 className="mb-2 text-sm font-medium text-white">ผลรายปีปฏิทิน</h3>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-white/50">
+              <th className="py-1 font-normal">ปี</th>
+              <th className="text-right font-normal">พอร์ต</th>
+              <th className="text-right font-normal">Buy-and-Hold</th>
+              <th className="text-right font-normal">S&P 500</th>
+              <th className="text-right font-normal">วัน</th>
+            </tr>
+          </thead>
+          <tbody>
+            {r.calendar_years.map((y) => (
+              <tr key={y.year} className="border-t border-white/5 tabular-nums">
+                <td className="py-1 text-white/80">{y.year}</td>
+                <td className={`text-right ${signCls(y.portfolio)}`}>{pct(y.portfolio)}</td>
+                <td className={`text-right ${signCls(y.buy_hold)}`}>{pct(y.buy_hold)}</td>
+                <td className={`text-right ${signCls(y.benchmark)}`}>{pct(y.benchmark)}</td>
+                <td className="text-right text-white/50">{y.days}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className={card}>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-medium text-white">รายการซื้อขาย ({r.trades.length}{r.trades_truncated ? "+" : ""})</h3>
+          <button type="button" className="text-xs text-sky-300 hover:underline" onClick={() => setShowTrades((v) => !v)}>
+            {showTrades ? "ซ่อน" : "แสดง"}
+          </button>
+        </div>
+        {showTrades && (
+          <div className="mt-2 max-h-80 overflow-auto">
+            <table className="w-full min-w-[560px] text-xs tabular-nums">
+              <thead className="sticky top-0 bg-zinc-900 text-left text-white/50">
+                <tr><th className="py-1 font-normal">วันที่</th><th className="font-normal">หุ้น</th><th className="font-normal">ด้าน</th>
+                  <th className="text-right font-normal">จำนวน</th><th className="text-right font-normal">ราคา</th>
+                  <th className="text-right font-normal">มูลค่า</th><th className="text-right font-normal">ค่าคอม</th><th className="pl-3 font-normal">เหตุผล</th></tr>
+              </thead>
+              <tbody>
+                {r.trades.map((t, i) => (
+                  <tr key={`${t.date}-${t.symbol}-${i}`} className="border-t border-white/5">
+                    <td className="py-1">{t.date}</td><td>{t.symbol}</td>
+                    <td className={t.side === "buy" ? "text-emerald-400" : "text-rose-400"}>{t.side === "buy" ? "ซื้อ" : "ขาย"}</td>
+                    <td className="text-right">{t.shares.toFixed(4)}</td><td className="text-right">{t.price.toFixed(2)}</td>
+                    <td className="text-right">{t.notional.toFixed(0)}</td><td className="text-right">{t.commission.toFixed(2)}</td>
+                    <td className="pl-3 text-white/60">{t.reason === "initial" ? "ซื้อเริ่มต้น" : "ปรับสัดส่วน"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className={card}>
+        <h3 className="mb-2 text-sm font-medium text-white">แหล่งข้อมูลที่ใช้</h3>
+        <ul className="space-y-0.5 text-xs text-white/60">
+          {r.data_snapshot.map((d) => (
+            <li key={d.symbol}>
+              {d.symbol} · {d.source} · ข้อมูล {d.first_date} → {d.last_date} · ดึงเมื่อ {d.fetched_at.slice(0, 16).replace("T", " ")} UTC
+              {d.stale ? " · ใช้ cache เก่า" : ""}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  )
+}
+
+export default function BacktestPage({ getToken, apiBase }: Props) {
+  const [meta, setMeta] = useState<Meta | null>(null)
+  const [rows, setRows] = useState<Row[]>([{ symbol: "AAPL", weightPct: "40" }, { symbol: "MSFT", weightPct: "30" }, { symbol: "NVDA", weightPct: "30" }])
+  const [start, setStart] = useState("2016-01-04")
+  const [end, setEnd] = useState(() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 1)
+    return d.toISOString().slice(0, 10)
+  })
+  const [capital, setCapital] = useState("100000")
+  const [mode, setMode] = useState<RebalanceMode>("none")
+  const [freq, setFreq] = useState<RebalanceFreq>("quarterly")
+  const [thr, setThr] = useState("5")
+  const [comm, setComm] = useState("0")
+  const [slip, setSlip] = useState("5")
+  const [rf, setRf] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [run, setRun] = useState<Run | null>(null)
+  const [history, setHistory] = useState<Run[]>([])
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const alive = useRef(true)
+
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+      if (timer.current) clearTimeout(timer.current)
+    }
+  }, [])
+
+  const fail = useCallback((e: unknown) => {
+    setError(e instanceof ApiError ? e.message : "เกิดข้อผิดพลาดที่ไม่คาดคิด")
+  }, [])
+
+  const refreshHistory = useCallback(async () => {
+    try {
+      setHistory((await listRuns(apiBase, getToken())).runs)
+    } catch {
+      /* ประวัติโหลดไม่ได้ไม่ใช่เรื่องร้ายแรง */
+    }
+  }, [apiBase, getToken])
+
+  useEffect(() => {
+    fetchMeta(apiBase, getToken()).then((m) => {
+      if (!alive.current) return
+      setMeta(m)
+      setComm(String(m.defaults.commission_bps))
+      setSlip(String(m.defaults.slippage_bps))
+    }).catch(fail)
+    void refreshHistory()
+  }, [apiBase, getToken, fail, refreshHistory])
+
+  const poll = useCallback((id: string, tries = 0) => {
+    timer.current = setTimeout(async () => {
+      try {
+        const r = await getRun(apiBase, getToken(), id)
+        if (!alive.current) return
+        setRun(r)
+        if ((r.status === "queued" || r.status === "running") && tries < 120) {
+          poll(id, tries + 1)
+        } else {
+          setBusy(false)
+          void refreshHistory()
+        }
+      } catch (e) {
+        if (alive.current) {
+          fail(e)
+          setBusy(false)
+        }
+      }
+    }, 1500)
+  }, [apiBase, getToken, fail, refreshHistory])
+
+  const totalPct = rows.reduce((a, r) => a + (Number(r.weightPct) || 0), 0)
+
+  const buildSpec = (): Spec | string => {
+    const positions = rows.filter((r) => r.symbol.trim() !== "").map((r) => ({ symbol: r.symbol.trim().toUpperCase(), weight: Number(r.weightPct) / 100 }))
+    if (positions.length === 0) return "ใส่หุ้นอย่างน้อย 1 ตัว"
+    if (positions.some((p) => !Number.isFinite(p.weight) || p.weight <= 0)) return "น้ำหนักของทุกตัวต้องมากกว่า 0"
+    if (totalPct > 100.0001) return `น้ำหนักรวม ${totalPct.toFixed(2)}% เกิน 100%`
+    const spec: Spec = {
+      version: 1, start, end, initial_capital: Number(capital), positions,
+      rebalance: mode === "none" ? { mode } : {
+        mode,
+        ...(mode === "calendar" || mode === "hybrid" ? { frequency: freq } : {}),
+        ...(mode === "threshold" || mode === "hybrid" ? { threshold_pct: Number(thr) } : {}),
+      },
+      costs: { commission_bps: Number(comm), slippage_bps: Number(slip) },
+      risk_free_annual: rf.trim() === "" ? null : Number(rf) / 100,
+    }
+    return spec
+  }
+
+  const submit = async () => {
+    setError(null)
+    const spec = buildSpec()
+    if (typeof spec === "string") return setError(spec)
+    setBusy(true)
+    setRun(null)
+    try {
+      const { id } = await createRun(apiBase, getToken(), spec)
+      poll(id)
+    } catch (e) {
+      fail(e)
+      setBusy(false)
+    }
+  }
+
+  const setRow = (i: number, patch: Partial<Row>) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)))
+  const maxSymbols = meta?.limits.max_symbols ?? 30
+
+  return (
+    <div className="mx-auto max-w-5xl space-y-4 p-4 text-white">
+      <div>
+        <h1 className="text-xl font-semibold">Backtest Lab · หุ้นสหรัฐ</h1>
+        <p className="text-xs text-white/50">{meta?.notice ?? "ผลจำลองย้อนหลัง ไม่ใช่ผลงานจริงและไม่ใช่การพยากรณ์"}</p>
+      </div>
+
+      <div className={card}>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <div className="mb-1 flex items-center justify-between text-xs text-white/50">
+              <span>หุ้นและสัดส่วน (เงินสด {(100 - totalPct).toFixed(2)}%)</span>
+              <span>{rows.length}/{maxSymbols}</span>
+            </div>
+            <div className="space-y-1.5">
+              {rows.map((r, i) => (
+                <div key={i} className="flex gap-2">
+                  <input className={input} placeholder="สัญลักษณ์ เช่น AAPL" value={r.symbol} onChange={(e) => setRow(i, { symbol: e.target.value.toUpperCase() })} />
+                  <input className={`${input} w-24`} inputMode="decimal" value={r.weightPct} onChange={(e) => setRow(i, { weightPct: e.target.value })} aria-label="น้ำหนัก %" />
+                  <span className="self-center text-xs text-white/50">%</span>
+                  <button type="button" className="px-2 text-white/40 hover:text-rose-400" onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))} aria-label="ลบ">✕</button>
+                </div>
+              ))}
+            </div>
+            <button type="button" disabled={rows.length >= maxSymbols} className="mt-2 text-xs text-sky-300 hover:underline disabled:opacity-40"
+              onClick={() => setRows((rs) => [...rs, { symbol: "", weightPct: "" }])}>+ เพิ่มหุ้น</button>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className={label}>วันเริ่ม</label><input type="date" className={input} value={start} max={today()} onChange={(e) => setStart(e.target.value)} /></div>
+            <div><label className={label}>วันสิ้นสุด</label><input type="date" className={input} value={end} max={today()} onChange={(e) => setEnd(e.target.value)} /></div>
+            <div><label className={label}>เงินทุนเริ่มต้น (USD)</label><input className={input} inputMode="decimal" value={capital} onChange={(e) => setCapital(e.target.value)} /></div>
+            <div><label className={label}>Risk-free ต่อปี % (ไม่ใส่ = ไม่คำนวณ Sharpe)</label><input className={input} inputMode="decimal" value={rf} placeholder="เช่น 4" onChange={(e) => setRf(e.target.value)} /></div>
+            <div>
+              <label className={label}>Rebalance</label>
+              <select className={input} value={mode} onChange={(e) => setMode(e.target.value as RebalanceMode)}>
+                <option value="none">ไม่ปรับ (น้ำหนักลอยตามราคา)</option>
+                <option value="calendar">ตามปฏิทิน</option>
+                <option value="threshold">เมื่อน้ำหนักเบี่ยงเกินเกณฑ์</option>
+                <option value="hybrid">ผสม (ตรวจสิ้นงวด ปรับเมื่อเกินเกณฑ์)</option>
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {(mode === "calendar" || mode === "hybrid") && (
+                <div><label className={label}>ความถี่</label>
+                  <select className={input} value={freq} onChange={(e) => setFreq(e.target.value as RebalanceFreq)}>
+                    <option value="monthly">รายเดือน</option><option value="quarterly">รายไตรมาส</option><option value="annual">รายปี</option>
+                  </select></div>
+              )}
+              {(mode === "threshold" || mode === "hybrid") && (
+                <div><label className={label}>เกณฑ์เบี่ยง (pp)</label><input className={input} inputMode="decimal" value={thr} onChange={(e) => setThr(e.target.value)} /></div>
+              )}
+            </div>
+            <div><label className={label}>ค่าคอมมิชชัน (bps)</label><input className={input} inputMode="decimal" value={comm} onChange={(e) => setComm(e.target.value)} /></div>
+            <div><label className={label}>Slippage (bps)</label><input className={input} inputMode="decimal" value={slip} onChange={(e) => setSlip(e.target.value)} /></div>
+          </div>
+        </div>
+
+        <p className="mt-3 text-xs text-white/40">
+          คำสั่งซื้อขายจับคู่ที่ราคาเปิดวันทำการถัดไป · เงินสดไม่ได้ดอกเบี้ย · ข้อมูลไม่รวมหุ้นที่ถูกถอนจากตลาด (ผลอาจดีกว่าความจริง) · Benchmark = S&P 500 Price Index (^GSPC)
+        </p>
+        <div className="mt-3 flex items-center gap-3">
+          <button type="button" disabled={busy} onClick={() => void submit()}
+            className="rounded-lg bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-50">
+            {busy ? "กำลังรัน…" : "รัน Backtest"}
+          </button>
+          {run && (run.status === "queued" || run.status === "running") && <span className="text-xs text-white/60">สถานะ: {run.status === "queued" ? "รอคิว" : "กำลังคำนวณ"}</span>}
+        </div>
+        {error && <div className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</div>}
+        {run?.status === "failed" && run.error && (
+          <div className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{run.error.message}</div>
+        )}
+      </div>
+
+      {run?.status === "done" && <Results run={run} />}
+
+      {history.length > 0 && (
+        <div className={card}>
+          <h3 className="mb-2 text-sm font-medium">ประวัติการรัน</h3>
+          <ul className="divide-y divide-white/5 text-xs">
+            {history.map((h) => (
+              <li key={h.id} className="flex items-center justify-between gap-2 py-1.5">
+                <button type="button" className="truncate text-left text-sky-300 hover:underline"
+                  onClick={async () => { try { setError(null); setRun(await getRun(apiBase, getToken(), h.id)) } catch (e) { fail(e) } }}>
+                  {h.created_at.slice(0, 16).replace("T", " ")} · {h.spec.positions.map((p) => p.symbol).join(", ")} · {h.spec.start} → {h.spec.end}
+                </button>
+                <span className="flex shrink-0 items-center gap-3">
+                  <span className={h.status === "done" ? "text-emerald-400" : h.status === "failed" ? "text-rose-400" : "text-white/50"}>{h.status}</span>
+                  <button type="button" className="text-white/40 hover:text-rose-400"
+                    onClick={async () => { try { await deleteRun(apiBase, getToken(), h.id); if (run?.id === h.id) setRun(null); await refreshHistory() } catch (e) { fail(e) } }}>ลบ</button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
