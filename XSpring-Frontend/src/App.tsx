@@ -741,7 +741,7 @@ function AppInner() {
               page !== "screener" &&
               page !== "watchlist" &&
               page !== "earnings" &&
-              page !== "backtest" &&
+              page !== "stock-backtest" &&
               page !== "news" && <PlaceholderPage title={currentPage?.label ?? ""} />}
 
           </main>
