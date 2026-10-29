@@ -750,6 +750,7 @@ function AppInner() {
               page !== "watchlist" &&
               page !== "earnings" &&
               page !== "stock-backtest" &&
+              page !== "super-investors" &&
               page !== "news" && <PlaceholderPage title={currentPage?.label ?? ""} />}
 
           </main>
