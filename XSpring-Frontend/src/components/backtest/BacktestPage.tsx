@@ -38,6 +38,7 @@ const r2 = (n: number) => Math.round(n * 100) / 100
 const wnum = (s: string) => {
   const n = Number(s)
   return Number.isFinite(n) && n > 0 ? n : 0
+}
 
 // ปรับน้ำหนักของแถว idx ให้รวมเป็น target พอดี (คงสัดส่วนเดิม ถ้ารวมเดิมเป็น 0 จะแบ่งเท่ากัน)
 function scaleRows(rs: Row[], idx: number[], target: number): Row[] {
