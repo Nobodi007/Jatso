@@ -190,10 +190,9 @@ const stockNavigation: NavigationItem[] = [
   { id: "positions", label: "Positions", icon: BarChart3 },
   { id: "earnings", label: "Earnings", icon: CalendarDays },
   { id: "risk", label: "Risk Center", icon: ShieldAlert },
-  { id: "quant", label: "Quant Lab", icon: FlaskConical },
+  { id: "stock-backtest", label: "Backtest Lab", icon: FlaskConical },
   { id: "news", label: "News", icon: Newspaper },
   { id: "settings", label: "Settings", icon: Settings },
-  { id: "stock-backtest", label: "Backtest Lab", icon: FlaskConical },
 ]
 
 
@@ -699,7 +698,7 @@ function AppInner() {
             )}
 
           
-            {page === "quant" && (
+            {page === "quant" && market === "crypto" && (
               <QuantLabPage
                 portfolio={portfolio}
                 loading={portfolioLoading}
@@ -742,6 +741,7 @@ function AppInner() {
               page !== "screener" &&
               page !== "watchlist" &&
               page !== "earnings" &&
+              page !== "backtest" &&
               page !== "news" && <PlaceholderPage title={currentPage?.label ?? ""} />}
 
           </main>
