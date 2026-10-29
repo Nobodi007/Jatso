@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { Component, useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
 /* พอร์ตจริง: กรอกเองจากรายการของโบรกเกอร์ (เช่น Webull) 1 อีเมล = 1 บัญชี ไม่ได้เชื่อมต่อบัญชีโบรกเกอร์
@@ -77,7 +77,38 @@ function Panel({ children }: { children: ReactNode }) {
 const field = "w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-emerald-500";
 const btn = "rounded-full px-4 py-2 text-sm font-medium disabled:opacity-50";
 
-export default function RealPortfolioPage({ getToken, apiBase = "" }: { getToken?: () => string | null; apiBase?: string }) {
+/** ถ้าหน้านี้เรนเดอร์พัง ให้แสดงข้อความแทนหน้าดำทั้งแอป (และพิมพ์รายละเอียดลง console) */
+class PageBoundary extends Component<{ children?: ReactNode }, { err: Error | null }> {
+  state: { err: Error | null } = { err: null };
+  static getDerivedStateFromError(err: Error) {
+    return { err };
+  }
+  componentDidCatch(err: Error, info: { componentStack?: string | null }) {
+    console.error("RealPortfolioPage crashed:", err, info?.componentStack);
+  }
+  render() {
+    if (!this.state.err) return this.props.children;
+    return (
+      <div className="rounded-3xl border border-rose-500/40 bg-card p-5 text-sm">
+        <p className="font-medium text-rose-400">หน้าพอร์ตจริงทำงานผิดพลาด</p>
+        <p className="mt-2 break-words text-muted-foreground">{this.state.err.message}</p>
+        <button className="mt-3 rounded-full border border-border px-4 py-2" onClick={() => this.setState({ err: null })}>
+          ลองใหม่
+        </button>
+      </div>
+    );
+  }
+}
+
+export default function RealPortfolioPage(props: { getToken?: () => string | null; apiBase?: string }) {
+  return (
+    <PageBoundary>
+      <RealPortfolioInner {...props} />
+    </PageBoundary>
+  );
+}
+
+function RealPortfolioInner({ getToken, apiBase = "" }: { getToken?: () => string | null; apiBase?: string }) {
   const authed = !!(typeof getToken === "function" && getToken());
   const [sum, setSum] = useState<Summary | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
