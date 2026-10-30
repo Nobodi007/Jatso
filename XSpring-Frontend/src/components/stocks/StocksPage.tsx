@@ -76,6 +76,8 @@ const Stat = ({ label, value }) => (
     <div className="mt-1 text-sm font-semibold text-foreground">{value}</div>
   </div>
 );
+
+
 class Boundary extends Component {
   state = { err: null };
   static getDerivedStateFromError(err) { return { err }; }
@@ -434,6 +436,7 @@ function Detail({ api, symbol, authed, onWatch }) {
             {ex.data?.ceo?.name && (
               <div className="text-xs text-muted-foreground">CEO: {ex.data.ceo.name}</div>
             )}
+            <div className="text-3xl font-bold text-foreground">
               {usd(d.price)}
             </div>
             <div className={`text-sm ${tone(d.change)}`}>
@@ -489,7 +492,7 @@ function Detail({ api, symbol, authed, onWatch }) {
         <Status s={m} />
         {m.data && <div className="grid grid-cols-2 gap-3 md:grid-cols-5">{MET.map(([l, k]) => <Stat key={k} label={l} value={num(m.data[k])} />)}</div>}
       </Card>
-      <Status s={f} empty={!f.loading && !f.error && !f.data?.annual?.length && (f.data?.taxonomy === "unsupported" ? "ไม่พบงบการเงินแบบ XBRL ของหุ้นตัวนี้ใน SEC" : "ไม่มีข้อมูล" ? "หุ้นตัวนี้ใช้มาตรฐานบัญชี IFRS ยังไม่รองรับ" : "ไม่มีข้อมูล")} />
+      <Status s={f} empty={!f.loading && !f.error && !f.data?.annual?.length && (f.data?.taxonomy === "unsupported" ? "ไม่พบงบการเงินแบบ XBRL ของหุ้นตัวนี้ใน SEC" : f.data?.taxonomy === "ifrs" ? "หุ้นตัวนี้ใช้มาตรฐานบัญชี IFRS ยังไม่รองรับ" : "ไม่มีข้อมูล")} />
       <Statements s={f} />
       <div className="grid gap-5 lg:grid-cols-2">
         <Card title="บทวิเคราะห์และราคาเป้าหมาย">
@@ -821,9 +824,7 @@ export default function StocksPage({ getToken, apiBase = "", view = "market" }) 
         {view === "market" && <MarketHeatmap api={api} open={open} />}
         {view === "detail" &&
           (sym ? (
-            <Boundary key={sym}>
-              <Detail key={sym} api={api} symbol={sym} authed={authed} />
-            </Boundary>
+            <Boundary key={sym}><Detail key={sym} api={api} symbol={sym} authed={authed} /></Boundary>
           ) : (
             <Card>
               <p className="text-sm text-zinc-500">ค้นหาหุ้นด้านบน หรือเลือกจากหน้า Market Overview</p>
