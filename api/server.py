@@ -1906,6 +1906,15 @@ CHAT_SYSTEM = (
     "ห้ามแนะนำให้ซื้อหรือขาย และคุณไม่สามารถสั่งซื้อขายแทนผู้ใช้ได้"
 )
 
+CHAT_SYSTEM_STOCKS = (
+    "คุณคือผู้ช่วยของ Nobodi ตอบเป็นภาษาไทย "
+    "ตอบสั้นมาก ไม่เกิน 2 ประโยค ไม่เกิน 40 คำ ห้ามใช้ markdown หรือ bullet "
+    "ผู้ใช้กำลังดูพอร์ตหุ้นสหรัฐ สกุลเงิน USD ใช้เฉพาะตัวเลขใน stock_context "
+    "ห้ามเดาหรือสร้างตัวเลขเอง ถ้าไม่มีข้อมูลให้บอกว่าไม่มีข้อมูล "
+    "ถ้า stock_context มี current_symbol ให้ถือว่าผู้ใช้กำลังดูหุ้นตัวนั้นอยู่ "
+    "ห้ามแนะนำให้ซื้อหรือขาย และคุณไม่สามารถสั่งซื้อขายแทนผู้ใช้ได้"
+)
+
 
 class ChatTurn(BaseModel):
     role: str = Field(..., max_length=12)
@@ -1915,6 +1924,10 @@ class ChatTurn(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=500)
     history: list[ChatTurn] = Field(default_factory=list)
+    # "crypto" = พอร์ตคริปโต (ค่าเริ่มต้น เข้ากันได้กับ frontend เดิม), "stocks" = หุ้นสหรัฐ
+    market: str = Field(default="crypto", pattern="^(crypto|stocks)$")
+    # หุ้นที่ผู้ใช้เปิดอยู่ในหน้า Company เช่น "AAPL" (ไม่บังคับ)
+    symbol: str = Field(default="", max_length=10)
 
 
 def _chat_context(user_email: str) -> dict:
@@ -1950,6 +1963,67 @@ def _chat_context(user_email: str) -> dict:
         return {}
 
 
+def _chat_context_stocks(user_email: str, symbol: str = "") -> dict:
+    """Compact US-stock portfolio snapshot. Any failure -> empty context, chat still works.
+
+    ดึงจาก stock_book.portfolio() (พอร์ตหุ้นจำลอง USD)
+    """
+    ctx: dict = {}
+    sym = (symbol or "").upper().strip()
+    if sym and _STOCK_SYM_RE.match(sym):
+        ctx["current_symbol"] = sym
+    try:
+        data = _load_stock_portfolio_for_chat(user_email)  # <- ฟังก์ชันที่ต้องต่อ
+        if data:
+            ctx.update(data)
+    except Exception:
+        import traceback
+        traceback.print_exc()
+    return ctx
+
+
+def _load_stock_portfolio_for_chat(user_email: str) -> dict:
+    """ดึงพอร์ตหุ้นจาก api/stocks/stock_book.portfolio() ตัวเดียวกับหน้า Portfolio
+
+    chat() เป็น sync endpoint (รันใน worker thread) ส่วน portfolio() เป็น async
+    ใช้ anyio.from_thread.run ให้ไปรันบน event loop หลัก เพื่อไม่ชน async client ที่ผูกกับ loop นั้น
+    """
+    import anyio
+    sb_mod = _stocks_mod("stock_book")
+    pf = anyio.from_thread.run(sb_mod.portfolio, str(user_email).strip().lower())
+
+    def r(v, nd=2):
+        try:
+            return round(float(v), nd)
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "currency": "USD",
+        "equity": r(pf.get("equity")),
+        "cash": r(pf.get("cash")),
+        "market_value": r(pf.get("market_value")),
+        "initial_cash": r(pf.get("initial_cash")),
+        "pnl": r(pf.get("pnl")),
+        "pnl_pct": r(pf.get("pnl_pct")),
+        "positions": [
+            {
+                "symbol": p.get("symbol"),
+                "qty": r(p.get("qty"), 6),
+                "avg_cost": r(p.get("avg_cost")),
+                "last": r(p.get("last")),
+                "market_value": r(p.get("market_value")),
+                "unrealized_pnl": r(p.get("unrealized_pnl")),
+                "unrealized_pct": r(p.get("unrealized_pct")),
+                "allocation_pct": r(
+                    (p.get("market_value") or 0) / pf["equity"] * 100
+                ) if pf.get("equity") else None,
+            }
+            for p in (pf.get("positions") or [])
+        ],
+    }
+
+
 @app.post("/api/chat", dependencies=[Depends(require_api_key)])
 def chat(req: ChatRequest, user: str = Depends(require_user)):
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
@@ -1961,7 +2035,11 @@ def chat(req: ChatRequest, user: str = Depends(require_user)):
 
     # สร้าง context ก่อน (ใช้ lock สั้น ๆ) แล้วค่อยเรียก Gemini นอก lock
     # เพื่อไม่ให้การรอ AI ไปบล็อกการส่งคำสั่งซื้อขาย
-    context = _chat_context(user)
+    is_stocks = req.market == "stocks"
+    if is_stocks:
+        context = _chat_context_stocks(user, req.symbol)
+    else:
+        context = _chat_context(user)
 
     messages = []
     for turn in req.history[-6:]:
@@ -1969,11 +2047,18 @@ def chat(req: ChatRequest, user: str = Depends(require_user)):
         messages.append({"role": role, "content": turn.content})
     messages.append({"role": "user", "content": req.message.strip()})
 
-    system = (
-        CHAT_SYSTEM
-        + "\n\nportfolio_context:\n"
-        + json.dumps(context, ensure_ascii=False)
-    )
+    if is_stocks:
+        system = (
+            CHAT_SYSTEM_STOCKS
+            + "\n\nstock_context:\n"
+            + json.dumps(context, ensure_ascii=False)
+        )
+    else:
+        system = (
+            CHAT_SYSTEM
+            + "\n\nportfolio_context:\n"
+            + json.dumps(context, ensure_ascii=False)
+        )
 
     try:
         gu = load_gu()
