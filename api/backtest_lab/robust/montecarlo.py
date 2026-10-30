@@ -16,6 +16,7 @@ MAX_SIMS = 5000
 MAX_WORK = 12_000_000            # sims × horizon (กันกินเวลา CPU)
 TRADING_DAYS = 252
 PCTS = (5, 25, 50, 75, 95)
+SAMPLE_PATHS = 150               # จำนวนเส้นทางตัวอย่างที่ส่งไปวาดกราฟ (เส้นแรกของการจำลองตามลำดับ ไม่คัดเลือก)
 
 
 class MCError(ValueError):
@@ -105,6 +106,7 @@ def simulate(rp: list[float], rb: list[float], *, sims: int = 2000, horizon: int
             "drawdown_worse_30": sum(1 for m in mdds if m <= -0.30) / N,
             "drawdown_worse_50": sum(1 for m in mdds if m <= -0.50) / N,
         },
+        "paths": [[fan[ci][k] for ci in range(len(cps))] for k in range(min(sims, SAMPLE_PATHS))],
         "fan": {"x": cps, **{f"p{p}": [percentile(sorted(col), p) for col in fan] for p in PCTS}},
         "labels": ["monte_carlo_simulation", "not_a_forecast"],
         "caveats": [
