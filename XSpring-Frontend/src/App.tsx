@@ -103,15 +103,15 @@ export function formatTHB(value: number) {
   })}`
 }
 
-function AiAssistantOverlay({
-  onClose,
-  market,
-  symbol,
-}: {
-  onClose: () => void
-  market: "crypto" | "stocks"
-  symbol?: string
-}) {
+  function AiAssistantOverlay({
+    onClose,
+    market,
+    symbol,
+  }: {
+   onClose: () => void
+    market: "crypto" | "stocks"
+    symbol?: string
+  }) {
   const historyRef = useRef<{ role: "user" | "assistant"; content: string }[]>([])
 
   // สลับตลาดแล้วล้างประวัติ ไม่งั้นบอทจะเอาบทสนทนาคริปโตมาปนกับหุ้น
@@ -122,13 +122,16 @@ function AiAssistantOverlay({
   const handleSubmit = async (text: string): Promise<string> => {
     if (!DEALER_API_KEY) return "ยังไม่ได้ตั้ง VITE_DEALER_API_KEY"
     try {
-      const response = await authFetch(`${API_BASE_URL}/api/chat`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          "X-API-Key": DEALER_API_KEY,
-        },
+         const response = await authFetch(`${API_BASE_URL}/api/chat`, {
+           method: "POST",
+           headers: { ... },
+           body: JSON.stringify({
+             message: text,
+             history: historyRef.current,
+             market,
+             symbol: market === "stocks" ? (symbol ?? "") : "",
+           }),
+         })
         body: JSON.stringify({
           message: text,
           history: historyRef.current,
