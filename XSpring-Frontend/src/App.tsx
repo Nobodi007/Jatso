@@ -136,12 +136,6 @@ export function formatTHB(value: number) {
       symbol: market === "stocks" ? (symbol ?? "") : "",
     }),
   })
-        body: JSON.stringify({
-          message: text,
-          history: historyRef.current,
-          market,
-          symbol: market === "stocks" ? (symbol ?? "") : "",
-        }),
       const body = await response.json().catch(() => null)
 
       if (!response.ok) {
