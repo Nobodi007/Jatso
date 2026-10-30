@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { PointerEvent as RPointerEvent, ReactNode } from "react";
+import PositionsDonut from "./PositionsDonut"
 
 /* ------------------------------------------------------------------ */
 /*  พอร์ตหุ้น Nobodi: การ์ดแบบ Bento + กราฟ SVG ไม่ใช้ไลบรารี           */
@@ -618,27 +619,19 @@ export default function StockPortfolioPage({
     </Card>
   );
 
-  const positionsTable = book && (
-    <Card label="หุ้นที่ถือ">
-      <h2 className="mb-3 text-[17px] font-semibold tracking-tight">หุ้นที่ถือ</h2>
-      <Table head={["Symbol", "จำนวน", "ต้นทุนเฉลี่ย", "ราคาล่าสุด", "มูลค่า", "P/L", "%"]}>
-        {book.positions.length === 0 && (
-          <tr><td colSpan={7} className="px-3 py-8 text-center text-muted-foreground">ยังไม่มีหุ้นในพอร์ต</td></tr>
-        )}
-        {book.positions.map((p) => (
-          <tr key={p.symbol} className="border-t border-border">
-            <td className="px-3 py-3 font-semibold">{p.symbol}</td>
-            <td className="px-3 py-3 text-right tabular-nums">{nf(p.qty, 0)}</td>
-            <td className="px-3 py-3 text-right tabular-nums">{usd(p.avg_cost)}</td>
-            <td className="px-3 py-3 text-right tabular-nums">{usd(p.last)}</td>
-            <td className="px-3 py-3 text-right tabular-nums">{usd(p.market_value)}</td>
-            <td className={`px-3 py-3 text-right tabular-nums ${tone(p.unrealized_pnl)}`}>{sUsd(p.unrealized_pnl)}</td>
-            <td className={`px-3 py-3 text-right tabular-nums ${tone(p.unrealized_pct)}`}>{sgn(p.unrealized_pct)}{nf(p.unrealized_pct, 2)}%</td>
-          </tr>
-        ))}
-      </Table>
-    </Card>
-  );
+    const positionsTable = book && (
+     <Card label="หุ้นที่ถือ">
+       <h2 className="mb-3 text-[17px] font-semibold tracking-tight">
+         หุ้นที่ถือ
+       </h2>
+       <PositionsDonut
+         positions={book.positions}
+         usd={usd}
+         sUsd={sUsd}
+         nf={nf}
+       />
+     </Card>
+   )
 
   return (
     <div className="space-y-5 text-foreground">
