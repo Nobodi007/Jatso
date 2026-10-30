@@ -64,6 +64,8 @@ def test_distribution_structure_and_fan():
         assert f["p5"][i] <= f["p50"][i] <= f["p95"][i]
     assert f["p50"][-1] == pytest.approx(fr["p50"], rel=1e-12)              # จุดสุดท้ายของพัดคือผลสุดท้าย
     assert out["max_drawdown"]["p95"] <= 0
+    assert len(out["paths"]) == 150 and all(len(p) == len(f["x"]) for p in out["paths"])
+    assert all(lo <= p[-1] <= hi for p in out["paths"] for lo, hi in [(min(out["fan"]["p5"]) - 1, max(out["fan"]["p95"]) + 1)])
     assert "actual" not in out                                               # horizon ≠ จำนวนวันจริง
     out2 = MC.simulate(rp, rp, sims=100, seed=1, actual_final=0.1)
     assert 0 <= out2["actual"]["percentile_rank"] <= 1
