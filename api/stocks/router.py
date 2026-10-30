@@ -18,6 +18,8 @@ from .public_market import router as public_market_router
 router.include_router(public_market_router)
 from .stock_detail import router as stock_detail_router
 router.include_router(stock_detail_router)
+from .stock_insights import router as stock_insights_router
+router.include_router(stock_insights_router)
 
 
 
