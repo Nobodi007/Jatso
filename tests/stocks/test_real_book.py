@@ -277,3 +277,28 @@ def test_broker_name_and_account_update(monkeypatch):
     with pytest.raises(R.HTTPException):
         run(R.put_account(SimpleNamespace(broker="   "), email="a@b.c"))
     assert len(db.t["real_accounts"]) == 1
+
+
+def test_every_write_clears_the_real_report_cache_but_not_the_paper_one(monkeypatch):
+    db = _setup(monkeypatch)
+    cache = R.rd._cache
+    keys = {"real": R.report_key("a@b.c", "real"), "paper": R.report_key("a@b.c", "paper")}
+
+    def seed():
+        cache[keys["real"]] = (0.0, "stale-real")
+        cache[keys["paper"]] = (0.0, "paper-report")
+
+    seed(); run(R.add_flow(_flow(), email="a@b.c"))
+    assert keys["real"] not in cache and keys["paper"] in cache
+    seed(); t = run(R.add_trade(_trade(), email="a@b.c"))["trade"]
+    assert keys["real"] not in cache and keys["paper"] in cache
+    seed(); run(R.void_trade(t["id"], email="a@b.c"))
+    assert keys["real"] not in cache and keys["paper"] in cache
+    fid = db.t["real_cash_flows"][0]["id"]
+    seed(); run(R.void_flow(fid, email="a@b.c"))
+    assert keys["real"] not in cache and keys["paper"] in cache
+    # คำขอที่ถูกปฏิเสธไม่ต้องล้างแคช (ไม่มีอะไรเปลี่ยน)
+    seed()
+    with pytest.raises(R.HTTPException):
+        run(R.add_trade(_trade(qty=0), email="a@b.c"))
+    assert keys["real"] in cache

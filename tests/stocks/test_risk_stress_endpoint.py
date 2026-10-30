@@ -16,7 +16,7 @@ def _patch(monkeypatch):
     ctx = {"holdings": {"AAA": {"qty": 10, "price": 100.0}, "BBB": {"qty": 5, "price": 100.0}}, "cash": 500.0,
            "returns": {}, "bench_returns": None, "as_of": "2026-10-27", "skipped": []}
 
-    async def fake_ctx(email):
+    async def fake_ctx(email, portfolio="paper"):
         return {"meta": {"warnings": [], "data_status": "ok"}}, ctx
 
     async def fake_sectors(syms):
@@ -52,7 +52,7 @@ def test_attribution_endpoint_adds_sector_and_pnl(monkeypatch):
                           {"symbol": "BBB", "contribution": -0.01, "avg_weight_nav": 0.2, "days_held": 3, "held_now": False}],
             "sum_check": {"ok": True}}
 
-    async def fake_report(email):
+    async def fake_report(email, portfolio="paper"):
         return {"meta": {"data_status": "ok"}, "attribution": attr, "pnl": {"total_net": 12.5}}
 
     async def fake_sectors(syms):
