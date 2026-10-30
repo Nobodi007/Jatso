@@ -376,6 +376,10 @@ function Detail({ api, symbol, authed, onWatch }) {
   const m = useGet(api, `/${symbol}/metrics`);
   const f = useGet(api, `/${symbol}/financials?years=15`);
   const n = useGet(api, `/${symbol}/news`);
+  const ex = useGet(api, `/${symbol}/executives`);
+  const ow = useGet(api, `/${symbol}/ownership`);
+  const an = useGet(api, `/${symbol}/analyst`);
+  const ins = useGet(api, `/${symbol}/insiders`);
   const [note, setNote] = useState("");
   const add = async () => {
     try { await api("/me/watchlist", { method: "POST", body: { symbol } }); setNote("เพิ่มใน Watchlist แล้ว"); onWatch?.(); }
@@ -418,6 +422,7 @@ function Detail({ api, symbol, authed, onWatch }) {
           <div>
             <div className="text-sm text-muted-foreground">
               {pr.data?.name || symbol} · {pr.data?.exchange}
+              CEO: {ex.data.ceo.name}
             </div>
             <div className="text-3xl font-bold text-foreground">
               {usd(d.price)}
@@ -477,6 +482,65 @@ function Detail({ api, symbol, authed, onWatch }) {
       </Card>
       <Status s={f} empty={!f.loading && !f.error && !f.data?.annual?.length && (f.data?.taxonomy === "unsupported" ? "ไม่พบงบการเงินแบบ XBRL ของหุ้นตัวนี้ใน SEC" : "ไม่มีข้อมูล" ? "หุ้นตัวนี้ใช้มาตรฐานบัญชี IFRS ยังไม่รองรับ" : "ไม่มีข้อมูล")} />
       <Statements s={f} />
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Card title="บทวิเคราะห์และราคาเป้าหมาย">
+          <Status s={an} empty={!an.loading && !an.error && !an.data?.target && "ไม่มีข้อมูล"} />
+          {an.data?.target && (() => {
+            const t = an.data.target, r = an.data.rating || {};
+            const total = Object.values(r).reduce((a, b) => a + (b || 0), 0) || 1;
+            const up = d?.price ? ((t.mean - d.price) / d.price) * 100 : null;
+            const seg = [["strongBuy", "#10b981"], ["buy", "#34d399"], ["hold", "#a1a1aa"], ["sell", "#fb923c"], ["strongSell", "#f87171"]];
+            return (
+              <>
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                  <Stat label="เป้าหมายเฉลี่ย" value={usd(t.mean)} />
+                  <Stat label="สูงสุด" value={usd(t.high)} />
+                  <Stat label="ต่ำสุด" value={usd(t.low)} />
+                  <Stat label="เทียบราคาตอนนี้" value={<span className={tone(up)}>{pct(up)}</span>} />
+                </div>
+                <div className="mt-4 flex h-3 overflow-hidden rounded-full">
+                  {seg.map(([k, c]) => <div key={k} style={{ width: `${((r[k] || 0) / total) * 100}%`, background: c }} />)}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-x-4 text-xs text-muted-foreground">
+                  {seg.map(([k, c]) => <span key={k}><span className="mr-1 inline-block h-2 w-2 rounded-full" style={{ background: c }} />{k} {r[k] || 0}</span>)}
+                </div>
+              </>
+            );
+          })()}
+        </Card>
+      
+        <Card title="ผู้ถือหุ้นรายใหญ่" right={ow.data && <span className="text-xs text-muted-foreground">สถาบัน {num(ow.data.institutionsPercent, 1)}% · ผู้บริหาร {num(ow.data.insidersPercent, 1)}%</span>}>
+          <Status s={ow} empty={!ow.loading && !ow.error && !ow.data?.holders?.length && "ไม่มีข้อมูล"} />
+          <div className="divide-y divide-border">
+            {ow.data?.holders?.slice(0, 10).map((h) => (
+              <div key={h.name} className="flex items-center justify-between gap-3 py-2 text-sm">
+                <span className="truncate text-foreground">{h.name}</span>
+                <span className="text-foreground/80">{num(h.percent)}%</span>
+                <span className={tone(h.change)}>{h.change ? big(h.change) : "–"}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+      
+      <Card title="ผู้บริหารซื้อขายหุ้น">
+        <Status s={ins} empty={!ins.loading && !ins.error && !ins.data?.length && "ไม่มีรายการในช่วงนี้"} />
+        {ins.data?.length > 0 && (
+          <div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead><tr className="text-zinc-500">{["วันที่", "ชื่อ", "ซื้อ/ขาย", "จำนวน", "ราคา", "มูลค่า"].map((t, i) => <th key={t} className={`py-2 font-normal ${i < 2 ? "text-left" : "text-right"}`}>{t}</th>)}</tr></thead>
+            <tbody className="divide-y divide-border text-foreground">
+              {ins.data.slice(0, 15).map((r, i) => (
+                <tr key={i}>
+                  <td className="py-2">{r.date}</td>
+                  <td>{r.name}<div className="text-xs text-zinc-500">{r.title}</div></td>
+                  <td className={`text-right ${r.type === "BUY" ? "text-emerald-400" : "text-red-400"}`}>{r.type === "BUY" ? "ซื้อ" : "ขาย"}</td>
+                  <td className="text-right">{big(r.shares)}</td><td className="text-right">{usd(r.price)}</td><td className="text-right">{usd(r.value, 0)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table></div>
+        )}
+      </Card>
       <Card title="ข่าวล่าสุด (7 วัน)">
         <Status s={n} empty={!n.loading && !n.error && !n.data?.length && "ไม่มีข่าวในช่วงนี้"} />
         <div className="divide-y divide-border">
