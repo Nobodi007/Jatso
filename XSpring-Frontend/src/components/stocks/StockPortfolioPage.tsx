@@ -408,10 +408,8 @@ export default function StockPortfolioPage({
   const [book, setBook] = useState<Book | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [err, setErr] = useState("");
-  const [busy, setBusy] = useState(false);
   const [tip, setTip] = useState<Tip>(null);
   const [year, setYear] = useState<number | null>(null);
-  const [f, setF] = useState({ symbol: "", side: "buy", qty: "", price: "", fee: "", note: "" });
 
   const call = useCallback(
     async (path: string, init?: RequestInit) => {
@@ -443,30 +441,6 @@ export default function StockPortfolioPage({
     const id = setInterval(() => void load(), 30000);
     return () => clearInterval(id);
   }, [load]);
-
-  const submit = async () => {
-    setBusy(true);
-    try {
-      setErr("");
-      await call("/trade", {
-        method: "POST",
-        body: JSON.stringify({
-          symbol: f.symbol.trim().toUpperCase(),
-          side: f.side,
-          qty: Number(f.qty),
-          price: f.price ? Number(f.price) : null,
-          fee: f.fee ? Number(f.fee) : 0,
-          note: f.note || null,
-        }),
-      });
-      setF({ ...f, qty: "", price: "", fee: "", note: "" });
-      await load();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "ส่งคำสั่งไม่สำเร็จ");
-    } finally {
-      setBusy(false);
-    }
-  };
 
   /* ----- ข้อมูลที่คำนวณจากรายการซื้อขายจริง ----- */
   const asc = useMemo(() => [...trades].reverse(), [trades]); // API ส่งใหม่สุดก่อน
@@ -522,7 +496,6 @@ export default function StockPortfolioPage({
   }, [book]);
 
   const unrealized = book ? book.positions.reduce((a, p) => a + p.unrealized_pnl, 0) : 0;
-  const inp = "h-10 rounded-xl border border-border bg-background px-3 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring";
 
   /* ----- ชิ้นส่วนที่ใช้ซ้ำ ----- */
   const allocation = (
@@ -557,19 +530,20 @@ export default function StockPortfolioPage({
     </Card>
   );
 
-    const positionsTable = book && (
-     <Card label="หุ้นที่ถือ">
-       <h2 className="mb-3 text-[17px] font-semibold tracking-tight">
-         หุ้นที่ถือ
-       </h2>
-       <PositionsDonut
-         positions={book.positions}
-         usd={usd}
-         sUsd={sUsd}
-         nf={nf}
-       />
-     </Card>
-   )
+  const holdings = (cls: string) =>
+    book && (
+      <Card className={cls} label="หุ้นที่ถือ">
+        <h2 className="mb-3 text-[17px] font-semibold tracking-tight">หุ้นที่ถือ</h2>
+        <PositionsDonut
+          positions={book.positions}
+          usd={usd}
+          sUsd={sUsd}
+          nf={nf}
+          size={200}
+          strokeWidth={24}
+        />
+      </Card>
+    );
 
   return (
     <div className="space-y-5 text-foreground">
@@ -607,28 +581,7 @@ export default function StockPortfolioPage({
             </div>
           </Card>
 
-          <Card className="col-span-12 lg:col-span-7" label="บันทึกรายการซื้อขาย">
-            <h2 className="text-[17px] font-semibold tracking-tight">บันทึกรายการซื้อขาย</h2>
-            <p className="mt-1 text-xs text-muted-foreground">ราคาว่าง = ใช้ราคาตลาดตอนบันทึก</p>
-            <div className="mt-4 grid grid-cols-2 gap-3">
-              <input className={inp} placeholder="Symbol เช่น AAPL" value={f.symbol} onChange={(e) => setF({ ...f, symbol: e.target.value })} />
-              <select className={inp} value={f.side} onChange={(e) => setF({ ...f, side: e.target.value })}>
-                <option value="buy">ซื้อ</option>
-                <option value="sell">ขาย</option>
-              </select>
-              <input className={inp} inputMode="numeric" placeholder="จำนวน" value={f.qty} onChange={(e) => setF({ ...f, qty: e.target.value })} />
-              <input className={inp} inputMode="decimal" placeholder="ราคา (ว่าง = ราคาตลาด)" value={f.price} onChange={(e) => setF({ ...f, price: e.target.value })} />
-              <input className={inp} inputMode="decimal" placeholder="ค่าธรรมเนียม" value={f.fee} onChange={(e) => setF({ ...f, fee: e.target.value })} />
-              <input className={inp} placeholder="โน้ต" value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} />
-              <button
-                disabled={busy || !f.symbol || !f.qty}
-                onClick={() => void submit()}
-                className={`col-span-2 h-10 rounded-xl px-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40 ${f.side === "buy" ? "bg-emerald-500 hover:bg-emerald-600" : "bg-rose-500 hover:bg-rose-600"}`}
-              >
-                {busy ? "กำลังบันทึก…" : f.side === "buy" ? "บันทึกซื้อ" : "บันทึกขาย"}
-              </button>
-            </div>
-          </Card>
+          {holdings("col-span-12 lg:col-span-7")}
 
           {allocation}
 
@@ -681,12 +634,10 @@ export default function StockPortfolioPage({
         </div>
       )}
 
-      {book && view === "portfolio" && positionsTable}
-
       {book && view === "positions" && (
         <>
           <div className="grid grid-cols-12 gap-4">{allocation}</div>
-          {positionsTable}
+          {holdings("")}
         </>
       )}
 
