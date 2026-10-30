@@ -31,4 +31,5 @@ RUN_TIMEOUT_SECONDS = 120
 RATE_LIMIT_RUNS = 6
 RATE_LIMIT_WINDOW_SECONDS = 600
 MAX_STORED_RUNS_PER_USER = 50
+RETENTION_DAYS = 30                 # ผลที่เสร็จแล้ว (done/failed) เก่ากว่านี้ถูกลบอัตโนมัติ (ต่อผู้ใช้ ตอนสร้างรัน/เปิดประวัติ)
 MAX_TRADES_IN_RESULT = 2000
