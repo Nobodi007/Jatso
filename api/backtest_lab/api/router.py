@@ -11,6 +11,9 @@ from fastapi.responses import JSONResponse
 from . import handlers as H
 from .auth import AuthError, decode_email
 
+from ..robust.router import register as _register_robust
+_register_robust(router, services, _email, _out)
+
 router = APIRouter(prefix="/api/backtest-lab", tags=["backtest-lab"])
 _services: H.Services | None = None
 
