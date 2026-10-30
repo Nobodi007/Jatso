@@ -1,5 +1,5 @@
 """ค่าคงที่และเพดานทั้งหมดของ Backtest Lab (แพ็กเกจนี้แยกขาดจาก Backtest เดิมและ Risk Center)"""
-ENGINE_VERSION = "backtest-lab/0.1.0"
+ENGINE_VERSION = "backtest-lab/0.2.0"
 SPEC_VERSION = 1
 
 BENCHMARK = "^GSPC"                 # S&P 500 Price Index (ไม่ใช่ SPY)

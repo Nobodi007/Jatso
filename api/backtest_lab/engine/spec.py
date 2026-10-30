@@ -19,6 +19,7 @@ from datetime import date
 from typing import Any
 
 from .. import config as C
+from .rules import RuleError, validate_strategy
 
 SYMBOL_RE = re.compile(r"^[A-Z][A-Z.\-]{0,9}$")
 MODES = ("none", "calendar", "threshold", "hybrid")
@@ -49,7 +50,7 @@ def validate_spec(raw: Any, today: date | None = None) -> dict:
     today = today or date.today()
     if not isinstance(raw, dict):
         raise SpecError("spec ต้องเป็น object")
-    unknown = set(raw) - {"version", "start", "end", "initial_capital", "positions", "rebalance", "costs", "risk_free_annual"}
+    unknown = set(raw) - {"version", "start", "end", "initial_capital", "positions", "rebalance", "costs", "risk_free_annual", "strategy"}
     if unknown:
         raise SpecError(f"พบฟิลด์ที่ไม่รองรับ: {', '.join(sorted(map(str, unknown)))}")
     if raw.get("version", C.SPEC_VERSION) != C.SPEC_VERSION:
@@ -113,10 +114,16 @@ def validate_spec(raw: Any, today: date | None = None) -> dict:
     rf = raw.get("risk_free_annual")
     rf = None if rf is None else _num(rf, "risk_free_annual", 0.0, 0.5)
 
-    return {"version": C.SPEC_VERSION, "start": start.isoformat(), "end": end.isoformat(),
-            "initial_capital": capital, "positions": positions,
-            "rebalance": {"mode": mode, "frequency": freq, "threshold_pct": thr},
-            "costs": {"commission_bps": comm, "slippage_bps": slip}, "risk_free_annual": rf}
+    out = {"version": C.SPEC_VERSION, "start": start.isoformat(), "end": end.isoformat(),
+           "initial_capital": capital, "positions": positions,
+           "rebalance": {"mode": mode, "frequency": freq, "threshold_pct": thr},
+           "costs": {"commission_bps": comm, "slippage_bps": slip}, "risk_free_annual": rf}
+    if raw.get("strategy") is not None:                      # ไม่มี strategy -> spec/hash เหมือน B1 ทุกประการ
+        try:
+            out["strategy"] = validate_strategy(raw["strategy"])
+        except RuleError as e:
+            raise SpecError(f"strategy: {e}")
+    return out
 
 
 def spec_hash(spec: dict) -> str:

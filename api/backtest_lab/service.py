@@ -10,7 +10,9 @@ from .data.price_store import PriceStore
 from .data.provider_base import ProviderError
 from .data.validate import DataError, clean_bars
 from .db.run_store import RunStore, now_iso
+from .engine.rules import warmup_bars
 from .engine.runner import run_backtest
+from .engine.strategy_runner import run_strategy
 from .engine.spec import SpecError, spec_hash
 
 log = logging.getLogger("backtest_lab")
@@ -51,9 +53,36 @@ def _warnings(spec: dict, snapshot: list[dict], issues: list[dict], filled: dict
     return w
 
 
+def _strategy_warnings(spec: dict, result: dict, bars: dict, warm: int) -> list[dict]:
+    w = [{"code": "hindsight_risk", "severity": "high",
+          "message": "กฎและพารามิเตอร์ที่เลือกหลังเห็นผลย้อนหลังมีความเสี่ยง overfit สูง ผลที่ดีในอดีตไม่ได้รับประกันอนาคต "
+                     "ควรทดสอบกับช่วงเวลา/หุ้นที่ไม่ได้ใช้ปรับกฎ"},
+         {"code": "intrabar_assumption", "severity": "info",
+          "message": "stop ตรวจจาก high/low รายวัน: ถ้า stop-loss และ take-profit เป็นไปได้ในแท่งเดียวกัน ถือว่า stop-loss ถูกก่อน; "
+                     "ราคาที่จับคู่จริงอาจต่างจากนี้ในตลาดจริง"}]
+    first = result["strategy_result"]["first_entry_signal"]
+    for sym, d in first.items():
+        if d is None:
+            w.append({"code": "no_entry_signal", "severity": "medium", "symbol": sym,
+                      "message": f"{sym}: ไม่มีสัญญาณเข้าซื้อเลยในช่วงที่ทดสอบ (เงินส่วนนี้ถือเป็นเงินสดตลอด)"})
+    first_trade = result["period"]["first_trade_date"]
+    for sym, bs in bars.items():
+        if bs and warm and (date.fromisoformat(first_trade) - date.fromisoformat(bs[0]["date"])).days < warm * 1.4:
+            w.append({"code": "short_warmup", "severity": "medium", "symbol": sym,
+                      "message": f"{sym}: ประวัติราคาก่อนวันเริ่มสั้นกว่าที่ตัวชี้วัดต้องใช้ ค่าช่วงแรกอาจยังไม่นิ่ง/ไม่มีสัญญาณ "
+                                 f"(ข้อมูลเริ่ม {bs[0]['date']})"})
+    if result["strategy_result"]["trip_stats"]["closed_trades"] < 30:
+        w.append({"code": "few_trades", "severity": "medium",
+                  "message": "จำนวนรอบการซื้อขายน้อยกว่า 30 รอบ ค่าสถิติต่อรอบ (win rate, profit factor) ไม่มีนัยสำคัญทางสถิติ"})
+    return w
+
+
 def build_result(spec: dict, price_store: PriceStore) -> dict:
     start, end = date.fromisoformat(spec["start"]), date.fromisoformat(spec["end"])
-    fetch_from = start - timedelta(days=30)                # ต้องมีแท่งก่อนวันเริ่ม (วันฐาน + seed สำหรับเติมช่องว่าง)
+    strategy = spec.get("strategy")
+    warm = warmup_bars(strategy) if strategy else 0
+    # ต้องมีแท่งก่อนวันเริ่ม (วันฐาน + seed เติมช่องว่าง) + ช่วงอุ่นเครื่องของตัวชี้วัด (วันทำการ ≈ 1.5 เท่าเป็นวันปฏิทิน)
+    fetch_from = start - timedelta(days=30 + int(warm * 1.5) + 7)
     bars, snapshot, issues = {}, [], []
     for sym in [p["symbol"] for p in spec["positions"]] + [C.BENCHMARK]:
         raw, meta = price_store.get_bars(sym, fetch_from, end)
@@ -62,11 +91,13 @@ def build_result(spec: dict, price_store: PriceStore) -> dict:
         issues.extend(iss)
         snapshot.append({**meta, "bars_used": len(cleaned)})
     bench = bars.pop(C.BENCHMARK)
-    result = run_backtest(spec, bars, bench)
+    result = run_strategy(spec, bars, bench) if strategy else run_backtest(spec, bars, bench)
     filled = result["data_quality"]["filled_days"]
     result["data_quality"]["issues"] = issues
     result["data_snapshot"] = snapshot
     result["warnings"] = _warnings(spec, snapshot, issues, filled)
+    if strategy:
+        result["warnings"].extend(_strategy_warnings(spec, result, bars, warm))
     result["engine_version"] = C.ENGINE_VERSION
     result["spec_hash"] = spec_hash(spec)
     return result

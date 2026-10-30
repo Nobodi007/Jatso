@@ -15,6 +15,8 @@ from ..data.price_store import LayeredBackend, MemoryBackend, PriceStore, Supaba
 from ..data.provider_yahoo import YahooProvider
 from ..db.client import SbClient
 from ..db.run_store import MemoryRunStore, RunStore, SupabaseRunStore
+from ..engine import rules
+from ..engine.indicators import catalogue as indicator_catalogue
 from ..engine.spec import SpecError, spec_hash, validate_spec
 from ..jobs.limiter import RateLimiter
 from ..jobs.runner_pool import RunPool
@@ -53,6 +55,10 @@ def meta() -> tuple[int, dict]:
                    "max_commission_bps": C.MAX_COMMISSION_BPS, "max_slippage_bps": C.MAX_SLIPPAGE_BPS},
         "defaults": {"commission_bps": C.DEFAULT_COMMISSION_BPS, "slippage_bps": C.DEFAULT_SLIPPAGE_BPS,
                      "execution": "next_open", "return_method": "price_return"},
+        "indicators": indicator_catalogue(),
+        "rule_language": {"operators": list(rules.OPS), "price_fields": list(rules.PRICE_FIELDS),
+                          "max_nodes": rules.MAX_NODES, "max_depth": rules.MAX_DEPTH, "max_shift": rules.MAX_SHIFT,
+                          "stops": ["stop_loss_pct", "take_profit_pct", "trailing_stop_pct", "max_hold_days"]},
         "notice": "ผล Backtest เป็นข้อมูลจำลองย้อนหลัง ไม่ใช่ผลงานจริงและไม่ใช่การพยากรณ์ ไม่ใช่คำแนะนำการลงทุน",
     }
 
