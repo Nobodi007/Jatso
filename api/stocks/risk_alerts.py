@@ -367,7 +367,7 @@ def _last_daily_return(nav_series) -> dict | None:
         return None
     a, b = nav_series[-2], nav_series[-1]
     try:
-        prev, cur = float(a["nav"]), float(b["nav"])
+        prev, cur = float(a["nav"]) + float(b.get("flow") or 0.0), float(b["nav"])   # flow = start-of-day deposit/withdrawal
     except (KeyError, TypeError, ValueError):
         return None
     if prev <= 0:

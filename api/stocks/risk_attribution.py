@@ -37,9 +37,10 @@ def attribution(trades: Sequence[L.Trade], calendar: Sequence[date],
     n = len(calendar)
     if n < 2 or len(nav) != n:
         raise ValueError("need ≥2 calendar days and one NAV point per day")
-    if any(p.nav is None or p.nav <= 0 for p in nav):
+    has_flows = any(p.flow != 0 for p in nav[1:])
+    if any(p.nav is None for p in nav) or (not has_flows and any(p.nav <= 0 for p in nav)):
         raise ValueError("NAV unavailable or non-positive")
-    nav0 = nav[0].nav
+    nav0 = nav[0].nav                                   # may be 0 only when flows fund the account after the base day
     qty: dict[str, float] = {}
     idx = 0
 
@@ -65,9 +66,13 @@ def attribution(trades: Sequence[L.Trade], calendar: Sequence[date],
     acc: dict[str, dict] = {}
     exec_total = fees_total = cash_drag = 0.0
     cash_w_sum = 0.0
+    cum = 1.0                                           # cumulative time-weighted growth (used only with flows)
     for k in range(1, n):
-        nav_prev = nav[k - 1].nav
-        link = nav_prev / nav0
+        flow = nav[k].flow                              # external flow arrives at the start of day k
+        nav_prev = nav[k - 1].nav + flow                # capital at work on day k (= NAV_{k−1} when no flows)
+        if nav_prev <= 0:
+            raise ValueError(f"no capital at start of {calendar[k].isoformat()}")
+        link = cum if has_flows else nav[k - 1].nav / nav0
         eq_open = eq_pnl = 0.0
         for s, q in qty.items():                        # opening quantities of day k
             if q <= L.QTY_EPS:
@@ -79,7 +84,7 @@ def attribution(trades: Sequence[L.Trade], calendar: Sequence[date],
             a["d"] += 1
             eq_open += q * p0
             eq_pnl += q * (p1 - p0)
-        cash_w = nav[k - 1].cash / nav_prev
+        cash_w = (nav[k - 1].cash + flow) / nav_prev
         cash_w_sum += cash_w
         if eq_open > 0:
             cash_drag += link * (-cash_w) * (eq_pnl / eq_open)
@@ -90,8 +95,9 @@ def attribution(trades: Sequence[L.Trade], calendar: Sequence[date],
             f -= t.fee
         exec_total += link * e / nav_prev
         fees_total += link * f / nav_prev
+        cum *= nav[k].nav / nav_prev
 
-    rp = nav[-1].nav / nav0 - 1.0
+    rp = (cum - 1.0) if has_flows else nav[-1].nav / nav0 - 1.0
     rows = [{"symbol": s, "contribution": a["c"], "avg_weight_nav": a["w"] / a["d"],
              "days_held": a["d"], "held_now": qty.get(s, 0.0) > L.QTY_EPS} for s, a in acc.items()]
     rows.sort(key=lambda r: -r["contribution"])
@@ -99,7 +105,9 @@ def attribution(trades: Sequence[L.Trade], calendar: Sequence[date],
     resid = rp - (pos_sum + exec_total + fees_total)
     return {
         "partial": True, "partial_note": PARTIAL_NOTE, "method": METHOD,
-        "unit": "decimal of start-of-period NAV (display ×100 as pp)",
+        "unit": ("decimal of capital at work (start-of-period NAV; external flows applied at start of day)"
+                 if has_flows else "decimal of start-of-period NAV (display ×100 as pp)"),
+        "external_flows": has_flows,
         "n_obs": n - 1, "portfolio_return": rp, "positions": rows,
         "execution": {"value": exec_total, "note": EXEC_NOTE},
         "fees": {"value": fees_total, "note": FEES_NOTE},
@@ -159,4 +167,5 @@ def pnl_breakdown(pos: Mapping[str, L.Position], prices: Mapping[str, float | No
         diff = (nav_end - initial_cash) - total
         out["check"] = {"nav_change": nav_end - initial_cash, "total_net": total, "difference": diff,
                         "ok": abs(diff) <= 0.01}
+        out["basis_note"] = "nav_change = NAV − capital contributed (initial cash + net deposits)"
     return out

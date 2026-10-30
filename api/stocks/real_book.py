@@ -13,7 +13,7 @@
 
 กติกา: กรอกจำนวนและราคาตามที่เกิดขึ้นจริงในวันนั้น (ไม่ต้องปรับ split) ระบบปรับให้เอง
 วันที่ = วันที่ตามเวลาสหรัฐ (ET) ซื้อขายหลังตลาดปิด (16:00 ET) ให้ติ๊ก after_close
-ยังไม่เชื่อมกับ Risk Center (รอบถัดไป): ตัวเลขความเสี่ยงยังคำนวณจากพอร์ตจำลองเท่านั้น
+Risk Center ของพอร์ตจริงอ่านจากตารางเหล่านี้ผ่าน risk_api (?portfolio=real) แคชรายงานแยกคีย์ และถูกล้างเมื่อมีการเขียน
 """
 from __future__ import annotations
 
@@ -27,8 +27,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from . import ledger as L
+from . import risk_data as rd
 from .auth import current_email
 from .db import sb
+from .risk_api import report_key
 from .risk_ratelimit import make_limiter
 
 log = logging.getLogger("stocks.real_book")
@@ -137,6 +139,11 @@ async def _active_trades(email: str) -> list[dict]:
 
 async def _active_flows(email: str) -> list[dict]:
     return await _active("real_cash_flows", email, "flow_date.asc,id.asc")
+
+
+def _invalidate(email: str) -> None:
+    """ล้างแคชรายงาน Risk ของพอร์ตจริง เพื่อให้รายการที่เพิ่งกรอกสะท้อนทันที (คีย์ของพอร์ตจำลองไม่ถูกแตะ)"""
+    rd.invalidate(report_key(email, "real"))
 
 
 async def _audit(email: str, event: str, param: str, old, new) -> bool:
@@ -264,6 +271,7 @@ async def add_trade(body: TradeIn, email: str = Depends(_write)):
                      json=[{"email": email, "symbol": sym, "side": body.side, "qty": body.qty, "price": body.price,
                             "fee": body.fee, "ts": iso, "note": (body.note or None)}])
     row = saved[0] if saved else candidate
+    _invalidate(email)
     flows = await _active_flows(email)
     _, cw = cash_warnings(existing + [{**candidate, "id": row.get("id", candidate["id"])}], flows)
     audited = await _audit(email, "real_trade_added", f"{row.get('id')}:{sym}:{body.side}", None,
@@ -285,6 +293,7 @@ async def void_trade(trade_id: int, email: str = Depends(_write)):
                     json={"voided_at": _now().isoformat()}, prefer="return=representation")
     if not rows:
         raise _bad("trade_not_found", 404)
+    _invalidate(email)
     flows = await _active_flows(email)
     _, cw = cash_warnings(rest, flows)
     audited = await _audit(email, "real_trade_voided", f"{trade_id}:{target['symbol']}:{target['side']}",
@@ -329,6 +338,7 @@ async def add_flow(body: FlowIn, email: str = Depends(_write)):
                      json=[{"email": email, "flow_date": body.flow_date.isoformat(),
                             "amount": body.amount, "note": (body.note or None)}])
     row = saved[0] if saved else {"flow_date": body.flow_date.isoformat(), "amount": body.amount}
+    _invalidate(email)
     trades = await _active_trades(email)
     _, cw = cash_warnings(trades, flows + [row])
     audited = await _audit(email, "real_cash_flow_added", f"flow:{row.get('id')}", None, body.amount)
@@ -347,6 +357,7 @@ async def void_flow(flow_id: int, email: str = Depends(_write)):
                     json={"voided_at": _now().isoformat()}, prefer="return=representation")
     if not rows:
         raise _bad("cash_flow_not_found", 404)
+    _invalidate(email)
     trades = await _active_trades(email)
     _, cw = cash_warnings(trades, [f for f in flows if int(f["id"]) != flow_id])
     audited = await _audit(email, "real_cash_flow_voided", f"flow:{flow_id}", float(target["amount"]), None)
@@ -379,4 +390,4 @@ async def summary(email: str = Depends(_read)):
             "fees_paid": round(sum(p.fees for p in pos.values()), 2),
             "counts": {"trades": len(trade_rows), "cash_flows": len(flows)},
             "warnings": cw + [{"code": "splits_unavailable", "detail": w} for w in split_warnings],
-            "note": "จำนวนและต้นทุนเฉลี่ยปรับ split แล้ว เทียบกับหน้าถือครองใน Webull ได้ · ยังไม่รวมปันผล · ยังไม่เชื่อมกับ Risk Center"}
+            "note": "จำนวนและต้นทุนเฉลี่ยปรับ split แล้ว เทียบกับหน้าถือครองใน Webull ได้ · ยังไม่รวมปันผล"}

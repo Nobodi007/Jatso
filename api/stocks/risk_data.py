@@ -92,6 +92,31 @@ async def account(email: str) -> dict | None:
     return rows[0] if rows else None
 
 
+async def real_account(email: str) -> dict | None:
+    rows = await sb("GET", "real_accounts", params={"email": f"eq.{email}", "select": "*", "limit": "1"})
+    return rows[0] if rows else None
+
+
+async def _paged_real(table: str, email: str, order: str) -> list[dict]:
+    out, offset = [], 0
+    while True:
+        rows = await sb("GET", table, params={"email": f"eq.{email}", "voided_at": "is.null", "select": "*",
+                                              "order": order, "limit": "1000", "offset": str(offset)}) or []
+        out.extend(rows)
+        if len(rows) < 1000:
+            return out
+        offset += 1000
+
+
+async def real_trades(email: str) -> list[dict]:
+    """Manually entered real-portfolio trades (user-scoped, excludes voided). Email from the verified JWT only."""
+    return await _paged_real("real_trades", email, "ts.asc,id.asc")
+
+
+async def real_flows(email: str) -> list[dict]:
+    return await _paged_real("real_cash_flows", email, "flow_date.asc,id.asc")
+
+
 async def active_trades(email: str) -> list[dict]:
     """User-scoped, excludes voided (reset) trades. Email must come from the verified JWT only."""
     out, offset = [], 0

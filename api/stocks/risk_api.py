@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+from typing import Annotated
 from datetime import date, datetime, timezone
 
 import re
@@ -70,7 +72,7 @@ def _diagnose_price_gaps(issues: list[dict], closes: dict, calendar: list[date],
 
 
 def _nav_json(points):
-    return [{"date": p.date.isoformat(), "nav": p.nav, "cash": p.cash,
+    return [{"date": p.date.isoformat(), "nav": p.nav, "cash": p.cash, "flow": p.flow,
              "market_value": p.market_value, "stale_symbols": list(p.stale)} for p in points]
 
 
@@ -117,13 +119,20 @@ def _realized_summary(adj) -> dict | None:
                     for s, p in sorted(pos.items())],
     }
 
-async def _build(email: str) -> dict:
+PORTFOLIOS = ("paper", "real")
+
+
+async def _build(email: str, portfolio: str = "paper") -> dict:
     today = datetime.now(L.ET).date()
+    real = portfolio == "real"
     f_start, f_end = rd.window(today)
     warnings: list[dict] = []
     meta = {
-        "asset_class": "us_equities", "account_type": "paper_trading", "currency": "USD",
-        "return_method": "daily time-weighted price return; split-adjusted; net of fees; excludes dividends",
+        "asset_class": "us_equities", "currency": "USD", "portfolio": portfolio,
+        "account_type": "real_portfolio_manual_entry" if real else "paper_trading",
+        "return_method": ("daily time-weighted price return; external cash flows applied at the start of day; "
+                          "split-adjusted; net of fees; excludes dividends" if real else
+                          "daily time-weighted price return; split-adjusted; net of fees; excludes dividends"),
         "benchmark": {"symbol": rd.BENCHMARK, "name": "S&P 500 Price Index", "return_method": "price return"},
         "providers": {"prices": "Financial Modeling Prep EOD", "risk_free": "FMP treasury-rates 3M"},
         "method_version": E.METHOD_VERSION, "computed_at": datetime.now(timezone.utc).isoformat()}
@@ -138,14 +147,28 @@ async def _build(email: str) -> dict:
             extra["pnl"] = state["pnl"]
         return {"meta": {**meta, "data_status": status, "warnings": warnings}, **extra, **body}
 
-    acc = await rd.account(email)
-    if not acc:
-        return done("no_account")
-    try:
-        trades = L.to_trades(await rd.active_trades(email))
-    except L.LedgerError as e:
-        warnings.append({"code": "ledger_invalid", "detail": str(e)})
-        return done("ledger_integrity_error")
+    flows: list[L.CashFlow] = []
+    if real:
+        # พอร์ตจริง: กรอกเอง ไม่มีเงินตั้งต้นแยก (เงินเข้าทั้งหมดคือรายการฝาก) และไม่มียอดเงินสดจากโบรกเกอร์ให้กระทบยอด
+        racc = await rd.real_account(email)
+        if not racc:
+            return done("no_account")
+        acc = {"initial_cash": 0.0, "inception_at": None, "cash": None}
+        try:
+            trades = L.to_trades(await rd.real_trades(email))
+            flows = L.to_flows(await rd.real_flows(email))
+        except L.LedgerError as e:
+            warnings.append({"code": "ledger_invalid", "detail": str(e)})
+            return done("ledger_integrity_error")
+    else:
+        acc = await rd.account(email)
+        if not acc:
+            return done("no_account")
+        try:
+            trades = L.to_trades(await rd.active_trades(email))
+        except L.LedgerError as e:
+            warnings.append({"code": "ledger_invalid", "detail": str(e)})
+            return done("ledger_integrity_error")
     if not trades:
         return done("no_activity")
     symbols = sorted({t.symbol for t in trades})
@@ -194,6 +217,8 @@ async def _build(email: str) -> dict:
     base = base_c[-1] if base_c else cal_all[0]
     incep = L.session_date(L.parse_ts(acc["inception_at"])) if acc.get("inception_at") else adj[0].session_date
     incep = min(incep, adj[0].session_date)
+    if flows:
+        incep = min(incep, flows[0].date)
     if incep > base:
         prior = [d for d in cal_all if d < incep]
         base = prior[-1] if prior else cal_all[0]
@@ -203,7 +228,7 @@ async def _build(email: str) -> dict:
         warnings.append({"code": "trades_after_last_close", "detail": "not yet reflected in EOD NAV"})
 
     try:
-        nav, issues = L.build_nav(adj, float(acc["initial_cash"]), calendar, closes)
+        nav, issues = L.build_nav(adj, float(acc["initial_cash"]), calendar, closes, flows=flows)
     except L.LedgerError as e:
         warnings.append({"code": "ledger_invalid", "detail": str(e)})
         return done("ledger_integrity_error")
@@ -214,7 +239,7 @@ async def _build(email: str) -> dict:
     try:
         state["pnl"] = A.pnl_breakdown(
             L.positions(adj), {s: h["price"] for s, h in state["ctx"]["holdings"].items()},
-            float(acc["initial_cash"]), nav[-1].nav)
+            float(acc["initial_cash"]) + math.fsum(f.amount for f in flows), nav[-1].nav)
     except (L.LedgerError, KeyError, ValueError) as e:
         log.warning("pnl breakdown unavailable: %s", e)
 
@@ -223,7 +248,7 @@ async def _build(email: str) -> dict:
         if b and not (b[0] * 0.99 <= t.price <= b[1] * 1.01):
             warnings.append({"code": "trade_price_outside_daily_range", "trade_id": t.id, "symbol": t.symbol})
     ledger_cash = L.replay_cash(trades, float(acc["initial_cash"]))
-    if abs(ledger_cash - float(acc["cash"])) > 0.01:
+    if acc.get("cash") is not None and abs(ledger_cash - float(acc["cash"])) > 0.01:
         warnings.append({"code": "cash_reconciliation_mismatch", "ledger": round(ledger_cash, 2),
                          "account": float(acc["cash"])})
 
@@ -237,7 +262,11 @@ async def _build(email: str) -> dict:
         return done("insufficient_data", nav_series=_nav_json(nav))
 
     dates = [pt.date for pt in nav]
-    rp = [nav[i].nav / nav[i - 1].nav - 1 for i in range(1, len(nav))]
+    try:
+        rp = L.returns_from_nav(nav)
+    except L.LedgerError as e:                               # เงินในพอร์ตเป็น 0 ในบางวัน (เช่น ถอนหมดแล้วฝากใหม่)
+        warnings.append({"code": "no_capital_on_some_days", "detail": str(e)})
+        return done("insufficient_data", nav_series=_nav_json(nav))
     rb = None
     if bench_rows:
         bmap = {date.fromisoformat(r["date"]): r["close"] for r in bench_rows}
@@ -259,9 +288,17 @@ async def _build(email: str) -> dict:
                 attribution=attribution)
 
 
-async def _report(email: str) -> dict:
+def report_key(email: str, portfolio: str = "paper") -> str:
+    """แคชพอร์ตจำลองใช้คีย์เดิม (stock_book ล้างด้วยคีย์นี้) พอร์ตจริงแยกคีย์ (real_book ล้างด้วยคีย์นี้)"""
+    return f"report:{email}" if portfolio == "paper" else f"report:{portfolio}:{email}"
+
+
+async def _report(email: str, portfolio: str = "paper") -> dict:
+    if portfolio not in PORTFOLIOS:
+        raise HTTPException(400, "invalid_portfolio")
     try:
-        return await rd.memo(f"report:{email}", REPORT_TTL, lambda: _build(email), provider_call=False)
+        return await rd.memo(report_key(email, portfolio), REPORT_TTL, lambda: _build(email, portfolio),
+                             provider_call=False)
     except RateLimited:
         raise HTTPException(503, "Market data rate limit reached. Try again later.")
     except ProviderError:
@@ -274,13 +311,16 @@ async def _report(email: str) -> dict:
 
 
 PERIOD = Query("1y", pattern="^1y$")
+PortfolioQ = Annotated[str, Query(pattern="^(paper|real)$")]   # paper = พอร์ตจำลอง (เดิม, ค่าเริ่มต้น) · real = พอร์ตจริงที่กรอกเอง
 
 # จำกัด 30 ครั้ง/นาที/ผู้ใช้ รวมทุก endpoint ในไฟล์นี้ (หน้า Risk Center เปิดทีเดียวยิงหลายตัว)
 _heavy = make_limiter(current_email, 30, 60, "heavy")
 
 
-async def _active_alerts(email: str) -> dict:
+async def _active_alerts(email: str, portfolio: str = "paper") -> dict:
     """จำนวน alert ที่เปิดอยู่ ณ การประเมินล่าสุด (POST /alerts/evaluate) ไม่ใช่ตามราคาสด"""
+    if portfolio != "paper":      # alert/ลิมิตของพอร์ตจริงยังไม่เปิดใช้ (รอบถัดไป) ไม่ใช้ตารางของพอร์ตจำลองแทน
+        return {"value": None, "status": "unavailable", "reason": "alerts_not_enabled_for_this_portfolio"}
     try:
         rows = await sb("GET", "stock_risk_alerts",
                         params={"email": f"eq.{email}", "status": "eq.active", "select": "id,severity,acknowledged_at"}) or []
@@ -292,8 +332,8 @@ async def _active_alerts(email: str) -> dict:
 
 
 @router.get("/overview")
-async def overview(period: str = PERIOD, email: str = Depends(_heavy)):
-    rep = await _report(email)
+async def overview(period: str = PERIOD, portfolio: PortfolioQ = "paper", email: str = Depends(_heavy)):
+    rep = await _report(email, portfolio)
     a = rep.get("analysis") or {}
     perf, ra, tail = a.get("performance", {}), a.get("risk_adjusted", {}), a.get("tail", {})
     nav = rep.get("nav_series") or []
@@ -304,12 +344,12 @@ async def overview(period: str = PERIOD, email: str = Depends(_heavy)):
         "portfolio_return": perf.get("portfolio_return"), "benchmark_return": perf.get("benchmark_return"),
         "active_return": perf.get("active_return"), "volatility": perf.get("volatility"),
         "max_drawdown": tail.get("max_drawdown"), "sharpe": ra.get("sharpe"),
-        "active_alerts": await _active_alerts(email)}}
+        "active_alerts": await _active_alerts(email, portfolio)}}
 
 
 @router.get("/performance")
-async def performance(period: str = PERIOD, email: str = Depends(_heavy)):
-    rep = await _report(email)
+async def performance(period: str = PERIOD, portfolio: PortfolioQ = "paper", email: str = Depends(_heavy)):
+    rep = await _report(email, portfolio)
     a = rep.get("analysis") or {}
     return {"meta": rep["meta"], "metrics": a.get("performance"), "series": a.get("series"),
             "monthly": a.get("monthly"), "rolling": a.get("rolling"),
@@ -317,8 +357,8 @@ async def performance(period: str = PERIOD, email: str = Depends(_heavy)):
 
 
 @router.get("/metrics")
-async def metrics(period: str = PERIOD, email: str = Depends(_heavy)):
-    rep = await _report(email)
+async def metrics(period: str = PERIOD, portfolio: PortfolioQ = "paper", email: str = Depends(_heavy)):
+    rep = await _report(email, portfolio)
     a = rep.get("analysis") or {}
     tail = a.get("tail") or {}
     keep = ("max_drawdown", "current_drawdown", "drawdown_episode", "longest_underwater_trading_days",
@@ -327,8 +367,8 @@ async def metrics(period: str = PERIOD, email: str = Depends(_heavy)):
             "tail": {k: tail.get(k) for k in keep}, "conventions": a.get("conventions")}
 
 @router.get("/realized")
-async def realized(period: str = PERIOD, email: str = Depends(_heavy)):
-    rep = await _report(email)
+async def realized(period: str = PERIOD, portfolio: PortfolioQ = "paper", email: str = Depends(_heavy)):
+    rep = await _report(email, portfolio)
     data = rep.get("realized")
     if data is None:
         return {"meta": rep["meta"], "realized": None, "status": "unavailable",
@@ -383,8 +423,8 @@ def compute_drawdown(points, min_points: int = 5) -> dict:
     }
 
 @router.get("/drawdown")
-async def drawdown(period: str = PERIOD, email: str = Depends(_heavy)):
-    rep = await _report(email)
+async def drawdown(period: str = PERIOD, portfolio: PortfolioQ = "paper", email: str = Depends(_heavy)):
+    rep = await _report(email, portfolio)
     status = rep["meta"].get("data_status")
     nav = rep.get("nav_series") or []
     if status not in ("ok", "ok_with_warnings") or not nav:
@@ -397,8 +437,8 @@ async def drawdown(period: str = PERIOD, email: str = Depends(_heavy)):
 
 
 # ---------------- Phase 2: exposure / risk decomposition / stress ----------------
-async def _ctx(email: str):
-    rep = await _report(email)
+async def _ctx(email: str, portfolio: str = "paper"):
+    rep = await _report(email, portfolio)
     ctx = rep.get("exposure_ctx")
     if not ctx or not ctx["holdings"]:
         return rep, None
@@ -429,8 +469,8 @@ async def _sector_map(syms: list[str]) -> dict:
 
 
 @router.get("/exposure")
-async def exposure(period: str = PERIOD, email: str = Depends(_heavy)):
-    rep, ctx = await _ctx(email)
+async def exposure(period: str = PERIOD, portfolio: PortfolioQ = "paper", email: str = Depends(_heavy)):
+    rep, ctx = await _ctx(email, portfolio)
     if ctx is None:
         return _no_ctx(rep, "exposure")
     syms = list(ctx["holdings"])
@@ -443,8 +483,8 @@ async def exposure(period: str = PERIOD, email: str = Depends(_heavy)):
 
 
 @router.get("/risk-decomposition")
-async def risk_decomposition(period: str = PERIOD, email: str = Depends(_heavy)):
-    rep, ctx = await _ctx(email)
+async def risk_decomposition(period: str = PERIOD, portfolio: PortfolioQ = "paper", email: str = Depends(_heavy)):
+    rep, ctx = await _ctx(email, portfolio)
     if ctx is None:
         return _no_ctx(rep, "decomposition")
     w, _, _ = X.nav_weights(ctx["holdings"], ctx["cash"])
@@ -453,8 +493,8 @@ async def risk_decomposition(period: str = PERIOD, email: str = Depends(_heavy))
 
 
 @router.get("/attribution")
-async def attribution_view(period: str = PERIOD, email: str = Depends(_heavy)):
-    rep = await _report(email)
+async def attribution_view(period: str = PERIOD, portfolio: PortfolioQ = "paper", email: str = Depends(_heavy)):
+    rep = await _report(email, portfolio)
     attr = rep.get("attribution")
     if attr is None:
         st = rep["meta"].get("data_status")
@@ -475,7 +515,7 @@ class StressIn(BaseModel):
 
 
 @router.post("/stress-test")
-async def stress_test(body: StressIn, email: str = Depends(_heavy)):
+async def stress_test(body: StressIn, portfolio: PortfolioQ = "paper", email: str = Depends(_heavy)):
     shocks = {k.strip().upper(): v for k, v in body.shocks.items()}
     sector_shocks = {k.strip(): v for k, v in body.sector_shocks.items()}
     if body.market_shock is None and not shocks and not sector_shocks:
@@ -484,7 +524,7 @@ async def stress_test(body: StressIn, email: str = Depends(_heavy)):
         raise HTTPException(400, "Invalid sector_shocks (name 1-60 chars, values within -1..1).")
     if len(shocks) > rd.MAX_SYMBOLS or any(not _SYM.match(k) or not -1.0 <= v <= 1.0 for k, v in shocks.items()):
         raise HTTPException(400, "Invalid shocks (symbols A-Z0-9.-, values within -1..1).")
-    rep, ctx = await _ctx(email)
+    rep, ctx = await _ctx(email, portfolio)
     if ctx is None:
         return _no_ctx(rep, "stress")
     betas = X.holding_betas(ctx["returns"], ctx["bench_returns"])
