@@ -8,6 +8,8 @@ import type { StrategyForm } from "./StrategyBuilder"
 import StrategyResults, { REASON_LABEL } from "./StrategyResults"
 import TickerInput from "./TickerInput"
 import type { TickerHit } from "./TickerInput"
+import RobustnessPanel from "./RobustnessPanel"
+
 
 // หน้า Backtest Lab (หุ้นสหรัฐ) — คอมโพเนนต์ใหม่ทั้งหมด ไม่ import/ไม่แตะโค้ด Backtest เดิม
 type Props = { getToken: () => string | null; apiBase: string }
@@ -670,6 +672,7 @@ const rangeText = (() => {
       </div>
 
       {run?.status === "done" && <Results run={run} />}
+      {run?.status === "done" && <RobustnessPanel runId={run.id} apiBase={apiBase} getToken={getToken} />}
 
       {history.length > 0 && (
         <div className={card}>
