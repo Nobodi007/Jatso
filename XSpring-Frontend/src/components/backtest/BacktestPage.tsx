@@ -9,6 +9,7 @@ import StrategyResults, { REASON_LABEL } from "./StrategyResults"
 import TickerInput from "./TickerInput"
 import type { TickerHit } from "./TickerInput"
 import RobustnessPanel from "./RobustnessPanel"
+import ResultCharts from "./ResultCharts"
 
 
 // หน้า Backtest Lab (หุ้นสหรัฐ) — คอมโพเนนต์ใหม่ทั้งหมด ไม่ import/ไม่แตะโค้ด Backtest เดิม
@@ -217,7 +218,7 @@ function Results({ run }: { run: Run }) {
 
       <div className={card}>
         <h3 className="mb-2 text-sm font-medium text-foreground">ผลตอบแทนสะสม</h3>
-        <EquityChart series={r.series} />
+        <ResultCharts series={r.series} />
       </div>
 
       <div className={card}>
