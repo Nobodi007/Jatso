@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import math
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -44,6 +45,32 @@ class NavPoint:
     cash: float
     market_value: float | None
     stale: tuple[str, ...]
+    flow: float = 0.0   # external cash flow applied at the START of this day (deposit +, withdrawal −); 0 on the base day
+
+
+@dataclass(frozen=True)
+class CashFlow:
+    """External cash flow (deposit +, withdrawal −) effective from the START of `date`.
+    Weekend/holiday dates take effect on the next trading day in the calendar."""
+    id: int
+    date: date
+    amount: float
+
+
+def to_flows(rows: list[dict]) -> list[CashFlow]:
+    out = []
+    for r in rows:
+        try:
+            amt = float(r["amount"])
+            d = date.fromisoformat(str(r["flow_date"])[:10])
+            fid = int(r["id"])
+        except (KeyError, TypeError, ValueError) as e:
+            raise LedgerError(f"unparseable cash flow id={r.get('id')}: {e}") from None
+        if not math.isfinite(amt) or amt == 0:
+            raise LedgerError(f"invalid cash flow id={r.get('id')}")
+        out.append(CashFlow(fid, d, amt))
+    out.sort(key=lambda f: (f.date, f.id))
+    return out
 
 
 def parse_ts(v) -> datetime:
@@ -119,10 +146,14 @@ def positions(trades: list[Trade]) -> dict[str, Position]:
 
 
 def build_nav(trades: list[Trade], initial_cash: float, calendar: list[date],
-              closes: dict[str, dict[date, float]], max_ffill: int = 5) -> tuple[list[NavPoint], list[dict]]:
-    """NAV_t = cash_t + Σ q_i,t · close_i,t. Trades with session_date ≤ t are applied before valuing t."""
+              closes: dict[str, dict[date, float]], max_ffill: int = 5,
+              flows: list[CashFlow] | None = None) -> tuple[list[NavPoint], list[dict]]:
+    """NAV_t = cash_t + Σ q_i,t · close_i,t. Trades with session_date ≤ t are applied before valuing t.
+    flows (optional): external cash flows with date ≤ t are added to cash at the start of t, before trades.
+    Flows dated on/before calendar[0] are part of the opening balance (NavPoint.flow = 0 on the base day)."""
+    flows = flows or []
     qty: dict[str, float] = {}
-    cash, i = initial_cash, 0
+    cash, i, j = initial_cash, 0, 0
     last: dict[str, tuple[int, float]] = {}
     for sym, series in closes.items():                     # seed with last close before window
         prior = [d for d in series if d < calendar[0] and series[d] > 0]
@@ -131,6 +162,12 @@ def build_nav(trades: list[Trade], initial_cash: float, calendar: list[date],
     issues: dict[tuple[str, str], dict] = {}
     points = []
     for k, d in enumerate(calendar):
+        flow_today = 0.0
+        while j < len(flows) and flows[j].date <= d:
+            cash += flows[j].amount
+            if k > 0:
+                flow_today += flows[j].amount
+            j += 1
         while i < len(trades) and trades[i].session_date <= d:
             t = trades[i]
             held = qty.get(t.symbol, 0.0)
@@ -161,5 +198,19 @@ def build_nav(trades: list[Trade], initial_cash: float, calendar: list[date],
             if k - hit[0] > 0:
                 stale.append(sym)
             mv += q * hit[1]
-        points.append(NavPoint(d, cash + mv if ok else None, cash, mv if ok else None, tuple(stale)))
+        points.append(NavPoint(d, cash + mv if ok else None, cash, mv if ok else None, tuple(stale), flow_today))
     return points, list(issues.values())
+
+
+def returns_from_nav(nav: list[NavPoint]) -> list[float]:
+    """Daily time-weighted returns. External flows arrive at the start of the day, so the capital at work is
+    NAV_{t−1} + flow_t:  r_t = NAV_t / (NAV_{t−1} + flow_t) − 1.  With no flows this is exactly NAV_t/NAV_{t−1} − 1."""
+    out = []
+    for i in range(1, len(nav)):
+        if nav[i].nav is None or nav[i - 1].nav is None:
+            raise LedgerError("NAV unavailable")
+        base = nav[i - 1].nav + nav[i].flow
+        if base <= 0:
+            raise LedgerError(f"no capital at start of {nav[i].date.isoformat()} (NAV + flow ≤ 0)")
+        out.append(nav[i].nav / base - 1)
+    return out
