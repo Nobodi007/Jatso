@@ -123,57 +123,6 @@ function Comparison({ r }: { r: Result }) {
   )
 }
 
-function EquityChart({ series }: { series: Result["series"] }) {
-  const W = 800
-  const H = 260
-  const P = { l: 48, r: 12, t: 10, b: 22 }
-  const { paths, y0, ticks, first, last } = useMemo(() => {
-    const keys = ["portfolio", "buy_hold", "benchmark"] as const
-    let lo = 0
-    let hi = 0
-    for (const s of series) for (const k of keys) {
-      lo = Math.min(lo, s[k])
-      hi = Math.max(hi, s[k])
-    }
-    const span = hi - lo || 1
-    const x = (i: number) => P.l + (i / Math.max(series.length - 1, 1)) * (W - P.l - P.r)
-    const y = (v: number) => P.t + (1 - (v - lo) / span) * (H - P.t - P.b)
-    const mk = (k: (typeof keys)[number]) => series.map((s, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(s[k]).toFixed(1)}`).join(" ")
-    const t = [0, 1, 2, 3, 4].map((n) => lo + (span * n) / 4)
-    return {
-      paths: { portfolio: mk("portfolio"), buy_hold: mk("buy_hold"), benchmark: mk("benchmark") },
-      y0: y(0),
-      ticks: t.map((v) => ({ v, y: y(v) })),
-      first: series[0]?.date ?? "",
-      last: series[series.length - 1]?.date ?? "",
-    }
-  }, [series])
-  return (
-    <div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full text-muted-foreground" role="img" aria-label="ผลตอบแทนสะสม พอร์ต เทียบ Buy-and-Hold และ S&P 500">
-        {ticks.map((t) => (
-          <g key={t.v}>
-            <line x1={P.l} x2={W - P.r} y1={t.y} y2={t.y} stroke="currentColor" strokeOpacity="0.15" />
-            <text x={P.l - 6} y={t.y + 3} textAnchor="end" fontSize="10" fill="currentColor">
-              {(t.v * 100).toFixed(0)}%
-            </text>
-          </g>
-        ))}
-        <line x1={P.l} x2={W - P.r} y1={y0} y2={y0} stroke="currentColor" strokeOpacity="0.5" strokeDasharray="4 3" />
-        <path d={paths.benchmark} fill="none" stroke="#a1a1aa" strokeWidth="1.5" strokeDasharray="5 3" />
-        <path d={paths.buy_hold} fill="none" stroke="#f59e0b" strokeWidth="1.5" />
-        <path d={paths.portfolio} fill="none" stroke="#38bdf8" strokeWidth="2" />
-        <text x={P.l} y={H - 6} fontSize="10" fill="currentColor">{first}</text>
-        <text x={W - P.r} y={H - 6} textAnchor="end" fontSize="10" fill="currentColor">{last}</text>
-      </svg>
-      <div className="mt-1 flex flex-wrap gap-4 text-xs text-muted-foreground">
-        <span><i className="mr-1 inline-block h-0.5 w-4 bg-sky-400 align-middle" />พอร์ต</span>
-        <span><i className="mr-1 inline-block h-0.5 w-4 bg-amber-500 align-middle" />Buy-and-Hold</span>
-        <span><i className="mr-1 inline-block h-0.5 w-4 bg-zinc-400 align-middle" />S&P 500 (Price)</span>
-      </div>
-    </div>
-  )
-}
 
 function Results({ run }: { run: Run }) {
   const r = run.result
