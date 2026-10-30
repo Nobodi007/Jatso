@@ -1,0 +1,255 @@
+"""
+stock_insights.py  -  ข้อมูลเพิ่มเติมหน้า Company (Finnhub ก่อน, Yahoo เป็น fallback)
+  GET /api/stocks/{symbol}/executives
+  GET /api/stocks/{symbol}/ownership
+  GET /api/stocks/{symbol}/analyst
+  GET /api/stocks/{symbol}/insiders
+
+เพิ่มใน router.py:
+    from .stock_insights import router as stock_insights_router
+    router.include_router(stock_insights_router)
+"""
+import asyncio
+import math
+import re
+
+from fastapi import APIRouter, HTTPException
+
+from . import providers as p
+from .cache import ProviderError, RateLimited, cached
+
+router = APIRouter(tags=["stocks-insights"])
+SYMBOL_RE = re.compile(r"^[A-Z][A-Z.\-]{0,9}$")
+
+
+def norm(symbol: str) -> str:
+    s = symbol.upper().strip()
+    if not SYMBOL_RE.match(s):
+        raise HTTPException(400, "invalid_symbol")
+    return s
+
+
+async def guard(coro):
+    try:
+        return await coro
+    except RateLimited:
+        raise HTTPException(503, "rate_limited")
+    except ProviderError:
+        raise HTTPException(502, "provider_error")
+
+
+async def optional(coro):
+    """ล้มเหลว/ติดแพ็กเกจ -> None (ไม่ทำให้ทั้งหน้าพัง) แต่ rate limit ยังส่งต่อให้ frontend"""
+    try:
+        return await coro
+    except RateLimited:
+        raise HTTPException(503, "rate_limited")
+    except ProviderError:
+        return None
+
+
+def _f(x):
+    try:
+        v = float(x)
+        return v if math.isfinite(v) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _day(ts):
+    try:
+        return ts.date().isoformat()
+    except AttributeError:
+        return str(ts)[:10] if ts is not None else None
+
+
+# ====================== Yahoo (sync, รันผ่าน p._yahoo) ======================
+def _yf_officers(symbol):
+    import yfinance as yf
+    info = yf.Ticker(p._yf_sym(symbol)).info or {}
+    return [
+        {"name": o.get("name"), "title": o.get("title"), "since": None,
+         "age": o.get("age"), "compensation": o.get("totalPay")}
+        for o in info.get("companyOfficers") or [] if o.get("name")
+    ]
+
+
+def _yf_holders(symbol):
+    import yfinance as yf
+    t = yf.Ticker(p._yf_sym(symbol))
+    out = {"institutionsPercent": None, "insidersPercent": None, "holders": []}
+    try:
+        mh = t.major_holders
+        if mh is not None and not mh.empty:
+            col = mh.columns[0]
+            for key, field in (("institutionsPercentHeld", "institutionsPercent"),
+                               ("insidersPercentHeld", "insidersPercent")):
+                if key in mh.index:
+                    v = _f(mh.loc[key, col])
+                    out[field] = round(v * 100, 2) if v is not None else None
+    except Exception:
+        pass
+    df = t.institutional_holders
+    if df is not None and not df.empty:
+        pct_col = "pctHeld" if "pctHeld" in df.columns else ("% Out" if "% Out" in df.columns else None)
+        for _, r in df.iterrows():
+            pct = _f(r.get(pct_col)) if pct_col else None
+            chg = _f(r.get("pctChange"))
+            sh = _f(r.get("Shares"))
+            out["holders"].append({
+                "name": r.get("Holder"), "shares": sh,
+                "percent": round(pct * 100, 2) if pct is not None else None,
+                # Yahoo ให้เป็น % เปลี่ยนแปลง ไม่ใช่จำนวนหุ้น -> แปลงเป็นจำนวนหุ้นโดยประมาณ
+                "change": round(sh * chg / (1 + chg)) if sh and chg not in (None, -1) else None,
+                "date": _day(r.get("Date Reported")),
+            })
+    return out
+
+
+def _yf_analyst(symbol):
+    import yfinance as yf
+    t = yf.Ticker(p._yf_sym(symbol))
+    res = {"rating": None, "target": None}
+    try:
+        pt = t.analyst_price_targets or {}
+        if pt.get("mean"):
+            res["target"] = {"mean": _f(pt.get("mean")), "median": _f(pt.get("median")),
+                             "high": _f(pt.get("high")), "low": _f(pt.get("low")), "updatedAt": None}
+    except Exception:
+        pass
+    try:
+        rs = t.recommendations_summary
+        if rs is not None and not rs.empty:
+            r = rs.iloc[0]
+            res["rating"] = {k: int(_f(r.get(k)) or 0) for k in ("strongBuy", "buy", "hold", "sell", "strongSell")}
+            res["rating"]["period"] = str(r.get("period", ""))
+    except Exception:
+        pass
+    return res
+
+
+def _yf_insiders(symbol):
+    import yfinance as yf
+    df = yf.Ticker(p._yf_sym(symbol)).insider_transactions
+    out = []
+    if df is None or df.empty:
+        return out
+    for _, r in df.iterrows():
+        text = f"{r.get('Transaction') or ''} {r.get('Text') or ''}".lower()
+        if "sale" in text or "sold" in text:
+            typ = "SELL"
+        elif "purchase" in text or "bought" in text or "buy" in text:
+            typ = "BUY"
+        else:
+            continue  # ข้าม award / exercise / gift
+        sh, val = _f(r.get("Shares")), _f(r.get("Value"))
+        if not sh:
+            continue
+        out.append({
+            "name": r.get("Insider"), "title": r.get("Position") or None, "type": typ,
+            "shares": abs(sh), "price": round(val / abs(sh), 2) if val else None,
+            "value": round(abs(val)) if val else None, "date": _day(r.get("Start Date")),
+        })
+    return out
+
+
+# ====================== 2) CEO / ผู้บริหาร ======================
+def _is_ceo(t):
+    t = (t or "").lower()
+    return "chief executive" in t or re.search(r"\bceo\b", t) is not None
+
+
+@router.get("/{symbol}/executives")
+async def executives(symbol: str):
+    s = norm(symbol)
+    d = await optional(cached(f"exec:{s}", 86400, lambda: p.finnhub("/stock/executive", symbol=s)))
+    officers = [
+        {"name": x.get("name"), "title": x.get("position"), "since": x.get("since"),
+         "age": x.get("age"), "compensation": x.get("compensation")}
+        for x in (d or {}).get("executive") or [] if x.get("name")
+    ]
+    src = "finnhub"
+    if not officers:
+        officers = await optional(cached(f"exec_y:{s}", 86400, lambda: p._yahoo(_yf_officers, s))) or []
+        src = "yahoo"
+    ceo = next((o for o in officers if _is_ceo(o["title"])), None)
+    return {"ceo": ceo, "officers": officers[:12], "source": src if officers else None}
+
+
+# ====================== 1) ผู้ถือหุ้น ======================
+@router.get("/{symbol}/ownership")
+async def ownership(symbol: str):
+    s = norm(symbol)
+    own, prof = await asyncio.gather(
+        optional(cached(f"own:{s}", 86400, lambda: p.finnhub("/stock/ownership", symbol=s, limit=20))),
+        optional(cached(f"profile:{s}", 86400, lambda: p.finnhub("/stock/profile2", symbol=s))),
+    )
+    shares_out = ((prof or {}).get("shareOutstanding") or 0) * 1e6
+    holders = []
+    for h in (own or {}).get("ownership") or []:
+        sh = h.get("share")
+        holders.append({
+            "name": h.get("name"), "shares": sh,
+            "percent": round(sh / shares_out * 100, 2) if sh and shares_out else None,
+            "change": h.get("change"), "date": h.get("filingDate"),
+        })
+    if holders:
+        holders.sort(key=lambda x: x["shares"] or 0, reverse=True)
+        return {"institutionsPercent": None, "insidersPercent": None, "holders": holders, "source": "finnhub"}
+
+    y = await optional(cached(f"own_y:{s}", 86400, lambda: p._yahoo(_yf_holders, s)))
+    if y:
+        return {**y, "source": "yahoo"}
+    return {"institutionsPercent": None, "insidersPercent": None, "holders": [], "source": None}
+
+
+# ====================== 3) บทวิเคราะห์ + ราคาเป้าหมาย ======================
+@router.get("/{symbol}/analyst")
+async def analyst(symbol: str):
+    s = norm(symbol)
+    rec, pt = await asyncio.gather(
+        optional(cached(f"rec:{s}", 6 * 3600, lambda: p.finnhub("/stock/recommendation", symbol=s))),
+        optional(cached(f"pt:{s}", 6 * 3600, lambda: p.finnhub("/stock/price-target", symbol=s))),
+    )
+    rating = None
+    if rec:
+        r = rec[0]
+        rating = {k: r.get(k, 0) for k in ("strongBuy", "buy", "hold", "sell", "strongSell")}
+        rating["period"] = r.get("period")
+    target = None
+    if pt and pt.get("targetMean"):
+        target = {"mean": pt.get("targetMean"), "median": pt.get("targetMedian"),
+                  "high": pt.get("targetHigh"), "low": pt.get("targetLow"), "updatedAt": pt.get("lastUpdated")}
+
+    if rating is None or target is None:  # เติมส่วนที่ขาดจาก Yahoo
+        y = await optional(cached(f"an_y:{s}", 6 * 3600, lambda: p._yahoo(_yf_analyst, s))) or {}
+        rating = rating or y.get("rating")
+        target = target or y.get("target")
+    return {"rating": rating, "target": target}
+
+
+# ====================== 4) ผู้บริหารซื้อขายหุ้น ======================
+@router.get("/{symbol}/insiders")
+async def insiders(symbol: str):
+    s = norm(symbol)
+    d = await optional(cached(f"ins:{s}", 3600, lambda: p.finnhub("/stock/insider-transactions", symbol=s)))
+    out = []
+    for t in (d or {}).get("data") or []:
+        code = t.get("transactionCode")
+        if code not in ("P", "S"):  # P = ซื้อในตลาด, S = ขายในตลาด
+            continue
+        qty = abs(t.get("change") or 0)
+        price = t.get("transactionPrice") or 0
+        if not qty:
+            continue
+        out.append({
+            "name": t.get("name"), "title": None,
+            "type": "BUY" if code == "P" else "SELL",
+            "shares": qty, "price": price or None,
+            "value": round(qty * price) if price else None,
+            "date": t.get("transactionDate") or t.get("filingDate"),
+        })
+    if not out:
+        out = await optional(cached(f"ins_y:{s}", 3600, lambda: p._yahoo(_yf_insiders, s))) or []
+    out.sort(key=lambda x: x["date"] or "", reverse=True)
+    return out[:30]
