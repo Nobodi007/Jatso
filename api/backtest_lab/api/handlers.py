@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -59,8 +60,19 @@ def meta() -> tuple[int, dict]:
         "rule_language": {"operators": list(rules.OPS), "price_fields": list(rules.PRICE_FIELDS),
                           "max_nodes": rules.MAX_NODES, "max_depth": rules.MAX_DEPTH, "max_shift": rules.MAX_SHIFT,
                           "stops": ["stop_loss_pct", "take_profit_pct", "trailing_stop_pct", "max_hold_days"]},
+        "retention_days": C.RETENTION_DAYS,
         "notice": "ผล Backtest เป็นข้อมูลจำลองย้อนหลัง ไม่ใช่ผลงานจริงและไม่ใช่การพยากรณ์ ไม่ใช่คำแนะนำการลงทุน",
     }
+
+
+async def prune_expired(s: Services, email: str) -> int:
+    """ลบผลที่เสร็จแล้วและเก่าเกิน RETENTION_DAYS ของผู้ใช้คนนี้ (ล้มเหลวไม่ทำให้คำขอหลักล้ม)"""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=C.RETENTION_DAYS)).isoformat()
+    try:
+        return await asyncio.to_thread(s.run_store.delete_finished_before, email, cutoff)
+    except Exception:
+        log.warning("backtest_lab: prune ล้มเหลว (ข้ามไป)")
+        return 0
 
 
 async def create_run(s: Services, email: str, body) -> tuple[int, dict]:
@@ -74,6 +86,7 @@ async def create_run(s: Services, email: str, body) -> tuple[int, dict]:
         return 400, {"code": "invalid_spec", "message": str(e)}
     h = spec_hash(spec)
 
+    await prune_expired(s, email)
     active = await asyncio.to_thread(s.run_store.find_active, email, h)       # กันรันซ้ำที่ยังไม่เสร็จ
     if active:
         return 200, {"id": active["id"], "status": active["status"], "duplicate": True}
@@ -112,6 +125,7 @@ async def get_run(s: Services, email: str, run_id: str) -> tuple[int, dict]:
 
 
 async def list_runs(s: Services, email: str) -> tuple[int, dict]:
+    await prune_expired(s, email)
     rows = await asyncio.to_thread(s.run_store.list, email, C.MAX_STORED_RUNS_PER_USER)
     return 200, {"runs": rows}
 
