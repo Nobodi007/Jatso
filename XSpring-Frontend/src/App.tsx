@@ -103,8 +103,21 @@ export function formatTHB(value: number) {
   })}`
 }
 
-function AiAssistantOverlay({ onClose }: { onClose: () => void }) {
+function AiAssistantOverlay({
+  onClose,
+  market,
+  symbol,
+}: {
+  onClose: () => void
+  market: "crypto" | "stocks"
+  symbol?: string
+}) {
   const historyRef = useRef<{ role: "user" | "assistant"; content: string }[]>([])
+
+  // สลับตลาดแล้วล้างประวัติ ไม่งั้นบอทจะเอาบทสนทนาคริปโตมาปนกับหุ้น
+  useEffect(() => {
+    historyRef.current = []
+  }, [market])
 
   const handleSubmit = async (text: string): Promise<string> => {
     if (!DEALER_API_KEY) return "ยังไม่ได้ตั้ง VITE_DEALER_API_KEY"
@@ -116,8 +129,12 @@ function AiAssistantOverlay({ onClose }: { onClose: () => void }) {
           Accept: "application/json",
           "X-API-Key": DEALER_API_KEY,
         },
-        body: JSON.stringify({ message: text, history: historyRef.current }),
-      })
+        body: JSON.stringify({
+          message: text,
+          history: historyRef.current,
+          market,
+          symbol: market === "stocks" ? (symbol ?? "") : "",
+        }),
       const body = await response.json().catch(() => null)
 
       if (!response.ok) {
@@ -770,7 +787,11 @@ function AppInner() {
       >
         ✨ ถาม AI
       </button>
-      {aiOpen && <AiAssistantOverlay onClose={() => setAiOpen(false)} />}
+      {aiOpen && <AiAssistantOverlay
+        onClose={() => setAiOpen(false)}
+        market={market}          // ตัวแปรที่เก็บแท็บ คริปโต/หุ้นสหรัฐ
+        symbol={currentSymbol}   // หุ้นที่เปิดอยู่ในหน้า Company (ไม่ส่งก็ได้)
+      />
     </div>            
   )
 }
