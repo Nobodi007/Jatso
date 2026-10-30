@@ -24,6 +24,7 @@ class RunStore(Protocol):
     def update(self, email: str, run_id: str, fields: dict) -> None: ...
     def delete(self, email: str, run_id: str) -> bool: ...
     def find_active(self, email: str, spec_hash: str) -> Optional[dict]: ...
+    def delete_finished_before(self, email: str, cutoff_iso: str) -> int: ...
 
 
 class MemoryRunStore:
@@ -71,6 +72,15 @@ class MemoryRunStore:
                 return dict(r)
         return None
 
+    def delete_finished_before(self, email, cutoff_iso):
+        """ลบเฉพาะรันของ email นี้ที่เสร็จแล้ว (done/failed) และสร้างก่อน cutoff — queued/running ไม่ถูกแตะ"""
+        with self._lock:
+            ids = [i for i, r in self._rows.items() if r["email"] == email and r["status"] in ("done", "failed")
+                   and r["created_at"] < cutoff_iso]
+            for i in ids:
+                del self._rows[i]
+        return len(ids)
+
 
 class SupabaseRunStore:
     def __init__(self, client: SbClient):
@@ -107,3 +117,9 @@ class SupabaseRunStore:
         rows = self.c.request("GET", TABLE, params={"email": f"eq.{email}", "spec_hash": f"eq.{spec_hash}",
                                                     "status": "in.(queued,running)", "select": "id,status", "limit": "1"})
         return rows[0] if rows else None
+
+    def delete_finished_before(self, email, cutoff_iso):
+        out = self.c.request("DELETE", TABLE, params={"email": f"eq.{email}", "status": "in.(done,failed)",
+                                                      "created_at": f"lt.{cutoff_iso}", "select": "id"},
+                             prefer="return=representation")
+        return len(out or [])
