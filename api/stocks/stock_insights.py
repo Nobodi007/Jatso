@@ -10,6 +10,7 @@ stock_insights.py  -  ข้อมูลเพิ่มเติมหน้า 
     router.include_router(stock_insights_router)
 """
 import asyncio
+import logging
 import math
 import re
 
@@ -18,6 +19,7 @@ from fastapi import APIRouter, HTTPException
 from . import providers as p
 from .cache import ProviderError, RateLimited, cached
 
+log = logging.getLogger("stocks.insights")
 router = APIRouter(tags=["stocks-insights"])
 SYMBOL_RE = re.compile(r"^[A-Z][A-Z.\-]{0,9}$")
 
@@ -44,7 +46,8 @@ async def optional(coro):
         return await coro
     except RateLimited:
         raise HTTPException(503, "rate_limited")
-    except ProviderError:
+    except ProviderError as e:
+        log.warning("insights provider failed: %s: %s", type(e).__name__, str(e)[:200])
         return None
 
 
@@ -153,6 +156,25 @@ def _yf_insiders(symbol):
     return out
 
 
+# ====================== FMP fallback (ใช้โควต้า fmp รวมกับส่วนอื่น) ======================
+async def _fmp_officers(s):
+    rows = await p._fmp("/key-executives", symbol=s)
+    return [
+        {"name": r.get("name"), "title": r.get("title"), "since": r.get("titleSince"),
+         "age": None, "compensation": r.get("pay")}
+        for r in (rows if isinstance(rows, list) else []) if r.get("name")
+    ]
+
+
+async def _fmp_target(s):
+    rows = await p._fmp("/price-target-consensus", symbol=s)
+    r = rows[0] if isinstance(rows, list) and rows else None
+    if not r or not (r.get("targetConsensus") or r.get("targetMedian")):
+        return None
+    return {"mean": _f(r.get("targetConsensus")), "median": _f(r.get("targetMedian")),
+            "high": _f(r.get("targetHigh")), "low": _f(r.get("targetLow")), "updatedAt": None}
+
+
 # ====================== 2) CEO / ผู้บริหาร ======================
 def _is_ceo(t):
     t = (t or "").lower()
@@ -172,6 +194,9 @@ async def executives(symbol: str):
     if not officers:
         officers = await optional(cached(f"exec_y:{s}", 86400, lambda: p._yahoo(_yf_officers, s))) or []
         src = "yahoo"
+    if not officers:
+        officers = await optional(cached(f"exec_f:{s}", 86400, lambda: _fmp_officers(s))) or []
+        src = "fmp"
     ceo = next((o for o in officers if _is_ceo(o["title"])), None)
     return {"ceo": ceo, "officers": officers[:12], "source": src if officers else None}
 
@@ -225,6 +250,8 @@ async def analyst(symbol: str):
         y = await optional(cached(f"an_y:{s}", 6 * 3600, lambda: p._yahoo(_yf_analyst, s))) or {}
         rating = rating or y.get("rating")
         target = target or y.get("target")
+    if target is None:
+        target = await optional(cached(f"pt_f:{s}", 6 * 3600, lambda: _fmp_target(s)))
     return {"rating": rating, "target": target}
 
 
