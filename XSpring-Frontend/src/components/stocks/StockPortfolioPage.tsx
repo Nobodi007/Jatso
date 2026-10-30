@@ -34,7 +34,6 @@ const sgn = (n: number) => (n > 0 ? "+" : "");
 const sUsd = (n: number) => `${sgn(n)}${usd(n)}`;
 const tone = (n: number) => (n > 0 ? "text-emerald-500" : n < 0 ? "text-rose-500" : "text-muted-foreground");
 const ease = (t: number) => 1 - Math.pow(1 - t, 3);
-const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 const MONTHS = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
 
 function useSize() {
@@ -199,50 +198,6 @@ function LineChart({ points, setTip }: { points: { label: string; value: number 
               <circle cx={P[hover][0]} cy={P[hover][1]} r={4.5} fill={col} className="stroke-card" strokeWidth={2} />
             </>
           )}
-          <rect width={W} height={H} fill="transparent" onPointerMove={move} onPointerLeave={() => { setHover(null); setTip(null); }} />
-        </svg>
-      )}
-    </div>
-  );
-}
-
-/* ---------------- B: ซื้อ vs ขาย 14 วัน (คลื่นสองฝั่ง) ---------------- */
-
-function WaveChart({ labels, buy, sell, setTip }: { labels: string[]; buy: number[]; sell: number[]; setTip: SetTip }) {
-  const [ref, { w: W, h: H }] = useSize();
-  const t = useGrow(buy.join(",") + "|" + sell.join(","), 1300);
-  const [hover, setHover] = useState<number | null>(null);
-  const n = buy.length;
-  const max = Math.max(1, ...buy, ...sell);
-  const mid = H / 2, amp = H / 2 - 16, pad = 20;
-  const X = (i: number) => pad + (i / (n - 1)) * (W - 2 * pad);
-  const line = (a: number[], dir: number) =>
-    smooth(a.map((v, i) => [X(i), mid + dir * (2 + (v / max) * amp * t)] as [number, number]));
-  const area = (a: number[], dir: number) => `${line(a, dir)}L${X(n - 1)},${mid}L${X(0)},${mid}Z`;
-
-  const move = (e: RPointerEvent<SVGRectElement>) => {
-    const r = e.currentTarget.ownerSVGElement!.getBoundingClientRect();
-    const i = Math.max(0, Math.min(n - 1, Math.round(((e.clientX - r.left - pad) / (W - 2 * pad)) * (n - 1))));
-    setHover(i);
-    setTip({
-      x: r.left + X(i), y: r.top + 14, title: labels[i],
-      rows: [
-        { label: "ซื้อ", value: usd(buy[i]), dot: "#10b981" },
-        { label: "ขาย", value: usd(sell[i]), dot: "#f43f5e" },
-      ],
-    });
-  };
-
-  return (
-    <div ref={ref} className="relative h-[160px] w-full overflow-hidden rounded-2xl border border-border bg-muted/40">
-      {W > 0 && (
-        <svg width={W} height={H} className="block" role="img" aria-label="มูลค่าซื้อและขายรายวัน 14 วันล่าสุด">
-          <line x1={pad} x2={W - pad} y1={mid} y2={mid} className="stroke-border" />
-          <path d={area(buy, -1)} fill="#10b981" opacity={0.12} />
-          <path d={area(sell, 1)} fill="#f43f5e" opacity={0.12} />
-          <path d={line(buy, -1)} fill="none" stroke="#10b981" strokeWidth={2.5} strokeLinecap="round" />
-          <path d={line(sell, 1)} fill="none" stroke="#f43f5e" strokeWidth={2.5} strokeLinecap="round" />
-          {hover !== null && <line x1={X(hover)} x2={X(hover)} y1={4} y2={H - 4} className="stroke-muted-foreground/60" />}
           <rect width={W} height={H} fill="transparent" onPointerMove={move} onPointerLeave={() => { setHover(null); setTip(null); }} />
         </svg>
       )}
@@ -529,23 +484,6 @@ export default function StockPortfolioPage({
   }, [asc]);
   const totalRealized = realizedSeries.length ? realizedSeries[realizedSeries.length - 1].value : 0;
 
-  const activity = useMemo(() => {
-    const keys: string[] = [], labels: string[] = [];
-    const now = new Date();
-    for (let i = 13; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-      keys.push(dayKey(d));
-      labels.push(d.toLocaleDateString("th-TH", { day: "numeric", month: "short" }));
-    }
-    const buy = keys.map(() => 0), sell = keys.map(() => 0);
-    for (const t of trades) {
-      const i = keys.indexOf(dayKey(new Date(t.ts)));
-      if (i < 0) continue;
-      if (t.side === "buy") buy[i] += t.qty * t.price; else sell[i] += t.qty * t.price;
-    }
-    return { labels, buy, sell, has: buy.some((x) => x > 0) || sell.some((x) => x > 0) };
-  }, [trades]);
-
   const years = useMemo(() => {
     const s = new Set<number>([new Date().getFullYear()]);
     trades.forEach((t) => s.add(new Date(t.ts).getFullYear()));
@@ -635,39 +573,17 @@ export default function StockPortfolioPage({
 
   return (
     <div className="space-y-5 text-foreground">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">
-          {view === "portfolio" ? "พอร์ตหุ้นของฉัน" : view === "orders" ? "ประวัติการซื้อขาย" : "Positions หุ้น"}
-        </h1>
-        <p className="text-sm text-muted-foreground">พอร์ตหุ้นสหรัฐ แยกจากคริปโตทั้งหมด</p>
-      </div>
+      {view !== "portfolio" && (
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">
+            {view === "orders" ? "ประวัติการซื้อขาย" : "Positions หุ้น"}
+          </h1>
+          <p className="text-sm text-muted-foreground">พอร์ตหุ้นสหรัฐ แยกจากคริปโตทั้งหมด</p>
+        </div>
+      )}
 
       {err && <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-400">{err}</div>}
       {!book && !err && <Empty text="กำลังโหลดพอร์ต…" className="h-40" />}
-
-      {/* ฟอร์มบันทึกรายการ */}
-      {view === "portfolio" && (
-        <Card label="บันทึกรายการซื้อขาย">
-          <div className="grid grid-cols-2 gap-2 lg:grid-cols-7">
-            <input className={inp} placeholder="Symbol เช่น AAPL" value={f.symbol} onChange={(e) => setF({ ...f, symbol: e.target.value })} />
-            <select className={inp} value={f.side} onChange={(e) => setF({ ...f, side: e.target.value })}>
-              <option value="buy">ซื้อ</option>
-              <option value="sell">ขาย</option>
-            </select>
-            <input className={inp} inputMode="numeric" placeholder="จำนวน" value={f.qty} onChange={(e) => setF({ ...f, qty: e.target.value })} />
-            <input className={inp} inputMode="decimal" placeholder="ราคา (ว่าง = ราคาตลาด)" value={f.price} onChange={(e) => setF({ ...f, price: e.target.value })} />
-            <input className={inp} inputMode="decimal" placeholder="ค่าธรรมเนียม" value={f.fee} onChange={(e) => setF({ ...f, fee: e.target.value })} />
-            <input className={inp} placeholder="โน้ต" value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} />
-            <button
-              disabled={busy || !f.symbol || !f.qty}
-              onClick={() => void submit()}
-              className={`h-10 rounded-xl px-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40 ${f.side === "buy" ? "bg-emerald-500 hover:bg-emerald-600" : "bg-rose-500 hover:bg-rose-600"}`}
-            >
-              {busy ? "กำลังบันทึก…" : f.side === "buy" ? "บันทึกซื้อ" : "บันทึกขาย"}
-            </button>
-          </div>
-        </Card>
-      )}
 
       {/* Bento หน้า Portfolio */}
       {book && view === "portfolio" && (
@@ -691,22 +607,26 @@ export default function StockPortfolioPage({
             </div>
           </Card>
 
-          <Card className="col-span-12 lg:col-span-7" label="กิจกรรมซื้อขาย">
-            <div className="text-[13px] text-muted-foreground">มูลค่าหุ้นที่ถือ</div>
-            <div className="mt-2.5 text-[34px] font-medium leading-none tabular-nums sm:text-[40px]">
-              <CountUp value={book.market_value} prefix="$" decimals={2} />
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-              <span>ซื้อขาย 14 วันล่าสุด</span>
-              <span className="inline-flex items-center gap-1.5"><i className="h-0.5 w-3.5 rounded-sm bg-emerald-500" />ซื้อ</span>
-              <span className="inline-flex items-center gap-1.5"><i className="h-0.5 w-3.5 rounded-sm bg-rose-500" />ขาย</span>
-            </div>
-            <div className="mt-4">
-              {activity.has ? (
-                <WaveChart labels={activity.labels} buy={activity.buy} sell={activity.sell} setTip={setTip} />
-              ) : (
-                <Empty text="ยังไม่มีรายการซื้อขายใน 14 วันที่ผ่านมา" className="h-[160px]" />
-              )}
+          <Card className="col-span-12 lg:col-span-7" label="บันทึกรายการซื้อขาย">
+            <h2 className="text-[17px] font-semibold tracking-tight">บันทึกรายการซื้อขาย</h2>
+            <p className="mt-1 text-xs text-muted-foreground">ราคาว่าง = ใช้ราคาตลาดตอนบันทึก</p>
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <input className={inp} placeholder="Symbol เช่น AAPL" value={f.symbol} onChange={(e) => setF({ ...f, symbol: e.target.value })} />
+              <select className={inp} value={f.side} onChange={(e) => setF({ ...f, side: e.target.value })}>
+                <option value="buy">ซื้อ</option>
+                <option value="sell">ขาย</option>
+              </select>
+              <input className={inp} inputMode="numeric" placeholder="จำนวน" value={f.qty} onChange={(e) => setF({ ...f, qty: e.target.value })} />
+              <input className={inp} inputMode="decimal" placeholder="ราคา (ว่าง = ราคาตลาด)" value={f.price} onChange={(e) => setF({ ...f, price: e.target.value })} />
+              <input className={inp} inputMode="decimal" placeholder="ค่าธรรมเนียม" value={f.fee} onChange={(e) => setF({ ...f, fee: e.target.value })} />
+              <input className={inp} placeholder="โน้ต" value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} />
+              <button
+                disabled={busy || !f.symbol || !f.qty}
+                onClick={() => void submit()}
+                className={`col-span-2 h-10 rounded-xl px-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40 ${f.side === "buy" ? "bg-emerald-500 hover:bg-emerald-600" : "bg-rose-500 hover:bg-rose-600"}`}
+              >
+                {busy ? "กำลังบันทึก…" : f.side === "buy" ? "บันทึกซื้อ" : "บันทึกขาย"}
+              </button>
             </div>
           </Card>
 
