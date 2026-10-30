@@ -3,6 +3,9 @@ import { ApiError, createRun, deleteRun, fetchMeta, getRun, listRuns } from "./a
 import type { Brief, Meta, Metric, Result, Run, Spec, RebalanceFreq, RebalanceMode } from "./types"
 import { DonutChart } from "../ui/donut-chart"
 import type { DonutChartSegment } from "../ui/donut-chart"
+import StrategyBuilder, { buildStrategy, defaultStrategyForm } from "./StrategyBuilder"
+import type { StrategyForm } from "./StrategyBuilder"
+import StrategyResults, { REASON_LABEL } from "./StrategyResults"
 import TickerInput from "./TickerInput"
 import type { TickerHit } from "./TickerInput"
 
@@ -208,6 +211,8 @@ function Results({ run }: { run: Run }) {
         </div>
       </div>
 
+      {r.strategy_result && <StrategyResults sr={r.strategy_result} />}
+
       <div className={card}>
         <h3 className="mb-2 text-sm font-medium text-foreground">ผลตอบแทนสะสม</h3>
         <EquityChart series={r.series} />
@@ -294,7 +299,7 @@ function Results({ run }: { run: Run }) {
                     <td className={t.side === "buy" ? "text-emerald-500" : "text-red-500"}>{t.side === "buy" ? "ซื้อ" : "ขาย"}</td>
                     <td className="text-right">{t.shares.toFixed(4)}</td><td className="text-right">{t.price.toFixed(2)}</td>
                     <td className="text-right">{t.notional.toFixed(0)}</td><td className="text-right">{t.commission.toFixed(2)}</td>
-                    <td className="pl-3 text-muted-foreground">{t.reason === "initial" ? "ซื้อเริ่มต้น" : "ปรับสัดส่วน"}</td>
+                    <td className="pl-3 text-muted-foreground">{REASON_LABEL[t.reason] ?? t.reason}</td>
                   </tr>
                 ))}
               </tbody>
@@ -334,6 +339,7 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
   const [comm, setComm] = useState("0")
   const [slip, setSlip] = useState("5")
   const [rf, setRf] = useState("")
+  const [sf, setSf] = useState<StrategyForm>(defaultStrategyForm)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [run, setRun] = useState<Run | null>(null)
@@ -434,6 +440,11 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
       },
       costs: { commission_bps: Number(comm), slippage_bps: Number(slip) },
       risk_free_annual: rf.trim() === "" ? null : Number(rf) / 100,
+    }
+    if (sf.enabled) {
+      const st = buildStrategy(sf, meta?.indicators ?? [])
+      if (typeof st === "string") return st
+      spec.strategy = st
     }
     return spec
   }
@@ -637,6 +648,10 @@ const rangeText = (() => {
             </div>
           </div>
         </div>
+
+        {meta && meta.indicators && (
+          <StrategyBuilder form={sf} onChange={setSf} cat={meta.indicators} ops={meta.rule_language.operators} fields={meta.rule_language.price_fields} />
+        )}
 
         <p className="mt-3 text-xs text-muted-foreground">
           คำสั่งซื้อขายจับคู่ที่ราคาเปิดวันทำการถัดไป · เงินสดไม่ได้ดอกเบี้ย · ข้อมูลไม่รวมหุ้นที่ถูกถอนจากตลาด (ผลอาจดีกว่าความจริง) · Benchmark = S&P 500 Price Index (^GSPC)
