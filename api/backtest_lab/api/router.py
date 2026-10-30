@@ -11,8 +11,6 @@ from fastapi.responses import JSONResponse
 from . import handlers as H
 from .auth import AuthError, decode_email
 
-from ..robust.router import register as _register_robust
-_register_robust(router, services, _email, _out)
 
 router = APIRouter(prefix="/api/backtest-lab", tags=["backtest-lab"])
 _services: H.Services | None = None
@@ -60,3 +58,6 @@ async def get_run(run_id: str, authorization: str = Header(default="")):
 @router.delete("/runs/{run_id}")
 async def delete_run(run_id: str, authorization: str = Header(default="")):
     return _out(await H.delete_run(services(), _email(authorization), run_id))
+
+from ..robust.router import register as _register_robust
+_register_robust(router, services, _email, _out)
