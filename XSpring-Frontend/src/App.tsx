@@ -788,11 +788,10 @@ function AppInner() {
       >
         ✨ ถาม AI
       </button>
-      {aiOpen && (
+     {aiOpen && (
         <AiAssistantOverlay
           onClose={() => setAiOpen(false)}
           market={market}
-          symbol={currentSymbol}
         />
       )}
     </div>            
