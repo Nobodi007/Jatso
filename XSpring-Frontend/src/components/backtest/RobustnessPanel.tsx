@@ -11,6 +11,7 @@ type MC = {
   max_drawdown: Dist
   benchmark_final_return: Dist
   prob: { loss: number; beat_benchmark: number; drawdown_worse_20: number; drawdown_worse_30: number; drawdown_worse_50: number }
+  paths: number[][]
   fan: { x: number[]; p5: number[]; p25: number[]; p50: number[]; p75: number[]; p95: number[] }
   actual?: { final_return: number; percentile_rank: number }
   caveats: string[]
@@ -57,10 +58,10 @@ async function post<T>(apiBase: string, token: string | null, path: string, body
   return data as T
 }
 
-function Fan({ fan, days }: { fan: MC["fan"]; days: number }) {
+function Fan({ fan, paths, days, mode }: { fan: MC["fan"]; paths: number[][]; days: number; mode: "paths" | "bands" }) {
   const W = 800, H = 280, P = { l: 52, r: 12, t: 10, b: 24 }
   const g = useMemo(() => {
-    const all = [...fan.p5, ...fan.p95, 0]
+    const all = [...fan.p5, ...fan.p95, 0, ...(mode === "paths" ? paths.flat() : [])]
     const lo = Math.min(...all), hi = Math.max(...all), span = hi - lo || 1
     const x = (i: number) => P.l + (fan.x[i] / Math.max(days - 1, 1)) * (W - P.l - P.r)
     const y = (v: number) => P.t + (1 - (v - lo) / span) * (H - P.t - P.b)
@@ -70,9 +71,10 @@ function Fan({ fan, days }: { fan: MC["fan"]; days: number }) {
       `${b.map((_, k) => { const i = b.length - 1 - k; return `L${x(i).toFixed(1)},${y(b[i]).toFixed(1)}` }).join(" ")} Z`
     return {
       outer: band(fan.p5, fan.p95), inner: band(fan.p25, fan.p75), med: line(fan.p50), y0: y(0),
+      lo5: line(fan.p5), hi95: line(fan.p95), lines: paths.map((p) => line(p)),
       ticks: [0, 1, 2, 3, 4].map((n) => { const v = lo + (span * n) / 4; return { v, y: y(v) } }),
     }
-  }, [fan, days])
+  }, [fan, paths, days, mode])
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full text-muted-foreground" role="img" aria-label="ช่วงผลตอบแทนสะสมจากการจำลอง">
       {g.ticks.map((t) => (
@@ -82,9 +84,21 @@ function Fan({ fan, days }: { fan: MC["fan"]; days: number }) {
         </g>
       ))}
       <line x1={P.l} x2={W - P.r} y1={g.y0} y2={g.y0} stroke="currentColor" strokeOpacity="0.5" strokeDasharray="4 3" />
-      <path d={g.outer} fill="#38bdf8" fillOpacity="0.15" />
-      <path d={g.inner} fill="#38bdf8" fillOpacity="0.3" />
-      <path d={g.med} fill="none" stroke="#38bdf8" strokeWidth="2" />
+      {mode === "bands" ? (
+        <>
+          <path d={g.outer} fill="#38bdf8" fillOpacity="0.15" />
+          <path d={g.inner} fill="#38bdf8" fillOpacity="0.3" />
+        </>
+      ) : (
+        <>
+          {g.lines.map((d, i) => (
+            <path key={i} d={d} fill="none" stroke={`hsl(${(i * 47) % 360} 70% 55%)`} strokeOpacity="0.35" strokeWidth="0.8" />
+          ))}
+          <path d={g.hi95} fill="none" stroke="currentColor" strokeOpacity="0.8" strokeWidth="1.2" strokeDasharray="5 3" />
+          <path d={g.lo5} fill="none" stroke="currentColor" strokeOpacity="0.8" strokeWidth="1.2" strokeDasharray="5 3" />
+        </>
+      )}
+      <path d={g.med} fill="none" stroke={mode === "paths" ? "currentColor" : "#38bdf8"} strokeWidth="2.2" />
       <text x={P.l} y={H - 6} fontSize="10" fill="currentColor">วันที่ 0</text>
       <text x={W - P.r} y={H - 6} textAnchor="end" fontSize="10" fill="currentColor">วันที่ {days}</text>
     </svg>
@@ -108,6 +122,7 @@ function MonteCarlo({ runId, apiBase, getToken }: Props) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [r, setR] = useState<MC | null>(null)
+  const [mode, setMode] = useState<"paths" | "bands">("paths")
   const go = async () => {
     setBusy(true); setErr(null)
     try {
@@ -150,11 +165,28 @@ function MonteCarlo({ runId, apiBase, getToken }: Props) {
             <Tile label="DD เกิน −30%" value={pct(r.prob.drawdown_worse_30)} />
           </div>
           <div>
-            <Fan fan={r.fan} days={r.params.horizon_days} />
+            <div className="mb-2 inline-flex overflow-hidden rounded-md border text-xs">
+              {(["paths", "bands"] as const).map((m) => (
+                <button key={m} type="button" onClick={() => setMode(m)} className={`px-2.5 py-1 ${mode === m ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}>
+                  {m === "paths" ? "เส้นทางจำลอง" : "ช่วงความเชื่อมั่น"}
+                </button>
+              ))}
+            </div>
+            <Fan fan={r.fan} paths={r.paths} days={r.params.horizon_days} mode={mode} />
             <div className="mt-1 flex flex-wrap gap-4 text-xs text-muted-foreground">
-              <span><i className="mr-1 inline-block h-0.5 w-4 bg-sky-400 align-middle" />มัธยฐาน</span>
-              <span><i className="mr-1 inline-block h-2 w-4 bg-sky-400/30 align-middle" />25–75%</span>
-              <span><i className="mr-1 inline-block h-2 w-4 bg-sky-400/15 align-middle" />5–95%</span>
+              {mode === "paths" ? (
+                <>
+                  <span>แสดง {r.paths.length} เส้นทางแรกจาก {r.params.sims} รอบ (ไม่ได้คัดเลือก)</span>
+                  <span><i className="mr-1 inline-block h-0.5 w-4 bg-current align-middle" />มัธยฐาน (คำนวณจากทุกรอบ)</span>
+                  <span>เส้นประ = 5% / 95% (จากทุกรอบ)</span>
+                </>
+              ) : (
+                <>
+                  <span><i className="mr-1 inline-block h-0.5 w-4 bg-sky-400 align-middle" />มัธยฐาน</span>
+                  <span><i className="mr-1 inline-block h-2 w-4 bg-sky-400/30 align-middle" />25–75%</span>
+                  <span><i className="mr-1 inline-block h-2 w-4 bg-sky-400/15 align-middle" />5–95%</span>
+                </>
+              )}
             </div>
           </div>
           {r.actual && (
