@@ -75,3 +75,12 @@ def test_memory_store_isolation():
     st.update("b@x.com", a["id"], {"status": "hacked"})
     assert st.get("a@x.com", a["id"])["status"] == "queued"
     assert len(st.list("a@x.com")) == 1 and st.count("b@x.com") == 1
+
+
+def test_delete_finished_before_is_scoped_and_filtered():
+    rec = Rec(payload=json.dumps([{"id": "a"}, {"id": "b"}]).encode())
+    st = SupabaseRunStore(SbClient("https://db.example", "KEY123", rec))
+    assert st.delete_finished_before("a@x.com", "2026-01-01T00:00:00+00:00") == 2
+    method, url, *_ = rec.calls[0]
+    assert method == "DELETE" and "email=eq.a%40x.com" in url
+    assert "status=in.%28done%2Cfailed%29" in url and "created_at=lt." in url        # ไม่แตะ queued/running
