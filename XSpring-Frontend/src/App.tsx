@@ -788,11 +788,13 @@ function AppInner() {
       >
         ✨ ถาม AI
       </button>
-      {aiOpen && <AiAssistantOverlay
-        onClose={() => setAiOpen(false)}
-        market={market}          // ตัวแปรที่เก็บแท็บ คริปโต/หุ้นสหรัฐ
-        symbol={currentSymbol}   // หุ้นที่เปิดอยู่ในหน้า Company (ไม่ส่งก็ได้)
-      />
+      {aiOpen && (
+        <AiAssistantOverlay
+          onClose={() => setAiOpen(false)}
+          market={market}
+          symbol={currentSymbol}
+        />
+      )}
     </div>            
   )
 }
