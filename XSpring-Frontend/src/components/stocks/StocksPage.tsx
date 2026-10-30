@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useState, useEffect, useMemo, useCallback, useRef, memo } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, memo, Component } from "react";
 import MarketHeatmap from "./MarketHeatmap";
 import WatchlistPage from "./WatchlistPage";
 import EarningsPage from "./EarningsPage";
@@ -76,7 +76,15 @@ const Stat = ({ label, value }) => (
     <div className="mt-1 text-sm font-semibold text-foreground">{value}</div>
   </div>
 );
-
+class Boundary extends Component {
+  state = { err: null };
+  static getDerivedStateFromError(err) { return { err }; }
+  render() {
+    return this.state.err
+      ? <Card><p className="text-sm text-red-300">เกิดข้อผิดพลาด: {String(this.state.err?.message || this.state.err)}</p></Card>
+      : this.props.children;
+  }
+}
 
 const PAL = ["#10b981", "#34d399", "#059669", "#6ee7b7", "#047857", "#a7f3d0"];
 
@@ -422,9 +430,10 @@ function Detail({ api, symbol, authed, onWatch }) {
           <div>
             <div className="text-sm text-muted-foreground">
               {pr.data?.name || symbol} · {pr.data?.exchange}
-              CEO: {ex.data.ceo.name}
             </div>
-            <div className="text-3xl font-bold text-foreground">
+            {ex.data?.ceo?.name && (
+              <div className="text-xs text-muted-foreground">CEO: {ex.data.ceo.name}</div>
+            )}
               {usd(d.price)}
             </div>
             <div className={`text-sm ${tone(d.change)}`}>
@@ -484,12 +493,12 @@ function Detail({ api, symbol, authed, onWatch }) {
       <Statements s={f} />
       <div className="grid gap-5 lg:grid-cols-2">
         <Card title="บทวิเคราะห์และราคาเป้าหมาย">
-          <Status s={an} empty={!an.loading && !an.error && !an.data?.target && "ไม่มีข้อมูล"} />
-          {an.data?.target && (() => {
-            const t = an.data.target, r = an.data.rating || {};
-            const total = Object.values(r).reduce((a, b) => a + (b || 0), 0) || 1;
-            const up = d?.price ? ((t.mean - d.price) / d.price) * 100 : null;
+          <Status s={an} empty={!an.loading && !an.error && !an.data?.target && !an.data?.rating && "ไม่มีข้อมูล"} />
+          {(an.data?.target || an.data?.rating) && (() => {
+            const t = an.data.target || {}, r = an.data.rating || {};
             const seg = [["strongBuy", "#10b981"], ["buy", "#34d399"], ["hold", "#a1a1aa"], ["sell", "#fb923c"], ["strongSell", "#f87171"]];
+            const total = seg.reduce((a, [k]) => a + (Number(r[k]) || 0), 0) || 1;
+            const up = d?.price && t.mean ? ((t.mean - d.price) / d.price) * 100 : null;
             return (
               <>
                 <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -812,7 +821,9 @@ export default function StocksPage({ getToken, apiBase = "", view = "market" }) 
         {view === "market" && <MarketHeatmap api={api} open={open} />}
         {view === "detail" &&
           (sym ? (
-            <Detail key={sym} api={api} symbol={sym} authed={authed} />
+            <Boundary key={sym}>
+              <Detail key={sym} api={api} symbol={sym} authed={authed} />
+            </Boundary>
           ) : (
             <Card>
               <p className="text-sm text-zinc-500">ค้นหาหุ้นด้านบน หรือเลือกจากหน้า Market Overview</p>
