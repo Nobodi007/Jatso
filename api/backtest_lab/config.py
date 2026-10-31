@@ -1,8 +1,9 @@
 """ค่าคงที่และเพดานทั้งหมดของ Backtest Lab (แพ็กเกจนี้แยกขาดจาก Backtest เดิมและ Risk Center)"""
-ENGINE_VERSION = "backtest-lab/0.2.0"
+ENGINE_VERSION = "backtest-lab/0.3.0"
 SPEC_VERSION = 1
 
 BENCHMARK = "^GSPC"                 # S&P 500 Price Index (ไม่ใช่ SPY)
+BENCHMARK_TR = "^SP500TR"           # S&P 500 Total Return Index (ใช้เฉพาะโหมดรวมปันผล)
 FULL_HISTORY_START = "1980-01-01"   # ดึงประวัติทั้งหมดครั้งเดียวแล้ว cache (Yahoo ส่งเท่าที่มี)
 
 # เพดานต่อการรัน (ป้องกัน rate limit / CPU)
@@ -24,6 +25,7 @@ DEFAULT_SLIPPAGE_BPS = 5.0
 PRICE_TTL_SECONDS = 12 * 3600
 OVERLAP_DAYS = 7                     # ดึงซ้อนทับเพื่อตรวจว่าราคาเก่าถูกปรับ (split) หรือไม่
 OVERLAP_TOL = 1e-3
+ADJ_TOL = 1e-4                      # สัดส่วน adj_close/close ช่วงซ้อนทับเปลี่ยนเกินนี้ = มีปันผลใหม่ -> ประวัติ adj_close เก่าล้าสมัย ต้องดึงเต็มใหม่
 
 # งานและการจำกัด
 MAX_CONCURRENT_RUNS = 2
