@@ -15,6 +15,7 @@ import logging
 import math
 import os
 import re
+import time
 
 from fastapi import APIRouter, HTTPException
 
@@ -51,6 +52,22 @@ async def optional(coro):
     except ProviderError as e:
         print(f"[insights] provider failed: {type(e).__name__}: {str(e)[:200]}")
         return None
+
+
+_EMPTY_UNTIL: dict = {}
+
+
+def _nonempty(key, fn, ok):
+    """ไม่ให้ cache ผลที่ว่าง: ถ้าว่างให้ raise (cached จะไม่เก็บ) และพัก 5 นาทีก่อนลองใหม่"""
+    async def run():
+        if time.time() < _EMPTY_UNTIL.get(key, 0):
+            raise ProviderError("empty (recent)")
+        r = await fn()
+        if not ok(r):
+            _EMPTY_UNTIL[key] = time.time() + 300
+            raise ProviderError("empty result")
+        return r
+    return run
 
 
 def _f(x):
@@ -194,10 +211,10 @@ async def executives(symbol: str):
     ]
     src = "finnhub"
     if not officers:
-        officers = await optional(cached(f"exec_y:{s}", 86400, lambda: p._yahoo(_yf_officers, s))) or []
+        officers = await optional(cached(f"exec_y:{s}", 86400, _nonempty(f"exec_y:{s}", lambda: p._yahoo(_yf_officers, s), bool))) or []
         src = "yahoo"
     if not officers:
-        officers = await optional(cached(f"exec_f:{s}", 86400, lambda: _fmp_officers(s))) or []
+        officers = await optional(cached(f"exec_f:{s}", 86400, _nonempty(f"exec_f:{s}", lambda: _fmp_officers(s), bool))) or []
         src = "fmp"
     ceo = next((o for o in officers if _is_ceo(o["title"])), None)
     return {"ceo": ceo, "officers": officers[:12], "source": src if officers else None}
@@ -224,7 +241,7 @@ async def ownership(symbol: str):
         holders.sort(key=lambda x: x["shares"] or 0, reverse=True)
         return {"institutionsPercent": None, "insidersPercent": None, "holders": holders, "source": "finnhub"}
 
-    y = await optional(cached(f"own_y:{s}", 86400, lambda: p._yahoo(_yf_holders, s)))
+    y = await optional(cached(f"own_y:{s}", 86400, _nonempty(f"own_y:{s}", lambda: p._yahoo(_yf_holders, s), lambda r: bool(r.get("holders")))))
     if y:
         return {**y, "source": "yahoo"}
     return {"institutionsPercent": None, "insidersPercent": None, "holders": [], "source": None}
@@ -249,11 +266,11 @@ async def analyst(symbol: str):
                   "high": pt.get("targetHigh"), "low": pt.get("targetLow"), "updatedAt": pt.get("lastUpdated")}
 
     if rating is None or target is None:  # เติมส่วนที่ขาดจาก Yahoo
-        y = await optional(cached(f"an_y:{s}", 6 * 3600, lambda: p._yahoo(_yf_analyst, s))) or {}
+        y = await optional(cached(f"an_y:{s}", 6 * 3600, _nonempty(f"an_y:{s}", lambda: p._yahoo(_yf_analyst, s), lambda r: bool(r.get("rating") or r.get("target"))))) or {}
         rating = rating or y.get("rating")
         target = target or y.get("target")
     if target is None:
-        target = await optional(cached(f"pt_f:{s}", 6 * 3600, lambda: _fmp_target(s)))
+        target = await optional(cached(f"pt_f:{s}", 6 * 3600, _nonempty(f"pt_f:{s}", lambda: _fmp_target(s), bool)))
     return {"rating": rating, "target": target}
 
 
@@ -279,7 +296,7 @@ async def insiders(symbol: str):
             "date": t.get("transactionDate") or t.get("filingDate"),
         })
     if not out:
-        out = await optional(cached(f"ins_y:{s}", 3600, lambda: p._yahoo(_yf_insiders, s))) or []
+        out = await optional(cached(f"ins_y:{s}", 3600, _nonempty(f"ins_y:{s}", lambda: p._yahoo(_yf_insiders, s), bool))) or []
     out.sort(key=lambda x: x["date"] or "", reverse=True)
     return out[:30]
 
