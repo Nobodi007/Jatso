@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from . import config as C
 from .data.price_store import PriceStore
+from .data.total_return import load_market
 from .data.provider_base import ProviderError
 from .data.validate import DataError, clean_bars
 from .db.run_store import RunStore, now_iso
@@ -77,27 +78,41 @@ def _strategy_warnings(spec: dict, result: dict, bars: dict, warm: int) -> list[
     return w
 
 
+def _apply_total_labels(spec: dict, result: dict) -> None:
+    """ปรับป้ายกำกับ/คำอธิบายของผลลัพธ์ให้ตรงโหมด Total Return (engine ใช้ข้อความ Price Return เป็นค่าตั้งต้น)"""
+    result["labels"] = ["total_return_dividends_reinvested" if x == "price_return_only" else x for x in result["labels"]]
+    conv = result["conventions"]
+    conv["return_method"] = ("Total Return: ปันผลถูกนำไปซื้อหุ้นเพิ่มที่ราคาปิดวัน ex-date (ใช้ Adj Close ของ Yahoo) ไม่รวมภาษีหัก ณ ที่จ่าย; "
+                             "S&P 500 = Total Return Index (^SP500TR)")
+    conv["trade_prices"] = ("ราคาในรายการซื้อขายเป็นราคาที่ปรับปันผลย้อนหลังแล้ว จึงต่ำกว่าราคาที่เห็นจริงในอดีต; "
+                            "ตัวชี้วัดและกฎของกลยุทธ์คำนวณจากราคาจริงที่ไม่ปรับปันผล")
+    result["return_mode"] = "total"
+
+
 def build_result(spec: dict, price_store: PriceStore) -> dict:
     start, end = date.fromisoformat(spec["start"]), date.fromisoformat(spec["end"])
     strategy = spec.get("strategy")
     warm = warmup_bars(strategy) if strategy else 0
     # ต้องมีแท่งก่อนวันเริ่ม (วันฐาน + seed เติมช่องว่าง) + ช่วงอุ่นเครื่องของตัวชี้วัด (วันทำการ ≈ 1.5 เท่าเป็นวันปฏิทิน)
     fetch_from = start - timedelta(days=30 + int(warm * 1.5) + 7)
-    bars, snapshot, issues = {}, [], []
-    for sym in [p["symbol"] for p in spec["positions"]] + [C.BENCHMARK]:
-        raw, meta = price_store.get_bars(sym, fetch_from, end)
-        cleaned, iss = clean_bars(sym, raw)
-        bars[sym] = cleaned
-        issues.extend(iss)
-        snapshot.append({**meta, "bars_used": len(cleaned)})
-    bench = bars.pop(C.BENCHMARK)
-    result = run_strategy(spec, bars, bench) if strategy else run_backtest(spec, bars, bench)
-    filled = result["data_quality"]["filled_days"]
-    result["data_quality"]["issues"] = issues
-    result["data_snapshot"] = snapshot
-    result["warnings"] = _warnings(spec, snapshot, issues, filled)
+    total = spec.get("return_mode") == "total"
+    mk = load_market(spec, price_store, fetch_from, end)
     if strategy:
-        result["warnings"].extend(_strategy_warnings(spec, result, bars, warm))
+        result = run_strategy(spec, mk.bars, mk.bench, mk.signal_bars, mk.signal_bench)
+    else:
+        result = run_backtest(spec, mk.bars, mk.bench)
+    filled = result["data_quality"]["filled_days"]
+    result["data_quality"]["issues"] = mk.issues
+    result["data_snapshot"] = mk.snapshot
+    result["warnings"] = _warnings(spec, mk.snapshot, mk.issues, filled)
+    if strategy:
+        result["warnings"].extend(_strategy_warnings(spec, result, mk.signal_bars or mk.bars, warm))
+    if total:
+        _apply_total_labels(spec, result)
+        result["warnings"] = [w for w in result["warnings"] if w["code"] != "price_return_only"]
+        result["warnings"].append({"code": "total_return_mode", "severity": "info",
+                                   "message": "โหมดรวมปันผล: สมมติปันผลถูกนำไปซื้อหุ้นเพิ่มทันทีที่ราคาปิดวัน ex-date ไม่รวมภาษีหัก ณ ที่จ่าย "
+                                              "และไม่รวมค่าธรรมเนียมการนำปันผลกลับมาลงทุน"})
     result["engine_version"] = C.ENGINE_VERSION
     result["spec_hash"] = spec_hash(spec)
     return result
