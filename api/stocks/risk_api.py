@@ -120,6 +120,9 @@ def _realized_summary(adj) -> dict | None:
     }
 
 PORTFOLIOS = ("paper", "real")
+# ลิมิต/alert แยกตารางตามพอร์ต (พอร์ตจริงใช้ตารางของตัวเอง ไม่ปนกับพอร์ตจำลอง)
+LIMIT_TABLE = {"paper": "stock_risk_limits", "real": "real_risk_limits"}
+ALERT_TABLE = {"paper": "stock_risk_alerts", "real": "real_risk_alerts"}
 
 
 async def _build(email: str, portfolio: str = "paper") -> dict:
@@ -319,10 +322,8 @@ _heavy = make_limiter(current_email, 30, 60, "heavy")
 
 async def _active_alerts(email: str, portfolio: str = "paper") -> dict:
     """จำนวน alert ที่เปิดอยู่ ณ การประเมินล่าสุด (POST /alerts/evaluate) ไม่ใช่ตามราคาสด"""
-    if portfolio != "paper":      # alert/ลิมิตของพอร์ตจริงยังไม่เปิดใช้ (รอบถัดไป) ไม่ใช้ตารางของพอร์ตจำลองแทน
-        return {"value": None, "status": "unavailable", "reason": "alerts_not_enabled_for_this_portfolio"}
     try:
-        rows = await sb("GET", "stock_risk_alerts",
+        rows = await sb("GET", ALERT_TABLE[portfolio],
                         params={"email": f"eq.{email}", "status": "eq.active", "select": "id,severity,acknowledged_at"}) or []
     except HTTPException:
         return {"value": None, "status": "unavailable", "reason": "alerts_unavailable"}
