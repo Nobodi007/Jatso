@@ -291,6 +291,7 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
   const [comm, setComm] = useState("0")
   const [slip, setSlip] = useState("5")
   const [rf, setRf] = useState("")
+  const [retMode, setRetMode] = useState<"price" | "total">("price")
   const [sf, setSf] = useState<StrategyForm>(defaultStrategyForm)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -398,6 +399,7 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
       if (typeof st === "string") return st
       spec.strategy = st
     }
+    if (retMode === "total") spec.return_mode = "total"
     return spec
   }
 
@@ -574,6 +576,11 @@ const rangeText = (() => {
             <div className="grid grid-cols-2 gap-2">
               <div><label className={label}>เงินทุนเริ่มต้น (USD)</label><input className={input} inputMode="decimal" value={capital} onChange={(e) => setCapital(e.target.value)} /></div>
               <div><label className={label}>Risk-free ต่อปี % (เว้นว่าง = 0)</label><input className={input} inputMode="decimal" value={rf} onChange={(e) => setRf(e.target.value)} /></div>
+              <div><label className={label}>วิธีคิดผลตอบแทน</label>
+                <select className={input} value={retMode} onChange={(e) => setRetMode(e.target.value as "price" | "total")}>
+                  <option value="price">Price Return (ไม่รวมปันผล)</option>
+                  <option value="total">Total Return (รวมปันผล)</option>
+                </select></div>
             </div>
             <div><label className={label}>โหมด Rebalance</label>
               <select className={input} value={mode} onChange={(e) => setMode(e.target.value as RebalanceMode)}>
