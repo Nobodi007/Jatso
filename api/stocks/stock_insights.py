@@ -62,12 +62,28 @@ def _nonempty(key, fn, ok):
     async def run():
         if time.time() < _EMPTY_UNTIL.get(key, 0):
             raise ProviderError("empty (recent)")
-        r = await fn()
+        try:
+            r = await fn()
+        except p.PlanRestricted:
+            _EMPTY_UNTIL[key] = time.time() + 86400  # หุ้น/endpoint นี้อยู่นอกแพ็กเกจ ไม่ต้องยิงซ้ำ (กันเปลืองโควต้า)
+            raise
         if not ok(r):
             _EMPTY_UNTIL[key] = time.time() + 300
             raise ProviderError("empty result")
         return r
     return run
+
+
+async def _fh(path, **params):
+    """Finnhub endpoint ที่ติดแพ็กเกจ: จำไว้ 6 ชม. จะไม่ยิง 403 ซ้ำทุกครั้งที่เปิดหน้า"""
+    key = f"plan:{path}"
+    if time.time() < _EMPTY_UNTIL.get(key, 0):
+        raise ProviderError("plan restricted (remembered)")
+    try:
+        return await p.finnhub(path, **params)
+    except p.PlanRestricted:
+        _EMPTY_UNTIL[key] = time.time() + 6 * 3600
+        raise
 
 
 def _f(x):
@@ -203,7 +219,7 @@ def _is_ceo(t):
 @router.get("/{symbol}/executives")
 async def executives(symbol: str):
     s = norm(symbol)
-    d = await optional(cached(f"exec:{s}", 86400, lambda: p.finnhub("/stock/executive", symbol=s)))
+    d = await optional(cached(f"exec:{s}", 86400, lambda: _fh("/stock/executive", symbol=s)))
     officers = [
         {"name": x.get("name"), "title": x.get("position"), "since": x.get("since"),
          "age": x.get("age"), "compensation": x.get("compensation")}
@@ -211,11 +227,11 @@ async def executives(symbol: str):
     ]
     src = "finnhub"
     if not officers:
-        officers = await optional(cached(f"exec_y:{s}", 86400, _nonempty(f"exec_y:{s}", lambda: p._yahoo(_yf_officers, s), bool))) or []
-        src = "yahoo"
-    if not officers:
         officers = await optional(cached(f"exec_f:{s}", 86400, _nonempty(f"exec_f:{s}", lambda: _fmp_officers(s), bool))) or []
         src = "fmp"
+    if not officers:
+        officers = await optional(cached(f"exec_y:{s}", 86400, _nonempty(f"exec_y:{s}", lambda: p._yahoo(_yf_officers, s), bool))) or []
+        src = "yahoo"
     ceo = next((o for o in officers if _is_ceo(o["title"])), None)
     return {"ceo": ceo, "officers": officers[:12], "source": src if officers else None}
 
@@ -225,7 +241,7 @@ async def executives(symbol: str):
 async def ownership(symbol: str):
     s = norm(symbol)
     own, prof = await asyncio.gather(
-        optional(cached(f"own:{s}", 86400, lambda: p.finnhub("/stock/ownership", symbol=s, limit=20))),
+        optional(cached(f"own:{s}", 86400, lambda: _fh("/stock/ownership", symbol=s, limit=20))),
         optional(cached(f"profile:{s}", 86400, lambda: p.finnhub("/stock/profile2", symbol=s))),
     )
     shares_out = ((prof or {}).get("shareOutstanding") or 0) * 1e6
@@ -253,7 +269,7 @@ async def analyst(symbol: str):
     s = norm(symbol)
     rec, pt = await asyncio.gather(
         optional(cached(f"rec:{s}", 6 * 3600, lambda: p.finnhub("/stock/recommendation", symbol=s))),
-        optional(cached(f"pt:{s}", 6 * 3600, lambda: p.finnhub("/stock/price-target", symbol=s))),
+        optional(cached(f"pt:{s}", 6 * 3600, lambda: _fh("/stock/price-target", symbol=s))),
     )
     rating = None
     if rec:
@@ -265,12 +281,12 @@ async def analyst(symbol: str):
         target = {"mean": pt.get("targetMean"), "median": pt.get("targetMedian"),
                   "high": pt.get("targetHigh"), "low": pt.get("targetLow"), "updatedAt": pt.get("lastUpdated")}
 
-    if rating is None or target is None:  # เติมส่วนที่ขาดจาก Yahoo
+    if target is None:
+        target = await optional(cached(f"pt_f:{s}", 6 * 3600, _nonempty(f"pt_f:{s}", lambda: _fmp_target(s), bool)))
+    if rating is None or target is None:  # ยังขาดอยู่ ลอง Yahoo
         y = await optional(cached(f"an_y:{s}", 6 * 3600, _nonempty(f"an_y:{s}", lambda: p._yahoo(_yf_analyst, s), lambda r: bool(r.get("rating") or r.get("target"))))) or {}
         rating = rating or y.get("rating")
         target = target or y.get("target")
-    if target is None:
-        target = await optional(cached(f"pt_f:{s}", 6 * 3600, _nonempty(f"pt_f:{s}", lambda: _fmp_target(s), bool)))
     return {"rating": rating, "target": target}
 
 
