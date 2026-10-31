@@ -285,6 +285,24 @@ async def insiders(symbol: str):
 
 
 
+def _yf_raw(symbol):
+    import yfinance as yf
+    t = yf.Ticker(p._yf_sym(symbol))
+    out = {}
+    for name in ("info", "major_holders", "institutional_holders", "analyst_price_targets",
+                 "recommendations_summary", "insider_transactions"):
+        try:
+            v = getattr(t, name)
+            out[name] = {
+                "type": type(v).__name__,
+                "len": len(v) if hasattr(v, "__len__") else None,
+                "keys": list(v.keys())[:6] if isinstance(v, dict) else None,
+            }
+        except Exception as e:
+            out[name] = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+    return out
+
+
 # ====================== วินิจฉัย (เปิดด้วย env INSIGHTS_DEBUG=1 แล้วลบทิ้งเมื่อเสร็จ) ======================
 @router.get("/{symbol}/_debug")
 async def insights_debug(symbol: str):
@@ -306,7 +324,7 @@ async def insights_debug(symbol: str):
         yf_ver = "NOT INSTALLED"
 
     names = ["finnhub_executive", "finnhub_ownership", "finnhub_price_target",
-             "yahoo_officers", "yahoo_holders", "yahoo_analyst", "fmp_officers", "fmp_target"]
+             "yahoo_officers", "yahoo_holders", "yahoo_analyst", "fmp_officers", "fmp_target", "yahoo_raw"]
     results = await asyncio.gather(
         probe(p.finnhub("/stock/executive", symbol=s)),
         probe(p.finnhub("/stock/ownership", symbol=s, limit=5)),
@@ -316,5 +334,6 @@ async def insights_debug(symbol: str):
         probe(p._yahoo(_yf_analyst, s)),
         probe(_fmp_officers(s)),
         probe(_fmp_target(s)),
+        probe(p._yahoo(_yf_raw, s)),
     )
     return {"yfinance_version": yf_ver, **dict(zip(names, results))}
