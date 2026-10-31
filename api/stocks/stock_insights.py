@@ -10,8 +10,10 @@ stock_insights.py  -  ข้อมูลเพิ่มเติมหน้า 
     router.include_router(stock_insights_router)
 """
 import asyncio
+import importlib.metadata as _md
 import logging
 import math
+import os
 import re
 
 from fastapi import APIRouter, HTTPException
@@ -47,7 +49,7 @@ async def optional(coro):
     except RateLimited:
         raise HTTPException(503, "rate_limited")
     except ProviderError as e:
-        log.warning("insights provider failed: %s: %s", type(e).__name__, str(e)[:200])
+        print(f"[insights] provider failed: {type(e).__name__}: {str(e)[:200]}")
         return None
 
 
@@ -280,3 +282,39 @@ async def insiders(symbol: str):
         out = await optional(cached(f"ins_y:{s}", 3600, lambda: p._yahoo(_yf_insiders, s))) or []
     out.sort(key=lambda x: x["date"] or "", reverse=True)
     return out[:30]
+
+
+
+# ====================== วินิจฉัย (เปิดด้วย env INSIGHTS_DEBUG=1 แล้วลบทิ้งเมื่อเสร็จ) ======================
+@router.get("/{symbol}/_debug")
+async def insights_debug(symbol: str):
+    if os.environ.get("INSIGHTS_DEBUG", "") != "1":
+        raise HTTPException(404, "not_found")
+    s = norm(symbol)
+
+    async def probe(coro):
+        try:
+            r = await coro
+            size = len(r) if hasattr(r, "__len__") else None
+            return {"ok": True, "size": size, "sample": str(r)[:250]}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:250]}"}
+
+    try:
+        yf_ver = _md.version("yfinance")
+    except Exception:
+        yf_ver = "NOT INSTALLED"
+
+    names = ["finnhub_executive", "finnhub_ownership", "finnhub_price_target",
+             "yahoo_officers", "yahoo_holders", "yahoo_analyst", "fmp_officers", "fmp_target"]
+    results = await asyncio.gather(
+        probe(p.finnhub("/stock/executive", symbol=s)),
+        probe(p.finnhub("/stock/ownership", symbol=s, limit=5)),
+        probe(p.finnhub("/stock/price-target", symbol=s)),
+        probe(p._yahoo(_yf_officers, s)),
+        probe(p._yahoo(_yf_holders, s)),
+        probe(p._yahoo(_yf_analyst, s)),
+        probe(_fmp_officers(s)),
+        probe(_fmp_target(s)),
+    )
+    return {"yfinance_version": yf_ver, **dict(zip(names, results))}
