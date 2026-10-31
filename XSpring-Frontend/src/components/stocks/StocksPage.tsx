@@ -484,7 +484,7 @@ function Detail({ api, symbol, authed, onWatch }) {
   )}
 </Card>
       {f.data?.annual?.length > 0 && (
-        <div className={`grid gap-5 ${showOw ? "lg:grid-cols-2" : ""}`}>
+        <div className="grid gap-5 lg:grid-cols-2">
           <Card title="รายได้และกำไรสุทธิรายปี"><Bars rows={f.data.annual.slice(-8)} series={[{ k: "revenue", label: "รายได้", color: "#10b981" }, { k: "netIncome", label: "กำไรสุทธิ", color: "#a7f3d0" }]} /></Card>
           <Card title={`รายได้ไหลไปไหน ปี ${f.data.annual[f.data.annual.length - 1].year}`}><Sankey a={f.data.annual[f.data.annual.length - 1]} /></Card>
         </div>
@@ -513,7 +513,7 @@ function Detail({ api, symbol, authed, onWatch }) {
                     <Stat label="เทียบราคาตอนนี้" value={<span className={tone(up)}>{pct(up)}</span>} />
                   </div>
                 ) : (
-                  <p className="mb-1 text-xs text-muted-foreground">ยังไม่มีข้อมูลราคาเป้าหมาย (ต้องใช้แหล่งข้อมูลแบบเสียเงิน)</p>
+                  <p className="mb-3 text-xs text-muted-foreground">ยังไม่มีข้อมูลราคาเป้าหมาย (ต้องใช้แหล่งข้อมูลแบบเสียเงิน)</p>
                 )}
                 <div className="mt-4 flex h-3 overflow-hidden rounded-full">
                   {seg.map(([k, c]) => <div key={k} style={{ width: `${((r[k] || 0) / total) * 100}%`, background: c }} />)}
@@ -525,12 +525,10 @@ function Detail({ api, symbol, authed, onWatch }) {
             );
           })()}
         </Card>
-
+      
         {showOw && (
         <Card title="ผู้ถือหุ้นรายใหญ่" right={ow.data && <span className="text-xs text-muted-foreground">สถาบัน {num(ow.data.institutionsPercent, 1)}% · ผู้บริหาร {num(ow.data.insidersPercent, 1)}%</span>}>
           <Status s={ow} empty={!ow.loading && !ow.error && !ow.data?.holders?.length && "ไม่มีข้อมูล"} />
-        </Card>
-      )}
           <div className="divide-y divide-border">
             {ow.data?.holders?.slice(0, 10).map((h) => (
               <div key={h.name} className="flex items-center justify-between gap-3 py-2 text-sm">
@@ -541,6 +539,7 @@ function Detail({ api, symbol, authed, onWatch }) {
             ))}
           </div>
         </Card>
+        )}
       </div>
       
       <Card title="ผู้บริหารซื้อขายหุ้น">
