@@ -21,6 +21,7 @@ export type Spec = {
   rebalance: { mode: RebalanceMode; frequency?: RebalanceFreq; threshold_pct?: number }
   costs: { commission_bps: number; slippage_bps: number }
   risk_free_annual: number | null
+  return_mode?: "price" | "total"
   strategy?: StrategySpec
 }
 
@@ -95,6 +96,7 @@ export type Warning = { code: string; severity: "info" | "low" | "medium" | "hig
 
 export type Result = {
   mode?: "strategy"
+  return_mode?: "total"
   strategy_result?: StrategyResult
   period: { base_date: string; first_trade_date: string; last_date: string; trading_days: number }
   comparison: { portfolio: Brief; buy_hold: Brief; benchmark: Brief }
