@@ -50,7 +50,7 @@ def validate_spec(raw: Any, today: date | None = None) -> dict:
     today = today or date.today()
     if not isinstance(raw, dict):
         raise SpecError("spec ต้องเป็น object")
-    unknown = set(raw) - {"version", "start", "end", "initial_capital", "positions", "rebalance", "costs", "risk_free_annual", "strategy"}
+    unknown = set(raw) - {"version", "start", "end", "initial_capital", "positions", "rebalance", "costs", "risk_free_annual", "strategy", "return_mode"}
     if unknown:
         raise SpecError(f"พบฟิลด์ที่ไม่รองรับ: {', '.join(sorted(map(str, unknown)))}")
     if raw.get("version", C.SPEC_VERSION) != C.SPEC_VERSION:
@@ -118,6 +118,11 @@ def validate_spec(raw: Any, today: date | None = None) -> dict:
            "initial_capital": capital, "positions": positions,
            "rebalance": {"mode": mode, "frequency": freq, "threshold_pct": thr},
            "costs": {"commission_bps": comm, "slippage_bps": slip}, "risk_free_annual": rf}
+    rm = raw.get("return_mode", "price")
+    if rm not in ("price", "total"):
+        raise SpecError("return_mode ต้องเป็น price (ไม่รวมปันผล) หรือ total (รวมปันผล)")
+    if rm == "total":                                         # โหมด price ไม่ใส่ฟิลด์ -> spec/hash เหมือนเดิมทุกประการ
+        out["return_mode"] = "total"
     if raw.get("strategy") is not None:                      # ไม่มี strategy -> spec/hash เหมือน B1 ทุกประการ
         try:
             out["strategy"] = validate_strategy(raw["strategy"])

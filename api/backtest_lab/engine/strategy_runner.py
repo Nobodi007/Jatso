@@ -71,7 +71,9 @@ def _signals(spec, bars_by_symbol, bench_bars, ext_dates):
     return out
 
 
-def run_strategy(spec: dict, bars_by_symbol: dict[str, list[dict]], bench_bars: list[dict]) -> dict:
+def run_strategy(spec: dict, bars_by_symbol: dict[str, list[dict]], bench_bars: list[dict],
+                 signal_bars: dict[str, list[dict]] | None = None, signal_bench: list[dict] | None = None) -> dict:
+    """signal_bars/signal_bench: ราคาที่ใช้คำนวณตัวชี้วัด/กฎ (โหมด Total Return ใช้ราคาจริงไม่ปรับปันผล) — ไม่ระบุ = ใช้ชุดเดียวกับราคาซื้อขาย"""
     cal, base_date, bench, opens, closes, filled = _align(spec, bars_by_symbol, bench_bars)
     N = len(cal)
     capital = spec["initial_capital"]
@@ -83,7 +85,7 @@ def run_strategy(spec: dict, bars_by_symbol: dict[str, list[dict]], bench_bars: 
     syms = list(targets)
 
     ext_dates = [base_date] + cal
-    sig = _signals(spec, bars_by_symbol, bench_bars, ext_dates)
+    sig = _signals(spec, signal_bars or bars_by_symbol, signal_bench or bench_bars, ext_dates)
     highs, lows = {}, {}
     for s in syms:
         highs[s], lows[s] = _hl(bars_by_symbol[s], cal, closes[s])
