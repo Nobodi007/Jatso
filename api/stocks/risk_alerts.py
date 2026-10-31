@@ -1,6 +1,6 @@
 """Phase 4: risk limits + alert history (stock-risk).
 
-ไฟล์ใหม่ ไม่แก้ไฟล์เดิม ใช้ตาราง stock_risk_limits / stock_risk_alerts / audit_log
+ใช้ตาราง stock_risk_limits / stock_risk_alerts (พอร์ตจำลอง) หรือ real_risk_limits / real_risk_alerts (พอร์ตจริง, ?portfolio=real) และ audit_log
 - GET  /api/stocks/risk/limits            อ่านลิมิตของผู้ใช้
 - PUT  /api/stocks/risk/limits            แก้ลิมิต (เขียน audit_log ทุกฟิลด์ที่เปลี่ยน)
 - POST /api/stocks/risk/alerts/evaluate   ประเมินลิมิตกับสถานะ ณ ราคาปิดล่าสุด เปิด/ปิด alert
@@ -29,7 +29,7 @@ from . import risk_exposure as X
 from .cache import ProviderError, RateLimited
 from .db import sb
 from .ledger import ET
-from .risk_api import STALE_AFTER_DAYS, _report, current_email
+from .risk_api import ALERT_TABLE, LIMIT_TABLE, STALE_AFTER_DAYS, PortfolioQ, _report, current_email
 from .risk_ratelimit import make_limiter
 
 log = logging.getLogger(__name__)
@@ -83,8 +83,8 @@ class LimitsIn(BaseModel):
     earnings_lookahead_days: int | None = Field(default=None, ge=1, le=30)
 
 
-async def _get_limits(email: str) -> dict:
-    rows = await sb("GET", "stock_risk_limits",
+async def _get_limits(email: str, portfolio: str = "paper") -> dict:
+    rows = await sb("GET", LIMIT_TABLE[portfolio],
                     params={"email": f"eq.{email}", "select": "*"})
     return rows[0] if rows else {}
 
@@ -105,18 +105,18 @@ def _limit_sources(row: dict) -> dict:
 
 
 @router.get("/limits")
-async def get_limits(email: str = Depends(current_email)):
-    row = await _get_limits(email)
+async def get_limits(portfolio: PortfolioQ = "paper", email: str = Depends(current_email)):
+    row = await _get_limits(email, portfolio)
     return {"limits": _effective_limits(row), "source": _limit_sources(row),
             "defaults": dict(DEFAULT_LIMITS), "updated_at": row.get("updated_at")}
 
 
 @router.put("/limits")
-async def put_limits(body: LimitsIn, email: str = Depends(_limits_write)):
+async def put_limits(body: LimitsIn, portfolio: PortfolioQ = "paper", email: str = Depends(_limits_write)):
     changes = {k: getattr(body, k) for k in body.model_fields_set if k in LIMIT_FIELDS}
     if not changes:
         raise HTTPException(400, "no_fields")
-    old = await _get_limits(email)
+    old = await _get_limits(email, portfolio)
     old_eff = _effective_limits(old)
     diff = {k: v for k, v in changes.items() if not _same(old_eff.get(k), v)}
     if not diff:
@@ -125,16 +125,17 @@ async def put_limits(body: LimitsIn, email: str = Depends(_limits_write)):
 
     # ผู้ใช้ยังไม่มีแถว: บันทึกค่าเริ่มต้นของข้ออื่นลงไปด้วย ไม่งั้นการแก้ข้อเดียวจะปิดข้ออื่นเงียบ ๆ
     seeded = {k: v for k, v in DEFAULT_LIMITS.items() if k not in diff} if not old else {}
-    saved = await sb("POST", "stock_risk_limits",
+    saved = await sb("POST", LIMIT_TABLE[portfolio],
                      params={"on_conflict": "email"},
                      json=[{"email": email, "updated_at": _now(), **seeded, **diff}],
                      prefer="resolution=merge-duplicates,return=representation")
     new_row = saved[0] if saved else {**old, **seeded, **diff}
 
     ts = _now()
-    audit = [{"ts": ts, "actor": email, "event": "risk_limit_changed", "param": k,
+    pre = "" if portfolio == "paper" else f"{portfolio}_"        # พอร์ตจำลองใช้ชื่อ event เดิม
+    audit = [{"ts": ts, "actor": email, "event": f"{pre}risk_limit_changed", "param": k,
               "old_value": _num(old_eff.get(k)), "new_value": v} for k, v in diff.items()]
-    audit += [{"ts": ts, "actor": email, "event": "risk_limit_default_seeded", "param": k,
+    audit += [{"ts": ts, "actor": email, "event": f"{pre}risk_limit_default_seeded", "param": k,
                "old_value": None, "new_value": v} for k, v in seeded.items()]
     audit_ok = True
     try:
@@ -427,8 +428,8 @@ def _plan(found: dict, evaluated: set, active_rows: list[dict]):
 
 
 @router.post("/alerts/evaluate")
-async def evaluate(email: str = Depends(_evaluate_limit)):
-    rep = await _report(email)
+async def evaluate(portfolio: PortfolioQ = "paper", email: str = Depends(_evaluate_limit)):
+    rep = await _report(email, portfolio)
     ctx = rep.get("exposure_ctx")
     meta = rep.get("meta", {})
     status, as_of = meta.get("data_status"), meta.get("as_of")
@@ -440,7 +441,7 @@ async def evaluate(email: str = Depends(_evaluate_limit)):
         return {"evaluated": False, "reason": "data_not_ready", "data_status": status,
                 "warnings": meta.get("warnings", [])}
     else:
-        limits = _effective_limits(await _get_limits(email))
+        limits = _effective_limits(await _get_limits(email, portfolio))
         # เรียก Finnhub เฉพาะเมื่อผู้ใช้ตั้งลิมิต sector (ประหยัดโควตา) ผลถูก cache 7 วันใน risk_data
         sector_fetched = limits.get("max_sector_weight") is not None and bool(ctx["holdings"])
         sectors = (await _fetch_sectors(list(ctx["holdings"])) if sector_fetched
@@ -454,7 +455,7 @@ async def evaluate(email: str = Depends(_evaluate_limit)):
             extras["earnings"] = await _fetch_earnings(list(ctx["holdings"]), datetime.now(ET).date(), int(lookahead))
         found, evaluated, skipped = _find_conditions(exp, rep.get("analysis"), limits, extras)
 
-    active_rows = await sb("GET", "stock_risk_alerts",
+    active_rows = await sb("GET", ALERT_TABLE[portfolio],
                            params={"email": f"eq.{email}", "status": "eq.active", "select": "*"}) or []
     to_open, to_update, to_resolve = _plan(found, evaluated, active_rows)
 
@@ -462,7 +463,7 @@ async def evaluate(email: str = Depends(_evaluate_limit)):
     for c in to_open:
         row = {"email": email, **c, "status": "active", "as_of": as_of}
         try:
-            await sb("POST", "stock_risk_alerts", json=[row], prefer="return=minimal")
+            await sb("POST", ALERT_TABLE[portfolio], json=[row], prefer="return=minimal")
             opened.append({"alert_type": c["alert_type"], "symbol": c["symbol"],
                            "sector": c.get("sector"), "severity": c["severity"]})
         except HTTPException as e:
@@ -473,12 +474,12 @@ async def evaluate(email: str = Depends(_evaluate_limit)):
                  "as_of": as_of, "detail": c["detail"], "severity": c["severity"]}
         if _SEV_RANK.get(c["severity"], 0) > _SEV_RANK.get(r.get("severity"), 0):
             patch["acknowledged_at"] = None  # รุนแรงขึ้น: ต้องให้ผู้ใช้รับทราบใหม่
-        await sb("PATCH", "stock_risk_alerts",
+        await sb("PATCH", ALERT_TABLE[portfolio],
                  params={"id": f"eq.{r['id']}", "email": f"eq.{email}", "status": "eq.active"},
                  json=patch, prefer="return=minimal")
     resolved = []
     for r in to_resolve:
-        await sb("PATCH", "stock_risk_alerts",
+        await sb("PATCH", ALERT_TABLE[portfolio],
                  params={"id": f"eq.{r['id']}", "email": f"eq.{email}", "status": "eq.active"},
                  json={"status": "resolved", "resolved_at": _now()},
                  prefer="return=minimal")
@@ -492,7 +493,8 @@ async def evaluate(email: str = Depends(_evaluate_limit)):
 
 @router.get("/alerts")
 async def list_alerts(status: str | None = None, acknowledged: bool | None = None,
-                      limit: int = Query(50, ge=1, le=200), email: str = Depends(current_email)):
+                      limit: int = Query(50, ge=1, le=200), portfolio: PortfolioQ = "paper",
+                      email: str = Depends(current_email)):
     if status not in (None, "active", "resolved"):
         raise HTTPException(400, "bad_status")
     params = {"email": f"eq.{email}", "select": "*", "order": "opened_at.desc",
@@ -501,20 +503,20 @@ async def list_alerts(status: str | None = None, acknowledged: bool | None = Non
         params["status"] = f"eq.{status}"
     if acknowledged is not None:
         params["acknowledged_at"] = "not.is.null" if acknowledged else "is.null"
-    rows = await sb("GET", "stock_risk_alerts", params=params) or []
+    rows = await sb("GET", ALERT_TABLE[portfolio], params=params) or []
     return {"alerts": rows}
 
 
 @router.post("/alerts/{alert_id}/acknowledge")
-async def acknowledge_alert(alert_id: int, email: str = Depends(_limits_write)):
+async def acknowledge_alert(alert_id: int, portfolio: PortfolioQ = "paper", email: str = Depends(_limits_write)):
     """รับทราบ alert ที่ยัง active ของตัวเองเท่านั้น (กรอง email จาก JWT) ไม่ปิด alert: ปิดได้เฉพาะตอนเงื่อนไขหาย"""
-    rows = await sb("PATCH", "stock_risk_alerts",
+    rows = await sb("PATCH", ALERT_TABLE[portfolio],
                     params={"id": f"eq.{alert_id}", "email": f"eq.{email}", "status": "eq.active",
                             "acknowledged_at": "is.null"},
                     json={"acknowledged_at": _now()}, prefer="return=representation")
     if rows:
         return {"ok": True, "alert": rows[0]}
-    cur = await sb("GET", "stock_risk_alerts",
+    cur = await sb("GET", ALERT_TABLE[portfolio],
                    params={"id": f"eq.{alert_id}", "email": f"eq.{email}", "select": "id,status,acknowledged_at"})
     if not cur:
         raise HTTPException(404, "alert_not_found")
