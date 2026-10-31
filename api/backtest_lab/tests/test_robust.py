@@ -9,6 +9,7 @@ from backtest_lab.engine.strategy_runner import run_strategy
 from backtest_lab.robust import handlers as RH
 from backtest_lab.robust import montecarlo as MC
 from backtest_lab.robust import stability as ST
+from backtest_lab.data.total_return import Market
 from backtest_lab.tests.helpers import mk_bars, spec
 from backtest_lab.tests.test_handlers import BENCH as HBENCH, SPEC, finish, services
 
@@ -112,7 +113,7 @@ def test_window_test_and_summary():
     sp = spec([{"symbol": "AAA", "weight": 1.0}], "2024-01-02", "2024-12-13", strategy=strat(10))
     res = run_strategy(sp, {"AAA": a}, BENCH)
     dates = [x["date"] for x in res["series"]]
-    out = ST.window_test(sp, {"AAA": a}, BENCH, dates, 4)
+    out = ST.window_test(sp, Market({"AAA": a}, BENCH), dates, 4)
     assert out["summary"]["windows"] == 4 and not out["skipped"]
     assert out["windows"][0]["start"] == dates[0] and out["windows"][-1]["end"] == dates[-1]
     assert 0 <= out["summary"]["beat_benchmark"] <= 4
@@ -144,7 +145,7 @@ def test_sensitivity_baseline_matches_original_run():
     a = mk_bars("2023-12-28", NB + 5, wavy)
     sp = spec([{"symbol": "AAA", "weight": 1.0}], "2024-01-02", "2024-12-13", strategy=strat(10, stop_loss_pct=8))
     res = run_strategy(sp, {"AAA": a}, BENCH)
-    out = ST.sensitivity(sp, {"AAA": a}, BENCH)
+    out = ST.sensitivity(sp, Market({"AAA": a}, BENCH))
     assert out["available"] and set(out["families"]) == {"indicators", "stops"}
     for fam in out["families"].values():
         assert [r["factor"] for r in fam["rows"]] == list(ST.FACTORS)
@@ -152,7 +153,7 @@ def test_sensitivity_baseline_matches_original_run():
         assert base["portfolio"]["total_return"] == pytest.approx(res["comparison"]["portfolio"]["total_return"]["value"], rel=1e-12)
         assert fam["summary"]["min"] <= fam["summary"]["median"] <= fam["summary"]["max"]
     plain = spec([{"symbol": "AAA", "weight": 1.0}], "2024-01-02", "2024-12-13")
-    assert ST.sensitivity(plain, {"AAA": a}, BENCH)["available"] is False
+    assert ST.sensitivity(plain, Market({"AAA": a}, BENCH))["available"] is False
 
 
 # ------------------------------------------------------------------ handlers
