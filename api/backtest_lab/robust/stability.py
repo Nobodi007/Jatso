@@ -21,8 +21,11 @@ FACTORS = (0.5, 0.75, 1.0, 1.25, 1.5)
 STOP_RANGES = {"stop_loss_pct": (0.1, 90.0), "take_profit_pct": (0.1, 1000.0), "trailing_stop_pct": (0.1, 90.0)}
 
 
-def _run(spec: dict, bars: dict, bench: list) -> dict:
-    return run_strategy(spec, bars, bench) if spec.get("strategy") else run_backtest(spec, bars, bench)
+def _run(spec: dict, mk) -> dict:
+    """mk = Market (ราคาซื้อขาย/ราคาสัญญาณ/benchmark) — โหมด Total Return ใช้ชุดราคาเดียวกับรันหลัก"""
+    if spec.get("strategy"):
+        return run_strategy(spec, mk.bars, mk.bench, mk.signal_bars, mk.signal_bench)
+    return run_backtest(spec, mk.bars, mk.bench)
 
 
 def _brief(res: dict) -> dict:
@@ -44,12 +47,12 @@ def split_windows(dates: list[str], k: int) -> list[tuple[str, str]]:
     return out
 
 
-def window_test(spec: dict, bars: dict, bench: list, dates: list[str], k: int) -> dict:
+def window_test(spec: dict, mk, dates: list[str], k: int) -> dict:
     rows, skipped = [], []
     for a, b in split_windows(dates, k):
         sub = {**spec, "start": a, "end": b}
         try:
-            r = _brief(_run(sub, bars, bench))
+            r = _brief(_run(sub, mk))
         except DataError as e:
             skipped.append({"start": a, "end": b, "reason": str(e)})
             continue
@@ -122,7 +125,7 @@ def scaled_variant(spec: dict, family: str, f: float) -> dict | None:
     return v if found else None
 
 
-def sensitivity(spec: dict, bars: dict, bench: list, factors=FACTORS) -> dict:
+def sensitivity(spec: dict, mk, factors=FACTORS) -> dict:
     if not spec.get("strategy"):
         return {"available": False, "reason": "ไม่มีกลยุทธ์ (ไม่มีพารามิเตอร์ให้ขยับ)"}
     out: dict = {"available": True, "families": {}}
@@ -134,7 +137,7 @@ def sensitivity(spec: dict, bars: dict, bench: list, factors=FACTORS) -> dict:
                 rows = []
                 break
             try:
-                b = _brief(_run(var, bars, bench))
+                b = _brief(_run(var, mk))
             except DataError:
                 continue
             rows.append({"factor": f, **b})
@@ -159,10 +162,10 @@ def sensitivity(spec: dict, bars: dict, bench: list, factors=FACTORS) -> dict:
     return out
 
 
-def robustness(spec: dict, bars: dict, bench: list, dates: list[str], k: int, do_sens: bool) -> dict:
+def robustness(spec: dict, mk, dates: list[str], k: int, do_sens: bool) -> dict:
     return {
-        "window_test": window_test(spec, bars, bench, dates, k),
-        "sensitivity": sensitivity(spec, bars, bench) if do_sens else {"available": False, "reason": "ไม่ได้เลือกทดสอบ"},
+        "window_test": window_test(spec, mk, dates, k),
+        "sensitivity": sensitivity(spec, mk) if do_sens else {"available": False, "reason": "ไม่ได้เลือกทดสอบ"},
         "caveats": [
             "ถ้ากฎถูกเลือกหลังเห็นผลของช่วงทั้งหมด การแบ่งช่วงไม่ใช่ out-of-sample จริง ใช้ดูว่าผลกระจุกอยู่ช่วงเดียวหรือไม่",
             "Out-of-sample จริง: ล็อกกฎจากข้อมูลช่วงแรก แล้วรันกับช่วงหลังที่ไม่เคยดูมาก่อน (ตั้งวันเริ่ม/สิ้นสุดของการรันใหม่)",

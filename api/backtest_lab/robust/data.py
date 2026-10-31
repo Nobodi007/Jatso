@@ -3,19 +3,13 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from .. import config as C
 from ..data.price_store import PriceStore
-from ..data.validate import clean_bars
+from ..data.total_return import Market, load_market
 from ..engine.rules import warmup_bars
 
 
-def load_bars(spec: dict, price_store: PriceStore) -> tuple[dict, list]:
+def load_bars(spec: dict, price_store: PriceStore) -> Market:
     start, end = date.fromisoformat(spec["start"]), date.fromisoformat(spec["end"])
     warm = warmup_bars(spec["strategy"]) if spec.get("strategy") else 0
     fetch_from = start - timedelta(days=30 + int(warm * 1.5) + 7)
-    bars = {}
-    for sym in [p["symbol"] for p in spec["positions"]] + [C.BENCHMARK]:
-        raw, _meta = price_store.get_bars(sym, fetch_from, end)
-        bars[sym], _issues = clean_bars(sym, raw)
-    bench = bars.pop(C.BENCHMARK)
-    return bars, bench
+    return load_market(spec, price_store, fetch_from, end)

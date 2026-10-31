@@ -103,8 +103,7 @@ async def run_robustness(s: Services, email: str, run_id: str, body) -> tuple[in
     spec, dates = row["spec"], [x["date"] for x in row["result"]["series"]]
 
     def fn():
-        bars, bench = load_bars(spec, s.price_store)
-        return robustness(spec, bars, bench, dates, k, do_sens)
+        return robustness(spec, load_bars(spec, s.price_store), dates, k, do_sens)
 
     done, box = await _compute(s, fn)
     if not done:
