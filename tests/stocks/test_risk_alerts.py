@@ -58,7 +58,7 @@ def test_same_tolerates_float_noise():
 def test_evaluate_after_reset_resolves_everything(monkeypatch):
     calls = []
 
-    async def fake_report(email):
+    async def fake_report(email, portfolio="paper"):
         return {"meta": {"data_status": "no_activity"}}
 
     async def fake_sb(method, table, params=None, json=None, prefer=None, **kw):
@@ -74,7 +74,7 @@ def test_evaluate_after_reset_resolves_everything(monkeypatch):
 
 
 def test_evaluate_does_nothing_when_data_not_ready(monkeypatch):
-    async def fake_report(email):
+    async def fake_report(email, portfolio="paper"):
         return {"meta": {"data_status": "incomplete", "warnings": []}, "exposure_ctx": None}
 
     async def fake_sb(*a, **k):
@@ -222,7 +222,7 @@ def _fake_sb(calls, limits_rows=(), active_rows=()):
 def test_evaluate_uses_default_limits_fetches_sector_and_writes_severity(monkeypatch):
     calls = []
 
-    async def fake_report(email):
+    async def fake_report(email, portfolio="paper"):
         return {"meta": {"data_status": "ok", "as_of": "2026-10-27", "freshness": "fresh", "warnings": []},
                 "exposure_ctx": {"holdings": {"AAA": {"qty": 10, "price": 10.0}}, "cash": 0.0, "skipped": []},
                 "analysis": {"performance": {}},
@@ -251,7 +251,7 @@ def test_evaluate_uses_default_limits_fetches_sector_and_writes_severity(monkeyp
 def test_evaluate_skips_finnhub_when_sector_limit_is_off(monkeypatch):
     calls = []
 
-    async def fake_report(email):
+    async def fake_report(email, portfolio="paper"):
         return {"meta": {"data_status": "ok", "as_of": "2026-10-27", "freshness": "fresh", "warnings": []},
                 "exposure_ctx": {"holdings": {"AAA": {"qty": 10, "price": 10.0}}, "cash": 0.0, "skipped": []},
                 "analysis": {"performance": {}}, "nav_series": []}
@@ -361,7 +361,7 @@ def test_evaluate_opens_earnings_alert_for_held_symbol(monkeypatch):
     calls = []
     seen = {}
 
-    async def fake_report(email):
+    async def fake_report(email, portfolio="paper"):
         return {"meta": {"data_status": "ok", "as_of": "2026-10-28", "freshness": "fresh", "warnings": []},
                 "exposure_ctx": {"holdings": {"MU": {"qty": 1, "price": 100.0}}, "cash": 900.0, "skipped": []},
                 "analysis": {"performance": {}}, "nav_series": []}
@@ -383,3 +383,91 @@ def test_evaluate_opens_earnings_alert_for_held_symbol(monkeypatch):
 def test_earnings_constants_are_registered():
     assert RA.DEFAULT_LIMITS["earnings_lookahead_days"] == 7 and "earnings_lookahead_days" in RA.LIMIT_FIELDS
     assert "earnings" in RA.ALERT_TYPES
+
+
+# ---------------------------------------------------------------- ลิมิต/alert แยกตามพอร์ต (paper | real)
+def _tables_used(calls):
+    return {(c[0], c[1]) for c in calls}
+
+
+def test_real_portfolio_uses_its_own_tables_and_report(monkeypatch):
+    seen = {}
+
+    async def fake_report(email, portfolio="paper"):
+        seen["portfolio"] = portfolio
+        return {"meta": {"data_status": "ok", "as_of": "2026-10-28", "freshness": "fresh", "warnings": []},
+                "exposure_ctx": {"holdings": {"AAA": {"qty": 10, "price": 10.0}}, "cash": 0.0, "skipped": []},
+                "analysis": {"performance": {}}, "nav_series": []}
+
+    for pf, lim_t, al_t in (("real", "real_risk_limits", "real_risk_alerts"), ("paper", "stock_risk_limits", "stock_risk_alerts")):
+        calls = []
+
+        async def sb(method, table, params=None, json=None, prefer=None, **kw):
+            calls.append((method, table))
+            if method == "GET" and table == lim_t:
+                return [{"email": "a@b.c", "max_hhi": 0.9}]       # หุ้นตัวเดียว HHI = 1.0 > 0.9
+            return []
+
+        monkeypatch.setattr(RA, "_report", fake_report)
+        monkeypatch.setattr(RA, "sb", sb)
+        out = asyncio.run(RA.evaluate(portfolio=pf, email="a@b.c"))
+        assert seen["portfolio"] == pf and [o["alert_type"] for o in out["opened"]] == ["hhi"]
+        used = _tables_used(calls)
+        assert ("GET", lim_t) in used and ("POST", al_t) in used
+        other = "stock_risk_alerts" if pf == "real" else "real_risk_alerts"
+        assert not any(t in (other, "stock_risk_limits" if pf == "real" else "real_risk_limits") for _, t in used)
+
+
+def test_limits_endpoints_and_audit_events_are_scoped_per_portfolio(monkeypatch):
+    from types import SimpleNamespace
+    for pf, lim_t, ev in (("real", "real_risk_limits", "real_risk_limit_changed"), ("paper", "stock_risk_limits", "risk_limit_changed")):
+        calls = []
+
+        async def sb(method, table, params=None, json=None, prefer=None, **kw):
+            calls.append((method, table, json))
+            if method == "POST" and table == lim_t:
+                return json
+            return []
+
+        monkeypatch.setattr(RA, "sb", sb)
+        body = SimpleNamespace(model_fields_set={"max_drawdown"}, max_drawdown=0.15)
+        out = asyncio.run(RA.put_limits(body, portfolio=pf, email="a@b.c"))
+        assert out["changed"] == ["max_drawdown"] and ("POST", lim_t) in {(c[0], c[1]) for c in calls}
+        audit = [c for c in calls if c[1] == "audit_log"][0][2]
+        assert {a["event"] for a in audit if a["param"] == "max_drawdown"} == {ev}
+        got = asyncio.run(RA.get_limits(portfolio=pf, email="a@b.c"))
+        assert got["source"]["max_drawdown"] == "default" and ("GET", lim_t) in {(c[0], c[1]) for c in calls}
+
+
+def test_alert_list_and_acknowledge_are_scoped_per_portfolio(monkeypatch):
+    calls = []
+
+    async def sb(method, table, params=None, json=None, prefer=None, **kw):
+        calls.append((method, table, params))
+        return []
+
+    monkeypatch.setattr(RA, "sb", sb)
+    asyncio.run(RA.list_alerts(status="active", acknowledged=None, limit=10, portfolio="real", email="a@b.c"))
+    assert calls[-1][1] == "real_risk_alerts" and calls[-1][2]["email"] == "eq.a@b.c"
+    try:
+        asyncio.run(RA.acknowledge_alert(3, portfolio="real", email="a@b.c"))
+    except RA.HTTPException as e:
+        assert e.status_code == 404
+    assert {c[1] for c in calls} == {"real_risk_alerts"}
+    asyncio.run(RA.list_alerts(status=None, acknowledged=None, limit=10, portfolio="paper", email="a@b.c"))
+    assert calls[-1][1] == "stock_risk_alerts"
+
+
+def test_overview_active_alert_count_reads_the_portfolios_own_table(monkeypatch):
+    from stocks import risk_api as API
+    seen = []
+
+    async def sb(method, table, params=None, **kw):
+        seen.append(table)
+        return [{"id": 1, "severity": "critical", "acknowledged_at": None}]
+
+    monkeypatch.setattr(API, "sb", sb)
+    real = asyncio.run(API._active_alerts("a@b.c", "real"))
+    paper = asyncio.run(API._active_alerts("a@b.c", "paper"))
+    assert seen == ["real_risk_alerts", "stock_risk_alerts"]
+    assert real["value"] == 1 and real["critical"] == 1 and paper["unacknowledged"] == 1
