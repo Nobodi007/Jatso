@@ -1,6 +1,7 @@
 """Yahoo Finance (yfinance) — แหล่งไม่เป็นทางการ ใช้เป็นแหล่งหลักของ Backtest ตามที่ตัดสินใจใน B0
 
 - auto_adjust=False  -> Close เป็น split-adjusted ไม่ปรับปันผล (ตรงนิยาม Price Return)
+  และเก็บ "Adj Close" (ปรับทั้ง split และปันผล) เป็น adj_close ไว้ใช้โหมด Total Return
 - ตัดแท่งของวันนี้ที่ตลาดยังไม่ปิดทิ้ง
 - ฟังก์ชันเป็น sync (เรียกผ่าน thread จากชั้น service)
 ผลทดสอบจริงของ probe: AAPL/NVDA/TSLA/CRDO/^GSPC/SPY ได้ครบ มี volume; SIVB (delist) ว่างเปล่า
@@ -47,8 +48,17 @@ class YahooProvider:
             if not all(math.isfinite(x) for x in (o, h, l, c)) or min(o, h, l, c) <= 0:
                 continue
             d = ts.date()
+            adj = None
+            try:
+                a = float(r["Adj Close"])
+                adj = a if math.isfinite(a) and a > 0 else None
+            except (KeyError, TypeError, ValueError):
+                adj = None
             if d == now.date() and now.time() < dtime(16, 15):
                 continue
-            out.append({"date": d.isoformat(), "open": o, "high": h, "low": l, "close": c, "volume": v})
+            bar = {"date": d.isoformat(), "open": o, "high": h, "low": l, "close": c, "volume": v}
+            if adj is not None:
+                bar["adj_close"] = adj
+            out.append(bar)
         out.sort(key=lambda b: b["date"])
         return out

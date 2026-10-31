@@ -31,8 +31,15 @@ def clean_bars(symbol: str, bars: list[dict]) -> tuple[list[dict], list[dict]]:
         if not all(math.isfinite(v) for v in vals) or min(vals) <= 0:
             dropped += 1
             continue
-        seen[d] = {"date": d, "open": vals[0], "high": vals[1], "low": vals[2], "close": vals[3],
-                   "volume": int(b.get("volume") or 0)}
+        row = {"date": d, "open": vals[0], "high": vals[1], "low": vals[2], "close": vals[3],
+               "volume": int(b.get("volume") or 0)}
+        try:                                                  # adj_close (ถ้ามี) ใช้เฉพาะโหมด Total Return
+            a = float(b["adj_close"])
+            if math.isfinite(a) and a > 0:
+                row["adj_close"] = a
+        except (KeyError, TypeError, ValueError):
+            pass
+        seen[d] = row
     out = [seen[k] for k in sorted(seen)]
     if dropped:
         issues.append({"symbol": symbol, "code": "dropped_rows", "count": dropped})

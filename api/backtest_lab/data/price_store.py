@@ -129,7 +129,8 @@ class PriceStore:
 
     def _entry(self, symbol: str, bars: list[dict]) -> dict:
         return {"symbol": symbol, "source": self.provider.name, "first_date": bars[0]["date"],
-                "last_date": bars[-1]["date"], "fetched_at": self.now().isoformat(), "bars": bars}
+                "last_date": bars[-1]["date"], "fetched_at": self.now().isoformat(), "bars": bars,
+                "has_adj": all("adj_close" in b for b in bars)}
 
     def _refresh(self, symbol: str, entry: dict) -> tuple[dict, bool]:
         """คืน (entry ใหม่, refreshed) ; ถ้าอัปเดตล้มเหลว -> raise ให้ผู้เรียกใช้ stale"""
@@ -138,18 +139,25 @@ class PriceStore:
         fresh = self.provider.get_bars(symbol, frm, self.now().date())
         if not fresh:
             raise ProviderError(f"{symbol}: refresh returned no data")
-        old = {b["date"]: b["close"] for b in entry["bars"]}
+        old = {b["date"]: b for b in entry["bars"]}
         for b in fresh:
             o = old.get(b["date"])
-            if o is not None and abs(b["close"] / o - 1.0) > C.OVERLAP_TOL:
-                return self._full_fetch(symbol), True            # ราคาเก่าถูกปรับย้อนหลัง -> ดึงเต็มใหม่
+            if o is None:
+                continue
+            if abs(b["close"] / o["close"] - 1.0) > C.OVERLAP_TOL:
+                return self._full_fetch(symbol), True            # ราคาเก่าถูกปรับย้อนหลัง (split) -> ดึงเต็มใหม่
+            if "adj_close" in b and "adj_close" in o:            # มีปันผลใหม่ -> adj_close ของประวัติเก่าทั้งหมดเปลี่ยนสเกล -> ดึงเต็มใหม่
+                if abs((b["adj_close"] / b["close"]) / (o["adj_close"] / o["close"]) - 1.0) > C.ADJ_TOL:
+                    return self._full_fetch(symbol), True
+        if "adj_close" in fresh[0] and any("adj_close" not in b for b in entry["bars"]):
+            return self._full_fetch(symbol), True                # cache เก่าไม่มี adj_close -> ดึงเต็มใหม่ครั้งเดียว
         merged = {b["date"]: b for b in entry["bars"]}
         for b in fresh:
             merged[b["date"]] = b
         bars = [merged[k] for k in sorted(merged)]
         return self._entry(symbol, bars), True
 
-    def get_bars(self, symbol: str, start: date, end: date) -> tuple[list[dict], dict]:
+    def get_bars(self, symbol: str, start: date, end: date, need_adj: bool = False) -> tuple[list[dict], dict]:
         with self._lock(symbol):
             entry = self.backend.get(symbol)
             stale, refreshed = False, False
@@ -164,6 +172,9 @@ class PriceStore:
                         self.backend.put(symbol, entry)
                     except ProviderError:
                         stale = True
+            if need_adj and not entry.get("has_adj", False) and not refreshed:
+                entry, refreshed = self._full_fetch(symbol), True    # cache เก่าไม่มี adj_close
+                self.backend.put(symbol, entry)
         s, e = start.isoformat(), end.isoformat()
         bars = [b for b in entry["bars"] if s <= b["date"] <= e]
         meta = {"symbol": symbol, "source": entry["source"], "first_date": entry["first_date"],
