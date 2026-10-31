@@ -34,6 +34,8 @@ interface Overview {
     benchmark?: { symbol: string; name: string };
     warnings?: Warning[];
     period?: { label?: string; trading_days?: number };
+    data_status?: string;
+    portfolio?: "paper" | "real";
   };
   cards: {
     market_value?: { value: number | null };
@@ -53,6 +55,7 @@ interface Position {
   unrealized_pnl?: number | null;
 }
 interface Exposure {
+  /** null เมื่อพอร์ตยังไม่มีหุ้นที่มีราคา (เช่น ยังไม่มีรายการ หรือราคาขาด): หลังบ้านตอบ 200 พร้อม status=unavailable */
   exposure: {
     nav: number;
     equity_value: number;
@@ -63,9 +66,12 @@ interface Exposure {
     effective_n?: Metric;
     top1?: Metric;
     sectors?: { sector: string; weight_nav: number; market_value?: number }[];
-  };
+  } | null;
   meta?: { sector_classification?: string };
 }
+type ExposureBody = NonNullable<Exposure["exposure"]>;
+/** ตัวเลขเป็น null เพื่อให้ usd()/pct() แสดง “—” (ไม่แสดง $0 ที่ดูเหมือนมีข้อมูลจริง) */
+const EMPTY_EXPOSURE = { nav: null, equity_value: null, cash: null, cash_weight: null, positions: [] } as unknown as ExposureBody;
 interface Limits {
   max_drawdown: number | null;
   max_single_weight: number | null;
@@ -183,7 +189,31 @@ interface AttrRes {
 interface Props {
   getToken: () => string | null;
   apiBase: string;
+  /** paper = พอร์ตจำลอง (ค่าเริ่มต้น) · real = พอร์ตจริงที่กรอกเอง (ข้อมูล ลิมิต และ alert แยกกัน) */
+  portfolio?: "paper" | "real";
 }
+
+/** ข้อความอธิบายสถานะรายงานที่ไม่ปกติ (ตัวเลขจะขึ้น “ยังคำนวณไม่ได้” อยู่แล้ว ข้อความนี้บอกเหตุผล) */
+const STATUS_TEXT = (status: string | undefined, real: boolean): string | null => {
+  switch (status) {
+    case "no_account":
+      return real ? "ยังไม่มีพอร์ตจริง ไปที่แท็บ “รายการ” เพื่อกรอกเงินฝากและรายการซื้อขาย" : "ยังไม่มีบัญชีพอร์ตจำลอง";
+    case "no_activity":
+      return real
+        ? "ยังไม่มีรายการซื้อขาย (อาจมีแต่เงินฝาก) ไปที่แท็บ “รายการ” เพื่อกรอกรายการซื้อ"
+        : "ยังไม่มีรายการซื้อขายที่ใช้งานอยู่";
+    case "insufficient_data":
+      return "ข้อมูลยังไม่พอคำนวณตัวชี้วัดความเสี่ยง (ดูหมายเหตุด้านล่าง)";
+    case "incomplete":
+      return "คำนวณ NAV ไม่ครบ เพราะราคาของบางตัวขาดหาย (ดูหมายเหตุด้านล่าง) ระบบไม่เดามูลค่าให้";
+    case "ledger_integrity_error":
+      return "รายการซื้อขายไม่สอดคล้องกัน (เช่น ขายเกินที่ถือ) ตรวจรายการอีกครั้ง";
+    case "unavailable":
+      return "ดึงข้อมูลตลาดไม่สำเร็จ ลองรีเฟรชภายหลัง";
+    default:
+      return null;
+  }
+};
 
 /* ───────── helpers ───────── */
 const MIN_VOL = 20;
@@ -1058,7 +1088,7 @@ function AttributionSection({ a }: { a: AttrRes | null }) {
 }
 
 /* ───────── page ───────── */
-export default function StockRiskPage({ getToken, apiBase }: Props) {
+export default function StockRiskPage({ getToken, apiBase, portfolio = "paper" }: Props) {
   const [ov, setOv] = useState<Overview | null>(null);
   const [ex, setEx] = useState<Exposure | null>(null);
   const [limits, setLimits] = useState<Limits | null>(null);
@@ -1082,7 +1112,9 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
   const call = useCallback(
     async <T,>(path: string, init?: RequestInit): Promise<T> => {
       const token = getToken();
-      const r = await fetch(`${apiBase}/api/stocks/risk${path}`, {
+      // พอร์ตจริง: ทุกคำขอต่อท้าย portfolio=real (พอร์ตจำลองไม่ต่อท้าย = พฤติกรรมเดิม)
+      const q = portfolio === "real" ? `${path.includes("?") ? "&" : "?"}portfolio=real` : "";
+      const r = await fetch(`${apiBase}/api/stocks/risk${path}${q}`, {
         ...init,
         headers: {
           ...(init?.headers ?? {}),
@@ -1092,7 +1124,7 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
       if (!r.ok) throw new Error(r.status === 401 ? "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่" : r.status === 429 ? "เรียกถี่เกินไป กรุณารอสักครู่แล้วลองใหม่" : `เซิร์ฟเวอร์ตอบ ${r.status}`);
       return (await r.json()) as T;
     },
-    [getToken, apiBase],
+    [getToken, apiBase, portfolio],
   );
 
   const load = useCallback(async () => {
@@ -1236,7 +1268,7 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
   if (!ov || !ex) return null;
 
   const c = ov.cards;
-  const e = ex.exposure;
+  const e: ExposureBody = ex.exposure ?? EMPTY_EXPOSURE;
   const warnings = ov.meta.warnings ?? [];
   const activeList = alerts.filter((a) => a.status === "active");
   const activeN = activeList.length;
@@ -1254,7 +1286,9 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
           <h1 className="flex items-center gap-2 text-2xl font-medium">
             <ShieldAlert className="size-6" /> Risk Center
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">หุ้นสหรัฐ · พอร์ตจำลอง · สกุลเงิน USD</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            หุ้นสหรัฐ · {portfolio === "real" ? "พอร์ตจริง (กรอกเอง)" : "พอร์ตจำลอง"} · สกุลเงิน USD
+          </p>
         </div>
         <div className="flex items-center gap-2">
           {ov.meta.as_of && <Chip>ข้อมูล ณ {ov.meta.as_of.slice(0, 10)}</Chip>}
@@ -1277,6 +1311,12 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
       </div>
 
       {error && <p className="text-sm text-rose-500">{error}</p>}
+
+      {STATUS_TEXT(ov.meta.data_status, portfolio === "real") && (
+        <div role="status" className="rounded-3xl border border-border bg-card p-4 text-sm">
+          {STATUS_TEXT(ov.meta.data_status, portfolio === "real")}
+        </div>
+      )}
 
       {/* data notes */}
       {warnings.length > 0 && (
@@ -1383,7 +1423,7 @@ export default function StockRiskPage({ getToken, apiBase }: Props) {
                   {usd(e.cash)} · {pct(e.cash_weight, 1)}
                 </span>
               </div>
-              <Bar value={e.cash_weight} kind="ok" />
+              <Bar value={e.cash_weight ?? 0} kind="ok" />
             </div>
           </div>
           <div className="mt-5 flex flex-wrap gap-2 border-t border-border pt-3">
