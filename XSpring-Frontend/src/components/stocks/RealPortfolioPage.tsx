@@ -1,5 +1,7 @@
 import { Component, useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import RealOverviewTab from "./RealOverviewTab";
+import StockRiskPage from "../risk/StockRiskPage";
 
 /* พอร์ตจริง: กรอกเองจากรายการของโบรกเกอร์ (เช่น Webull) 1 อีเมล = 1 บัญชี ไม่ได้เชื่อมต่อบัญชีโบรกเกอร์
    ตรงกับ api/stocks/real_book.py · ยังไม่เชื่อมกับ Risk Center */
@@ -74,23 +76,6 @@ const tone = (n: number) => (n > 0 ? "text-emerald-500" : n < 0 ? "text-rose-500
 const SYMBOL_RE = /^[A-Z][A-Z0-9.-]{0,9}$/;
 const num = (s: string) => (s.trim() === "" ? NaN : Number(s));
 
-/* ---------- ตัวช่วยวันที่ (คำนวณแบบ UTC เที่ยงวัน กันวันเลื่อนจาก timezone) ---------- */
-const shiftDate = (iso: string, days: number) => {
-  const d = new Date(iso + "T12:00:00Z");
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-};
-const dayOfWeek = (iso: string) => new Date(iso + "T12:00:00Z").getUTCDay();
-const isWeekend = (iso: string) => {
-  const d = dayOfWeek(iso);
-  return d === 0 || d === 6;
-};
-const prevTradingDay = (iso: string) => {
-  let d = shiftDate(iso, -1);
-  while (isWeekend(d)) d = shiftDate(d, -1);
-  return d;
-};
-
 const warnText = (w: Warn): string => {
   switch (w.code) {
     case "negative_cash":
@@ -109,59 +94,6 @@ function Panel({ children }: { children: ReactNode }) {
 }
 const field = "w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-emerald-500";
 const btn = "rounded-full px-4 py-2 text-sm font-medium disabled:opacity-50";
-const voidBtn =
-  "rounded-full border border-border px-2.5 py-0.5 text-xs text-muted-foreground hover:border-rose-500 hover:text-rose-500 disabled:opacity-50";
-
-/** ช่องวันที่: คลิกตรงไหนก็เปิดปฏิทิน + ปุ่มลัด + เตือนเสาร์/อาทิตย์
- *  ใช้ div ครอบแทน label เพราะถ้าปุ่มอยู่ใน label การกดปุ่มลัดจะไปเปิดปฏิทินซ้อน */
-function DateField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
-  const today = todayET();
-  const quick = [
-    { label: "วันนี้", v: today },
-    { label: "เมื่อวาน", v: shiftDate(today, -1) },
-    { label: "วันทำการก่อนหน้า", v: prevTradingDay(today) },
-    { label: "7 วันก่อน", v: shiftDate(today, -7) },
-  ];
-  const weekend = !!value && isWeekend(value);
-
-  return (
-    <div className="block text-sm">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <input
-        type="date"
-        className={`${field} mt-1 cursor-pointer`}
-        value={value}
-        min="2010-01-01"
-        max={today}
-        onClick={(e) => {
-          try {
-            (e.currentTarget as HTMLInputElement & { showPicker?: () => void }).showPicker?.();
-          } catch {
-            /* เบราว์เซอร์เก่าไม่รองรับ showPicker ก็พิมพ์เองได้ตามปกติ */
-          }
-        }}
-        onChange={(e: { target: { value: string } }) => onChange(e.target.value)}
-      />
-      <div className="mt-1.5 flex flex-wrap gap-1">
-        {quick.map((q) => (
-          <button
-            key={q.label}
-            type="button"
-            onClick={() => onChange(q.v)}
-            className={`rounded-full border px-2 py-0.5 text-[11px] ${
-              value === q.v
-                ? "border-emerald-500 bg-emerald-500/10 text-emerald-500"
-                : "border-border text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {q.label}
-          </button>
-        ))}
-      </div>
-      {weekend && <p className="mt-1 text-xs text-amber-500">วันเสาร์/อาทิตย์ตลาดปิด ตรวจวันที่อีกครั้ง</p>}
-    </div>
-  );
-}
 
 /** ถ้าหน้านี้เรนเดอร์พัง ให้แสดงข้อความแทนหน้าดำทั้งแอป (และพิมพ์รายละเอียดลง console) */
 class PageBoundary extends Component<{ children?: ReactNode }, { err: Error | null }> {
@@ -194,7 +126,15 @@ export default function RealPortfolioPage(props: { getToken?: () => string | nul
   );
 }
 
+type Tab = "overview" | "entries" | "risk";
+const TABS: { id: Tab; label: string }[] = [
+  { id: "overview", label: "ภาพรวม" },
+  { id: "entries", label: "รายการ" },
+  { id: "risk", label: "Risk" },
+];
+
 function RealPortfolioInner({ getToken, apiBase = "" }: { getToken?: () => string | null; apiBase?: string }) {
+  const [tab, setTab] = useState<Tab>("overview");
   const authed = !!(typeof getToken === "function" && getToken());
   const [sum, setSum] = useState<Summary | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
@@ -340,15 +280,48 @@ function RealPortfolioInner({ getToken, apiBase = "" }: { getToken?: () => strin
     return <Panel><p className="text-sm text-muted-foreground">เข้าสู่ระบบเพื่อบันทึกพอร์ตจริง</p></Panel>;
   }
 
+  const tabBar = (
+    <div role="tablist" className="flex flex-wrap gap-2">
+      {TABS.map((x) => (
+        <button
+          key={x.id}
+          role="tab"
+          aria-selected={tab === x.id}
+          onClick={() => setTab(x.id)}
+          className={`rounded-full px-4 py-2 text-sm transition ${
+            tab === x.id ? "bg-emerald-500 font-medium text-black" : "border border-border bg-card text-foreground/80 hover:bg-accent"
+          }`}
+        >
+          {x.label}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (tab !== "entries") {
+    return (
+      <div className="space-y-5">
+        <div>
+          <h1 className="text-2xl font-semibold">พอร์ตจริง</h1>
+          <p className="mt-1 text-sm text-muted-foreground">กรอกเองจากรายการของโบรกเกอร์ ไม่ได้เชื่อมต่อบัญชีโบรกเกอร์ · ข้อมูล ลิมิต และการเตือนแยกจากพอร์ตจำลอง</p>
+        </div>
+        {tabBar}
+        {tab === "overview" ? (
+          <RealOverviewTab getToken={getToken} apiBase={apiBase} />
+        ) : (
+          <StockRiskPage getToken={getToken as () => string | null} apiBase={apiBase} portfolio="real" />
+        )}
+      </div>
+    );
+  }
+
   return (
-    /* pb-28 = เว้นที่ท้ายหน้า ให้เลื่อนส่วนล่างขึ้นมาพ้นปุ่ม "ถาม AI" ที่ลอยมุมขวาล่าง */
-    <div className="space-y-5 pb-28">
+    <div className="space-y-5">
       <div>
         <h1 className="text-2xl font-semibold">พอร์ตจริง</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          กรอกเองจากรายการของโบรกเกอร์ ไม่ได้เชื่อมต่อบัญชีโบรกเกอร์ · ยังไม่เชื่อมกับ Risk Center (ตัวเลขความเสี่ยงยังมาจากพอร์ตจำลอง)
-        </p>
+        <p className="mt-1 text-sm text-muted-foreground">กรอกเองจากรายการของโบรกเกอร์ ไม่ได้เชื่อมต่อบัญชีโบรกเกอร์ · ข้อมูล ลิมิต และการเตือนแยกจากพอร์ตจำลอง</p>
       </div>
+      {tabBar}
 
       {error && <p role="alert" className="rounded-xl bg-rose-500/10 px-3 py-2 text-sm text-rose-400">{error}</p>}
       {notice.length > 0 && (
@@ -438,14 +411,16 @@ function RealPortfolioInner({ getToken, apiBase = "" }: { getToken?: () => strin
           <label className="block text-sm"><span className="text-xs text-muted-foreground">ราคาต่อหุ้น (USD)</span>
             <input className={`${field} mt-1`} inputMode="decimal" value={t.price} placeholder="95.50"
               onChange={(e: { target: { value: string } }) => setT({ ...t, price: e.target.value })} /></label>
-          <label className="block self-start text-sm"><span className="text-xs text-muted-foreground">ค่าธรรมเนียม (USD)</span>
+          <label className="block text-sm"><span className="text-xs text-muted-foreground">ค่าธรรมเนียม (USD)</span>
             <input className={`${field} mt-1`} inputMode="decimal" value={t.fee}
               onChange={(e: { target: { value: string } }) => setT({ ...t, fee: e.target.value })} /></label>
-          <DateField label="วันที่ (เวลาสหรัฐ ET)" value={t.date} onChange={(v) => setT({ ...t, date: v })} />
-          <label className="mt-7 flex cursor-pointer items-center gap-2 self-start text-sm">
+          <label className="block text-sm"><span className="text-xs text-muted-foreground">วันที่ (เวลาสหรัฐ ET)</span>
+            <input type="date" className={`${field} mt-1`} value={t.date} min="2010-01-01" max={todayET()}
+              onChange={(e: { target: { value: string } }) => setT({ ...t, date: e.target.value })} /></label>
+          <label className="flex items-end gap-2 pb-2 text-sm">
             <input type="checkbox" checked={t.after} onChange={(e: { target: { checked: boolean } }) => setT({ ...t, after: e.target.checked })} />
             <span>ซื้อขายหลังตลาดปิด (หลัง 16:00 ET)</span></label>
-          <label className="block self-start text-sm"><span className="text-xs text-muted-foreground">หมายเหตุ (ไม่บังคับ)</span>
+          <label className="block text-sm"><span className="text-xs text-muted-foreground">หมายเหตุ (ไม่บังคับ)</span>
             <input className={`${field} mt-1`} value={t.note} maxLength={200}
               onChange={(e: { target: { value: string } }) => setT({ ...t, note: e.target.value })} /></label>
         </div>
@@ -462,20 +437,22 @@ function RealPortfolioInner({ getToken, apiBase = "" }: { getToken?: () => strin
       <Panel>
         <h2 className="text-base font-medium">เพิ่มเงินฝาก / ถอน</h2>
         <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
-          <div className="self-start text-sm"><span className="text-xs text-muted-foreground">ประเภท</span>
+          <div className="text-sm"><span className="text-xs text-muted-foreground">ประเภท</span>
             <div className="mt-1 flex gap-2">
               {(["deposit", "withdraw"] as const).map((k) => (
                 <button key={k} type="button" onClick={() => setF({ ...f, kind: k })}
-                  className={`${btn} flex-1 ${f.kind === k ? (k === "deposit" ? "bg-emerald-500 text-black" : "bg-rose-500 text-white") : "border border-border"}`}>
+                  className={`${btn} flex-1 ${f.kind === k ? "bg-emerald-500 text-black" : "border border-border"}`}>
                   {k === "deposit" ? "ฝาก" : "ถอน"}
                 </button>
               ))}
             </div></div>
-          <label className="block self-start text-sm"><span className="text-xs text-muted-foreground">จำนวนเงิน (USD)</span>
+          <label className="block text-sm"><span className="text-xs text-muted-foreground">จำนวนเงิน (USD)</span>
             <input className={`${field} mt-1`} inputMode="decimal" value={f.amount} placeholder="5000"
               onChange={(e: { target: { value: string } }) => setF({ ...f, amount: e.target.value })} /></label>
-          <DateField label="วันที่ (ET)" value={f.date} onChange={(v) => setF({ ...f, date: v })} />
-          <label className="block self-start text-sm"><span className="text-xs text-muted-foreground">หมายเหตุ (ไม่บังคับ)</span>
+          <label className="block text-sm"><span className="text-xs text-muted-foreground">วันที่ (ET)</span>
+            <input type="date" className={`${field} mt-1`} value={f.date} min="2010-01-01" max={todayET()}
+              onChange={(e: { target: { value: string } }) => setF({ ...f, date: e.target.value })} /></label>
+          <label className="block text-sm"><span className="text-xs text-muted-foreground">หมายเหตุ (ไม่บังคับ)</span>
             <input className={`${field} mt-1`} value={f.note} maxLength={200}
               onChange={(e: { target: { value: string } }) => setF({ ...f, note: e.target.value })} /></label>
         </div>
@@ -488,25 +465,25 @@ function RealPortfolioInner({ getToken, apiBase = "" }: { getToken?: () => strin
           <p className="mt-3 text-sm text-muted-foreground">ยังไม่มีรายการ</p>
         ) : (
           <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-[600px] text-sm tabular-nums">
+            <table className="w-full min-w-[560px] text-sm tabular-nums">
               <thead><tr className="text-left text-xs text-muted-foreground">
-                <th className="w-20 py-1 pr-3 font-normal" />
                 <th className="py-1 pr-3 font-normal">วันที่ (ET)</th><th className="py-1 pr-3 font-normal">หุ้น</th>
                 <th className="py-1 pr-3 font-normal">ประเภท</th><th className="py-1 pr-3 text-right font-normal">จำนวน</th>
-                <th className="py-1 pr-3 text-right font-normal">ราคา</th><th className="py-1 text-right font-normal">ค่าธรรมเนียม</th>
+                <th className="py-1 pr-3 text-right font-normal">ราคา</th><th className="py-1 pr-3 text-right font-normal">ค่าธรรมเนียม</th>
+                <th className="py-1 text-right font-normal" />
               </tr></thead>
               <tbody>
                 {trades.map((x) => (
                   <tr key={x.id} className="border-t border-border">
-                    <td className="py-1.5 pr-3">
-                      <button onClick={() => voidTrade(x)} disabled={busy} className={voidBtn}>ยกเลิก</button>
-                    </td>
                     <td className="py-1.5 pr-3">{x.trade_date}{x.after_close ? " 🌙" : ""}</td>
                     <td className="py-1.5 pr-3 font-medium" title={x.note ?? ""}>{x.symbol}</td>
                     <td className={`py-1.5 pr-3 ${x.side === "buy" ? "text-emerald-500" : "text-rose-500"}`}>{x.side === "buy" ? "ซื้อ" : "ขาย"}</td>
                     <td className="py-1.5 pr-3 text-right">{x.qty}</td>
                     <td className="py-1.5 pr-3 text-right">{usd(x.price)}</td>
-                    <td className="py-1.5 text-right text-muted-foreground">{usd(x.fee)}</td>
+                    <td className="py-1.5 pr-3 text-right text-muted-foreground">{usd(x.fee)}</td>
+                    <td className="py-1.5 text-right">
+                      <button onClick={() => voidTrade(x)} disabled={busy} className="text-xs text-muted-foreground underline hover:text-foreground">ยกเลิก</button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -522,24 +499,17 @@ function RealPortfolioInner({ getToken, apiBase = "" }: { getToken?: () => strin
           <p className="mt-3 text-sm text-muted-foreground">ยังไม่มีรายการ</p>
         ) : (
           <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-[480px] text-sm tabular-nums">
-              <thead><tr className="text-left text-xs text-muted-foreground">
-                <th className="w-20 py-1 pr-3 font-normal" />
-                <th className="py-1 pr-3 font-normal">วันที่ (ET)</th>
-                <th className="py-1 pr-3 font-normal">ประเภท</th>
-                <th className="py-1 pr-3 text-right font-normal">จำนวนเงิน</th>
-                <th className="py-1 font-normal">หมายเหตุ</th>
-              </tr></thead>
+            <table className="w-full text-sm tabular-nums">
               <tbody>
                 {flows.map((x) => (
-                  <tr key={x.id} className="border-t border-border">
-                    <td className="py-1.5 pr-3">
-                      <button onClick={() => voidFlow(x)} disabled={busy} className={voidBtn}>ยกเลิก</button>
-                    </td>
+                  <tr key={x.id} className="border-t border-border first:border-0">
                     <td className="py-1.5 pr-3">{x.flow_date}</td>
                     <td className="py-1.5 pr-3">{x.amount > 0 ? "ฝาก" : "ถอน"}</td>
                     <td className={`py-1.5 pr-3 text-right ${tone(x.amount)}`}>{usd(x.amount, true)}</td>
-                    <td className="py-1.5 text-muted-foreground">{x.note ?? ""}</td>
+                    <td className="py-1.5 pr-3 text-muted-foreground">{x.note ?? ""}</td>
+                    <td className="py-1.5 text-right">
+                      <button onClick={() => voidFlow(x)} disabled={busy} className="text-xs text-muted-foreground underline hover:text-foreground">ยกเลิก</button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
