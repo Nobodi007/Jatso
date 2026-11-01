@@ -9,7 +9,7 @@ import { useBrokerFee } from "./useBrokerFee";
    ตรงกับ api/stocks/real_book.py · ยังไม่เชื่อมกับ Risk Center */
 
 interface Trade {
-  id: number; symbol: string; side: "buy" | "sell"; qty: number; price: number; : number;
+  id: number; symbol: string; side: "buy" | "sell"; qty: number; price: number; fee: number;
   trade_date: string; after_close: boolean; note?: string | null;
 }
 interface Flow { id: number; flow_date: string; amount: number; note?: string | null }
@@ -411,12 +411,6 @@ function RealPortfolioInner({ getToken, apiBase = "" }: { getToken?: () => strin
           <label className="block text-sm"><span className="text-xs text-muted-foreground">ราคาต่อหุ้น (USD)</span>
             <input className={`${field} mt-1`} inputMode="decimal" value={t.price} placeholder="95.50"
               onChange={(e: { target: { value: string } }) => setT({ ...t, price: e.target.value })} /></label>
-          <div>
-           <label className="block text-sm">
-             <span className="text-xs text-muted-foreground">ค่าธรรมเนียม (USD)</span>
-             <input className={`${field} mt-1`} inputMode="decimal" value={t.fee}
-               onChange={(e: { target: { value: string } }) => { brokerFee.markManual(); setT({ ...t, fee: e.target.value }); }} />
-           </label>
            <div>
            <label className="block text-sm">
              <span className="text-xs text-muted-foreground">ค่าธรรมเนียม (USD)</span>
