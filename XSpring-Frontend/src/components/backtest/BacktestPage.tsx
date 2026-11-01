@@ -10,6 +10,7 @@ import TickerInput from "./TickerInput"
 import type { TickerHit } from "./TickerInput"
 import RobustnessPanel from "./RobustnessPanel"
 import ResultCharts from "./ResultCharts"
+import SearchPanel from "./SearchPanel"
 
 
 // หน้า Backtest Lab (หุ้นสหรัฐ) — คอมโพเนนต์ใหม่ทั้งหมด ไม่ import/ไม่แตะโค้ด Backtest เดิม
@@ -630,6 +631,7 @@ const rangeText = (() => {
 
       {run?.status === "done" && <Results run={run} />}
       {run?.status === "done" && <RobustnessPanel runId={run.id} apiBase={apiBase} getToken={getToken} />}
+      {run?.status === "done" && <SearchPanel runId={run.id} apiBase={apiBase} getToken={getToken} />}
 
       {history.length > 0 && (
         <div className={card}>
