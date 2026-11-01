@@ -2,6 +2,8 @@ import { Component, useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import RealOverviewTab from "./RealOverviewTab";
 import StockRiskPage from "../risk/StockRiskPage";
+import BrokerPanel from "./BrokerPanel";
+import { useBrokerFee } from "./useBrokerFee";
 
 /* พอร์ตจริง: กรอกเองจากรายการของโบรกเกอร์ (เช่น Webull) 1 อีเมล = 1 บัญชี ไม่ได้เชื่อมต่อบัญชีโบรกเกอร์
    ตรงกับ api/stocks/real_book.py · ยังไม่เชื่อมกับ Risk Center */
@@ -148,6 +150,9 @@ function RealPortfolioInner({ getToken, apiBase = "" }: { getToken?: () => strin
   const [t, setT] = useState({ symbol: "", side: "buy" as "buy" | "sell", qty: "", price: "", fee: "0", date: todayET(), after: false, note: "" });
   const [dup, setDup] = useState(false);
   const [f, setF] = useState({ kind: "deposit" as "deposit" | "withdraw", amount: "", date: todayET(), note: "" });
+  const brokerFee = useBrokerFee(broker, num(t.qty), num(t.price), (v) =>
+     setT((x) => (x.fee === v ? x : { ...x, fee: v })),
+  );
 
   const call = useCallback(
     async <T,>(path: string, init?: RequestInit): Promise<T> => {
@@ -192,7 +197,7 @@ function RealPortfolioInner({ getToken, apiBase = "" }: { getToken?: () => strin
       setSum(s);
       setTrades(tr.trades);
       setFlows(fl.cash_flows);
-      setBroker((b) => b || s.account?.broker || "");
+      setBroker((b) => s.account?.broker || b);
     } catch (e) {
       setError(msgOf(e));
     } finally {
@@ -222,12 +227,13 @@ function RealPortfolioInner({ getToken, apiBase = "" }: { getToken?: () => strin
     }
   };
 
-  const saveBroker = () =>
-    run(async () => {
-      const b = broker.trim();
-      if (b.length < 1 || b.length > 40) throw new ApiError(400, "invalid_broker");
-      await call("/account", { method: "PUT", body: JSON.stringify({ broker: b }) });
-    });
+  const saveBroker = (name: string) =>
+     run(async () => {
+       const b = name.trim();
+       if (b.length < 1 || b.length > 40) throw new ApiError(400, "invalid_broker");
+       await call("/account", { method: "PUT", body: JSON.stringify({ broker: b }) });
+     });
+  const pickBroker = (name: string) => void saveBroker(name);
 
   const submitTrade = (confirmDuplicate = false) => {
     const sym = t.symbol.trim().toUpperCase();
@@ -242,6 +248,7 @@ function RealPortfolioInner({ getToken, apiBase = "" }: { getToken?: () => strin
         body: JSON.stringify({ symbol: sym, side: t.side, qty, price, fee, trade_date: t.date, after_close: t.after,
           note: t.note.trim() || null, confirm_duplicate: confirmDuplicate }),
       });
+      brokerFee.recalc();
       setT((x) => ({ ...x, symbol: "", qty: "", price: "", note: "" }));
       return r.warnings.map(warnText);
     });
@@ -338,14 +345,7 @@ function RealPortfolioInner({ getToken, apiBase = "" }: { getToken?: () => strin
       )}
 
       <Panel>
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="block text-sm">
-            <span className="text-xs text-muted-foreground">โบรกเกอร์</span>
-            <input className={`${field} mt-1 w-56`} value={broker} maxLength={40} placeholder="เช่น Webull"
-              onChange={(e: { target: { value: string } }) => setBroker(e.target.value)} />
-          </label>
-          <button onClick={() => void saveBroker()} disabled={busy} className={`${btn} border border-border hover:bg-muted`}>บันทึกชื่อ</button>
-        </div>
+        <BrokerPanel broker={broker} onSelectBroker={pickBroker} busy={busy} fee={brokerFee} />
       </Panel>
 
       <Panel>
@@ -411,9 +411,23 @@ function RealPortfolioInner({ getToken, apiBase = "" }: { getToken?: () => strin
           <label className="block text-sm"><span className="text-xs text-muted-foreground">ราคาต่อหุ้น (USD)</span>
             <input className={`${field} mt-1`} inputMode="decimal" value={t.price} placeholder="95.50"
               onChange={(e: { target: { value: string } }) => setT({ ...t, price: e.target.value })} /></label>
-          <label className="block text-sm"><span className="text-xs text-muted-foreground">ค่าธรรมเนียม (USD)</span>
-            <input className={`${field} mt-1`} inputMode="decimal" value={t.fee}
-              onChange={(e: { target: { value: string } }) => setT({ ...t, fee: e.target.value })} /></label>
+          <div>
+           <label className="block text-sm">
+             <span className="text-xs text-muted-foreground">ค่าธรรมเนียม (USD)</span>
+             <input className={`${field} mt-1`} inputMode="decimal" value={t.fee}
+               onChange={(e: { target: { value: string } }) => { brokerFee.markManual(); setT({ ...t, fee: e.target.value }); }} />
+           </label>
+           <p className="mt-1 text-xs text-muted-foreground">
+             {brokerFee.manual ? (
+               <>กรอกเอง <button type="button" className="underline" onClick={brokerFee.recalc}>คำนวณใหม่</button></>
+             ) : brokerFee.est ? (
+               `ประมาณจาก ${brokerFee.broker?.name}: ${brokerFee.est.basis}`
+             ) : (
+               "ยังไม่คำนวณ (ไม่มีอัตราของโบรกนี้ หรือยังไม่ใส่จำนวน/ราคา)"
+             )}
+             {t.side === "sell" && " · ฝั่งขายอาจมี SEC fee/TAF เพิ่ม"}
+           </p>
+         </div>
           <label className="block text-sm"><span className="text-xs text-muted-foreground">วันที่ (เวลาสหรัฐ ET)</span>
             <input type="date" className={`${field} mt-1`} value={t.date} min="2010-01-01" max={todayET()}
               onChange={(e: { target: { value: string } }) => setT({ ...t, date: e.target.value })} /></label>
