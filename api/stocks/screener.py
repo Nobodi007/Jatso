@@ -7,13 +7,14 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Query, Request
 
+from . import datadir, technicals as tech, universe
 from . import providers as p
 
 log = logging.getLogger("stocks.screener")
 router = APIRouter(prefix="/api/stocks", tags=["screener"])
 
 SCHEMA = 2  # เปลี่ยนเลขนี้เมื่อโครงสร้างแถวเปลี่ยน → ระบบจะทิ้งแถวเก่าและดึงใหม่
-SNAPSHOT_FILE = os.getenv("SCREENER_FILE", "/tmp/screener_snapshot.json")
+SNAPSHOT_FILE = os.getenv("SCREENER_FILE", datadir.path("screener_snapshot.json"))
 REFRESH_SECONDS = 12 * 3600
 PER_MINUTE = 40
 
@@ -40,8 +41,24 @@ NEE DUK SO D AEP EXC SRE XEL PEG ED WEC EIX PCG CEG VST NRG
 AMT PLD EQIX O PSA CCI SPG WELL DLR VICI AVB EQR IRM SBAC EXR
 SHW APD ECL FCX NEM NUE DOW DD LYB MLM VMC CTVA PPG ALB STLD
 """
-UNIVERSE = list(dict.fromkeys(UNIVERSE_RAW.split()))
+_BASE = list(dict.fromkeys(UNIVERSE_RAW.split()))
+# ชุดสแกนจริง = ลิสต์พื้นฐานด้านบน + S&P 500 / S&P 400 / Nasdaq-100 (จากแคช universe.json) + EXTRA_TICKERS
+# เป็นลิสต์เดียวที่ถูกแก้ในที่เดิม (in-place) เมื่อรายชื่อเปลี่ยน เพื่อให้ทุกฟังก์ชันเห็นค่าล่าสุด
+UNIVERSE: list[str] = universe.merged(_BASE)
 _UNI_SET = set(UNIVERSE)
+
+
+async def _refresh_universe():
+    try:
+        new = await universe.refresh(_BASE)
+    except Exception:  # noqa: BLE001
+        log.exception("universe refresh failed")
+        return
+    if new and set(new) != _UNI_SET:
+        log.info("universe: %d -> %d symbols", len(UNIVERSE), len(new))
+        UNIVERSE[:] = new
+        _UNI_SET.clear()
+        _UNI_SET.update(new)
 
 _rows: dict[str, dict] = {}
 _profiles: dict[str, dict] = {}
@@ -80,6 +97,7 @@ GROUPS = [
     ("E", "สุขภาพการเงิน"),
     ("F", "เงินปันผล"),
     ("Q", "Quant / เฉพาะทาง"),
+    *tech.TECH_GROUPS,
 ]
 
 
@@ -184,6 +202,8 @@ _SPEC = [
     ("fixedAssetTurnover", "Fixed assets turnover", "Q", "quant", "x", "เช่น 3", K("fixedAssetTurnoverTTM", "fixedAssetTurnoverAnnual")),
 ]
 METRICS = [dict(zip(("id", "label", "group", "tier", "unit", "ph", "fn"), s)) for s in _SPEC]
+# Technicals คำนวณแยกใน technicals.py จากราคาย้อนหลัง (fn=None = ไม่คำนวณตอนดึง Finnhub)
+METRICS += [{**m, "fn": None} for m in tech.TECH_METRICS]
 _IDS = [m["id"] for m in METRICS]
 SORTABLE = set(_IDS) | {"symbol"}
 
@@ -261,6 +281,8 @@ async def _one(sym: str):
     c = {"mm": m.get("metric") or {}, "price": price, "dp": _f(q.get("dp"))}
     row = {"symbol": sym, "name": prof.get("name"), "industry": prof.get("industry"), "exchange": prof.get("exchange")}
     for mt in METRICS:
+        if mt["fn"] is None:
+            continue
         try:
             row[mt["id"]] = mt["fn"](c)
         except (ZeroDivisionError, TypeError):
@@ -313,6 +335,7 @@ async def _loop():
     _load()
     while True:
         try:
+            await _refresh_universe()
             stale = time.time() - float(_meta.get("fullAt") or 0) >= REFRESH_SECONDS
             if stale:
                 order = [s for s in UNIVERSE if s not in _rows] + [s for s in UNIVERSE if s in _rows]
@@ -328,13 +351,21 @@ async def _loop():
 
 def start_background():
     """เรียกครั้งเดียวตอนแอปสตาร์ต"""
-    asyncio.get_event_loop().create_task(_loop())
+    loop = asyncio.get_event_loop()
+    loop.create_task(_loop())
+    loop.create_task(tech.loop(lambda: list(UNIVERSE)))
 
 
 # ───────────────────────── API ─────────────────────────
 
 def _universe_rows():
-    return [r for s, r in _rows.items() if s in _UNI_SET]
+    """แถวพื้นฐานจาก Finnhub + ค่า Technicals (ถ้าคำนวณแล้ว) ผสมเป็นแถวเดียว"""
+    out = []
+    for s, r in _rows.items():
+        if s in _UNI_SET:
+            t = tech.get(s)
+            out.append({**r, **t} if t else r)
+    return out
 
 
 @router.get("/screener/meta")
@@ -345,6 +376,7 @@ async def screener_meta():
         "metrics": [{k: v for k, v in m.items() if k != "fn"} for m in METRICS],
         "industries": sorted({r["industry"] for r in rows if r.get("industry")}),
         "exchanges": sorted({r["exchange"] for r in rows if r.get("exchange")}),
+        "tech": tech.info(),
     }
 
 
@@ -362,7 +394,7 @@ async def screener(
     desc: bool = True,
     industry: str | None = None,
     exchange: str | None = None,
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(100, ge=1, le=1000),
 ):
     rows = _universe_rows()
 
@@ -407,6 +439,7 @@ async def screener(
         "loaded": len(rows),
         "total": len(out),
         # จำนวนหุ้นที่มีข้อมูลของแต่ละตัวชี้วัด ใช้ปิดตัวกรองที่ไม่มีข้อมูลเลย
+        "tech": tech.info(),
         "coverage": {mid: sum(1 for r in rows if r.get(mid) is not None) for mid in _IDS},
         "rows": out[:limit],
     }
