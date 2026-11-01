@@ -2,14 +2,14 @@ import { Component, useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import RealOverviewTab from "./RealOverviewTab";
 import StockRiskPage from "../risk/StockRiskPage";
-import BrokerPanel from "./BrokerPanel";
+import BrokerPanel, { FeeHint } from "./BrokerPanel"
 import { useBrokerFee } from "./useBrokerFee";
 
 /* พอร์ตจริง: กรอกเองจากรายการของโบรกเกอร์ (เช่น Webull) 1 อีเมล = 1 บัญชี ไม่ได้เชื่อมต่อบัญชีโบรกเกอร์
    ตรงกับ api/stocks/real_book.py · ยังไม่เชื่อมกับ Risk Center */
 
 interface Trade {
-  id: number; symbol: string; side: "buy" | "sell"; qty: number; price: number; fee: number;
+  id: number; symbol: string; side: "buy" | "sell"; qty: number; price: number; : number;
   trade_date: string; after_close: boolean; note?: string | null;
 }
 interface Flow { id: number; flow_date: string; amount: number; note?: string | null }
@@ -426,7 +426,7 @@ function RealPortfolioInner({ getToken, apiBase = "" }: { getToken?: () => strin
                "ยังไม่คำนวณ (ไม่มีอัตราของโบรกนี้ หรือยังไม่ใส่จำนวน/ราคา)"
              )}
              {t.side === "sell" && " · ฝั่งขายอาจมี SEC fee/TAF เพิ่ม"}
-           </p>
+           <FeeHint fee={brokerFee} side={t.side} />
          </div>
           <label className="block text-sm"><span className="text-xs text-muted-foreground">วันที่ (เวลาสหรัฐ ET)</span>
             <input type="date" className={`${field} mt-1`} value={t.date} min="2010-01-01" max={todayET()}
