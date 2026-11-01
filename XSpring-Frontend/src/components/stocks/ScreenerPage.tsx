@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react"
 
-type Unit = "usd" | "pct" | "x" | "mcap" | "vol" | "num"
-type Tier = "core" | "adv" | "quant"
-type Metric = { id: string; label: string; group: string; tier: Tier; unit: Unit; ph: string }
+type Unit = "usd" | "pct" | "x" | "mcap" | "vol" | "num" | "flag" | "days" | "score"
+type Tier = "core" | "adv" | "quant" | "tech"
+type Metric = { id: string; label: string; group: string; tier: Tier; unit: Unit; ph: string; tip?: string }
+type TechInfo = { asOf: string | null; count: number; mode: string; phase: string; done: number; total: number; error: string | null }
 type Meta = {
   groups: { id: string; title: string }[]
   metrics: Metric[]
@@ -17,6 +18,7 @@ type Resp = {
   loaded: number
   total: number
   coverage: Record<string, number>
+  tech?: TechInfo
   rows: Row[]
 }
 type Range = { min: string; max: string }
@@ -26,6 +28,7 @@ const TIERS: { id: Tier; label: string }[] = [
   { id: "core", label: "หลัก" },
   { id: "adv", label: "Advanced" },
   { id: "quant", label: "Quant" },
+  { id: "tech", label: "Technicals" },
 ]
 
 const BASE_COLS = ["price", "changePercent", "marketCap"]
@@ -37,10 +40,16 @@ const PRESETS: { label: string; hint: string; f: Filters }[] = [
   { label: "ปันผลเด่น", hint: "ปันผล ≥ 3%, Payout ≤ 70%", f: { dividendYield: { min: "3", max: "" }, payoutRatio: { min: "", max: "70" } } },
   { label: "งบแข็งแรง", hint: "D/E ≤ 0.5, Current ratio ≥ 1.5, ROE ≥ 12%", f: { debtToEquity: { min: "", max: "0.5" }, currentRatio: { min: "1.5", max: "" }, roe: { min: "12", max: "" } } },
   { label: "ใกล้จุดสูงสุด", hint: "ห่างจาก High 52 สัปดาห์ไม่เกิน 5%", f: { fromHigh52w: { min: "-5", max: "" } } },
+  { label: "RSI Oversold", hint: "RSI(14) ≤ 30", f: { rsi: { min: "", max: "30" } } },
+  { label: "Golden Cross ใหม่", hint: "SMA50 ตัดขึ้น SMA200 ภายใน 10 วัน", f: { goldenCrossDays: { min: "", max: "10" } } },
+  { label: "เทรนด์ขึ้นชัด", hint: "ราคาเหนือ SMA50 และ SMA200, ADX ≥ 25", f: { distSma50: { min: "0", max: "" }, distSma200: { min: "0", max: "" }, adx: { min: "25", max: "" } } },
+  { label: "เบรกเอาต์ + วอลุ่ม", hint: "ใกล้สูงสุด 20 วัน และวอลุ่ม ≥ 1.5 เท่า", f: { donchianPos: { min: "95", max: "" }, relVolume: { min: "1.5", max: "" } } },
+  { label: "Bollinger บีบตัว", hint: "Bandwidth ≤ 6%", f: { bbWidth: { min: "", max: "6" } } },
+  { label: "Technical Buy", hint: "Technical Rating ≥ 0.1", f: { techRating: { min: "0.1", max: "" } } },
   { label: "ใหญ่และคล่อง", hint: "มูลค่าตลาด ≥ 100,000 ล้าน, วอลุ่ม ≥ 5 ล้านหุ้น", f: { marketCap: { min: "100000", max: "" }, avgVolume: { min: "5", max: "" } } },
 ]
 
-const UNIT_HINT: Partial<Record<Unit, string>> = { pct: "%", x: "เท่า", usd: "USD", mcap: "ล้าน USD", vol: "ล้านหุ้น" }
+const UNIT_HINT: Partial<Record<Unit, string>> = { pct: "%", x: "เท่า", usd: "USD", mcap: "ล้าน USD", vol: "ล้านหุ้น", days: "วันทำการ", score: "−1 ถึง +1" }
 
 const fmt = (v: any, u: Unit) => {
   if (v == null || typeof v !== "number") return "–"
@@ -53,6 +62,9 @@ const fmt = (v: any, u: Unit) => {
       return a >= 1e6 ? `${(v / 1e6).toFixed(2)}T` : a >= 1e3 ? `${(v / 1e3).toFixed(1)}B` : `${v.toFixed(0)}M`
     }
     case "vol": return `${L(2)}M`
+    case "flag": return v ? "✓" : "–"
+    case "days": return `${v.toFixed(0)} วัน`
+    case "score": return `${v > 0 ? "+" : ""}${v.toFixed(2)}`
     case "x": return L(2)
     default: return L(2)
   }
@@ -60,7 +72,8 @@ const fmt = (v: any, u: Unit) => {
 
 const tone = (v: any) =>
   typeof v !== "number" || v === 0 ? "" : v > 0 ? "text-emerald-500" : "text-red-500"
-const isToned = (m: Metric) => m.id === "changePercent" || /Growth$/.test(m.id)
+const isToned = (m: Metric) =>
+  m.id === "changePercent" || /Growth$/.test(m.id) || m.unit === "score" || /^(perf|dist|gapPct|sarDist|roc$)/.test(m.id)
 
 // "" → undefined (ไม่ใช้), ตัวเลขไม่ถูกต้อง → NaN
 const parse = (s: string): number | undefined => {
@@ -93,6 +106,8 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
   const [tick, setTick] = useState(0)
   const [picker, setPicker] = useState(false)
   const [tier, setTier] = useState<Tier>("core")
+  const [q, setQ] = useState("")
+  const [limit, setLimit] = useState(200)
 
   const byId = useMemo(() => new Map((meta?.metrics ?? []).map((m) => [m.id, m])), [meta])
 
@@ -131,7 +146,7 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
       if (exchange) qs.set("exchange", exchange)
       qs.set("sort", sort)
       qs.set("desc", String(desc))
-      qs.set("limit", "200")
+      qs.set("limit", String(limit))
 
       setLoading(true)
       try {
@@ -152,7 +167,7 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
       off = true
       window.clearTimeout(timer)
     }
-  }, [apiBase, active, filters, industry, exchange, sort, desc, tick])
+  }, [apiBase, active, filters, industry, exchange, sort, desc, tick, limit])
 
   // ระหว่างที่ backend ยังดึงข้อมูลไม่ครบ โหลดซ้ำเองทุก 20 วินาที
   useEffect(() => {
@@ -163,18 +178,21 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
 
   const addFilter = (id: string) => {
     setActive((a) => (a.includes(id) ? a : [...a, id]))
-    setFilters((f) => (f[id] ? f : { ...f, [id]: { min: "", max: "" } }))
+    const flag = byId.get(id)?.unit === "flag"
+    setFilters((f) => (f[id] ? f : { ...f, [id]: { min: flag ? "1" : "", max: "" } }))
   }
   const removeFilter = (id: string) => setActive((a) => a.filter((x) => x !== id))
   const setRange = (id: string, k: keyof Range, v: string) =>
     setFilters((f) => ({ ...f, [id]: { ...(f[id] ?? { min: "", max: "" }), [k]: v } }))
   const applyPreset = (f: Filters) => {
+    setLimit(200)
     setFilters(f)
     setActive(Object.keys(f))
     setIndustry("")
     setExchange("")
   }
   const clearAll = () => {
+    setLimit(200)
     setFilters({})
     setActive([])
     setIndustry("")
@@ -283,6 +301,9 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
                       ลบ
                     </button>
                   </div>
+                  {m.unit === "flag" ? (
+                    <div className="text-xs text-muted-foreground">ต้องพบแพทเทิร์นนี้ที่แท่งล่าสุด</div>
+                  ) : (
                   <div className="flex items-center gap-2">
                     {(["min", "max"] as const).map((k) => (
                       <div key={k} className="flex-1">
@@ -301,6 +322,8 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
                       </div>
                     ))}
                   </div>
+                  )}
+                  {m.tip && <div className="mt-1 text-[11px] leading-4 text-muted-foreground">{m.tip}</div>}
                   {bad ? (
                     <div className="mt-1 text-[11px] text-red-500">กรอกเป็นตัวเลขเท่านั้น</div>
                   ) : hint ? (
@@ -322,7 +345,13 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
 
         {picker && meta && (
           <div className="mt-4 rounded-lg border bg-muted/20 p-4">
-            <div className="mb-4 flex gap-1">
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="ค้นหาตัวกรอง เช่น RSI, MACD, Hammer, P/E"
+              className="mb-3 w-full max-w-sm rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
+            />
+            <div className={`mb-4 flex flex-wrap gap-1 ${q.trim() ? "opacity-40" : ""}`}>
               {TIERS.map((t) => (
                 <button
                   key={t.id}
@@ -338,7 +367,11 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
             </div>
             <div className="space-y-4">
               {meta.groups.map((g) => {
-                const ms = meta.metrics.filter((m) => m.group === g.id && m.tier === tier)
+                const needle = q.trim().toLowerCase()
+                const ms = meta.metrics.filter((m) =>
+                  m.group === g.id &&
+                  (needle ? `${m.label} ${m.id}`.toLowerCase().includes(needle) : m.tier === tier)
+                )
                 if (!ms.length) return null
                 return (
                   <div key={g.id}>
@@ -352,7 +385,7 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
                             key={m.id}
                             type="button"
                             disabled={on || empty}
-                            title={empty ? "ยังไม่มีข้อมูลตัวนี้จากแหล่งข้อมูล" : undefined}
+                            title={empty ? (m.tier === "tech" ? "ยังไม่มีข้อมูลราคาย้อนหลัง (กำลังสร้าง)" : "ยังไม่มีข้อมูลตัวนี้จากแหล่งข้อมูล") : m.tip}
                             onClick={() => addFilter(m.id)}
                             className={`rounded-full border px-3 py-1 text-xs ${
                               on ? "bg-accent text-muted-foreground" : empty ? "opacity-40" : "hover:bg-accent"
@@ -366,7 +399,7 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
                   </div>
                 )
               })}
-              {!meta.metrics.some((m) => m.tier === tier) && (
+              {!q.trim() && !meta.metrics.some((m) => m.tier === tier) && (
                 <p className="text-xs text-muted-foreground">ยังไม่มีตัวชี้วัดในหมวดนี้</p>
               )}
             </div>
@@ -382,8 +415,20 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
 
       {building && (
         <div className="rounded-xl border border-yellow-500/30 bg-yellow-500/5 px-4 py-3 text-sm">
-          ระบบกำลังดึงข้อมูลหุ้น ({data?.loaded ?? 0} / {data?.universe ?? "–"} ตัว) รอบแรกใช้เวลาประมาณครึ่งชั่วโมง
+          ระบบกำลังดึงข้อมูลหุ้น ({data?.loaded ?? 0} / {data?.universe ?? "–"} ตัว) รอบแรกใช้เวลานาน (หลายสิบนาที ถึงหนึ่งชั่วโมงกว่าตามจำนวนหุ้น)
           ผลลัพธ์จะเพิ่มขึ้นเอง ไม่ต้องรีเฟรช
+        </div>
+      )}
+
+      {data?.tech && data.tech.phase !== "idle" && (
+        <div className="rounded-xl border border-yellow-500/30 bg-yellow-500/5 px-4 py-3 text-sm">
+          กำลังอัปเดตราคาย้อนหลังสำหรับ Technicals ({data.tech.done} / {data.tech.total}) ครั้งแรกใช้เวลาประมาณ 1 ชั่วโมง
+          ระหว่างนี้ตัวกรอง Technicals อาจยังไม่ครบ
+        </div>
+      )}
+      {data?.tech?.error && (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-500">
+          ดึงราคาย้อนหลังไม่สำเร็จ ({data.tech.error}) ระบบจะลองใหม่เอง
         </div>
       )}
 
@@ -442,13 +487,25 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
           </table>
         </div>
 
+        {data && data.total > rows.length && limit < 1000 && (
+          <div className="border-t px-5 py-3 text-center">
+            <button
+              type="button"
+              onClick={() => setLimit((l) => Math.min(l + 200, 1000))}
+              className="rounded-lg border px-4 py-2 text-sm hover:bg-accent"
+            >
+              แสดงเพิ่มอีก 200 ตัว
+            </button>
+          </div>
+        )}
+
         {!loading && rows.length === 0 && !building && (
           <p className="py-12 text-center text-sm text-muted-foreground">ไม่มีหุ้นที่ตรงเงื่อนไข ลองผ่อนเงื่อนไขลง</p>
         )}
       </div>
 
       <p className="text-xs leading-5 text-muted-foreground">
-        กดชื่อคอลัมน์เพื่อเรียงลำดับ กดแถวเพื่อดูข้อมูลบริษัท · ตัวเลขเป็นค่า TTM จาก Finnhub
+        กดชื่อคอลัมน์เพื่อเรียงลำดับ กดแถวเพื่อดูข้อมูลบริษัท · ตัวเลขพื้นฐานเป็นค่า TTM จาก Finnhub · Technicals คำนวณจากราคาปิดรายวัน{data?.tech?.asOf ? ` (ล่าสุด ${data.tech.asOf})` : ""} ไม่ใช่ real-time
         ครอบคลุมเฉพาะชุดหุ้นที่ระบบสแกน ไม่ใช่ทั้งตลาด · ช่องที่เว้นว่างไม่ถูกใช้
         หุ้นที่ไม่มีข้อมูลตัวนั้นจะถูกตัดออกเมื่อใช้ตัวกรองนั้น · ใช้เพื่อการศึกษา ไม่ใช่คำแนะนำการลงทุน
       </p>
