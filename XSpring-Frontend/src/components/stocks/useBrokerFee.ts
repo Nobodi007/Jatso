@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { estimateFee, findBroker, findPlan, type Broker, type FeeEstimate, type Plan } from "./brokerFees";
+import { describeRule, estimateFee, findBroker, findPlan, minFee, type Broker, type FeeEstimate, type Plan } from "./brokerFees";
 
 const PLAN_KEY = "xs.realPortfolio.plan.v1:"; // + broker.id (เก็บแผนที่เลือกไว้ในเครื่องนี้)
 
@@ -26,6 +26,10 @@ export type BrokerFee = {
   vatOn: boolean;
   setVatOn: (v: boolean) => void;
   est: FeeEstimate | null;
+  /** ค่าขั้นต่ำที่ใส่ให้ก่อน (ตอนยังไม่มีจำนวน/ราคา) null = ไม่มีขั้นต่ำหรือไม่มีอัตรา */
+  floor: number | null;
+  /** อัตราของแผนที่เลือกเป็นข้อความ null = ไม่มีอัตรา */
+  describe: string | null;
   /** true = ผู้ใช้แก้ช่องค่าธรรมเนียมเอง ระบบจะไม่คำนวณทับ */
   manual: boolean;
   /** เรียกเมื่อผู้ใช้พิมพ์ในช่องค่าธรรมเนียม */
@@ -61,10 +65,13 @@ export function useBrokerFee(brokerName: string, qty: number, price: number, set
 
   const est = useMemo(() => estimateFee(plan?.rule ?? null, qty, price, vatOn), [plan, qty, price, vatOn]);
 
+  const floor = !est && plan?.rule ? minFee(plan.rule, vatOn) : null;
+  const describe = plan?.rule ? describeRule(plan.rule, vatOn) : null;
+
   useEffect(() => {
     if (manual) return;
-    setFeeRef.current(est ? est.fee.toFixed(2) : "0");
-  }, [est, manual]);
+    setFeeRef.current(est ? est.fee.toFixed(2) : floor !== null ? floor.toFixed(2) : "0");
+  }, [est, floor, manual]);
 
   const setPlanId = useCallback(
     (id: string) => {
@@ -81,6 +88,8 @@ export function useBrokerFee(brokerName: string, qty: number, price: number, set
     vatOn,
     setVatOn,
     est,
+    floor,
+    describe,
     manual,
     markManual: useCallback(() => setManual(true), []),
     recalc: useCallback(() => setManual(false), []),

@@ -343,3 +343,27 @@ export function estimateFee(rule: FeeRule | null, qty: number, price: number, ad
   }
   return { fee: cents(fee), basis: parts.join(" · ") };
 }
+
+const tierText = (t: Tier) => (t.perShare !== undefined ? `$${t.perShare}/หุ้น` : `${t.pct}% ของมูลค่า`);
+
+/** อธิบายอัตราเป็นข้อความ เช่น "0.1% ของมูลค่า · ไม่มีขั้นต่ำ · +VAT 7%" */
+export function describeRule(rule: FeeRule, addVat: boolean): string {
+  const parts: string[] = [];
+  if (rule.tiers.length === 1) {
+    parts.push(tierText(rule.tiers[0]));
+  } else {
+    parts.push(
+      rule.tiers
+        .map((t, i) => `${t.minPrice === 0 ? `ราคา < $${rule.tiers[i + 1].minPrice}` : `ราคา ≥ $${t.minPrice}`}: ${tierText(t)}`)
+        .join(" · "),
+    );
+  }
+  parts.push(rule.min !== undefined ? `ขั้นต่ำ $${rule.min}` : "ไม่มีขั้นต่ำ");
+  if (addVat) parts.push("+VAT 7%");
+  return parts.join(" · ");
+}
+
+/** ค่าขั้นต่ำต่อรายการ (รวม VAT ถ้าเลือก) คืน null ถ้าโบรกนี้ไม่มีขั้นต่ำ */
+export function minFee(rule: FeeRule, addVat: boolean): number | null {
+  return rule.min !== undefined ? cents(rule.min * (addVat ? 1 + VAT_RATE : 1)) : null;
+}

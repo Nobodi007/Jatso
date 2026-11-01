@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import BrokerPicker from "./BrokerPicker";
 import { DATA_AS_OF } from "./brokerFees";
 import type { BrokerFee } from "./useBrokerFee";
@@ -70,5 +71,44 @@ export default function BrokerPanel({ broker, onSelectBroker, busy, fee }: Props
         </details>
       )}
     </div>
+  );
+}
+
+/** ข้อความใต้ช่องค่าธรรมเนียม: แสดงตัวเลขที่คำนวณได้ หรืออัตราของโบรกที่เลือก */
+export function FeeHint({ fee, side }: { fee: BrokerFee; side: "buy" | "sell" }) {
+  const rule = fee.plan?.rule ?? null;
+  let body: ReactNode;
+  if (fee.manual) {
+    body = (
+      <>
+        กรอกเอง{" "}
+        <button type="button" className="underline" onClick={fee.recalc}>
+          คำนวณใหม่
+        </button>
+      </>
+    );
+  } else if (!fee.broker) {
+    body = "โบรกนี้ไม่มีอัตราในระบบ กรอกเอง";
+  } else if (!rule) {
+    body = `${fee.broker.name}: ยังไม่มีอัตราในระบบ กรอกตามใบยืนยันรายการ`;
+  } else if (fee.est) {
+    body = (
+      <>
+        <span className="font-medium text-foreground">ประมาณ ${fee.est.fee.toFixed(2)}</span> · {fee.est.basis}
+      </>
+    );
+  } else {
+    body = (
+      <>
+        อัตรา {fee.describe}
+        {fee.floor !== null ? " · ใส่ขั้นต่ำให้ก่อน จะคำนวณใหม่เมื่อใส่จำนวนและราคา" : " · ใส่จำนวนและราคาเพื่อให้คำนวณ"}
+      </>
+    );
+  }
+  return (
+    <p className="mt-1 text-xs text-muted-foreground">
+      {body}
+      {side === "sell" && " · ฝั่งขายอาจมี SEC fee/TAF เพิ่ม"}
+    </p>
   );
 }
