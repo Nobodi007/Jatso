@@ -417,16 +417,12 @@ function RealPortfolioInner({ getToken, apiBase = "" }: { getToken?: () => strin
              <input className={`${field} mt-1`} inputMode="decimal" value={t.fee}
                onChange={(e: { target: { value: string } }) => { brokerFee.markManual(); setT({ ...t, fee: e.target.value }); }} />
            </label>
-           <p className="mt-1 text-xs text-muted-foreground">
-             {brokerFee.manual ? (
-               <>กรอกเอง <button type="button" className="underline" onClick={brokerFee.recalc}>คำนวณใหม่</button></>
-             ) : brokerFee.est ? (
-               `ประมาณจาก ${brokerFee.broker?.name}: ${brokerFee.est.basis}`
-             ) : (
-               "ยังไม่คำนวณ (ไม่มีอัตราของโบรกนี้ หรือยังไม่ใส่จำนวน/ราคา)"
-             )}
-             {t.side === "sell" && " · ฝั่งขายอาจมี SEC fee/TAF เพิ่ม"}
-              
+           <div>
+           <label className="block text-sm">
+             <span className="text-xs text-muted-foreground">ค่าธรรมเนียม (USD)</span>
+             <input className={`${field} mt-1`} inputMode="decimal" value={t.fee}
+               onChange={(e: { target: { value: string } }) => { brokerFee.markManual(); setT({ ...t, fee: e.target.value }); }} />
+           </label>
            <FeeHint fee={brokerFee} side={t.side} />
          </div>
           <label className="block text-sm"><span className="text-xs text-muted-foreground">วันที่ (เวลาสหรัฐ ET)</span>
