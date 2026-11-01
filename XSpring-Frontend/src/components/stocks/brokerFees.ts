@@ -248,34 +248,63 @@ export const BROKERS: Broker[] = [
     ],
     checks: ["ไม่เห็นค่าขั้นต่ำในภาพ จึงไม่ได้ใส่ขั้นต่ำ", "ข้อมูลลงวันที่ 8 ธ.ค. 2568"],
   },
-  // ---- ยังไม่มีอัตราที่อ่านได้/ยืนยันแล้ว: ให้กรอกค่าธรรมเนียมเอง ----
+  // ---- Maybank, Phillip, UOB Kay Hian: เพิ่มจากหน้าทางการที่ผู้ใช้ส่งมา ----
   {
     id: "maybank",
     name: "Maybank Securities",
     logo: "maybank.svg",
-    plans: [{ id: "none", label: "ยังไม่มีอัตรา", rule: null }],
-    checks: ["เอกสารระบุว่าค่าคอมและค่าใช้จ่ายทั้งหมดบวก VAT 7%"],
+    plans: [{ id: "std", label: "0.30%", rule: pct(0.3, undefined, true) }],
+    checks: [
+      "เอกสาร (ม.ค. 2025) ระบุค่าคอมและค่าใช้จ่ายทั้งหมดบวก VAT 7%",
+      "ขั้นต่ำสหรัฐ 600 ต่อรายการ (เอกสารไม่ระบุหน่วย น่าจะเป็นบาท ≈ 17-19 USD) ระบบไม่ได้ใส่ขั้นต่ำ ออเดอร์เล็กจึงจะคิดต่ำกว่าจริงมาก",
+    ],
   },
   {
     id: "phillip",
     name: "Phillip Securities",
     logo: "phillip.svg",
-    plans: [{ id: "none", label: "ยังไม่มีอัตรา", rule: null }],
-    checks: ["วันที่ในหน้าเอกสารไม่ตรงกัน (2565 กับ 2026)"],
+    plans: [
+      { id: "online", label: "ออนไลน์ 0.20% (ขั้นต่ำ $8)", rule: pct(0.2, 8, true) },
+      { id: "dealer", label: "ผ่านเทรดเดอร์ 0.35% (ขั้นต่ำ $20)", rule: pct(0.35, 20, true) },
+    ],
+    checks: [
+      "หน้าเว็บระบุว่าอัตรายังไม่รวมค่าธรรมเนียมและภาษี และมีผลตั้งแต่ 1 เม.ย. 2565 ควรตรวจว่ายังใช้อยู่",
+      "ฝั่งขายมีค่าอีก $0.000195/หุ้น สูงสุด $9.79 (ตั้งแต่ 1 ม.ค. 2026) ระบบไม่คิดให้",
+    ],
   },
   {
     id: "uob",
     name: "UOB Kay Hian",
     logo: "uob.png",
-    plans: [{ id: "none", label: "ยังไม่มีอัตรา", rule: null }],
-    checks: ["อัตราแยกตามระดับราคาหุ้น"],
+    plans: [
+      {
+        id: "online",
+        label: "ออนไลน์ (Global Trade)",
+        rule: {
+          tiers: [
+            { minPrice: 0, perShare: 0.08 },
+            { minPrice: 10, pct: 0.2 },
+          ],
+          min: 8,
+          vat: false,
+        },
+      },
+      {
+        id: "dealer",
+        label: "ผ่าน IC/RM/Dealer",
+        rule: {
+          tiers: [
+            { minPrice: 0, perShare: 0.1 },
+            { minPrice: 10, pct: 0.25 },
+          ],
+          min: 10,
+          vat: false,
+        },
+      },
+    ],
+    checks: ["หุ้นราคา < $10 คิด 8 เซนต์/หุ้น (ผ่านเทรดเดอร์ 10 เซนต์) ส่วน > $10 คิด % ราคา $10 พอดีหน้าเว็บไม่ระบุ ระบบใช้ %", "ไม่ชัดว่ารวมหรือไม่รวม VAT และหน้าเว็บไม่แสดงวันที่"],
   },
-  {
-    id: "globlex",
-    name: "Globlex Securities",
-    logo: "globlex.png",
-    plans: [{ id: "none", label: "ยังไม่มีอัตรา", rule: null }],
-  },
+  // ---- ยังไม่มีอัตราที่ยืนยันแล้ว: ให้กรอกค่าธรรมเนียมเอง ----
   {
     id: "sbito",
     name: "SBITO",
