@@ -426,6 +426,7 @@ function RealPortfolioInner({ getToken, apiBase = "" }: { getToken?: () => strin
                "ยังไม่คำนวณ (ไม่มีอัตราของโบรกนี้ หรือยังไม่ใส่จำนวน/ราคา)"
              )}
              {t.side === "sell" && " · ฝั่งขายอาจมี SEC fee/TAF เพิ่ม"}
+              
            <FeeHint fee={brokerFee} side={t.side} />
          </div>
           <label className="block text-sm"><span className="text-xs text-muted-foreground">วันที่ (เวลาสหรัฐ ET)</span>
