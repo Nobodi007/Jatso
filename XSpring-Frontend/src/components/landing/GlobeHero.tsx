@@ -12,6 +12,10 @@ const MARKERS: Marker[] = [
   { id: "london", location: [51.5074, -0.1278] },
   { id: "tokyo", location: [35.6762, 139.6503] },
   { id: "sydney", location: [-33.8688, 151.2093] },
+  { id: "sf", location: [37.7595, -122.4367] },
+  { id: "capetown", location: [-33.9249, 18.4241] },
+  { id: "dubai", location: [25.2048, 55.2708] },
+  { id: "saopaulo", location: [-23.5505, -46.6333] },
 ]
 
 const LABELS: Record<string, string> = {
@@ -20,6 +24,10 @@ const LABELS: Record<string, string> = {
   london: "London",
   tokyo: "Tokyo",
   sydney: "Sydney",
+  sf: "San Francisco",
+  capetown: "Cape Town",
+  dubai: "Dubai",
+  saopaulo: "São Paulo",
 }
 // ป้ายชื่อเมืองใช้ CSS Anchor Positioning: เบราว์เซอร์ที่ไม่รองรับจะไม่แสดงป้าย (ลูกโลกยังทำงานปกติ)
 const CAN_ANCHOR =
@@ -29,6 +37,7 @@ const ARCS: Arc[] = [
   { id: "nyc-london", from: [40.7128, -74.006], to: [51.5074, -0.1278] },
   { id: "bkk-london", from: [13.7563, 100.5018], to: [51.5074, -0.1278] },
   { id: "bkk-tokyo", from: [13.7563, 100.5018], to: [35.6762, 139.6503] },
+  { id: "sf-tokyo", from: [37.7595, -122.4367], to: [35.6762, 139.6503] },
 ]
 /* ---------- สีตามธีม: แก้ตรงนี้ที่เดียว ---------- */
 const THEME = {
