@@ -353,7 +353,12 @@ def start_background():
     """เรียกครั้งเดียวตอนแอปสตาร์ต"""
     loop = asyncio.get_event_loop()
     loop.create_task(_loop())
-    loop.create_task(tech.loop(lambda: list(UNIVERSE)))
+
+    async def _boot_tech():
+        await _refresh_universe()          # ให้รายชื่อหุ้นขยายก่อน ไม่งั้นราคาย้อนหลังจะเก็บแค่ชุดเดิม
+        await tech.loop(lambda: list(UNIVERSE))
+
+    loop.create_task(_boot_tech())
 
 
 # ───────────────────────── API ─────────────────────────
