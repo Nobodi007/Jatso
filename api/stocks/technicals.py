@@ -300,7 +300,7 @@ async def loop(get_universe):
         log.exception("technicals initial compute failed")
     while True:
         try:
-            if await bars.run_once(get_universe()) or not _tech:
+            if await bars.run_once(get_universe(), progress=lambda: recompute(get_universe())) or not _tech:
                 await recompute(get_universe())
         except Exception:  # noqa: BLE001
             log.exception("technicals loop failed")
