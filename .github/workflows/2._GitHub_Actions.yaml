@@ -1,0 +1,30 @@
+# .github/workflows/valuation.yml
+name: valuation
+on:
+  schedule:
+    - cron: "30 23 * * 1-5"   # 06:30 เวลาไทย หลังตลาด US ปิด
+    - cron: "0 3 * * 0"       # อาทิตย์ 10:00 เวลาไทย ดึงงบใหม่จาก EDGAR
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas numpy "psycopg[binary]" requests supabase
+      - name: Weekly fundamentals
+        if: github.event.schedule == '0 3 * * 0' || github.event_name == 'workflow_dispatch'
+        run: python edgar_fundamentals.py
+      - name: Valuation
+        run: python valuation_daily.py
+        env:
+          FULL_REBUILD: ${{ github.event.schedule == '0 3 * * 0' && '1' || '0' }}
+          SYNC_SPLITS: ${{ github.event.schedule == '0 3 * * 0' && '1' || '0' }}
