@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import os
@@ -92,6 +93,11 @@ def _mark_day(d: str, n: int):
 def _done_days() -> set[str]:
     with closing(_conn()) as c:
         return {r[0] for r in c.execute("SELECT d FROM days")}
+
+
+def _clear_days():
+    with _dblock, closing(_conn()) as c, c:
+        c.execute("DELETE FROM days")
 
 
 def _bar_stats() -> dict[str, tuple[int, str]]:
@@ -236,23 +242,36 @@ def _row(sym, d, r):
     return (sym, d, o, h, l, c, v, d)
 
 
-async def _sync_grouped(cl, uni: set[str], end: date) -> bool:
-    """คืน True ถ้าใช้ grouped ได้ ; False ถ้าแผนไม่อนุญาตตั้งแต่ครั้งแรก"""
+async def _sync_grouped(cl, uni: set[str], end: date, progress=None) -> bool:
+    """คืน True ถ้าใช้ grouped ได้ ; False ถ้าแผนไม่อนุญาต
+    ดึง "ใหม่ → เก่า" เพื่อให้ Technicals ใช้งานได้หลังผ่านไปไม่กี่นาที (ไม่ต้องรอครบทั้งปี)"""
     start = date.today() - timedelta(days=HISTORY_DAYS)
     done = _done_days()
+    saved = set(json.loads(kv_get("grouped_uni", "[]") or "[]"))
+    if done and len(uni - saved) > 25:
+        # รายชื่อหุ้นขยายมาก: วันที่เก็บไว้ไม่มีหุ้นใหม่ ต้องดึงวันเหล่านั้นซ้ำ (ทับของเดิมได้)
+        log.info("bars: universe grew by %d symbols; re-fetching history", len(uni - saved))
+        await asyncio.to_thread(_clear_days)
+        done = set()
+    await asyncio.to_thread(kv_set, "grouped_uni", json.dumps(sorted(uni)))
     pending = [d for d in _weekdays(start, end) if d.isoformat() not in done]
+    pending.reverse()
     STATUS.update(phase="grouped", done=0, total=len(pending))
-    first = not done
+    first, stored = not done, 0
     for k, d in enumerate(pending):
         ds = d.isoformat()
         try:
             js = await _poly(cl, f"/v2/aggs/grouped/locale/us/market/stocks/{ds}", {"adjusted": "false"})
         except PlanDenied as e:
-            if first and k == 0:
+            if (end - d).days <= 3:
+                log.info("polygon: %s not available yet (%s)", ds, e)
+                continue
+            if first and stored == 0:
                 log.warning("polygon: grouped daily not allowed on this plan (%s); switching to per-symbol", e)
                 return False
-            log.info("polygon: %s not available yet (%s)", ds, e)
+            log.info("polygon: %s denied (%s); stopping this round", ds, e)
             break
+        stored += 1
         res = js.get("results") or []
         rows = [x for x in (_row(r.get("T"), ds, r) for r in res if r.get("T") in uni) if x]
         if rows:
@@ -260,6 +279,8 @@ async def _sync_grouped(cl, uni: set[str], end: date) -> bool:
         if res or (end - d).days > 3:       # วันหยุดจริง = ว่าง ; ว่างในช่วง 3 วันล่าสุด อาจยังไม่ออก ให้ลองใหม่
             await asyncio.to_thread(_mark_day, ds, len(res))
         STATUS["done"] = k + 1
+        if progress and (k + 1) % 25 == 0:
+            await progress()
     return True
 
 
@@ -388,7 +409,7 @@ async def _sync_yahoo(uni: list[str]):
 
 # ───────────────────────── entry ─────────────────────────
 
-async def run_once(universe: list[str]) -> bool:
+async def run_once(universe: list[str], progress=None) -> bool:
     """อัปเดตแท่งเทียนหนึ่งรอบ คืน True ถ้ามีข้อมูลใหม่"""
     init_db()
     before = max((mx for _, mx in (await asyncio.to_thread(_bar_stats)).values()), default="")
@@ -399,7 +420,7 @@ async def run_once(universe: list[str]) -> bool:
         if POLYGON_KEY:
             async with httpx.AsyncClient(timeout=40) as cl:
                 mode = kv_get("mode", "grouped")
-                if mode == "grouped" and not await _sync_grouped(cl, uni, end):
+                if mode == "grouped" and not await _sync_grouped(cl, uni, end, progress):
                     kv_set("mode", "per_symbol")
                     mode = "per_symbol"
                 if mode == "grouped":
