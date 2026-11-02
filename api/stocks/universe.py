@@ -67,12 +67,22 @@ def extra_from_env() -> list[str]:
     return [t for t in re.split(r"[\s,]+", raw.upper()) if TICKER_RE.match(t)]
 
 
+def extra_from_file() -> list[str]:
+    """สำรองกรณี Wikipedia ใช้ไม่ได้: วางรายชื่อหุ้น (คั่นด้วยเว้นวรรค/คอมมา/ขึ้นบรรทัดใหม่) ไว้ที่ DATA_DIR/universe_extra.txt"""
+    try:
+        with open(datadir.path("universe_extra.txt")) as fh:
+            return [t for t in re.split(r"[\s,]+", fh.read().upper()) if TICKER_RE.match(t)]
+    except OSError:
+        return []
+
+
 def merged(base: list[str]) -> list[str]:
     c = _read_cache().get("lists", {})
     seq = list(base)
     for k in SOURCES:
         seq += c.get(k, [])
     seq += extra_from_env()
+    seq += extra_from_file()
     return list(dict.fromkeys(seq))
 
 
@@ -89,12 +99,13 @@ async def refresh(base: list[str], force: bool = False) -> list[str]:
                 r = await cl.get(url)
                 r.raise_for_status()
                 t = parse_constituents(r.text)
+                log.info("universe: %s parsed %d tickers", name, len(t))
                 if len(t) >= {"sp500": 400, "sp400": 300, "ndx100": 80}[name]:
                     lists[name] = list(dict.fromkeys(t))
                 else:
                     log.warning("universe: %s parsed only %d tickers; keeping previous", name, len(t))
             except Exception as e:  # noqa: BLE001
-                log.warning("universe: fetch %s failed: %s", name, type(e).__name__)
+                log.warning("universe: fetch %s failed: %s", name, str(e)[:150] or type(e).__name__)
     try:
         tmp = CACHE + ".tmp"
         with open(tmp, "w") as fh:
