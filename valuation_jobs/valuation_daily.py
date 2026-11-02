@@ -9,10 +9,6 @@ import psycopg
 import requests
 from psycopg.rows import dict_row
 
-# ---------- ปรับให้ตรงกับตารางราคาของมึง ----------
-PRICE_TABLE, PRICE_DATE, PRICE_CLOSE = "prices_daily", "date", "close"
-# -------------------------------------------------
-
 DB_URL = os.environ["DATABASE_URL"]
 POLYGON_KEY = os.environ.get("POLYGON_API_KEY")
 FULL_REBUILD = os.environ.get("FULL_REBUILD") == "1"
@@ -143,6 +139,8 @@ def rev_cagr_5y(g):
 
 
 def peer_median(df, key):
+    if df[key].isna().all():
+        return pd.Series(np.nan, index=df.index)
     g = df.groupby(key).pe
     return g.transform("median").where(g.transform("count") >= MIN_PEERS)
 
@@ -157,14 +155,25 @@ def run():
         if SYNC_SPLITS and POLYGON_KEY:
             sync_splits(conn, tickers)
 
-        # ราคาวันสุดท้ายของแต่ละเดือน ย้อนหลัง 6 ปี (แถวของเดือนนี้คือราคาล่าสุด)
-        prices = query(conn, f"""
-            select distinct on (ticker, date_trunc('month', {PRICE_DATE}))
-                   ticker, {PRICE_DATE} as date, {PRICE_CLOSE} as close
-            from {PRICE_TABLE}
-            where {PRICE_DATE} >= %s
-            order by ticker, date_trunc('month', {PRICE_DATE}), {PRICE_DATE} desc
-        """, (date.today() - timedelta(days=6 * 366),))
+        # ราคาปิดรายเดือน (Yahoo, ปรับ split แล้ว) จากตาราง prices_monthly
+        prices = query(conn, """
+            select ticker, month_end as date, close from prices_monthly
+            where month_end >= %s
+        """, (date.today() - timedelta(days=7 * 366),))
+        prices["date"] = pd.to_datetime(prices["date"])
+        # แถวของเดือนปัจจุบันจาก Yahoo ลงวันสิ้นเดือน (อนาคต) ตัดทิ้ง แล้วใช้ราคาล่าสุดจาก stock_heat แทน
+        prices = prices[prices["date"] <= pd.Timestamp.today().normalize()]
+
+        heat = query(conn, """
+            select symbol as ticker, price as close, quote_at from stock_heat
+            where price is not null and symbol in (select ticker from companies)
+        """)
+        if not heat.empty:
+            heat["date"] = pd.to_datetime(heat["quote_at"], utc=True).dt.tz_localize(None).dt.normalize()
+            heat = heat[["ticker", "date", "close"]].drop_duplicates("ticker", keep="last")
+            ym = lambda d: d["ticker"] + d["date"].dt.strftime("%Y-%m")
+            prices = prices[~ym(prices).isin(set(ym(heat)))]   # เดือนเดียวกันให้ใช้ค่าล่าสุดจาก stock_heat
+            prices = pd.concat([prices, heat], ignore_index=True)
 
         fund = query(conn, """
             select ticker, period_end, available_date, revenue_ttm, net_income_ttm,
