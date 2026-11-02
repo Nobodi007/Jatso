@@ -743,7 +743,19 @@ export default function StocksPage({ getToken, apiBase = "", view = "market" }) 
     return j;
   }, [apiBase]);
 
-  const [sym, setSym] = useState(null);
+ const readPending = () => {
+  try { return localStorage.getItem("stocks_pending_symbol") || null; } catch { return null; }
+};
+
+// เริ่มจากตัวที่ถูกกดมาจากหน้าอื่น (ถ้ามี) จะได้ขึ้นข้อมูลทันทีไม่ต้องค้นหา
+const [sym, setSym] = useState(readPending);
+
+// กรณี App สลับ view โดยไม่ mount StocksPage ใหม่ ให้ดึงตัวที่ค้างไว้มาใช้ตอนเข้าหน้า detail
+useEffect(() => {
+  if (view !== "detail") return;
+  const p = readPending();
+  if (p) setSym((cur) => (cur === p ? cur : p));
+}, [view]);
 
   // ค้นหา/กดหุ้นจากหน้าไหนก็ตาม เก็บตัวที่เลือกไว้ แล้วขอให้ App สลับไปหน้า Company
   const open = (s) => {
