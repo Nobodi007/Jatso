@@ -267,10 +267,9 @@ def info() -> dict:
 
 
 def _compute_all(symbols: list[str]) -> tuple[dict, str | None]:
-    data = bars.load_all(set(symbols))
     cutoff = (date.today() - timedelta(days=10)).isoformat()
     out, newest = {}, ""
-    for s, b in data.items():
+    for s, b in bars.iter_bars(set(symbols)):
         if not len(b["c"]) or str(b["d"][-1]) < cutoff:     # ไม่มีแท่งใหม่ ≥10 วัน = เลิกซื้อขาย/ข้อมูลค้าง
             continue
         try:
