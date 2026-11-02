@@ -138,24 +138,19 @@ def _guess_splits(d, o, c):
     return out
 
 
-def load_all(symbols: set[str] | None = None) -> dict[str, dict]:
-    """{sym: {d: ndarray[str], o,h,l,c,v: ndarray}} เรียงเก่า→ใหม่ และปรับ split แล้ว"""
+def iter_bars(symbols: set[str] | None = None):
+    """สตรีมทีละตัว → (sym, {d,o,h,l,c,v}) เรียงเก่า→ใหม่ ปรับ split แล้ว
+    ไม่โหลดทั้งตารางเข้าหน่วยความจำ (ทุกแท่ง ~300k แถว จะกินแรมหลายร้อย MB บนเครื่อง 512 MB)"""
     with closing(_conn()) as cx:
-        rows = cx.execute("SELECT sym,d,o,h,l,c,v,asof FROM bars ORDER BY sym, d").fetchall()
         sp: dict[str, list] = {}
         for s, d, f in cx.execute("SELECT sym,d,factor FROM splits"):
             sp.setdefault(s, []).append((d, f))
-    use_guess = kv_get("splits_ok") == "0"
+        use_guess = kv_get("splits_ok") == "0"
+        cur = cx.execute("SELECT sym,d,o,h,l,c,v,asof FROM bars ORDER BY sym, d")
+        seg: list = []
+        sym = None
 
-    out: dict[str, dict] = {}
-    i, n = 0, len(rows)
-    while i < n:
-        sym = rows[i][0]
-        j = i
-        while j < n and rows[j][0] == sym:
-            j += 1
-        if symbols is None or sym in symbols:
-            seg = rows[i:j]
+        def build():
             d = np.array([r[1] for r in seg])
             asof = np.array([r[7] or r[1] for r in seg])
             o, h, l, c, v = (np.array([r[k] for r in seg], dtype=float) for k in (2, 3, 4, 5, 6))
@@ -167,12 +162,23 @@ def load_all(symbols: set[str] | None = None) -> dict[str, dict]:
                     continue
                 m = (d < sd) & (asof < sd)
                 if m.any():
-                    for a in (o, h, l, c):
-                        a[m] *= f
+                    for a_ in (o, h, l, c):
+                        a_[m] *= f
                     v[m] /= f
-            out[sym] = {"d": d, "o": o, "h": h, "l": l, "c": c, "v": v}
-        i = j
-    return out
+            return {"d": d, "o": o, "h": h, "l": l, "c": c, "v": v}
+
+        for row in cur:
+            if row[0] != sym:
+                if sym is not None and seg and (symbols is None or sym in symbols):
+                    yield sym, build()
+                sym, seg = row[0], []
+            seg.append(row)
+        if sym is not None and seg and (symbols is None or sym in symbols):
+            yield sym, build()
+
+
+def load_all(symbols: set[str] | None = None) -> dict[str, dict]:
+    return dict(iter_bars(symbols))
 
 
 # ───────────────────────── Polygon / Massive ─────────────────────────
