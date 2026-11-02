@@ -8,6 +8,8 @@ from fastapi import APIRouter, HTTPException, Query
 from . import providers as p
 from .cache import ProviderError, RateLimited, cached
 
+from .search_rank import clean_query, provider_query, rank_search
+
 
 router = APIRouter(prefix="/api/stocks", tags=["stocks"])
 SYMBOL_RE = re.compile(r"^[A-Z][A-Z.\-]{0,9}$")
@@ -75,15 +77,31 @@ async def market_movers():
         raise HTTPException(502, "provider_error")
 
 
-# ---------- ค้นหา ----------
+# ===== แทนที่ฟังก์ชัน search เดิมใน router.py (ส่วน "# ---------- ค้นหา ----------") =====
+# เพิ่ม import นี้ไว้ใกล้ ๆ import อื่นด้านบนไฟล์:
+#   from .search_rank import clean_query, provider_query, rank_search
+
 @router.get("/search")
-async def search(q: str = Query(min_length=1, max_length=20)):
-    data = await guard(cached(f"search:{q.lower()}", 3600, lambda: p.finnhub("/search", q=q)))
-    return [
-        {"symbol": x["symbol"], "name": x["description"], "type": x["type"]}
-        for x in data.get("result", [])
-        if "." not in x["symbol"]
-    ][:10]
+async def search(q: str = Query(min_length=1, max_length=40), limit: int = Query(10, ge=1, le=20)):
+    """ค้นหาหุ้น: ดึงผล Finnhub (cache 1 ชม.) แล้วจัดอันดับใหม่ในเครื่อง (ดู search_rank.py)
+    ถ้า Finnhub ล่ม/โดน rate limit จะตอบจากรายการหุ้นยอดนิยมในเครื่องแทน ถ้าไม่มีผลเลยค่อยตอบ error เดิม"""
+    q = clean_query(q)
+    if not q:
+        return []
+    raw, err = None, None
+    pq = provider_query(q)
+    if pq:
+        try:
+            data = await cached(f"search:{pq.lower()}", 3600, lambda: p.finnhub("/search", q=pq))
+            raw = data.get("result", []) if isinstance(data, dict) else []
+        except RateLimited:
+            err = HTTPException(503, "rate_limited")
+        except ProviderError:
+            err = HTTPException(502, "provider_error")
+    out = rank_search(q, raw, limit)
+    if not out and err:
+        raise err
+    return out
 
 
 # ---------- หุ้นรายตัว ----------
