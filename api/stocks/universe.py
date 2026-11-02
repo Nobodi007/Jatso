@@ -3,6 +3,7 @@
 ดึงรายชื่อจาก Wikipedia สัปดาห์ละครั้ง เก็บแคชไว้ในไฟล์ ถ้าดึงไม่ได้จะใช้แคชเก่า/ลิสต์พื้นฐานต่อ ระบบไม่ล่ม
 (Wikipedia แก้ไขได้โดยคนทั่วไป จึงกรองรูปแบบ ticker ให้เข้มและตัดทิ้งถ้ารูปแบบแปลก)
 """
+import asyncio
 import json
 import logging
 import os
@@ -17,14 +18,21 @@ log = logging.getLogger("stocks.universe")
 
 CACHE = datadir.path("universe.json")
 TTL = 7 * 86400
-UA = {"User-Agent": "NobodiScreener/1.0 (stock screener; contact: admin@localhost)"}
+RETRY_AFTER = 3600           # แหล่งที่ดึงไม่สำเร็จ ลองใหม่ได้ทุก 1 ชม. (ไม่ใช่ทุกรอบของลูป)
+# Wikimedia ขอให้บอกตัวตน/ช่องทางติดต่อใน User-Agent (ตัวที่คลุมเครือโดน 403 ได้) Render ตั้ง RENDER_EXTERNAL_URL ให้อัตโนมัติ
+_CONTACT = os.getenv("UNIVERSE_CONTACT") or os.getenv("RENDER_EXTERNAL_URL") or "https://example.com"
+UA = {"User-Agent": f"NobodiScreener/1.0 ({_CONTACT}; stock screener) python-httpx"}
 TICKER_RE = re.compile(r"^[A-Z]{1,5}(\.[A-Z])?$")
 
-SOURCES = {
-    "sp500": "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
-    "sp400": "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies",
-    "ndx100": "https://en.wikipedia.org/wiki/Nasdaq-100",
-}
+PAGES = {"sp500": "List_of_S%26P_500_companies", "sp400": "List_of_S%26P_400_companies", "ndx100": "Nasdaq-100"}
+MIN_COUNT = {"sp500": 400, "sp400": 300, "ndx100": 80}
+SOURCES = {k: None for k in PAGES}                       # (คงชื่อเดิมไว้ให้ส่วนอื่นอ้างอิง)
+WIKI_PAGE = "https://en.wikipedia.org/wiki/"
+WIKI_API = "https://en.wikipedia.org/w/api.php?action=parse&format=json&formatversion=2&prop=text&redirects=1&page="
+CSV_SP500 = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
+
+_lock = asyncio.Lock()
+_fail_at: dict[str, float] = {}
 
 
 def _strip(s: str) -> str:
@@ -86,31 +94,67 @@ def merged(base: list[str]) -> list[str]:
     return list(dict.fromkeys(seq))
 
 
-async def refresh(base: list[str], force: bool = False) -> list[str]:
-    """คืนรายชื่อรวมล่าสุด (ดึงใหม่ถ้าแคชเก่าเกิน 7 วัน)"""
-    cache = _read_cache()
-    if not force and time.time() - float(cache.get("at", 0)) < TTL and cache.get("lists"):
-        return merged(base)
+def _parse_csv(text: str) -> list[str]:
+    out = []
+    for line in text.splitlines()[1:]:
+        t = line.split(",", 1)[0].strip().strip('"').upper().replace("-", ".")
+        if TICKER_RE.match(t):
+            out.append(t)
+    return out
 
-    lists = dict(cache.get("lists", {}))
-    async with httpx.AsyncClient(timeout=30, headers=UA, follow_redirects=True) as cl:
-        for name, url in SOURCES.items():
-            try:
-                r = await cl.get(url)
-                r.raise_for_status()
+
+async def _fetch_one(cl, name: str) -> list[str]:
+    """ลองทีละช่องทางจนได้จำนวนที่สมเหตุสมผล : หน้าเว็บ Wikipedia → API ของ Wikipedia → (sp500) CSV จาก GitHub"""
+    errs = []
+    attempts = [("page", WIKI_PAGE + PAGES[name]), ("api", WIKI_API + PAGES[name])]
+    if name == "sp500":
+        attempts.append(("csv", CSV_SP500))
+    for kind, url in attempts:
+        try:
+            r = await cl.get(url)
+            r.raise_for_status()
+            if kind == "api":
+                t = parse_constituents(r.json()["parse"]["text"])
+            elif kind == "csv":
+                t = _parse_csv(r.text)
+            else:
                 t = parse_constituents(r.text)
-                log.info("universe: %s parsed %d tickers", name, len(t))
-                if len(t) >= {"sp500": 400, "sp400": 300, "ndx100": 80}[name]:
-                    lists[name] = list(dict.fromkeys(t))
-                else:
-                    log.warning("universe: %s parsed only %d tickers; keeping previous", name, len(t))
-            except Exception as e:  # noqa: BLE001
-                log.warning("universe: fetch %s failed: %s", name, str(e)[:150] or type(e).__name__)
-    try:
-        tmp = CACHE + ".tmp"
-        with open(tmp, "w") as fh:
-            json.dump({"at": time.time(), "lists": lists}, fh)
-        os.replace(tmp, CACHE)
-    except OSError as e:
-        log.warning("universe: cannot save cache: %s", e)
-    return merged(base)
+            if len(t) >= MIN_COUNT[name]:
+                log.info("universe: %s via %s -> %d tickers", name, kind, len(t))
+                return list(dict.fromkeys(t))
+            errs.append(f"{kind}: parsed {len(t)}")
+        except Exception as e:  # noqa: BLE001
+            errs.append(f"{kind}: {str(e)[:60] or type(e).__name__}")
+    raise RuntimeError("; ".join(errs))
+
+
+async def refresh(base: list[str], force: bool = False) -> list[str]:
+    """คืนรายชื่อรวมล่าสุด ดึงเฉพาะแหล่งที่แคชเก่าเกิน 7 วัน (แต่ละแหล่งนับแยกกัน) แหล่งที่เพิ่งล้มเหลวจะรอ 1 ชม.ก่อนลองใหม่"""
+    async with _lock:                                   # ลูปสองตัวเรียกพร้อมกันได้ ดึงจริงครั้งเดียว
+        cache = _read_cache()
+        lists = dict(cache.get("lists", {}))
+        at = cache.get("at", {})
+        if not isinstance(at, dict):                    # รูปแบบเก่า (ตัวเลขเดียว)
+            at = {k: at for k in lists}
+        now = time.time()
+        todo = [n for n in PAGES
+                if (force or now - float(at.get(n, 0)) >= TTL or n not in lists)
+                and now - _fail_at.get(n, 0) >= RETRY_AFTER]
+        if todo:
+            async with httpx.AsyncClient(timeout=30, headers=UA, follow_redirects=True) as cl:
+                for name in todo:
+                    try:
+                        lists[name] = await _fetch_one(cl, name)
+                        at[name] = now
+                        _fail_at.pop(name, None)
+                    except Exception as e:  # noqa: BLE001
+                        _fail_at[name] = now
+                        log.warning("universe: %s failed (%s)", name, e)
+            try:
+                tmp = CACHE + ".tmp"
+                with open(tmp, "w") as fh:
+                    json.dump({"at": at, "lists": lists}, fh)
+                os.replace(tmp, CACHE)
+            except OSError as e:
+                log.warning("universe: cannot save cache: %s", e)
+        return merged(base)
