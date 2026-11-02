@@ -48,6 +48,9 @@ def run():
             cur.execute(DDL)
             cur.execute("select ticker from companies order by ticker")
             tickers = [r[0] for r in cur.fetchall()]
+        only = os.environ.get("TICKERS")  # เช่น TICKERS=PANW,PHM สำหรับดึงซ้ำเฉพาะบางตัว
+        if only:
+            tickers = [t.strip().upper() for t in only.split(",") if t.strip()]
         conn.commit()
 
         total, missing = 0, []
