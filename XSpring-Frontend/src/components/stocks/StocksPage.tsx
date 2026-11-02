@@ -748,8 +748,6 @@ export default function StocksPage({ getToken, apiBase = "", view = "market" }) 
   // ค้นหา/กดหุ้นจากหน้าไหนก็ตาม เก็บตัวที่เลือกไว้ แล้วขอให้ App สลับไปหน้า Company
   const open = (s) => {
     setSym(s);
-    setSr([]);
-    setQ("");
     if (view !== "detail") {
       try { localStorage.setItem("stocks_pending_symbol", s); } catch {}
       window.dispatchEvent(new CustomEvent("stocks:open-company", { detail: s }));
@@ -760,30 +758,6 @@ export default function StocksPage({ getToken, apiBase = "", view = "market" }) 
   try { localStorage.setItem("trade_pending_symbol", s); } catch {}
   window.dispatchEvent(new CustomEvent("stocks:open-trade", { detail: s }));
 };
-
-  // ถ้ามาถึงหน้า Company พร้อมหุ้นที่ค้างไว้ ให้เปิดตัวนั้น
-  useEffect(() => {
-    if (view !== "detail") return;
-    try {
-      const p = localStorage.getItem("stocks_pending_symbol");
-      if (p) {
-        setSym(p);
-        localStorage.removeItem("stocks_pending_symbol");
-      }
-    } catch {}
-  }, [view]);
-
-  useEffect(() => {
-    if (!q.trim()) return setSr([]);
-    const id = setTimeout(
-      () =>
-        api(`/search?q=${encodeURIComponent(q.trim())}`)
-          .then((d) => setSr(Array.isArray(d) ? d : []))
-          .catch(() => setSr([])),
-      350
-    );
-    return () => clearTimeout(id);
-  }, [q, api]);
 
   const TITLES = {
     market: ["หุ้นสหรัฐ", "ราคา งบการเงิน และพอร์ตหุ้น NYSE / Nasdaq หน่วย USD"],
