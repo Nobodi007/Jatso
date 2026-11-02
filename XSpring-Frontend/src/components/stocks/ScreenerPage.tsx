@@ -379,13 +379,13 @@ export default function ScreenerPage({ apiBase }: { apiBase: string }) {
                     <div className="flex flex-wrap gap-2">
                       {ms.map((m) => {
                         const on = active.includes(m.id)
-                        const empty = noData(m.id)
+                        const empty = m.tier !== "tech" && noData(m.id)   // Technicals เลือกได้เสมอ แม้ข้อมูลยังสร้างไม่เสร็จ
                         return (
                           <button
                             key={m.id}
                             type="button"
                             disabled={on || empty}
-                            title={empty ? (m.tier === "tech" ? "ยังไม่มีข้อมูลราคาย้อนหลัง (กำลังสร้าง)" : "ยังไม่มีข้อมูลตัวนี้จากแหล่งข้อมูล") : m.tip}
+                            title={empty ? "ยังไม่มีข้อมูลตัวนี้จากแหล่งข้อมูล" : m.tip}
                             onClick={() => addFilter(m.id)}
                             className={`rounded-full border px-3 py-1 text-xs ${
                               on ? "bg-accent text-muted-foreground" : empty ? "opacity-40" : "hover:bg-accent"
