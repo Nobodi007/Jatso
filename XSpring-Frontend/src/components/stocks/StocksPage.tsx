@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo, useCallback, useRef, memo, Component } fr
 import MarketHeatmap from "./MarketHeatmap";
 import WatchlistPage from "./WatchlistPage";
 import EarningsPage from "./EarningsPage";
+import StockSearchBox from "./StockSearchBox";
 
 const ERR = {
   rate_limited: "โควต้าข้อมูลเต็มชั่วคราว ลองใหม่อีกครั้งในอีกสักครู่",
@@ -743,8 +744,6 @@ export default function StocksPage({ getToken, apiBase = "", view = "market" }) 
   }, [apiBase]);
 
   const [sym, setSym] = useState(null);
-  const [q, setQ] = useState("");
-  const [sr, setSr] = useState([]);
 
   // ค้นหา/กดหุ้นจากหน้าไหนก็ตาม เก็บตัวที่เลือกไว้ แล้วขอให้ App สลับไปหน้า Company
   const open = (s) => {
@@ -803,29 +802,9 @@ export default function StocksPage({ getToken, apiBase = "", view = "market" }) 
             <h1 className="text-3xl font-bold text-foreground">{title}</h1>
             <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
           </div>
-          <div className="relative w-full md:w-80">
-            <Input
-              placeholder="ค้นหาหุ้น เช่น Apple, TSLA"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              aria-label="ค้นหาหุ้น"
-            />
-            {sr.length > 0 && (
-              <ul className="absolute z-10 mt-2 max-h-72 w-full overflow-auto rounded-xl border border bg-card shadow-xl">
-                {sr.map((x) => (
-                  <li key={x.symbol}>
-                    <button
-                      onClick={() => open(x.symbol)}
-                      className="flex w-full justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-accent"
-                    >
-                      <span className="font-semibold text-foreground">{x.symbol}</span>
-                      <span className="truncate text-muted-foreground">{x.name}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+         <div className="w-full md:w-80">
+          <StockSearchBox api={api} onPick={open} />
+        </div>
         </header>
 
         {view === "market" && <MarketHeatmap api={api} open={open} />}
