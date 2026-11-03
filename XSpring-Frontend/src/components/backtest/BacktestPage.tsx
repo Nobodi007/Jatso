@@ -11,6 +11,7 @@ import type { TickerHit } from "./TickerInput"
 import RobustnessPanel from "./RobustnessPanel"
 import ResultCharts from "./ResultCharts"
 import SearchPanel from "./SearchPanel"
+import { RiskPanel } from "./RiskPanel"
 
 
 // หน้า Backtest Lab (หุ้นสหรัฐ) — คอมโพเนนต์ใหม่ทั้งหมด ไม่ import/ไม่แตะโค้ด Backtest เดิม
@@ -92,7 +93,7 @@ function Comparison({ r }: { r: Result }) {
   const rows: { name: string; b: Brief }[] = [
     { name: "พอร์ตที่ทดสอบ", b: r.comparison.portfolio },
     { name: "Buy-and-Hold (หุ้นชุดเดียวกัน)", b: r.comparison.buy_hold },
-    { name: "S&P 500 Price Index", b: r.comparison.benchmark },
+    { name: r.return_mode === "total" ? "S&P 500 Total Return" : "S&P 500 Price Index", b: r.comparison.benchmark },
   ]
   return (
     <div className="overflow-x-auto">
@@ -139,7 +140,7 @@ function Results({ run }: { run: Run }) {
   return (
     <div className="space-y-4">
       <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
-        ผลจำลองย้อนหลัง (Hypothetical Backtest) ไม่ใช่ผลงานจริงและไม่ใช่การพยากรณ์ · Price Return ไม่รวมปันผล ·
+        ผลจำลองย้อนหลัง (Hypothetical Backtest) ไม่ใช่ผลงานจริงและไม่ใช่การพยากรณ์ · {r.return_mode === "total" ? "Total Return รวมปันผล" : "Price Return ไม่รวมปันผล"} ·
         ช่วง {r.period.first_trade_date} → {r.period.last_date} ({r.period.trading_days} วันทำการ) · engine {r.engine_version}
       </div>
       <div className="space-y-1.5">
@@ -170,6 +171,8 @@ function Results({ run }: { run: Run }) {
         <h3 className="mb-2 text-sm font-medium text-foreground">ผลตอบแทนสะสม</h3>
         <ResultCharts series={r.series} />
       </div>
+
+      <RiskPanel result={r} />
 
       <div className={card}>
         <h3 className="mb-2 text-sm font-medium text-foreground">วันที่พอร์ตบวก/ลบมากที่สุด เทียบ S&P 500 ในวันเดียวกัน</h3>
@@ -291,7 +294,7 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
   const [thr, setThr] = useState("5")
   const [comm, setComm] = useState("0")
   const [slip, setSlip] = useState("5")
-  const [rf, setRf] = useState("")
+    const [rfMode, setRfMode] = useState<"none" | "tbill" | "manual">("none")
   const [retMode, setRetMode] = useState<"price" | "total">("price")
   const [sf, setSf] = useState<StrategyForm>(defaultStrategyForm)
   const [busy, setBusy] = useState(false)
@@ -393,7 +396,8 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
         ...(mode === "threshold" || mode === "hybrid" ? { threshold_pct: Number(thr) } : {}),
       },
       costs: { commission_bps: Number(comm), slippage_bps: Number(slip) },
-      risk_free_annual: rf.trim() === "" ? null : Number(rf) / 100,
+      risk_free_annual: rfMode === "manual" && rf.trim() !== "" ? Number(rf) / 100 : null,
+      ...(rfMode === "tbill" ? { risk_free_source: "tbill" as const } : {}),
     }
     if (sf.enabled) {
       const st = buildStrategy(sf, meta?.indicators ?? [])
