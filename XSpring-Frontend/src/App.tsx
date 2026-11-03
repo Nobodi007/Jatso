@@ -331,7 +331,9 @@ function AppInner() {
       localStorage.setItem("market", market)
     } catch {
       // ไม่ขัดขวาง
-    } 
+    }
+  }, [market])
+
   useEffect(() => {
   const toCompany = () => setPage("markets");
   const toTrade = () => setPage("trade");
