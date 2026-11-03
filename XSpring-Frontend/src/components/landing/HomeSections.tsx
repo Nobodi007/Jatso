@@ -190,11 +190,11 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
 
         {assetTab === "stocks" && (
           <div className="mt-8 overflow-hidden rounded-2xl border">
-            <div className="grid grid-cols-[1.4fr_1fr_0.8fr_0.8fr] gap-2 bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
+            <div className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.8fr)] sm:grid-cols-[1.4fr_1fr_0.8fr_0.8fr] gap-2 bg-muted/40 px-3 sm:px-4 py-3 text-xs text-muted-foreground">
               <span>{t("market.colName")}</span>
               <span className="text-right">{t("market.colPrice")}</span>
               <span className="text-right">{t("market.colChangeToday")}</span>
-              <span className="text-right">{t("market.colTrend")}</span>
+              <span className="hidden text-right sm:block">{t("market.colTrend")}</span>
             </div>
             {stockRows === null && <p className="px-4 py-8 text-center text-sm text-muted-foreground">{t("market.loading")}</p>}
             {stockRows?.length === 0 && <p className="px-4 py-8 text-center text-sm text-muted-foreground">{t("market.loadFailed")}</p>}
@@ -243,7 +243,9 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
                 key={r.asset}
                 type="button"
                 onClick={() => onOpenCoin(r.asset)}
-                className="grid w-full grid-cols-[1.4fr_1fr_0.8fr_0.8fr] items-center gap-2 border-t px-4 py-3 text-left text-sm hover:bg-accent"
+                <span className="hidden justify-end sm:flex">
+                  <Spark data={sp} up={sp.length > 1 ? sp[sp.length - 1] >= sp[0] : up} />
+                </span>
               >
                 <span>
                   <span className="font-semibold">{r.asset}</span>{" "}
