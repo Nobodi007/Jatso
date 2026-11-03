@@ -297,6 +297,15 @@ function AppInner() {
   const [portfolioError, setPortfolioError] = useState("")
   const [orderRefreshKey, setOrderRefreshKey] = useState(0)
   const navigation = market === "stocks" ? stockNavigation : cryptoNavigation
+  
+  const mobileTabIds: Page[] =
+    market === "stocks"
+      ? ["dashboard", "markets", "watchlist", "trade"]
+      : ["dashboard", "markets", "trade", "portfolio"]
+  const mobileTabs = mobileTabIds
+    .map((id) => navigation.find((n) => n.id === id))
+    .filter((n): n is NavigationItem => !!n)
+ 
   const [stockQuery, setStockQuery] = useState<string>('');
 
   const openStock = (sym: string) => {
@@ -322,17 +331,7 @@ function AppInner() {
       localStorage.setItem("market", market)
     } catch {
       // ไม่ขัดขวาง
-    }
-    
-  const mobileTabIds: Page[] =
-    market === "stocks"
-      ? ["dashboard", "markets", "watchlist", "trade"]
-      : ["dashboard", "markets", "trade", "portfolio"]
-  const mobileTabs = mobileTabIds
-    .map((id) => navigation.find((n) => n.id === id))
-    .filter((n): n is NavigationItem => !!n)
-    }, [market])
-  
+    } 
   useEffect(() => {
   const toCompany = () => setPage("markets");
   const toTrade = () => setPage("trade");
