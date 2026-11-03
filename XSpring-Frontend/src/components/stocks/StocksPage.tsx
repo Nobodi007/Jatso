@@ -401,22 +401,65 @@ const zone = (p) =>
   : { t: "ใกล้ค่ากลางของอดีตตัวเอง", c: "text-muted-foreground" };
 
 function MultLine({ rows }) {
+  const [hi_, setHi] = useState(null); // index ของจุดที่เมาส์ชี้
   if (rows.length < 3) return <p className="py-6 text-sm text-muted-foreground">ประวัติยังไม่พอสำหรับวาดกราฟ</p>;
   const vals = rows.map((r) => r.v);
   const sorted = [...vals].sort((a, b) => a - b);
   const med = sorted[Math.floor(sorted.length / 2)];
-  const cap = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.97))]; // ตัดค่าพุ่งผิดปกติออกจากสเกลกราฟ
+  const cap = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.97))];
   const lo = sorted[0], hi = cap, W = 600, H = 200;
-  const x = (i) => (i / Math.max(rows.length - 1, 1)) * W;
-  const y = (v) => H - 8 - ((Math.min(v, hi) - lo) / (hi - lo || 1)) * (H - 16);
-  const d = vals.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const xp = (i) => i / Math.max(rows.length - 1, 1); // 0..1
+  const yp = (v) => (H - 8 - ((Math.min(v, hi) - lo) / (hi - lo || 1)) * (H - 16)) / H; // 0..1
+  const d = vals.map((v, i) => `${i ? "L" : "M"}${(xp(i) * W).toFixed(1)},${(yp(v) * H).toFixed(1)}`).join(" ");
+
+  const onMove = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const cx = e.touches ? e.touches[0].clientX : e.clientX;
+    const t = Math.min(Math.max((cx - r.left) / r.width, 0), 1);
+    setHi(Math.round(t * (rows.length - 1)));
+  };
+
+  const a = hi_ != null ? rows[hi_] : null;
+  const px = a ? xp(hi_) * 100 : 0;
+  const py = a ? yp(a.v) * 100 : 0;
+
   return (
     <div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="h-52 w-full" preserveAspectRatio="none" role="img" aria-label="กราฟตัวคูณมูลค่ารายเดือน">
-        <line x1="0" x2={W} y1={y(med)} y2={y(med)} stroke="#a1a1aa" strokeDasharray="4 4" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-        <path d={`${d} L${W},${H} L0,${H} Z`} fill="#10b981" opacity="0.1" />
-        <path d={d} fill="none" stroke="#10b981" strokeWidth="2" vectorEffect="non-scaling-stroke" />
-      </svg>
+      <div
+        className="relative h-52 w-full cursor-crosshair touch-none"
+        onMouseMove={onMove}
+        onMouseLeave={() => setHi(null)}
+        onTouchStart={onMove}
+        onTouchMove={onMove}
+        onTouchEnd={() => setHi(null)}
+      >
+        <svg viewBox={`0 0 ${W} ${H}`} className="h-full w-full" preserveAspectRatio="none" role="img" aria-label="กราฟตัวคูณมูลค่ารายเดือน">
+          <line x1="0" x2={W} y1={yp(med) * H} y2={yp(med) * H} stroke="#a1a1aa" strokeDasharray="4 4" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+          <path d={`${d} L${W},${H} L0,${H} Z`} fill="#10b981" opacity="0.1" />
+          <path d={d} fill="none" stroke="#10b981" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+        </svg>
+
+        {a && (
+          <>
+            {/* เส้นแนวตั้ง */}
+            <div className="pointer-events-none absolute top-0 bottom-0 w-px bg-zinc-500/70" style={{ left: `${px}%` }} />
+            {/* จุดบนเส้น (เป็น div เพื่อไม่ให้ถูกยืดตาม preserveAspectRatio) */}
+            <div
+              className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-background bg-emerald-400"
+              style={{ left: `${px}%`, top: `${py}%` }}
+            />
+            {/* กล่องข้อมูล */}
+            <div
+              className="pointer-events-none absolute top-1 z-10 -translate-x-1/2 rounded-lg border border-border bg-background/95 px-2.5 py-1.5 text-xs shadow"
+              style={{ left: `${Math.min(Math.max(px, 12), 88)}%` }}
+            >
+              <div className="text-muted-foreground">{a.time}</div>
+              <div className="font-semibold text-foreground">{xx(a.v)}</div>
+            </div>
+          </>
+        )}
+      </div>
+
       <div className="mt-2 flex justify-between text-xs text-zinc-500">
         <span>{rows[0].time}</span>
         <span>เส้นประ = ค่ากลาง {xx(med)} · ต่ำสุด {xx(lo)} · สูงสุด {xx(sorted[sorted.length - 1])}</span>
