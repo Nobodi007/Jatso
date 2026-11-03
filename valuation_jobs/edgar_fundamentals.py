@@ -7,7 +7,7 @@ from datetime import date
 import requests
 from supabase import create_client
 
-UA = {"User-Agent": "Nobodi Valuation your-email@example.com"}  # ต้องมีอีเมลจริง
+UA = {"User-Agent": "Nobodi Valuation teerapat30204@gmail.com"}  # ต้องมีอีเมลจริง
 FORMS = {"10-Q", "10-K", "10-Q/A", "10-K/A"}
 
 FLOW_TAGS = {
@@ -33,7 +33,9 @@ INSTANT_TAGS = {
     "equity": ["StockholdersEquity",
                "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"],
 }
-SHARES_TAGS = ["WeightedAverageNumberOfDilutedSharesOutstanding"]
+SHARES_TAGS = ["WeightedAverageNumberOfDilutedSharesOutstanding",
+               "WeightedAverageNumberOfShareOutstandingBasicAndDiluted",   # ชื่อจริงใน us-gaap (Share เอกพจน์) ใช้ตอนขาดทุน
+               "WeightedAverageNumberOfSharesOutstandingBasicAndDiluted"]
 
 
 def _d(s):
@@ -44,26 +46,27 @@ def _days(a, b):
     return (_d(b) - _d(a)).days
 
 
-def collect(gaap, tags, unit="USD", instant=False):
-    """รวมค่าจากหลาย tag ตามลำดับความสำคัญ โดยเลือกแยกทีละงวด ไม่ใช่เลือกครั้งเดียวทั้งบริษัท
-    เพราะบริษัทเปลี่ยน tag กลางทางได้ เช่น SalesRevenueNet -> RevenueFromContract... ช่วงปี 2018"""
+def collect(gaap, tags, unit="USD", instant=False, use_first=False):
     out = {}
     for tag in tags:
         for it in gaap.get(tag, {}).get("units", {}).get(unit, []):
             if it.get("form") not in FORMS:
                 continue
-            if instant == ("start" in it):  # instant ต้องไม่มี start, duration ต้องมี
+            if instant == ("start" in it):
                 continue
             key = it["end"] if instant else (it["start"], it["end"])
             cur = out.get(key)
-            if cur and cur["tag"] != tag:
-                continue  # tag ที่สำคัญกว่ามีค่าของงวดนี้แล้ว
+            if cur and cur["tag"] != tag and not use_first:
+                continue  # (โหมด use_first: รวมทุก tag เข้าด้วยกัน ให้ฉบับที่ยื่นแรกสุดชนะ)
             if cur is None:
                 out[key] = {"val": it["val"], "first": it["filed"], "last": it["filed"], "tag": tag}
-            else:
-                cur["first"] = min(cur["first"], it["filed"])  # วันที่ตลาดเห็นครั้งแรก
-                if it["filed"] >= cur["last"]:                 # ใช้ค่าจากฉบับแก้ไขล่าสุด
-                    cur["val"], cur["last"] = it["val"], it["filed"]
+                continue
+            if it["filed"] < cur["first"]:
+                cur["first"] = it["filed"]
+                if use_first:                      # จำนวนหุ้น: ใช้ค่าจากฉบับแรก (ยังไม่ปรับ split ย้อนหลัง)
+                    cur["val"] = it["val"]
+            if not use_first and it["filed"] >= cur["last"]:
+                cur["val"], cur["last"] = it["val"], it["filed"]
     return out
 
 
@@ -76,14 +79,14 @@ def to_quarterly(dur):
 
     q = {}
     for (s, e), v in dur.items():
-        if 80 <= _days(s, e) <= 100:
+        if 80 <= _days(s, e) <= 125:
             q[e] = {"val": v["val"], "avail": v["first"]}
 
     for (s, e), v in dur.items():
-        if e in q or not (170 <= _days(s, e) <= 380):
+        if e in q or not (160 <= _days(s, e) <= 380):
             continue
         for e2, v2 in by_start[s]:
-            if 80 <= _days(e2, e) <= 100:
+            if 80 <= _days(e2, e) <= 125:
                 q[e] = {"val": v["val"] - v2["val"], "avail": max(v["first"], v2["first"])}
                 break
     return dict(sorted(q.items()))
@@ -117,7 +120,7 @@ def build_rows(ticker, facts):
     q = {k: to_quarterly(collect(gaap, tags)) for k, tags in FLOW_TAGS.items()}
     t = {k: ttm(v) for k, v in q.items()}
     inst = {k: collect(gaap, tags, instant=True) for k, tags in INSTANT_TAGS.items()}
-    shares = collect(gaap, SHARES_TAGS, unit="shares")
+    shares = collect(gaap, SHARES_TAGS, unit="shares", use_first=True)
 
     def val(d, e):
         return d[e]["val"] if e in d else None
@@ -177,8 +180,12 @@ def fetch_facts(cik):
 
 def run():
     sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
-    tickers = [r["ticker"] for r in sb.table("companies").select("ticker")
-               .eq("filer_type", "us-gaap").execute().data]
+    only = os.environ.get("TICKERS")  # เช่น TICKERS=AAPL,MSFT,JPM,KO สำหรับทดสอบ
+    if only:
+        tickers = [t.strip().upper() for t in only.split(",") if t.strip()]
+    else:
+        tickers = [r["ticker"] for r in sb.table("companies").select("ticker")
+                   .eq("filer_type", "us-gaap").execute().data]
     ciks = load_cik_map()
     failed = []
 
