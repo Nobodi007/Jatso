@@ -13,12 +13,24 @@ from datetime import date
 
 from .. import config as C
 from ..data.validate import DataError
-from ..metrics import core as M
+from ..metrics import attribution as ATT, core as M, exposure as EXP
+from ..metrics.riskfree import daily_rf, describe
 from ..metrics.extremes import best_worst_days, calendar_year_returns, worst_best_periods
 from .execution import Account
 from .rebalance import max_drift, should_rebalance
 
 LABELS = ["hypothetical_backtest", "not_a_forecast", "price_return_only", "cash_earns_zero_interest"]
+
+
+def resolve_rf(spec: dict, rates, dates, n: int):
+    """(rf รายวันหรือ None, ข้อมูลอธิบายแหล่ง) — ค่าคงที่ของผู้ใช้ หรือ T-bill 3M (lag t-1) หรือไม่มี"""
+    if spec.get("risk_free_source") == "tbill":
+        rf = daily_rf(rates, dates)
+        return rf, describe(rates, dates, rf)
+    if spec["risk_free_annual"] is not None:
+        return [M.daily_rate(spec["risk_free_annual"])] * n, {"source": "user_constant", "status": "ok",
+                                                              "avg_annual": spec["risk_free_annual"]}
+    return None, {"source": None, "status": "not_set", "avg_annual": None}
 
 
 def _align(spec: dict, bars_by_symbol: dict, bench_bars: list[dict]):
@@ -65,7 +77,7 @@ def _align(spec: dict, bars_by_symbol: dict, bench_bars: list[dict]):
     return cal, base_date, bench, opens, closes, filled
 
 
-def run_backtest(spec: dict, bars_by_symbol: dict[str, list[dict]], bench_bars: list[dict]) -> dict:
+def run_backtest(spec: dict, bars_by_symbol: dict[str, list[dict]], bench_bars: list[dict], rates: dict | None = None) -> dict:
     cal, base_date, bench, opens, closes, filled = _align(spec, bars_by_symbol, bench_bars)
     N = len(cal)
     capital = spec["initial_capital"]
@@ -119,9 +131,7 @@ def run_backtest(spec: dict, bars_by_symbol: dict[str, list[dict]], bench_bars: 
     rb = rets(bclose, bench[cal[0]]["open"])
     dates = [date.fromisoformat(base_date)] + [date.fromisoformat(d) for d in cal]
     dates_r = dates[1:]
-    rf = None
-    if spec["risk_free_annual"] is not None:
-        rf = [M.daily_rate(spec["risk_free_annual"])] * N
+    rf, rf_info = resolve_rf(spec, rates, dates, N)
 
     an = M.analyze(rp, rb, rf, dates)
     an_bh = M.analyze(rbh, rb, rf, dates)
@@ -155,7 +165,12 @@ def run_backtest(spec: dict, bars_by_symbol: dict[str, list[dict]], bench_bars: 
         "time_in_market": sum(invested) / N,
         "final_weights": {s: acct.shares.get(s, 0.0) * closes[s][-1] / eq[-1] for s in targets},
     }
+    attr = ATT.build(list(targets), trades, cal, closes, capital, eq, rp)
+    attr.pop("_daily_contrib")
+    expo = EXP.build(targets, closes, {r["symbol"]: r["avg_weight"] for r in attr["positions"]},
+                     {r["symbol"]: r["final_value"] for r in attr["positions"]})
     return {
+        "attribution": attr, "exposure": expo,
         "period": {"base_date": base_date, "first_trade_date": cal[0], "last_date": cal[-1], "trading_days": N},
         "comparison": {"portfolio": brief(an), "buy_hold": brief(an_bh), "benchmark": brief(an_b)},
         "analysis": an, "analysis_buy_hold": {"performance": an_bh["performance"], "tail": {
@@ -166,7 +181,7 @@ def run_backtest(spec: dict, bars_by_symbol: dict[str, list[dict]], bench_bars: 
         "calendar_years": calendar_year_returns({"portfolio": rp, "buy_hold": rbh, "benchmark": rb}, dates_r),
         "trades": trades[:C.MAX_TRADES_IN_RESULT], "trades_truncated": len(trades) > C.MAX_TRADES_IN_RESULT,
         "rebalances": rebalances, "stats": stats,
-        "data_quality": {"filled_days": filled},
+        "data_quality": {"filled_days": filled}, "risk_free": rf_info,
         "labels": LABELS,
         "conventions": {
             "execution": "ตัดสินใจจากราคาปิดวัน t จับคู่ที่ราคาเปิดวัน t+1; ซื้อเริ่มต้นที่ราคาเปิดวันแรก",
@@ -175,6 +190,6 @@ def run_backtest(spec: dict, bars_by_symbol: dict[str, list[dict]], bench_bars: 
             "return_method": "Price Return (split-adjusted ไม่รวมปันผล) ทั้งพอร์ตและ S&P 500 Price Index (^GSPC)",
             "cash": "เงินสดไม่ได้ดอกเบี้ย", "fractional_shares": True,
             "turnover": "one-way รายปี = (Σ มูลค่าซื้อขายหลังซื้อเริ่มต้น / 2) / มูลค่าพอร์ตเฉลี่ย / จำนวนปี",
-            "risk_free": "ใช้ค่าที่ผู้ใช้ระบุเท่านั้น (ถ้าไม่ระบุ Sharpe/Alpha จะเป็น unavailable)",
+            "risk_free": ("อัตรา T-bill 3 เดือน (FMP) รายวัน ใช้ค่าของวันทำการก่อนหน้า (ไม่มี look-ahead)" if spec.get("risk_free_source") == "tbill" else "ใช้ค่าที่ผู้ใช้ระบุเท่านั้น (ถ้าไม่ระบุ Sharpe/Alpha จะเป็น unavailable)"),
             "metrics_method": M.METHOD_VERSION, "trading_days_per_year": M.TRADING_DAYS},
     }
