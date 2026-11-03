@@ -206,27 +206,37 @@ const startTour = () => {
         </div>
 
         {menuOpen && (
-          <div className="border-t px-4 py-2 md:hidden">
+          <div className="max-h-[calc(100vh-3.5rem)] overflow-y-auto border-t px-4 py-2 md:hidden">
             {MENU.map((label) => (
-              <button
-                key={label}
-                type="button"
-                onClick={() => go(label)}
-                className="block w-full py-2 text-left text-sm"
-              >
+              <button key={label} type="button" onClick={() => go(label)} className="block w-full py-3 text-left text-sm">
                 {t(MENU_KEY[label])}
               </button>
             ))}
-            <button
-              type="button"
-              onClick={onLogin}
-              className="block w-full py-2 text-left text-sm"
-            >
+            <button type="button" onClick={onLogin} className="block w-full py-3 text-left text-sm">
               {t("nav.login")}
             </button>
+
+            <div className="mt-1 flex items-center gap-2 border-t py-3">
+              <button
+                type="button"
+                onClick={startTour}
+                className="flex items-center gap-1.5 rounded-md border border-emerald-500/40 px-2.5 py-1.5 text-sm font-medium text-emerald-500"
+              >
+                <Sparkles className="h-4 w-4" />
+                {t("tour.start")}
+              </button>
+              <button
+                type="button"
+                aria-label={dark ? t("nav.themeLight") : t("nav.themeDark")}
+                onClick={toggleTheme}
+                className="rounded-md p-2 text-muted-foreground hover:bg-accent"
+              >
+                {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              </button>
+              <LanguageSwitcher />
+            </div>
           </div>
         )}
-      </header>
 
       {view === "contact" ? (
         <ContactPage />
