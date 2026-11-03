@@ -14,6 +14,7 @@ from typing import Optional
 from .. import config as C
 from ..data.price_store import LayeredBackend, MemoryBackend, PriceStore, SupabaseBackend
 from ..data.provider_yahoo import YahooProvider
+from ..data.rates import FmpRates, RateStore
 from ..db.client import SbClient
 from ..db.run_store import MemoryRunStore, RunStore, SupabaseRunStore
 from ..engine import rules
@@ -43,7 +44,7 @@ class Services:
         else:
             log.warning("backtest_lab: SUPABASE_* ไม่ถูกตั้งค่า ใช้ที่เก็บในหน่วยความจำ (ข้อมูลหายเมื่อรีสตาร์ต)")
             run_store, backend = MemoryRunStore(), MemoryBackend()
-        return cls(run_store, PriceStore(YahooProvider(), backend),
+        return cls(run_store, PriceStore(YahooProvider(), backend, rate_store=RateStore(FmpRates(), backend)),
                    RunPool(C.MAX_CONCURRENT_RUNS, C.RUN_TIMEOUT_SECONDS),
                    RateLimiter(C.RATE_LIMIT_RUNS, C.RATE_LIMIT_WINDOW_SECONDS))
 
