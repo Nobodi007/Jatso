@@ -1928,6 +1928,7 @@ class ChatRequest(BaseModel):
     market: str = Field(default="crypto", pattern="^(crypto|stocks)$")
     # หุ้นที่ผู้ใช้เปิดอยู่ในหน้า Company เช่น "AAPL" (ไม่บังคับ)
     symbol: str = Field(default="", max_length=10)
+    page: str = Field(default="", max_length=60)
 
 
 def _chat_context(user_email: str) -> dict:
@@ -2023,6 +2024,173 @@ def _load_stock_portfolio_for_chat(user_email: str) -> dict:
         ],
     }
 
+# =========================================================
+# วางบล็อกนี้ใน server.py "เหนือ" @app.post("/api/chat")
+# (ต่อท้าย _load_stock_portfolio_for_chat)
+#
+# import ที่ต้องเพิ่มด้านบน server.py:
+#   from google import genai
+#   from google.genai import types
+#   from api.stocks import risk_api as _risk_api
+#   from api.metric_help import METRIC_HELP
+# และเพิ่ม google-genai ใน requirements.txt (ไม่ต้องใช้ httpx แล้ว)
+#
+# ลบ CHAT_SYSTEM_STOCKS ตัวเดิม (บรรทัด ~1909) ทิ้ง ใช้ตัวใหม่ด้านล่างแทน
+# =========================================================
+
+CHAT_SYSTEM_STOCKS = (
+    "คุณคือผู้ช่วยของเว็บ Nobodi ตอบภาษาไทย กระชับ เข้าใจง่าย "
+    "ถ้าถามเรื่องพอร์ต ความเสี่ยง ผลตอบแทน การกระจายหุ้น ให้เรียก tool ก่อนเสมอ "
+    "ใช้เฉพาะตัวเลขที่ได้จาก tool ห้ามคำนวณหรือเดาเอง "
+    "ถ้าค่าไหนเป็น null หรือ status บอกว่ายังคำนวณไม่ได้ ให้อธิบายตาม reason และ n_obs "
+    "ถ้า meta.warnings มีรายการ ให้แจ้งผู้ใช้สั้นๆ "
+    "อธิบายความหมายของค่าต่างๆ ด้วย explain_metric "
+    "ห้ามแนะนำให้ซื้อหรือขาย และห้ามสั่งซื้อขายแทนผู้ใช้"
+)
+
+# series ยาวๆ ที่ AI ไม่จำเป็นต้องเห็น (ประหยัด token)
+_CHAT_DROP_KEYS = {"drawdown_series", "series", "nav_series"}
+
+
+def _slim(obj, max_list: int = 15):
+    """ตัดข้อมูลให้สั้น ประหยัด token และโควตาฟรี"""
+    if isinstance(obj, dict):
+        return {k: _slim(v, max_list) for k, v in obj.items() if k not in _CHAT_DROP_KEYS}
+    if isinstance(obj, list):
+        if len(obj) > max_list:
+            return {"_note": f"แสดง {max_list} รายการล่าสุดจาก {len(obj)}",
+                    "items": [_slim(x, max_list) for x in obj[-max_list:]]}
+        return [_slim(x, max_list) for x in obj]
+    return obj
+
+
+def _run_risk(coro_fn):
+    """รัน async endpoint ของ risk_api จาก worker thread (วิธีเดียวกับ _load_stock_portfolio_for_chat)"""
+    import anyio
+    try:
+        return _slim(anyio.from_thread.run(coro_fn))
+    except HTTPException as e:
+        return {"error": f"ดึงข้อมูลไม่สำเร็จ ({e.status_code}): {e.detail}"}
+    except Exception as e:
+        return {"error": f"ดึงข้อมูลไม่สำเร็จ: {type(e).__name__}"}
+
+
+def build_tools(user: str):
+    from api.stocks import risk_api as R
+    from api.metric_help import METRIC_HELP
+    email = str(user).strip().lower()
+
+    def _pf(p: str) -> str:
+        return p if p in ("paper", "real") else "paper"
+
+    def _call(fn_name: str, portfolio: str):
+        fn = getattr(R, fn_name)
+        p = _pf(portfolio)
+
+        async def go():
+            return await fn(period="1y", portfolio=p, email=email)
+
+        return _run_risk(go)
+
+    def get_portfolio() -> dict:
+        """ดึงพอร์ตหุ้นสหรัฐจำลอง: เงินสด มูลค่า กำไรขาดทุน หุ้นที่ถืออยู่"""
+        try:
+            return _load_stock_portfolio_for_chat(user)
+        except Exception as e:
+            return {"error": f"ดึงข้อมูลไม่สำเร็จ: {type(e).__name__}"}
+
+    def get_risk_overview(portfolio: str = "paper") -> dict:
+        """สรุปหน้า Risk Center: มูลค่าพอร์ต ผลตอบแทนพอร์ตเทียบ S&P 500 ผลตอบแทนส่วนเกิน
+        ความผันผวน max drawdown Sharpe จำนวน alert ที่เปิดอยู่ และ meta.warnings
+        portfolio: 'paper' (พอร์ตจำลอง) หรือ 'real' (พอร์ตจริง)"""
+        return _call("overview", portfolio)
+
+    def get_risk_metrics(portfolio: str = "paper") -> dict:
+        """ค่าความเสี่ยงทั้งหมด: Sharpe, Sortino, beta, alpha, information ratio, tracking error,
+        Calmar, VaR 95%, Expected Shortfall, downside deviation, max drawdown
+        แต่ละค่ามี value, status, n_obs (จำนวนวันที่มีข้อมูล) และ reason (เหตุผลที่ยังคำนวณไม่ได้)"""
+        return _call("metrics", portfolio)
+
+    def get_exposure(portfolio: str = "paper") -> dict:
+        """การกระจายพอร์ต: NAV, เงินสด, น้ำหนักแต่ละหุ้น, น้ำหนักแต่ละ sector, HHI"""
+        return _call("exposure", portfolio)
+
+    def get_performance(portfolio: str = "paper") -> dict:
+        """ผลตอบแทนพอร์ตเทียบ benchmark รายเดือน และค่า rolling volatility/beta/sharpe"""
+        return _call("performance", portfolio)
+
+    def get_drawdown(portfolio: str = "paper") -> dict:
+        """ประวัติ drawdown: ช่วงที่ลงลึกสุด ช่วงที่ยังจมน้ำอยู่ และ drawdown ปัจจุบัน"""
+        return _call("drawdown", portfolio)
+
+    def get_realized(portfolio: str = "paper") -> dict:
+        """กำไรขาดทุนที่ขายออกไปแล้ว (realized) แยกตามหุ้น"""
+        return _call("realized", portfolio)
+
+    def get_risk_decomposition(portfolio: str = "paper") -> dict:
+        """แยกว่าหุ้นแต่ละตัวทำให้พอร์ตเสี่ยงเพิ่มขึ้นเท่าไร (marginal contribution to risk)"""
+        return _call("risk_decomposition", portfolio)
+
+    def get_attribution(portfolio: str = "paper") -> dict:
+        """แยกว่ากำไรขาดทุนมาจากหุ้นตัวไหนหรือ sector ไหน"""
+        return _call("attribution_view", portfolio)
+
+    def run_stress_test(market_shock: float, portfolio: str = "paper") -> dict:
+        """จำลองว่าถ้าตลาดทั้งหมดเปลี่ยนตาม market_shock พอร์ตจะเปลี่ยนเท่าไร (เป็นการจำลอง ไม่กระทบพอร์ตจริง)
+        market_shock เป็นสัดส่วนระหว่าง -1 ถึง 1 เช่น -0.10 คือตลาดลง 10%"""
+        p = _pf(portfolio)
+
+        async def go():
+            body = R.StressIn(market_shock=market_shock)
+            return await R.stress_test(body=body, portfolio=p, email=email)
+
+        return _run_risk(go)
+
+    def explain_metric(name: str) -> dict:
+        """คำอธิบายของค่าต่างๆ ตามที่เว็บใช้ name เช่น sharpe, volatility, var_95, beta_capm, hhi, mcr"""
+        key = (name or "").strip().lower()
+        return METRIC_HELP.get(key, {"error": f"ไม่มีคำอธิบายของ {name}",
+                                     "available": list(METRIC_HELP)})
+
+    return [get_portfolio, get_risk_overview, get_risk_metrics, get_exposure,
+            get_performance, get_drawdown, get_realized, get_risk_decomposition,
+            get_attribution, run_stress_test, explain_metric]
+
+
+def _chat_stocks_tools(req: ChatRequest, user: str, api_key: str) -> dict:
+    from google import genai
+    from google.genai import types
+
+    contents = [
+        types.Content(role="model" if t.role == "assistant" else "user",
+                      parts=[types.Part(text=t.content)])
+        for t in req.history[-6:]
+    ]
+    hint = f"[ผู้ใช้อยู่หน้า {req.page}] " if req.page else ""
+    sym = (req.symbol or "").upper().strip()
+    if sym and _STOCK_SYM_RE.match(sym):
+        hint += f"[หุ้นที่เปิดอยู่: {sym}] "
+    contents.append(types.Content(role="user", parts=[types.Part(text=hint + req.message.strip())]))
+
+    try:
+        client = genai.Client(api_key=api_key)
+        resp = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=CHAT_SYSTEM_STOCKS,
+                tools=build_tools(user),
+                temperature=0.3,
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                    maximum_remote_calls=4),
+            ),
+        )
+    except Exception as e:
+        raise _internal_server_error("เรียก AI ไม่สำเร็จ", e)
+
+    answer = (resp.text or "").strip()[:1500]
+    return {"status": "ok", "answer": answer or "ไม่ได้รับคำตอบจาก AI"}
+
 
 @app.post("/api/chat", dependencies=[Depends(require_api_key)])
 def chat(req: ChatRequest, user: str = Depends(require_user)):
@@ -2032,6 +2200,35 @@ def chat(req: ChatRequest, user: str = Depends(require_user)):
             status_code=503,
             detail="ยังไม่ได้ตั้ง GEMINI_API_KEY บน Backend",
         )
+
+    if req.market == "stocks":
+        return _chat_stocks_tools(req, user, api_key)
+
+    # ---- คริปโต (โค้ดเดิม) ----
+    context = _chat_context(user)
+
+    messages = []
+    for turn in req.history[-6:]:
+        role = "assistant" if turn.role == "assistant" else "user"
+        messages.append({"role": role, "content": turn.content})
+    messages.append({"role": "user", "content": req.message.strip()})
+
+    system = (
+        CHAT_SYSTEM
+        + "\n\nportfolio_context:\n"
+        + json.dumps(context, ensure_ascii=False)
+    )
+
+    try:
+        gu = load_gu()
+        answer = str(gu.ask_ai(messages, api_key, system_override=system) or "").strip()
+    except Exception as e:
+        raise _internal_server_error("เรียก AI ไม่สำเร็จ", e)
+
+    if len(answer) > 240:
+        answer = answer[:237].rstrip() + "…"
+
+    return {"status": "ok", "answer": answer or "ไม่ได้รับคำตอบจาก AI"}
 
     # สร้าง context ก่อน (ใช้ lock สั้น ๆ) แล้วค่อยเรียก Gemini นอก lock
     # เพื่อไม่ให้การรอ AI ไปบล็อกการส่งคำสั่งซื้อขาย
