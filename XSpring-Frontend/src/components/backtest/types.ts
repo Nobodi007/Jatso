@@ -23,6 +23,7 @@ export type Spec = {
   risk_free_annual: number | null
   return_mode?: "price" | "total"
   strategy?: StrategySpec
+  risk_free_source?: "tbill"
 }
 
 export type OperandSpec = Record<string, string | number>
