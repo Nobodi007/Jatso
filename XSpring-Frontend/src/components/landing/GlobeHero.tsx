@@ -173,7 +173,8 @@ function Globe({ isDark }: { isDark: boolean }) {
     function init() {
       const width = canvas!.offsetWidth
       if (width === 0 || globe) return
-      const dpr = Math.min(window.devicePixelRatio || 1, 2)
+      const isSmall = window.innerWidth < 768
+      const dpr = Math.min(window.devicePixelRatio || 1, isSmall ? 1.5 : 2)
 
       globe = createGlobe(canvas!, {
         devicePixelRatio: dpr,
@@ -183,7 +184,7 @@ function Globe({ isDark }: { isDark: boolean }) {
         theta: THETA,
         dark: c.dark,
         diffuse: 1.5,
-        mapSamples: 16000,
+        mapSamples: isSmall ? 8000 : 16000,
         mapBrightness: c.mapBrightness,
         baseColor: c.baseColor,
         markerColor: c.markerColor,
@@ -298,7 +299,7 @@ export function GlobeHero() {
   const isDark = useIsDark(ref)
   return (
     <div ref={ref} className="flex w-full items-center justify-center overflow-hidden">
-      <div className="w-full max-w-[460px]">
+      <div className="w-full max-w-[240px] sm:max-w-[460px]">
         <Globe key={isDark ? "dark" : "light"} isDark={isDark} />
       </div>
     </div>
