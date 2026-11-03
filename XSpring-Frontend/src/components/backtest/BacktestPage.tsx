@@ -577,6 +577,7 @@ const rangeText = (() => {
                 <button type="button" className={chip} onClick={() => applyRange("ytd")}>ปีนี้</button>
                 {rangeText && <span className="ml-auto text-xs text-muted-foreground">{rangeText}</span>}
               </div>
+              </div>
               <div className="grid grid-cols-2 gap-2">
                 <div><label className={label}>เงินทุนเริ่มต้น (USD)</label><input className={input} inputMode="decimal" value={capital} onChange={(e) => setCapital(e.target.value)} /></div>
                 <div>
