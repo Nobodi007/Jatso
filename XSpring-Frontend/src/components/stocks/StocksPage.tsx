@@ -51,9 +51,9 @@ function useGet(api, path) {
 }
 
 const Card = ({ title, right, children, className = "" }) => (
-  <section className={`rounded-2xl border border bg-card p-5 ${className}`}>
+  <section className={`rounded-2xl border border bg-card p-4 md:p-5 ${className}`}>
     {(title || right) && (
-      <div className="mb-4 flex items-center justify-between gap-3">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h3 className="text-base font-semibold text-foreground">{title}</h3>
         {right}
       </div>
@@ -96,7 +96,7 @@ const PAL = ["#10b981", "#34d399", "#059669", "#6ee7b7", "#047857", "#a7f3d0"];
 function StatCard({ icon, label, value, change, sub, onClick }) {
   const Tag = onClick ? "button" : "div";
   return (
-    <Tag onClick={onClick} className="rounded-2xl border border bg-card p-5 text-left hover:border-border">
+    <Tag onClick={onClick} className="rounded-2xl border border bg-card p-4 text-left hover:border-border md:p-5">
       <div className="mb-5 flex h-10 w-10 items-center justify-center rounded-xl bg-muted text-sm font-semibold text-emerald-400">{icon}</div>
       <div className="text-sm text-muted-foreground">{label}</div>
       <div className="mt-1 flex items-end justify-between gap-2">
@@ -302,12 +302,12 @@ function Market({ api, open }) {
         <Status s={mv} empty={!mv.loading && !mv.error && !mv.data?.[k]?.length && "ไม่มีข้อมูล"} />
         <div className="divide-y divide-border">
           {mv.data?.[k]?.map((r) => (
-            <button key={r.symbol} onClick={() => open(r.symbol)} className="grid w-full grid-cols-4 items-center py-2.5 text-sm hover:bg-muted/50">
-              <span className="text-left font-semibold text-foreground">{r.symbol}</span>
-              <span className="text-right text-foreground/80">{usd(r.price)}</span>
-              <span className={`text-right ${tone(r.changePercent)}`}>{pct(r.changePercent)}</span>
-              <span className="text-right text-zinc-500">{r.volume ? big(r.volume) : "–"}</span>
-            </button>
+            <button key={r.symbol} onClick={() => open(r.symbol)} className="grid w-full grid-cols-3 items-center py-3 text-sm hover:bg-muted/50 sm:grid-cols-4">
+            <span className="text-left font-semibold text-foreground">{r.symbol}</span>
+            <span className="text-right text-foreground/80">{usd(r.price)}</span>
+            <span className={`text-right ${tone(r.changePercent)}`}>{pct(r.changePercent)}</span>
+            <span className="hidden text-right text-zinc-500 sm:block">{r.volume ? big(r.volume) : "–"}</span>
+          </button>
           ))}
         </div>
         {mv.data?.updatedAt && <p className="mt-3 text-xs text-muted-foreground">อัปเดตล่าสุด {mv.data.updatedAt}</p>}
@@ -564,6 +564,7 @@ function Detail({ api, symbol, authed, onWatch }) {
     catch (e) { setNote(msg(e.message)); }
   };
   const d = q.data;
+  const chartH = typeof window !== "undefined" && window.innerWidth < 768 ? 320 : 420;
   const showOw = ow.loading || ow.data?.holders?.length > 0;
   return (
     <div className="space-y-5">
@@ -628,6 +629,7 @@ function Detail({ api, symbol, authed, onWatch }) {
         <Stat label="สูงสุดวันนี้" value={usd(d.high)} />
         <Stat label="ต่ำสุดวันนี้" value={usd(d.low)} />
         <Stat label="ปิดก่อนหน้า" value={usd(d.prevClose)} />
+      <div className="col-span-2 md:col-span-1">
         <Stat
           label="มูลค่าตลาด"
           value={
@@ -643,11 +645,11 @@ function Detail({ api, symbol, authed, onWatch }) {
 
 <Card title="กราฟราคา">
   {pr.loading && !pr.data ? (
-    <div className="h-[420px] animate-pulse rounded-xl bg-muted/50" />
+    <div className="h-[320px] animate-pulse rounded-xl bg-muted/50 md:h-[420px]" />
   ) : (
     <TVChart
       symbol={tvSymbol(symbol, pr.data?.exchange)}
-      height={420}
+      height={chartH}
     />
   )}
 </Card>
