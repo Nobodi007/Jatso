@@ -112,7 +112,7 @@ def _utcnow() -> datetime:
 
 class PriceStore:
     def __init__(self, provider: PriceProvider, backend: CacheBackend,
-                 ttl_seconds: float = C.PRICE_TTL_SECONDS, now_fn: Callable[[], datetime] = _utcnow):
+                 ttl_seconds: float = C.PRICE_TTL_SECONDS, now_fn: Callable[[], datetime] = _utcnow
                  rate_store=None):
         self.provider, self.backend, self.ttl, self.now = provider, backend, ttl_seconds, now_fn
         self.rate_store = rate_store
