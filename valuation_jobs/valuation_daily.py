@@ -76,12 +76,34 @@ def add_split_factor(fund, splits):
     if splits.empty:
         fund["split_factor"] = 1.0
         return fund
+    # นับเฉพาะ split ที่เกิดขึ้นแล้ว (ราคาจาก Yahoo ยังไม่ปรับให้ split ที่ประกาศล่วงหน้า)
+    splits = splits[splits.execution_date <= pd.Timestamp.today().normalize()]
+    if splits.empty:
+        fund["split_factor"] = 1.0
+        return fund
     splits = splits.assign(ratio=splits.split_to / splits.split_from)
     m = fund[["ticker", "period_end", "available_date"]].merge(splits, on="ticker")
     m = m[m.execution_date > m.available_date]
     fac = m.groupby(["ticker", "period_end"]).ratio.prod().rename("split_factor").reset_index()
     fund = fund.merge(fac, on=["ticker", "period_end"], how="left")
     fund["split_factor"] = fund.split_factor.fillna(1.0)
+    return fund
+
+
+def fix_share_scale(fund, anchor=None):
+    """บางบริษัทกรอกจำนวนหุ้นผิดหน่วย (พัน/ล้าน) ในบางงบ
+    เทียบจำนวนหุ้น (ปรับ split แล้ว) กับจุดอ้างอิง: จำนวนหุ้นปัจจุบันจาก stock_heat ถ้ามี ไม่งั้นใช้มัธยฐานของตัวเอง
+    ถ้าต่างกันใกล้เคียง 1,000^k เท่า (k = ±1, ±2) ให้ปรับกลับ"""
+    adj = fund.shares_diluted * fund.split_factor
+    med = adj.where(adj > 0).groupby(fund.ticker).transform("median")
+    ref = med
+    if anchor is not None and len(anchor):
+        ref = fund.ticker.map(anchor).where(lambda x: x > 0).fillna(med)
+    lr = np.log10(adj.where(adj > 0) / ref)
+    k = (lr / 3).round()
+    bad = (k != 0) & ((lr - 3 * k).abs() <= 0.5)
+    fund.loc[bad, "shares_diluted"] = fund.loc[bad, "shares_diluted"] / (1000.0 ** k[bad])
+    print(f"share-scale fixes: {int(bad.sum())} rows, {fund.loc[bad, 'ticker'].nunique()} tickers")
     return fund
 
 
@@ -185,9 +207,12 @@ def run():
         for df, cols in ((prices, ["date"]), (fund, ["period_end", "available_date"]),
                          (splits, ["execution_date"] if not splits.empty else [])):
             for c in cols:
-                df[c] = pd.to_datetime(df[c])
+                df[c] = pd.to_datetime(df[c]).astype("datetime64[ns]")  # pandas 3: บังคับความละเอียดให้ตรงกัน
 
         fund = add_split_factor(fund, splits)
+        heat_sh = query(conn, "select symbol as ticker, shares from stock_heat where shares > 0")
+        anchor = (heat_sh.set_index("ticker")["shares"].astype(float) * 1e6) if not heat_sh.empty else None
+        fund = fix_share_scale(fund, anchor)
 
         # จับคู่ราคากับงบที่ตลาดเห็นแล้ว ณ วันนั้น (กัน look-ahead)
         prices = prices.sort_values("date")
@@ -223,6 +248,15 @@ def run():
         latest_day = latest.date.max()
         latest = latest[(latest_day - latest.date).dt.days <= 7]  # ตัดหุ้นที่ราคาไม่อัปเดต
 
+        # ตาข่ายดัก: ถ้ามูลค่าตลาดที่คำนวณต่างจาก stock_heat เกิน 3 เท่า ถือว่าจำนวนหุ้นไม่น่าเชื่อถือ
+        heat_mc = query(conn, "select symbol as ticker, market_cap as heat_mc from stock_heat where market_cap > 0")
+        latest = latest.merge(heat_mc.drop_duplicates("ticker"), on="ticker", how="left")
+        ratio = latest.market_cap / (latest.heat_mc * 1e6)
+        latest["mismatch"] = ((ratio < 1 / 3) | (ratio > 3)).fillna(False)
+        bad_cols = ["pe", "ps", "pfcf", "ev_ebitda", "pe_pct_5y", "ps_pct_5y", "pfcf_pct_5y"]
+        latest.loc[latest.mismatch, bad_cols] = np.nan
+        latest.loc[latest.mismatch, "market_cap"] = latest.heat_mc * 1e6   # แสดงมูลค่าตลาดจากแหล่งที่เชื่อถือได้แทน
+
         peer = peer_median(latest, "industry").fillna(peer_median(latest, "sector"))
         latest["pe_vs_industry"] = latest.pe / peer - 1
 
@@ -233,6 +267,8 @@ def run():
         for row in latest.itertuples():
             if row.valuation_model != "standard":
                 statuses.append("unsupported_type"); growths.append(None)
+            elif row.mismatch:
+                statuses.append("share_mismatch"); growths.append(None)
             elif pd.isna(row.market_cap):
                 statuses.append("insufficient_data"); growths.append(None)
             elif pd.isna(row.fcf_ttm) or row.fcf_ttm <= 0:
