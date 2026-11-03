@@ -134,12 +134,12 @@ const startTour = () => {
     return (
     <div className="min-h-screen bg-background text-foreground">
       <header id="tour-nav" className="sticky top-0 z-10 border-b bg-background/90 backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 px-3 md:h-16 md:gap-6 md:px-4">
-          <button type="button" onClick={() => setView("home")} className="text-lg font-extrabold tracking-tight md:text-xl">
+        <div className="mx-auto flex h-16 max-w-7xl items-center gap-6 px-4">
+          <button type="button" onClick={() => setView("home")} className="text-xl font-extrabold tracking-tight">
             {BRAND}
           </button>
 
-          <nav className="hidden items-center gap-1.5 rounded-md border border-emerald-500/40 px-2.5 py-1.5 text-sm font-medium text-emerald-500 hover:bg-emerald-500/10 sm:flex">
+          <nav className="hidden items-center gap-5 text-sm md:flex">
             {MENU.map((label) => (
               <button
                 key={label}
@@ -156,7 +156,7 @@ const startTour = () => {
             ))}
           </nav>
 
-        <div className="ml-auto flex items-center gap-1.5 md:gap-2">
+        <div className="ml-auto flex items-center gap-2">
           <button
             type="button"
             onClick={startTour}
@@ -177,7 +177,7 @@ const startTour = () => {
             <button
               type="button"
               onClick={onRegister}
-              className="rounded-md bg-emerald-500 px-2.5 py-1.5 text-xs font-semibold text-black hover:bg-emerald-400 md:px-3 md:text-sm"
+              className="rounded-md bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-black hover:bg-emerald-400"
             >
               {t("nav.register")}
             </button>
@@ -185,20 +185,18 @@ const startTour = () => {
               type="button"
               aria-label={dark ? t("nav.themeLight") : t("nav.themeDark")}
               onClick={toggleTheme}
-              className="hidden rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground md:block"
+              className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
 
-            <div className="hidden md:block">
-              <LanguageSwitcher />
-            </div>
+            <LanguageSwitcher />
 
             <button
               type="button"
               aria-label={t("nav.menu")}
               onClick={() => setMenuOpen((v) => !v)}
-              className="hidden rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground md:block"
+              className="rounded-md p-2 hover:bg-accent md:hidden"
             >
               {menuOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
             </button>
@@ -206,35 +204,24 @@ const startTour = () => {
         </div>
 
         {menuOpen && (
-          <div className="max-h-[calc(100vh-3.5rem)] overflow-y-auto border-t px-4 py-2 md:hidden">
+          <div className="border-t px-4 py-2 md:hidden">
             {MENU.map((label) => (
-              <button key={label} type="button" onClick={() => go(label)} className="block w-full py-3 text-left text-sm">
+              <button
+                key={label}
+                type="button"
+                onClick={() => go(label)}
+                className="block w-full py-2 text-left text-sm"
+              >
                 {t(MENU_KEY[label])}
               </button>
             ))}
-            <button type="button" onClick={onLogin} className="block w-full py-3 text-left text-sm">
+            <button
+              type="button"
+              onClick={onLogin}
+              className="block w-full py-2 text-left text-sm"
+            >
               {t("nav.login")}
             </button>
-
-            <div className="mt-1 flex items-center gap-2 border-t py-3">
-              <button
-                type="button"
-                onClick={startTour}
-                className="flex items-center gap-1.5 rounded-md border border-emerald-500/40 px-2.5 py-1.5 text-sm font-medium text-emerald-500"
-              >
-                <Sparkles className="h-4 w-4" />
-                {t("tour.start")}
-              </button>
-              <button
-                type="button"
-                aria-label={dark ? t("nav.themeLight") : t("nav.themeDark")}
-                onClick={toggleTheme}
-                className="rounded-md p-2 text-muted-foreground hover:bg-accent"
-              >
-                {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-              </button>
-              <LanguageSwitcher />
-            </div>
           </div>
         )}
       </header>
