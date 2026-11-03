@@ -111,7 +111,7 @@ function SummaryCard({
   label, value, sub, tone,
 }: { label: string; value: string; sub?: string; tone?: "up" | "down" }) {
   return (
-    <div className="min-w-[200px] flex-1 rounded-xl border bg-card p-4">
+    <div className="min-w-[150px] flex-1 rounded-xl border bg-card p-3 md:min-w-[200px] md:p-4">
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="mt-2 text-xl font-bold">{value}</p>
       {sub && (
@@ -209,11 +209,11 @@ export default function MarketSection({ onLogin, onRegister }: Props) {
     "grid grid-cols-[24px_minmax(0,1fr)_auto_72px] items-center gap-3 md:grid-cols-[24px_28px_minmax(0,1.6fr)_1.2fr_90px_110px_1fr_72px]"
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-10">
+    <main className="mx-auto max-w-7xl px-4 py-6 md:py-10">
       {/* หัวหน้า */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-extrabold tracking-tight">{t("mkt.title")}</h1>
+          <h1 className="text-2xl font-extrabold tracking-tight md:text-3xl">{t("mkt.title")}</h1>
           <p className="mt-1 text-sm text-muted-foreground">{t("mkt.subtitle")}</p>
         </div>
         <span className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -364,7 +364,7 @@ export default function MarketSection({ onLogin, onRegister }: Props) {
       </div>
 
       {/* แบนเนอร์ชวนสมัคร */}
-      <div className="mt-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border bg-card p-6">
+      <div className="mt-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border bg-card p-4 md:p-6">
         <div>
           <p className="text-lg font-bold">{t("mkt.bannerTitle")}</p>
           <p className="mt-1 text-sm text-muted-foreground">{t("mkt.bannerSub")}</p>
