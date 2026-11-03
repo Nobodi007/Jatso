@@ -629,15 +629,12 @@ function Detail({ api, symbol, authed, onWatch }) {
         <Stat label="สูงสุดวันนี้" value={usd(d.high)} />
         <Stat label="ต่ำสุดวันนี้" value={usd(d.low)} />
         <Stat label="ปิดก่อนหน้า" value={usd(d.prevClose)} />
-      <div className="col-span-2 md:col-span-1">
-        <Stat
-          label="มูลค่าตลาด"
-          value={
-            pr.data?.marketCap
-              ? "$" + big(pr.data.marketCap * 1e6)
-              : "–"
-          }
-        />
+        <div className="col-span-2 md:col-span-1">
+          <Stat
+            label="มูลค่าตลาด"
+            value={pr.data?.marketCap ? "$" + big(pr.data.marketCap * 1e6) : "–"}
+          />
+        </div>
       </div>
     </>
   )}
