@@ -21,6 +21,7 @@ const ERR = {
   invalid_range: "ช่วงวันที่ไม่ถูกต้อง (ไม่เกิน 31 วัน)",
   telegram_failed: "ส่งข้อความ Telegram ไม่สำเร็จ กด /start กับบอทก่อน",
   no_backend: "เชื่อมต่อ API หุ้นไม่ได้ ตรวจ apiBase และการ deploy backend",
+  no_valuation: "ยังไม่มีข้อมูล Valuation ของหุ้นตัวนี้",
 };
 const msg = (e) => ERR[e] || "เกิดข้อผิดพลาด ลองใหม่อีกครั้ง";
 
@@ -381,6 +382,129 @@ const MET = [["P/E", "pe"], ["P/B", "pb"], ["P/S", "ps"], ["ROE %", "roe"], ["RO
   ["Net margin %", "netMargin"], ["D/E", "debtToEquity"], ["Current ratio", "currentRatio"], ["ปันผล %", "dividendYield"],
   ["EPS", "eps"], ["รายได้โต %", "revenueGrowth"], ["Beta", "beta"], ["สูงสุด 52 สัปดาห์", "high52w"], ["ต่ำสุด 52 สัปดาห์", "low52w"]];
 
+// ValuationCard.tsx -- วางโค้ดนี้ใน StocksPage.tsx (ใช้ Card/Status/Stat/Pill/useGet/usd/num/tone ที่มีในไฟล์นั้นอยู่แล้ว)
+// ตำแหน่งวาง: ก่อนบรรทัด `function Detail({ api, symbol, authed, onWatch }) {`
+
+const VSTAT = {
+  negative_fcf: "กระแสเงินสดอิสระ (FCF) ของบริษัทติดลบ จึงคำนวณ Reverse DCF ไม่ได้",
+  unsupported_type: "หุ้นกลุ่มธนาคาร/ประกัน/REIT ไม่เหมาะกับโมเดลกระแสเงินสดอิสระ จึงแสดงเฉพาะตัวคูณ",
+  insufficient_data: "ข้อมูลงบการเงินของหุ้นตัวนี้ยังไม่เพียงพอสำหรับการประเมิน",
+  extreme: "ราคาปัจจุบันสะท้อนการเติบโตสูง/ต่ำเกินช่วงที่โมเดลคำนวณได้",
+  share_mismatch: "ข้อมูลจำนวนหุ้นยังไม่น่าเชื่อถือ จึงไม่แสดงตัวคูณ",
+};
+const VLBL = { pe: "P/E", ps: "P/S", pfcf: "P/FCF", evEbitda: "EV/EBITDA" };
+const xx = (n) => (n == null ? "–" : `${Number(n).toFixed(1)}x`);
+const zone = (p) =>
+  p == null ? null
+  : p >= 0.8 ? { t: "สูงเมื่อเทียบกับอดีตของตัวเอง", c: "text-red-400" }
+  : p <= 0.2 ? { t: "ต่ำเมื่อเทียบกับอดีตของตัวเอง", c: "text-emerald-400" }
+  : { t: "ใกล้ค่ากลางของอดีตตัวเอง", c: "text-muted-foreground" };
+
+function MultLine({ rows }) {
+  if (rows.length < 3) return <p className="py-6 text-sm text-muted-foreground">ประวัติยังไม่พอสำหรับวาดกราฟ</p>;
+  const vals = rows.map((r) => r.v);
+  const sorted = [...vals].sort((a, b) => a - b);
+  const med = sorted[Math.floor(sorted.length / 2)];
+  const cap = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.97))]; // ตัดค่าพุ่งผิดปกติออกจากสเกลกราฟ
+  const lo = sorted[0], hi = cap, W = 600, H = 200;
+  const x = (i) => (i / Math.max(rows.length - 1, 1)) * W;
+  const y = (v) => H - 8 - ((Math.min(v, hi) - lo) / (hi - lo || 1)) * (H - 16);
+  const d = vals.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-52 w-full" preserveAspectRatio="none" role="img" aria-label="กราฟตัวคูณมูลค่ารายเดือน">
+        <line x1="0" x2={W} y1={y(med)} y2={y(med)} stroke="#a1a1aa" strokeDasharray="4 4" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+        <path d={`${d} L${W},${H} L0,${H} Z`} fill="#10b981" opacity="0.1" />
+        <path d={d} fill="none" stroke="#10b981" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+      </svg>
+      <div className="mt-2 flex justify-between text-xs text-zinc-500">
+        <span>{rows[0].time}</span>
+        <span>เส้นประ = ค่ากลาง {xx(med)} · ต่ำสุด {xx(lo)} · สูงสุด {xx(sorted[sorted.length - 1])}</span>
+        <span>{rows[rows.length - 1].time}</span>
+      </div>
+    </div>
+  );
+}
+
+function ValuationCard({ api, symbol }) {
+  const v = useGet(api, `/${symbol}/valuation`);
+  const [k, setK] = useState("pe");
+  const d = v.data;
+  const rows = useMemo(
+    () => (d?.history || []).map((h) => ({ time: h.month, v: h[k] })).filter((r) => r.v != null && r.v > 0),
+    [d, k]
+  );
+  const p = d?.percentile5y?.[k];
+  const z = zone(p);
+  const note = d && VSTAT[d.status];
+
+  return (
+    <Card
+      title="Valuation (มูลค่าเทียบกับราคา)"
+      right={d?.asOf && <span className="text-xs text-muted-foreground">ข้อมูล ณ {d.asOf}</span>}
+    >
+      <Status s={v} />
+      {d && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <Stat label="P/E" value={xx(d.multiples.pe)} />
+            <Stat label="P/S" value={xx(d.multiples.ps)} />
+            <Stat label="P/FCF" value={xx(d.multiples.pfcf)} />
+            <Stat label="EV/EBITDA" value={xx(d.multiples.evEbitda)} />
+          </div>
+
+          {note && <p className="rounded-xl bg-muted/50 px-3 py-2 text-sm text-muted-foreground">{note}</p>}
+
+          {d.status !== "share_mismatch" && d.status !== "insufficient_data" && (
+            <>
+              <div className="flex flex-wrap gap-2">
+                {Object.keys(VLBL).map((m) => (
+                  <Pill key={m} on={k === m} onClick={() => setK(m)}>{VLBL[m]}</Pill>
+                ))}
+              </div>
+              <MultLine rows={rows} />
+              <ul className="space-y-1 text-sm text-foreground/90">
+                {p != null && (
+                  <li>
+                    {VLBL[k]} ปัจจุบัน {xx(d.multiples[k])} สูงกว่า {Math.round(p * 100)}% ของเดือนในช่วง 5 ปีที่ผ่านมา{" "}
+                    <span className={z.c}>({z.t})</span>
+                  </li>
+                )}
+                {d.peVsPeers != null && (
+                  <li>
+                    P/E {d.peVsPeers >= 0 ? "สูงกว่า" : "ต่ำกว่า"}ค่ากลางของกลุ่ม{d.sector ? ` ${d.sector}` : ""}{" "}
+                    {Math.abs(Math.round(d.peVsPeers * 100))}%
+                  </li>
+                )}
+              </ul>
+            </>
+          )}
+
+          {d.status === "ok" && d.impliedGrowth != null && (
+            <div className="rounded-xl border border-border p-4">
+              <div className="text-xs text-muted-foreground">Reverse DCF: ตลาดกำลังคาดหวังอะไรที่ราคานี้</div>
+              <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <span className={`text-2xl font-bold ${tone(d.impliedGrowth)}`}>{(d.impliedGrowth * 100).toFixed(1)}%</span>
+                <span className="text-sm text-foreground/90">ต่อปี (การเติบโตของ FCF ที่ราคาปัจจุบันสะท้อน)</span>
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                สมมติ FCF โตสม่ำเสมอ {d.assumptions.years} ปี แล้วโตต่อเนื่อง {(d.assumptions.terminalGrowth * 100).toFixed(1)}% ตลอดไป
+                คิดลดที่ {(d.assumptions.discountRate * 100).toFixed(0)}%
+                {d.histRevCagr5y != null && <> · รายได้ย้อนหลัง 5 ปีโตเฉลี่ย {(d.histRevCagr5y * 100).toFixed(1)}% ต่อปี</>}
+              </p>
+            </div>
+          )}
+
+          <p className="text-xs text-muted-foreground">
+            ข้อมูลประกอบการวิเคราะห์ ไม่ใช่คำแนะนำการลงทุน ตัวคูณคำนวณจากงบ TTM ของ SEC และราคาปิด
+          </p>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+
 function Detail({ api, symbol, authed, onWatch }) {
   const q = useGet(api, `/${symbol}/quote`);
   const pr = useGet(api, `/${symbol}/profile`);
@@ -494,6 +618,7 @@ function Detail({ api, symbol, authed, onWatch }) {
         <Status s={m} />
         {m.data && <div className="grid grid-cols-2 gap-3 md:grid-cols-5">{MET.map(([l, k]) => <Stat key={k} label={l} value={num(m.data[k])} />)}</div>}
       </Card>
+      <ValuationCard api={api} symbol={symbol} />
       <Status s={f} empty={!f.loading && !f.error && !f.data?.annual?.length && (f.data?.taxonomy === "unsupported" ? "ไม่พบงบการเงินแบบ XBRL ของหุ้นตัวนี้ใน SEC" : f.data?.taxonomy === "ifrs" ? "หุ้นตัวนี้ใช้มาตรฐานบัญชี IFRS ยังไม่รองรับ" : "ไม่มีข้อมูล")} />
       <Statements s={f} />
       <div className={`grid gap-5 ${showOw ? "lg:grid-cols-2" : ""}`}>
