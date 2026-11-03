@@ -48,7 +48,9 @@ def _warnings(spec: dict, snapshot: list[dict], issues: list[dict], filled: dict
         if n:
             w.append({"code": "filled_days", "severity": "low", "symbol": sym,
                       "message": f"{sym}: ไม่มีราคา {n} วัน ใช้ราคาปิดล่าสุดเติมแทน"})
-    if spec["risk_free_annual"] is None:
+    if spec.get("risk_free_source") == "tbill":
+        pass                                              # คำเตือนของ T-bill ใส่ใน build_result (ต้องรู้ผลหลังรัน)
+    elif spec["risk_free_annual"] is None:
         w.append({"code": "risk_free_missing", "severity": "info",
                   "message": "ไม่ได้ระบุ risk-free rate: Sharpe และ Alpha มาตรฐานจะเป็น unavailable (ระบบไม่สมมติค่าเอง)"})
     return w
@@ -98,15 +100,17 @@ def build_result(spec: dict, price_store: PriceStore) -> dict:
     total = spec.get("return_mode") == "total"
     mk = load_market(spec, price_store, fetch_from, end)
     if strategy:
-        result = run_strategy(spec, mk.bars, mk.bench, mk.signal_bars, mk.signal_bench)
+        result = run_strategy(spec, mk.bars, mk.bench, mk.signal_bars, mk.signal_bench, mk.rates)
     else:
-        result = run_backtest(spec, mk.bars, mk.bench)
+        result = run_backtest(spec, mk.bars, mk.bench, mk.rates)
     filled = result["data_quality"]["filled_days"]
     result["data_quality"]["issues"] = mk.issues
     result["data_snapshot"] = mk.snapshot
     result["warnings"] = _warnings(spec, mk.snapshot, mk.issues, filled)
     if strategy:
         result["warnings"].extend(_strategy_warnings(spec, result, mk.signal_bars or mk.bars, warm))
+    if spec.get("risk_free_source") == "tbill":
+        result["warnings"].extend(_tbill_warnings(result, mk))
     if total:
         _apply_total_labels(spec, result)
         result["warnings"] = [w for w in result["warnings"] if w["code"] != "price_return_only"]
@@ -116,6 +120,21 @@ def build_result(spec: dict, price_store: PriceStore) -> dict:
     result["engine_version"] = C.ENGINE_VERSION
     result["spec_hash"] = spec_hash(spec)
     return result
+
+
+def _tbill_warnings(result: dict, mk) -> list[dict]:
+    rf = result["risk_free"]
+    if rf["status"] == "ok":
+        w = [{"code": "risk_free_tbill", "severity": "info",
+              "message": f"risk-free = T-bill 3 เดือน (FMP) เฉลี่ย {rf['avg_annual'] * 100:.2f}%/ปี ในช่วงที่ทดสอบ "
+                         "(ใช้อัตราวันทำการก่อนหน้า) เงินสดในพอร์ตยังไม่ได้ดอกเบี้ย"}]
+        if mk.rates_meta and mk.rates_meta.get("stale"):
+            w.append({"code": "risk_free_stale", "severity": "low",
+                      "message": "อัปเดตอัตรา T-bill ล่าสุดไม่สำเร็จ ใช้ข้อมูลที่ cache ไว้"})
+        return w
+    why = mk.rates_error or "ข้อมูลอัตราไม่ครอบคลุม/ขาดช่วงเกิน 7 วัน"
+    return [{"code": "risk_free_unavailable", "severity": "medium",
+             "message": f"ดึงอัตรา T-bill ไม่ได้ ({why}) Sharpe และ Alpha จึงเป็น unavailable (ระบบไม่สมมติค่าเอง)"}]
 
 
 def _fail(code: str, message: str) -> dict:
