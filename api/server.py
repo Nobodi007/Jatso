@@ -2223,7 +2223,11 @@ def chat(req: ChatRequest, user: str = Depends(require_user)):
         gu = load_gu()
         answer = str(gu.ask_ai(messages, api_key, system_override=system) or "").strip()
     except Exception as e:
-        raise _internal_server_error("เรียก AI ไม่สำเร็จ", e)
+        print(f"[api] chat crypto error: {type(e).__name__}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"เรียก AI ไม่สำเร็จ: {type(e).__name__}: {str(e)[:200]}"
+        )
 
     if len(answer) > 240:
         answer = answer[:237].rstrip() + "…"
