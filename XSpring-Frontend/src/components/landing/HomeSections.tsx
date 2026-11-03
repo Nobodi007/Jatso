@@ -163,14 +163,14 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
   return (
     <>
       {/* HERO */}
-      <section id="tour-hero" className="mx-auto grid max-w-7xl items-center gap-10 px-4 py-6 lg:grid-cols-2 lg:py-8">
+      <section id="tour-hero" className="mx-auto grid max-w-7xl items-center gap-4 px-4 py-4 lg:grid-cols-2 lg:gap-10 lg:py-8">
         <div>
-          <h1 className="text-4xl font-extrabold leading-tight tracking-tight sm:text-5xl">{heroTitle}</h1>
-          <p className="mt-5 max-w-xl text-base leading-7 text-muted-foreground">{heroSub}</p>
+          <h1 className="text-3xl font-extrabold leading-tight tracking-tight sm:text-5xl">{heroTitle}</h1>
+          <p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground md:mt-5 md:text-base md:leading-7">{heroSub}</p>
           <button
             type="button"
             onClick={onRegister}
-            className="mt-8 rounded-lg bg-emerald-500 px-6 py-3 text-sm font-bold text-black hover:bg-emerald-400"
+            className="mt-5 rounded-lg bg-emerald-500 px-5 py-2.5 text-sm font-bold text-black hover:bg-emerald-400 md:mt-8 md:px-6 md:py-3"
           >
             {t("hero.cta")}
           </button>
@@ -179,8 +179,8 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
       </section>
 
       {/* ตลาด */}
-      <section id="tour-market" className="mx-auto max-w-4xl px-4 py-12">
-        <h2 className="text-center text-3xl font-extrabold tracking-tight">{t("market.title")}</h2>
+      <section id="tour-market" className="mx-auto max-w-4xl px-4 py-8 md:py-12">
+        <div className="mt-5 grid items-center gap-5 md:mt-8 md:gap-8 lg:grid-cols-[1fr_320px]">
         <p className="mt-2 text-center text-sm text-muted-foreground">
           {assetTab === "stocks" ? t("market.subtitleStocks") : t("market.subtitle")}
         </p>
@@ -269,7 +269,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
       </section>
 
       {/* ทำไมต้อง Nobodi */}
-      <section id="tour-why" className="mx-auto max-w-6xl px-4 py-12">
+      <h2 className="text-center text-2xl font-extrabold tracking-tight md:text-3xl">{t("why.title")}</h2>
         <h2 className="text-center text-3xl font-extrabold tracking-tight">{t("why.title")}</h2>
         <p className="mt-2 text-center text-sm text-muted-foreground">
           {t("why.subtitle")}
@@ -291,7 +291,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
       </section>
 
       {/* เริ่มต้นใน 3 ขั้น */}
-      <section id="tour-steps" className="mx-auto max-w-6xl px-4 py-12">
+      <section id="tour-steps" className="mx-auto max-w-6xl px-4 py-8 md:py-12">
         <h2 className="text-center text-3xl font-extrabold tracking-tight">{t("steps.title")}</h2>
         <div className="mt-8 grid items-center gap-8 lg:grid-cols-[1fr_320px]">
           <ol className="space-y-6">
@@ -343,9 +343,9 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
       </section>
 
       {/* เครื่องมือ */}
-      <section id="tour-tools" className="mx-auto max-w-6xl px-4 py-12">
+      <h2 className="text-center text-2xl font-extrabold tracking-tight md:text-3xl">{t("tools.title")}</h2>
         <h2 className="text-center text-3xl font-extrabold tracking-tight">{t("tools.title")}</h2>
-        <div className="mt-8 grid gap-4 md:grid-cols-3">
+        className="rounded-2xl border p-4 text-left transition-colors hover:bg-accent md:p-6"
           {TOOLS.map((tool) => {
             const Icon = tool.icon
             return (
@@ -369,8 +369,8 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
   
 
             {/* ปิดท้าย */}
-      <section id="tour-cta" className="mx-auto max-w-4xl px-4 py-16 text-center">
-        <h2 className="text-3xl font-extrabold tracking-tight">{t("cta.title")}</h2>
+      <section id="tour-cta" className="mx-auto max-w-4xl px-4 py-10 text-center md:py-16">
+        <div className="mt-5 flex flex-wrap justify-center gap-3">
         <p className="mt-2 text-sm text-muted-foreground">{t("cta.subtitle")}</p>
         <div className="mt-6 flex justify-center gap-3">
           <button
