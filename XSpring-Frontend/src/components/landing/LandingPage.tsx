@@ -73,17 +73,17 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
   const [tour, setTour] = useState(false)
   const [stockSym, setStockSym] = useState("")
 
-// ออกจากหน้าแรก = ปิดทัวร์
-useEffect(() => {
-  if (view !== "home") setTour(false)
-}, [view])
+  // ออกจากหน้าแรก = ปิดทัวร์
+  useEffect(() => {
+    if (view !== "home") setTour(false)
+  }, [view])
 
-const startTour = () => {
-  setMenuOpen(false)
-  setView("home")
-  window.scrollTo({ top: 0 })
-  setTour(true)
-}
+  const startTour = () => {
+    setMenuOpen(false)
+    setView("home")
+    window.scrollTo({ top: 0 })
+    setTour(true)
+  }
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark)
@@ -115,12 +115,12 @@ const startTour = () => {
     setView("coin")
     window.scrollTo({ top: 0 })
   }
-  
+
   const openStock = (symbol: string) => {
-  setStockSym(symbol.toUpperCase())
-  setView("stock")
-  window.scrollTo({ top: 0 })
-}
+    setStockSym(symbol.toUpperCase())
+    setView("stock")
+    window.scrollTo({ top: 0 })
+  }
 
   const stockToAuth = (symbol: string) => {
     try {
@@ -131,11 +131,11 @@ const startTour = () => {
     onRegister()
   }
 
-    return (
+  return (
     <div className="min-h-screen bg-background text-foreground">
       <header id="tour-nav" className="sticky top-0 z-10 border-b bg-background/90 backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-7xl items-center gap-6 px-4">
-          <button type="button" onClick={() => setView("home")} className="text-xl font-extrabold tracking-tight">
+        <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 px-3 md:h-16 md:gap-6 md:px-4">
+          <button type="button" onClick={() => setView("home")} className="text-lg font-extrabold tracking-tight md:text-xl">
             {BRAND}
           </button>
 
@@ -156,28 +156,28 @@ const startTour = () => {
             ))}
           </nav>
 
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            type="button"
-            onClick={startTour}
-            aria-label={t("tour.start")}
-            className="flex items-center gap-1.5 rounded-md border border-emerald-500/40 px-2.5 py-1.5 text-sm font-medium text-emerald-500 hover:bg-emerald-500/10"
-          >
-            <Sparkles className="h-4 w-4" />
-            <span className="hidden sm:inline">{t("tour.start")}</span>
-          </button>
-          <SearchBox onSelect={openCoin} onSelectStock={openStock} />
-          <button
-            type="button"
-            onClick={onLogin}
-            className="hidden rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent sm:block"
-          >
-            {t("nav.login")}
-          </button>
+          <div className="ml-auto flex items-center gap-1.5 md:gap-2">
+            <button
+              type="button"
+              onClick={startTour}
+              aria-label={t("tour.start")}
+              className="hidden items-center gap-1.5 rounded-md border border-emerald-500/40 px-2.5 py-1.5 text-sm font-medium text-emerald-500 hover:bg-emerald-500/10 md:flex"
+            >
+              <Sparkles className="h-4 w-4" />
+              <span>{t("tour.start")}</span>
+            </button>
+            <SearchBox onSelect={openCoin} onSelectStock={openStock} />
+            <button
+              type="button"
+              onClick={onLogin}
+              className="hidden rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent md:block"
+            >
+              {t("nav.login")}
+            </button>
             <button
               type="button"
               onClick={onRegister}
-              className="rounded-md bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-black hover:bg-emerald-400"
+              className="rounded-md bg-emerald-500 px-2.5 py-1.5 text-xs font-semibold text-black hover:bg-emerald-400 md:px-3 md:text-sm"
             >
               {t("nav.register")}
             </button>
@@ -185,12 +185,14 @@ const startTour = () => {
               type="button"
               aria-label={dark ? t("nav.themeLight") : t("nav.themeDark")}
               onClick={toggleTheme}
-              className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="hidden rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground md:block"
             >
               {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
 
-            <LanguageSwitcher />
+            <div className="hidden md:block">
+              <LanguageSwitcher />
+            </div>
 
             <button
               type="button"
@@ -204,24 +206,35 @@ const startTour = () => {
         </div>
 
         {menuOpen && (
-          <div className="border-t px-4 py-2 md:hidden">
+          <div className="max-h-[calc(100vh-3.5rem)] overflow-y-auto border-t px-4 py-2 md:hidden">
             {MENU.map((label) => (
-              <button
-                key={label}
-                type="button"
-                onClick={() => go(label)}
-                className="block w-full py-2 text-left text-sm"
-              >
+              <button key={label} type="button" onClick={() => go(label)} className="block w-full py-3 text-left text-sm">
                 {t(MENU_KEY[label])}
               </button>
             ))}
-            <button
-              type="button"
-              onClick={onLogin}
-              className="block w-full py-2 text-left text-sm"
-            >
+            <button type="button" onClick={onLogin} className="block w-full py-3 text-left text-sm">
               {t("nav.login")}
             </button>
+
+            <div className="mt-1 flex items-center gap-2 border-t py-3">
+              <button
+                type="button"
+                onClick={startTour}
+                className="flex items-center gap-1.5 rounded-md border border-emerald-500/40 px-2.5 py-1.5 text-sm font-medium text-emerald-500"
+              >
+                <Sparkles className="h-4 w-4" />
+                {t("tour.start")}
+              </button>
+              <button
+                type="button"
+                aria-label={dark ? t("nav.themeLight") : t("nav.themeDark")}
+                onClick={toggleTheme}
+                className="rounded-md p-2 text-muted-foreground hover:bg-accent"
+              >
+                {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              </button>
+              <LanguageSwitcher />
+            </div>
           </div>
         )}
       </header>
@@ -246,27 +259,28 @@ const startTour = () => {
         <CoinDetail asset={coin} onBack={() => setView("market")} onLogin={onLogin} onRegister={onRegister} />
       ) : view === "learn" ? (
         <LearnSection />
-              ) : (
-          <>
-            <HomeSections
-              onLogin={onLogin}
-              onRegister={onRegister}
-              onOpenCoin={openCoin}
-              onGo={go}
-              onSelectStock={openStock}
-              heroTitle={t("hero.title")}
-              heroSub={t("hero.desc")}
-              heroArt={
-                <div className="flex w-full flex-col items-center gap-4">
-                  <GlobeHero />
-                  <MarketStatusBadge />
-                </div>
-              }
-            />
-            <PriceTicker />
-          </>
-        )}
-    {tour && view === "home" && (
+      ) : (
+        <>
+          <HomeSections
+            onLogin={onLogin}
+            onRegister={onRegister}
+            onOpenCoin={openCoin}
+            onGo={go}
+            onSelectStock={openStock}
+            heroTitle={t("hero.title")}
+            heroSub={t("hero.desc")}
+            heroArt={
+              <div className="flex w-full flex-col items-center gap-4">
+                <GlobeHero />
+                <MarketStatusBadge />
+              </div>
+            }
+          />
+          <PriceTicker />
+        </>
+      )}
+
+      {tour && view === "home" && (
         <TourGuide
           onClose={() => setTour(false)}
           onRegister={() => {
