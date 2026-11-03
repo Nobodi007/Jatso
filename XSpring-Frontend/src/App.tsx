@@ -889,6 +889,15 @@ function AppInner() {
 >
   ✨<span className="hidden md:inline"> ถาม AI</span>
 </button>
+{aiOpen && (
+  <AiAssistantOverlay
+    onClose={() => setAiOpen(false)}
+    market={market}
+  />
+)}
+</div>
+)
+}
 
 
 /* =========================================================
