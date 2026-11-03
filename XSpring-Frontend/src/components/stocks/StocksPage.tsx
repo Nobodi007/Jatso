@@ -26,6 +26,7 @@ const ERR = {
 const msg = (e) => ERR[e] || "เกิดข้อผิดพลาด ลองใหม่อีกครั้ง";
 
 const usd = (n, d = 2) => (n == null ? "–" : (n < 0 ? "-" : "") + "$" + Math.abs(Number(n)).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
+const num = (n, d = 2) => (n == null ? "–" : Number(n).toLocaleString("en-US", { maximumFractionDigits: d }));
 const pct = (n) => (n == null ? "–" : `${n > 0 ? "+" : ""}${Number(n).toFixed(2)}%`);
 const big = (n) => {
   if (n == null) return "–";
