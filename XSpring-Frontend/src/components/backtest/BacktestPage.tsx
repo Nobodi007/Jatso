@@ -577,17 +577,25 @@ const rangeText = (() => {
                 <button type="button" className={chip} onClick={() => applyRange("ytd")}>ปีนี้</button>
                 {rangeText && <span className="ml-auto text-xs text-muted-foreground">{rangeText}</span>}
               </div>
-              <div>
-                <label className={label}>Risk-free</label>
-                <select className={input} value={rfMode} onChange={(e) => setRfMode(e.target.value as "none" | "tbill" | "manual")}>
-                  <option value="none">ไม่ระบุ (Sharpe/Alpha จะไม่มีค่า)</option>
-                  <option value="tbill">T-bill 3 เดือน (FMP)</option>
-                  <option value="manual">กำหนดเอง</option>
-                </select>
-                {rfMode === "manual" && (
-                  <input className={`${input} mt-1`} inputMode="decimal" placeholder="% ต่อปี เช่น 4.5" value={rf} onChange={(e) => setRf(e.target.value)} />
-                )}
+              <div className="grid grid-cols-2 gap-2">
+                <div><label className={label}>เงินทุนเริ่มต้น (USD)</label><input className={input} inputMode="decimal" value={capital} onChange={(e) => setCapital(e.target.value)} /></div>
+                <div>
+                  <label className={label}>Risk-free</label>
+                  <select className={input} value={rfMode} onChange={(e) => setRfMode(e.target.value as "none" | "tbill" | "manual")}>
+                    <option value="none">ไม่ระบุ (Sharpe/Alpha จะไม่มีค่า)</option>
+                    <option value="tbill">T-bill 3 เดือน (FMP)</option>
+                    <option value="manual">กำหนดเอง</option>
+                  </select>
+                  {rfMode === "manual" && (
+                    <input className={`${input} mt-1`} inputMode="decimal" placeholder="% ต่อปี เช่น 4.5" value={rf} onChange={(e) => setRf(e.target.value)} />
+                  )}
               </div>
+              <div><label className={label}>วิธีคิดผลตอบแทน</label>
+                <select className={input} value={retMode} onChange={(e) => setRetMode(e.target.value as "price" | "total")}>
+                  <option value="price">Price Return (ไม่รวมปันผล)</option>
+                  <option value="total">Total Return (รวมปันผล)</option>
+                </select></div>
+            </div>
             <div><label className={label}>โหมด Rebalance</label>
               <select className={input} value={mode} onChange={(e) => setMode(e.target.value as RebalanceMode)}>
                 <option value="none">ไม่ปรับสัดส่วน (Buy-and-Hold)</option>
