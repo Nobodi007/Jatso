@@ -109,6 +109,18 @@ def _hist(vals: list[float], actual: float | None) -> dict:
     return {"edges": [lo + w * i for i in range(HIST_BINS + 1)], "counts": counts}
 
 
+def verdict_text(head: dict) -> str:
+    """สรุปผลเทียบการสุ่ม: แยก 3 กรณี ดีกว่าสุ่มจริง / แยกจากโชคไม่ได้ / ต่ำกว่าการสุ่ม (ไม่ใช่แค่ "แยกจากโชคไม่ได้")"""
+    if head["p_bonferroni"] < 0.05:
+        return "แยกจากโชคได้ที่ระดับ 5% (ยังไม่ได้พิสูจน์ว่าจะใช้ได้ในอนาคต)"
+    if head["beats_fraction"] <= 0.05:
+        return ("ต่ำกว่าการสุ่มที่ระดับ 5% — จังหวะเข้า/ออกของกฎทำให้ผลแย่กว่าการสุ่มจังหวะ "
+                "(ไม่ใช่แค่แยกจากโชคไม่ได้ แต่แย่กว่าสุ่มจริง)")
+    if head["beats_fraction"] < 0.5:
+        return "ต่ำกว่าค่ากลางของการสุ่ม และยังแยกจากโชคไม่ได้ที่ระดับ 5% — ไม่มีหลักฐานว่าจังหวะของกฎช่วยได้"
+    return "ยังแยกจากโชคไม่ได้ที่ระดับ 5% — ผลที่เห็นอาจเกิดจากการเลือกหุ้น/ช่วงเวลา มากกว่าจังหวะของกฎ"
+
+
 def random_baseline(spec: dict, mk, result: dict, metric: str, sims: int, seed: int, trials: int = 1, cancel=None) -> dict:
     if not spec.get("strategy") or result.get("mode") != "strategy":
         raise SearchError("รันนี้ไม่มีกลยุทธ์ (พอร์ตถือเฉยๆ) จึงไม่มีจังหวะให้เทียบกับการสุ่ม")
@@ -182,9 +194,7 @@ def random_baseline(spec: dict, mk, result: dict, metric: str, sims: int, seed: 
                        f"โดยวัดจาก {METRIC_LABEL[used_metric]}; โอกาสที่การสุ่มได้ผลดีเท่ากันหรือดีกว่า = {head['p_as_good']:.1%}")
         if trials > 1:
             reading.append(f"เมื่อคิดว่าลองมาแล้ว {trials} ชุด ค่า p ปรับแบบ Bonferroni (ขอบเขตบน) = {head['p_bonferroni']:.1%}")
-        p_use = head["p_bonferroni"]
-        reading.append("แยกจากโชคได้ที่ระดับ 5% (ยังไม่ได้พิสูจน์ว่าจะใช้ได้ในอนาคต)" if p_use < 0.05
-                       else "ยังแยกจากโชคไม่ได้ที่ระดับ 5% — ผลที่เห็นอาจเกิดจากการเลือกหุ้น/ช่วงเวลา มากกว่าจังหวะของกฎ")
+        reading.append(verdict_text(head))
 
     warnings = []
     if spec["rebalance"]["mode"] != "none":
