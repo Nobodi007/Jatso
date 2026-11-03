@@ -25,8 +25,7 @@ const ERR = {
 };
 const msg = (e) => ERR[e] || "เกิดข้อผิดพลาด ลองใหม่อีกครั้ง";
 
-const usd = (n, d = 2) => (n == null ? "–" : "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
-const num = (n, d = 2) => (n == null ? "–" : Number(n).toLocaleString("en-US", { maximumFractionDigits: d }));
+const usd = (n, d = 2) => (n == null ? "–" : (n < 0 ? "-" : "") + "$" + Math.abs(Number(n)).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }));
 const pct = (n) => (n == null ? "–" : `${n > 0 ? "+" : ""}${Number(n).toFixed(2)}%`);
 const big = (n) => {
   if (n == null) return "–";
@@ -73,7 +72,7 @@ const Btn = ({ kind, ...p }) => (
 );
 const Input = (p) => <input {...p} className={`w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-emerald-500 ${p.className || ""}`} />;
 const Stat = ({ label, value }) => (
-  <div className="rounded-xl bg-muted/50 p-3">
+  <div className="rounded-xl bg-muted/50 p-2.5 md:p-3">
     <div className="text-xs text-zinc-500">{label}</div>
     <div className="mt-1 text-sm font-semibold text-foreground">{value}</div>
   </div>
@@ -96,17 +95,19 @@ const PAL = ["#10b981", "#34d399", "#059669", "#6ee7b7", "#047857", "#a7f3d0"];
 function StatCard({ icon, label, value, change, sub, onClick }) {
   const Tag = onClick ? "button" : "div";
   return (
-    <Tag onClick={onClick} className="rounded-2xl border border bg-card p-4 text-left hover:border-border md:p-5">
-      <div className="mb-5 flex h-10 w-10 items-center justify-center rounded-xl bg-muted text-sm font-semibold text-emerald-400">{icon}</div>
-      <div className="text-sm text-muted-foreground">{label}</div>
-      <div className="mt-1 flex items-end justify-between gap-2">
-        <div className="text-2xl font-bold text-foreground">{value}</div>
-        {change != null && (
-          <div className="text-right">
-            <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${change >= 0 ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"}`}>{change >= 0 ? "↑" : "↓"} {pct(change)}</span>
-            {sub && <div className="mt-1 text-[11px] text-zinc-500">{sub}</div>}
-          </div>
-        )}
+    <Tag onClick={onClick} className="flex items-center gap-3 rounded-2xl border border bg-card p-2.5 md:p-3 text-left hover:border-border md:block md:p-5">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-muted text-xs font-semibold text-emerald-400 md:mb-5 md:h-10 md:w-10 md:text-sm">{icon}</div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-xs text-muted-foreground md:text-sm">{label}</div>
+        <div className="mt-0.5 flex items-end justify-between gap-2 md:mt-1">
+          <div className="text-lg font-bold text-foreground md:text-2xl">{value}</div>
+          {change != null && (
+            <div className="text-right">
+              <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${change >= 0 ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"}`}>{change >= 0 ? "↑" : "↓"} {pct(change)}</span>
+              {sub && <div className="mt-1 hidden text-[11px] text-zinc-500 md:block">{sub}</div>}
+            </div>
+          )}
+        </div>
       </div>
     </Tag>
   );
@@ -293,7 +294,7 @@ function Market({ api, open }) {
   return (
     <div className="space-y-5">
       <Status s={ov} />
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-2 md:grid-cols-3 md:gap-3">
         {ov.data?.map((q, n) => (
           <StatCard key={q.symbol} onClick={() => open(q.symbol)} icon={["500", "100", "30"][n]} label={`${q.name} · ${q.symbol}`} value={usd(q.price)} change={q.changePercent} sub="เทียบวานนี้" />
         ))}
@@ -573,8 +574,8 @@ function Detail({ api, symbol, authed, onWatch }) {
 
   {q.loading && !d && (
     <div className="animate-pulse space-y-4">
-      <div className="flex items-center gap-4">
-        <div className="h-12 w-12 rounded-xl bg-muted" />
+      <div className="flex items-center gap-3">
+        <div className="h-10 w-10 md:h-12 md:w-12 rounded-xl bg-muted" />
         <div className="space-y-2">
           <div className="h-4 w-48 rounded bg-muted" />
           <div className="h-8 w-32 rounded bg-muted" />
@@ -590,13 +591,13 @@ function Detail({ api, symbol, authed, onWatch }) {
 
   {d && (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
           {pr.data?.logo && (
             <img
               src={pr.data.logo}
               alt=""
-              className="h-12 w-12 rounded-xl bg-white p-1"
+              className="h-10 w-10 md:h-12 md:w-12 rounded-xl bg-white p-1"
             />
           )}
           <div>
@@ -606,7 +607,7 @@ function Detail({ api, symbol, authed, onWatch }) {
             {ex.data?.ceo?.name && (
               <div className="text-xs text-muted-foreground">CEO: {ex.data.ceo.name}</div>
             )}
-            <div className="text-3xl font-bold text-foreground">
+            <div className="text-2xl md:text-3xl font-bold text-foreground">
               {usd(d.price)}
             </div>
             <div className={`text-sm ${tone(d.change)}`}>
@@ -624,7 +625,7 @@ function Detail({ api, symbol, authed, onWatch }) {
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-5">
+      <div className="mt-3 grid grid-cols-2 gap-2 md:mt-4 md:gap-3 md:grid-cols-5">
         <Stat label="เปิด" value={usd(d.open)} />
         <Stat label="สูงสุดวันนี้" value={usd(d.high)} />
         <Stat label="ต่ำสุดวันนี้" value={usd(d.low)} />
@@ -762,7 +763,7 @@ function Mine({ api, open, authed }) {
       {err && <p className="rounded-xl bg-red-500/10 px-3 py-2 text-sm text-red-300">{err}</p>}
       <Status s={pf} />
       {S && (
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           {[["$", "มูลค่าพอร์ต", usd(S.marketValue), null], ["฿", "ต้นทุนรวม", usd(S.costBasis), null], ["P", "กำไร/ขาดทุนที่ยังไม่รับรู้", usd(S.unrealizedPL), S.unrealizedPLPercent], ["D", "กำไร/ขาดทุนวันนี้", usd(S.dayPL), S.marketValue ? (S.dayPL / S.marketValue) * 100 : null]].map(([ic, l, v, c]) => (
             <StatCard key={l} icon={ic === "฿" ? "∑" : ic} label={l} value={v} change={c} sub={c == null ? null : "เทียบต้นทุน/วันก่อน"} />
           ))}
@@ -949,11 +950,11 @@ useEffect(() => {
 
   return (
     <div className="min-h-screen p-0 text-foreground">
-      <div className="mx-auto max-w-6xl space-y-6">
-        <header className="flex flex-wrap items-end justify-between gap-4">
+      <div className="mx-auto max-w-6xl space-y-4 md:space-y-6">
+        <header className="flex flex-wrap items-end justify-between gap-3 md:gap-3">
           <div>
-            <h1 className="text-3xl font-bold text-foreground">{title}</h1>
-            <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
+            <h1 className="text-xl font-bold text-foreground md:text-2xl md:text-3xl">{title}</h1>
+            <p className="mt-1 hidden text-sm text-muted-foreground md:block">{subtitle}</p>
           </div>
          <div className="w-full md:w-80">
           <StockSearchBox api={api} onPick={open} />
