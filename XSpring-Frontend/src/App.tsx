@@ -550,7 +550,7 @@ function AppInner() {
         <div className="flex min-w-0 flex-1 flex-col">
 
           {/* TOPBAR */}
-          <header className="sticky top-0 z-30 flex h-16 items-center gap-2 border-b bg-background px-3 md:gap-3 md:px-4">
+          <header className="sticky top-0 z-30 flex h-12 items-center gap-2 border-b bg-background px-3 md:h-16 md:gap-3 md:px-4">
             <button
               onClick={() => {
                 if (window.innerWidth < 768) setDrawerOpen(true)
@@ -570,7 +570,7 @@ function AppInner() {
                 e.preventDefault()
                 if (stockQuery.trim()) openStock(stockQuery.trim())
               }}
-              className="flex items-center gap-2"
+              className="hidden items-center gap-2 md:flex"
             >
               <input
                 value={stockQuery}
