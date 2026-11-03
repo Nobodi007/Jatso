@@ -2172,21 +2172,42 @@ def _chat_stocks_tools(req: ChatRequest, user: str, api_key: str) -> dict:
         hint += f"[หุ้นที่เปิดอยู่: {sym}] "
     contents.append(types.Content(role="user", parts=[types.Part(text=hint + req.message.strip())]))
 
-    try:
-        client = genai.Client(api_key=api_key)
-        resp = client.models.generate_content(
-            model=os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=CHAT_SYSTEM_STOCKS,
-                tools=build_tools(user),
-                temperature=0.3,
-                automatic_function_calling=types.AutomaticFunctionCallingConfig(
-                    maximum_remote_calls=4),
-            ),
-        )
-    except Exception as e:
-        raise _internal_server_error("เรียก AI ไม่สำเร็จ", e)
+        resp = None
+    last_err = None
+    model_name = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+    for attempt in range(3):
+        try:
+            client = genai.Client(api_key=api_key)
+            resp = client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=CHAT_SYSTEM_STOCKS,
+                    tools=build_tools(user),
+                    temperature=0.3,
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                        maximum_remote_calls=4),
+                ),
+            )
+            break
+        except Exception as e:
+            last_err = e
+            msg = str(e)
+            busy = "503" in msg or "UNAVAILABLE" in msg or "429" in msg
+            print(f"[api] chat attempt {attempt + 1} failed: {type(e).__name__}: {msg[:200]}")
+            if busy and attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            break
+
+    if resp is None:
+        msg = str(last_err)
+        if "503" in msg or "UNAVAILABLE" in msg or "429" in msg:
+            raise HTTPException(
+                status_code=503,
+                detail="AI กำลังมีผู้ใช้งานหนาแน่น ลองใหม่อีกครั้งในอีกสักครู่",
+            )
+        raise _internal_server_error("เรียก AI ไม่สำเร็จ", last_err)
 
     answer = (resp.text or "").strip()[:1500]
     return {"status": "ok", "answer": answer or "ไม่ได้รับคำตอบจาก AI"}
