@@ -50,7 +50,7 @@ def validate_spec(raw: Any, today: date | None = None) -> dict:
     today = today or date.today()
     if not isinstance(raw, dict):
         raise SpecError("spec ต้องเป็น object")
-    unknown = set(raw) - {"version", "start", "end", "initial_capital", "positions", "rebalance", "costs", "risk_free_annual", "strategy", "return_mode"}
+    unknown = set(raw) - {"version", "start", "end", "initial_capital", "positions", "rebalance", "costs", "risk_free_annual", "strategy", "return_mode", "risk_free_source"}
     if unknown:
         raise SpecError(f"พบฟิลด์ที่ไม่รองรับ: {', '.join(sorted(map(str, unknown)))}")
     if raw.get("version", C.SPEC_VERSION) != C.SPEC_VERSION:
@@ -113,11 +113,18 @@ def validate_spec(raw: Any, today: date | None = None) -> dict:
 
     rf = raw.get("risk_free_annual")
     rf = None if rf is None else _num(rf, "risk_free_annual", 0.0, 0.5)
+    rfs = raw.get("risk_free_source")
+    if rfs not in (None, "tbill"):
+        raise SpecError("risk_free_source ต้องเป็น tbill (อัตรา T-bill 3 เดือนรายวัน) หรือไม่ระบุ")
+    if rfs is not None and rf is not None:
+        raise SpecError("ระบุได้อย่างเดียว: risk_free_annual (ค่าคงที่) หรือ risk_free_source (T-bill)")
 
     out = {"version": C.SPEC_VERSION, "start": start.isoformat(), "end": end.isoformat(),
            "initial_capital": capital, "positions": positions,
            "rebalance": {"mode": mode, "frequency": freq, "threshold_pct": thr},
            "costs": {"commission_bps": comm, "slippage_bps": slip}, "risk_free_annual": rf}
+    if rfs is not None:                                       # ไม่ใช้ -> spec/hash เหมือนเดิมทุกประการ
+        out["risk_free_source"] = rfs
     rm = raw.get("return_mode", "price")
     if rm not in ("price", "total"):
         raise SpecError("return_mode ต้องเป็น price (ไม่รวมปันผล) หรือ total (รวมปันผล)")
