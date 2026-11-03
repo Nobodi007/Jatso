@@ -16,12 +16,12 @@ from __future__ import annotations
 from datetime import date
 
 from .. import config as C
-from ..metrics import core as M
+from ..metrics import attribution as ATT, core as M, exposure as EXP
 from ..metrics.extremes import best_worst_days, calendar_year_returns, worst_best_periods
 from . import rules
 from .execution import Account
 from .rebalance import should_rebalance
-from .runner import LABELS, _align
+from .runner import LABELS, _align, resolve_rf
 
 
 class _Sleeve:
@@ -72,7 +72,8 @@ def _signals(spec, bars_by_symbol, bench_bars, ext_dates):
 
 
 def run_strategy(spec: dict, bars_by_symbol: dict[str, list[dict]], bench_bars: list[dict],
-                 signal_bars: dict[str, list[dict]] | None = None, signal_bench: list[dict] | None = None) -> dict:
+                 signal_bars: dict[str, list[dict]] | None = None, signal_bench: list[dict] | None = None,
+                 rates: dict | None = None) -> dict:
     """signal_bars/signal_bench: ราคาที่ใช้คำนวณตัวชี้วัด/กฎ (โหมด Total Return ใช้ราคาจริงไม่ปรับปันผล) — ไม่ระบุ = ใช้ชุดเดียวกับราคาซื้อขาย"""
     cal, base_date, bench, opens, closes, filled = _align(spec, bars_by_symbol, bench_bars)
     N = len(cal)
@@ -247,7 +248,7 @@ def run_strategy(spec: dict, bars_by_symbol: dict[str, list[dict]], bench_bars: 
     rb = rets(bclose, bench[cal[0]]["open"])
     dates = [date.fromisoformat(base_date)] + [date.fromisoformat(d) for d in cal]
     dates_r = dates[1:]
-    rf = [M.daily_rate(spec["risk_free_annual"])] * N if spec["risk_free_annual"] is not None else None
+    rf, rf_info = resolve_rf(spec, rates, dates, N)
     an, an_bh, an_b = M.analyze(rp, rb, rf, dates), M.analyze(rbh, rb, rf, dates), M.analyze(rb, None, rf, dates)
     an.pop("series", None)
 
@@ -287,7 +288,12 @@ def run_strategy(spec: dict, bars_by_symbol: dict[str, list[dict]], bench_bars: 
     for s in syms:
         e_true = sig[s][0]
         first_sig[s] = next((ext_dates[j] for j, v in enumerate(e_true) if v), None)
+    attr = ATT.build(syms, all_trades, cal, closes, capital, eq, rp)
+    attr.pop("_daily_contrib")
+    expo = EXP.build(targets, closes, {r["symbol"]: r["avg_weight"] for r in attr["positions"]},
+                     {r["symbol"]: r["final_value"] for r in attr["positions"]})
     return {
+        "attribution": attr, "exposure": expo,
         "mode": "strategy",
         "period": {"base_date": base_date, "first_trade_date": cal[0], "last_date": cal[-1], "trading_days": N},
         "comparison": {"portfolio": brief(an), "buy_hold": brief(an_bh), "benchmark": brief(an_b)},
@@ -301,7 +307,7 @@ def run_strategy(spec: dict, bars_by_symbol: dict[str, list[dict]], bench_bars: 
         "rebalances": rebalances, "stats": stats,
         "strategy_result": {"trips": all_trips[:C.MAX_TRADES_IN_RESULT], "trip_stats": trip_stats(trips, open_trips),
                             "first_entry_signal": first_sig, "exit_reasons": reason_counts},
-        "data_quality": {"filled_days": filled},
+        "data_quality": {"filled_days": filled}, "risk_free": rf_info,
         "labels": LABELS + ["strategy_rules_chosen_with_hindsight_risk"],
         "conventions": {
             "execution": "สัญญาณจากราคาปิดวัน t จับคู่ที่ราคาเปิดวัน t+1; stop ตรวจ intrabar (gap -> ราคาเปิด, ไม่งั้น -> ระดับ stop); "
@@ -313,7 +319,7 @@ def run_strategy(spec: dict, bars_by_symbol: dict[str, list[dict]], bench_bars: 
             "cash": "เงินสดไม่ได้ดอกเบี้ย", "fractional_shares": True,
             "trip_return": "ผลตอบแทนต่อรอบ = เงินที่ได้คืนสุทธิ / เงินที่ลงสุทธิรวมค่าคอม (นับการเพิ่ม/ลดจาก rebalance ในรอบนั้น)",
             "turnover": "one-way รายปี = (Σ มูลค่าซื้อขาย / 2) / มูลค่าพอร์ตเฉลี่ย / จำนวนปี (นับการเข้าซื้อทุกครั้งของกลยุทธ์)",
-            "risk_free": "ใช้ค่าที่ผู้ใช้ระบุเท่านั้น (ถ้าไม่ระบุ Sharpe/Alpha จะเป็น unavailable)",
+            "risk_free": ("อัตรา T-bill 3 เดือน (FMP) รายวัน ใช้ค่าของวันทำการก่อนหน้า (ไม่มี look-ahead)" if spec.get("risk_free_source") == "tbill" else "ใช้ค่าที่ผู้ใช้ระบุเท่านั้น (ถ้าไม่ระบุ Sharpe/Alpha จะเป็น unavailable)"),
             "metrics_method": M.METHOD_VERSION, "trading_days_per_year": M.TRADING_DAYS},
     }
 
