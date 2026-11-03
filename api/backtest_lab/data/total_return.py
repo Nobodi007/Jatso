@@ -15,6 +15,7 @@ from datetime import date
 
 from .. import config as C
 from .price_store import PriceStore
+from .provider_base import ProviderError
 from .validate import DataError, clean_bars
 
 
@@ -54,9 +55,31 @@ class Market:
     issues: list = field(default_factory=list)
     signal_bars: dict | None = None  # ราคาจริงไม่ปรับปันผลสำหรับตัวชี้วัด/กฎ (None = ใช้ bars)
     signal_bench: list | None = None
+    rates: dict | None = None        # {date: อัตรา T-bill 3M รายปี} เมื่อ spec.risk_free_source == "tbill"
+    rates_meta: dict | None = None
+    rates_error: str | None = None   # ดึงไม่สำเร็จ -> รันต่อโดยไม่มี risk-free (service ใส่คำเตือน)
+
+
+def _load_rates(spec: dict, price_store, fetch_from: date, end: date):
+    if spec.get("risk_free_source") != "tbill":
+        return None, None, None
+    rs = getattr(price_store, "rate_store", None)
+    if rs is None:
+        return None, None, "ไม่ได้ตั้งค่าแหล่งอัตรา T-bill"
+    try:
+        rates, meta = rs.get_rates(fetch_from, end)
+        return (rates or None), meta, (None if rates else "ไม่มีข้อมูลอัตรา T-bill ในช่วงนี้")
+    except ProviderError as e:
+        return None, None, str(e)
 
 
 def load_market(spec: dict, price_store: PriceStore, fetch_from: date, end: date) -> Market:
+    mk = _load_market(spec, price_store, fetch_from, end)
+    mk.rates, mk.rates_meta, mk.rates_error = _load_rates(spec, price_store, fetch_from, end)
+    return mk
+
+
+def _load_market(spec: dict, price_store: PriceStore, fetch_from: date, end: date) -> Market:
     total = spec.get("return_mode") == "total"
     names = [p["symbol"] for p in spec["positions"]]
     raw, snapshot, issues = {}, [], []
