@@ -6,6 +6,7 @@
 #
 # ต้องมี env บน Render: SUPABASE_URL, SUPABASE_SERVICE_KEY  (และ pip: supabase)
 # ถ้าหลังบ้านมีตัวต่อ Supabase อยู่แล้ว ให้แก้ฟังก์ชัน _sb() ให้คืน client ตัวนั้นแทน
+import logging
 import os
 import re
 import time
@@ -13,6 +14,7 @@ import time
 from fastapi import APIRouter, HTTPException
 
 router = APIRouter()
+log = logging.getLogger("valuation")
 
 _SYM = re.compile(r"^[A-Z][A-Z.\-]{0,9}$")
 _TTL = 600  # วินาที ข้อมูลอัปเดตวันละครั้ง cache ไว้ 10 นาทีพอ
@@ -62,7 +64,8 @@ def valuation(symbol: str):
                 .eq("ticker", sym).order("month_end", desc=True).limit(61).execute().data) or []
     except HTTPException:
         raise
-    except Exception:
+    except Exception as e:
+        log.exception("valuation failed for %s: %r", sym, e)   # ดูสาเหตุจริงได้ใน Render > Logs
         raise HTTPException(status_code=502, detail="provider_error")
 
     hist.reverse()
