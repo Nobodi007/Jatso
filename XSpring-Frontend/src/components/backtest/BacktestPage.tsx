@@ -11,7 +11,7 @@ import type { TickerHit } from "./TickerInput"
 import RobustnessPanel from "./RobustnessPanel"
 import ResultCharts from "./ResultCharts"
 import SearchPanel from "./SearchPanel"
-import { RiskPanel } from "./RiskPanel"
+import RiskPanel from "./RiskPanel"
 
 
 // หน้า Backtest Lab (หุ้นสหรัฐ) — คอมโพเนนต์ใหม่ทั้งหมด ไม่ import/ไม่แตะโค้ด Backtest เดิม
@@ -294,7 +294,8 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
   const [thr, setThr] = useState("5")
   const [comm, setComm] = useState("0")
   const [slip, setSlip] = useState("5")
-    const [rfMode, setRfMode] = useState<"none" | "tbill" | "manual">("none")
+  const [rf, setRf] = useState("")
+  const [rfMode, setRfMode] = useState<"none" | "tbill" | "manual">("none")
   const [retMode, setRetMode] = useState<"price" | "total">("price")
   const [sf, setSf] = useState<StrategyForm>(defaultStrategyForm)
   const [busy, setBusy] = useState(false)
