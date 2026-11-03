@@ -2175,7 +2175,7 @@ def _chat_stocks_tools(req: ChatRequest, user: str, api_key: str) -> dict:
     try:
         client = genai.Client(api_key=api_key)
         resp = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=CHAT_SYSTEM_STOCKS,
