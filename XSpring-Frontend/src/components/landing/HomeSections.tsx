@@ -180,7 +180,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
 
       {/* ตลาด */}
       <section id="tour-market" className="mx-auto max-w-4xl px-4 py-8 md:py-12">
-        <div className="mt-5 grid items-center gap-5 md:mt-8 md:gap-8 lg:grid-cols-[1fr_320px]">
+        <h2 className="text-center text-2xl font-extrabold tracking-tight md:text-3xl">{t("market.title")}</h2>
         <p className="mt-2 text-center text-sm text-muted-foreground">
           {assetTab === "stocks" ? t("market.subtitleStocks") : t("market.subtitle")}
         </p>
@@ -189,8 +189,8 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
         </div>
 
         {assetTab === "stocks" && (
-          <div className="mt-8 overflow-hidden rounded-2xl border">
-            <div className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.8fr)] sm:grid-cols-[1.4fr_1fr_0.8fr_0.8fr] gap-2 bg-muted/40 px-3 sm:px-4 py-3 text-xs text-muted-foreground">
+          <div className="mt-6 overflow-hidden rounded-2xl border md:mt-8">
+            <div className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.8fr)] gap-2 bg-muted/40 px-3 py-3 text-xs text-muted-foreground sm:grid-cols-[1.4fr_1fr_0.8fr_0.8fr] sm:px-4">
               <span>{t("market.colName")}</span>
               <span className="text-right">{t("market.colPrice")}</span>
               <span className="text-right">{t("market.colChangeToday")}</span>
@@ -206,9 +206,9 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
                   key={r.symbol}
                   type="button"
                   onClick={() => onSelectStock(r.symbol)}
-                  className="grid w-full grid-cols-[1.4fr_1fr_0.8fr_0.8fr] items-center gap-2 border-t px-4 py-3 text-left text-sm hover:bg-accent"
+                  className="grid w-full grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.8fr)] items-center gap-2 border-t px-3 py-3 text-left text-sm hover:bg-accent sm:grid-cols-[1.4fr_1fr_0.8fr_0.8fr] sm:px-4"
                 >
-                  <span>
+                  <span className="min-w-0">
                     <span className="font-semibold">{r.symbol}</span>{" "}
                     <span className="text-xs text-muted-foreground">{r.name}</span>
                   </span>
@@ -217,7 +217,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
                     {up ? "+" : ""}
                     {r.changePercent.toFixed(2)}%
                   </span>
-                  <span className="flex justify-end">
+                  <span className="hidden justify-end sm:flex">
                     <Spark data={sp} up={sp.length > 1 ? sp[sp.length - 1] >= sp[0] : up} />
                   </span>
                 </button>
@@ -226,12 +226,12 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
           </div>
         )}
 
-        <div className={`mt-8 overflow-hidden rounded-2xl border ${assetTab === "stocks" ? "hidden" : ""}`}>
-          <div className="grid grid-cols-[1.4fr_1fr_0.8fr_0.8fr] gap-2 bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
+        <div className={`mt-6 overflow-hidden rounded-2xl border md:mt-8 ${assetTab === "stocks" ? "hidden" : ""}`}>
+          <div className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.8fr)] gap-2 bg-muted/40 px-3 py-3 text-xs text-muted-foreground sm:grid-cols-[1.4fr_1fr_0.8fr_0.8fr] sm:px-4">
             <span>{t("market.colName")}</span>
             <span className="text-right">{t("market.colPrice")}</span>
             <span className="text-right">{t("market.colChange")}</span>
-            <span className="text-right">{t("market.colTrend")}</span>
+            <span className="hidden text-right sm:block">{t("market.colTrend")}</span>
           </div>
           {rows === null && <p className="px-4 py-8 text-center text-sm text-muted-foreground">{t("market.loading")}</p>}
           {rows?.length === 0 && <p className="px-4 py-8 text-center text-sm text-muted-foreground">{t("market.loadFailed")}</p>}
@@ -243,11 +243,9 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
                 key={r.asset}
                 type="button"
                 onClick={() => onOpenCoin(r.asset)}
-                <span className="hidden justify-end sm:flex">
-                  <Spark data={sp} up={sp.length > 1 ? sp[sp.length - 1] >= sp[0] : up} />
-                </span>
+                className="grid w-full grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.8fr)] items-center gap-2 border-t px-3 py-3 text-left text-sm hover:bg-accent sm:grid-cols-[1.4fr_1fr_0.8fr_0.8fr] sm:px-4"
               >
-                <span>
+                <span className="min-w-0">
                   <span className="font-semibold">{r.asset}</span>{" "}
                   <span className="text-xs text-muted-foreground">{r.name}</span>
                 </span>
@@ -256,7 +254,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
                   {up ? "+" : ""}
                   {r.change.toFixed(2)}%
                 </span>
-                <span className="flex justify-end">
+                <span className="hidden justify-end sm:flex">
                   <Spark data={sp} up={sp.length > 1 ? sp[sp.length - 1] >= sp[0] : up} />
                 </span>
               </button>
@@ -271,16 +269,16 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
       </section>
 
       {/* ทำไมต้อง Nobodi */}
-      <h2 className="text-center text-2xl font-extrabold tracking-tight md:text-3xl">{t("why.title")}</h2>
-        <h2 className="text-center text-3xl font-extrabold tracking-tight">{t("why.title")}</h2>
+      <section id="tour-why" className="mx-auto max-w-6xl px-4 py-8 md:py-12">
+        <h2 className="text-center text-2xl font-extrabold tracking-tight md:text-3xl">{t("why.title")}</h2>
         <p className="mt-2 text-center text-sm text-muted-foreground">
           {t("why.subtitle")}
         </p>
-        <div className="mt-8 grid gap-4 md:grid-cols-3">
+        <div className="mt-6 grid gap-4 md:mt-8 md:grid-cols-3">
           {WHY.map((w) => {
             const Icon = w.icon
             return (
-              <div key={w.title} className="rounded-2xl border p-6 text-center">
+              <div key={w.title} className="rounded-2xl border p-4 text-center md:p-6">
                 <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-500">
                   <Icon className="h-6 w-6" />
                 </span>
@@ -294,8 +292,8 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
 
       {/* เริ่มต้นใน 3 ขั้น */}
       <section id="tour-steps" className="mx-auto max-w-6xl px-4 py-8 md:py-12">
-        <h2 className="text-center text-3xl font-extrabold tracking-tight">{t("steps.title")}</h2>
-        <div className="mt-8 grid items-center gap-8 lg:grid-cols-[1fr_320px]">
+        <h2 className="text-center text-2xl font-extrabold tracking-tight md:text-3xl">{t("steps.title")}</h2>
+        <div className="mt-6 grid items-center gap-8 md:mt-8 lg:grid-cols-[1fr_320px]">
           <ol className="space-y-6">
             {STEPS.map((s, i) => {
               const Icon = s.icon
@@ -345,9 +343,9 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
       </section>
 
       {/* เครื่องมือ */}
-      <h2 className="text-center text-2xl font-extrabold tracking-tight md:text-3xl">{t("tools.title")}</h2>
-        <h2 className="text-center text-3xl font-extrabold tracking-tight">{t("tools.title")}</h2>
-        className="rounded-2xl border p-4 text-left transition-colors hover:bg-accent md:p-6"
+      <section id="tour-tools" className="mx-auto max-w-6xl px-4 py-8 md:py-12">
+        <h2 className="text-center text-2xl font-extrabold tracking-tight md:text-3xl">{t("tools.title")}</h2>
+        <div className="mt-6 grid gap-4 md:mt-8 md:grid-cols-3">
           {TOOLS.map((tool) => {
             const Icon = tool.icon
             return (
@@ -355,7 +353,7 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
                 key={tool.title}
                 type="button"
                 onClick={() => onGo(tool.go)}
-                className="rounded-2xl border p-6 text-left transition-colors hover:bg-accent"
+                className="rounded-2xl border p-4 text-left transition-colors hover:bg-accent md:p-6"
               >
                 <Icon className="h-6 w-6 text-emerald-500" />
                 <h3 className="mt-4 text-lg font-bold">{t(tool.title)}</h3>
@@ -368,13 +366,12 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
       </section>
 
       <DeviceShowcase onRegister={onRegister} />
-  
 
-            {/* ปิดท้าย */}
+      {/* ปิดท้าย */}
       <section id="tour-cta" className="mx-auto max-w-4xl px-4 py-10 text-center md:py-16">
-        <div className="mt-5 flex flex-wrap justify-center gap-3">
+        <h2 className="text-2xl font-extrabold tracking-tight md:text-3xl">{t("cta.title")}</h2>
         <p className="mt-2 text-sm text-muted-foreground">{t("cta.subtitle")}</p>
-        <div className="mt-6 flex justify-center gap-3">
+        <div className="mt-6 flex flex-wrap justify-center gap-3">
           <button
             type="button"
             onClick={onRegister}
@@ -386,10 +383,9 @@ export default function HomeSections({ onRegister, onLogin, onOpenCoin, onGo, on
             {t("cta.login")}
           </button>
         </div>
-        </section>
+      </section>
 
-
-        <Footer onGo={onGo} onOpenCoin={onOpenCoin} onPage={openPage} />
-      </>
-    )
-  }
+      <Footer onGo={onGo} onOpenCoin={onOpenCoin} onPage={openPage} />
+    </>
+  )
+}
