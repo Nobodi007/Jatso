@@ -287,6 +287,11 @@ function AppInner() {
   const [page, setPage] = useState<Page>("dashboard")
   const [market, setMarket] = useState<Market>(() => (localStorage.getItem("market") as Market) || "crypto")
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const goto = (id: Page) => {
+    setPage(id)
+    setDrawerOpen(false)
+  }
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null)
   const [portfolioLoading, setPortfolioLoading] = useState(false)
   const [portfolioError, setPortfolioError] = useState("")
@@ -318,7 +323,16 @@ function AppInner() {
     } catch {
       // ไม่ขัดขวาง
     }
-  }, [market])
+    
+  const mobileTabIds: Page[] =
+    market === "stocks"
+      ? ["dashboard", "markets", "watchlist", "trade"]
+      : ["dashboard", "markets", "trade", "portfolio"]
+  const mobileTabs = mobileTabIds
+    .map((id) => navigation.find((n) => n.id === id))
+    .filter((n): n is NavigationItem => !!n)
+    }, [market])
+  
   useEffect(() => {
   const toCompany = () => setPage("markets");
   const toTrade = () => setPage("trade");
@@ -449,7 +463,7 @@ function AppInner() {
 
         {/* SIDEBAR */}
         <aside
-          className={`border-r bg-card transition-all duration-200 ${
+          className={`hidden border-r bg-card transition-all duration-200 md:block ${
             sidebarOpen ? "w-64" : "w-16"
           }`}
         >
@@ -535,16 +549,19 @@ function AppInner() {
         <div className="flex min-w-0 flex-1 flex-col">
 
           {/* TOPBAR */}
-          <header className="flex h-16 items-center gap-3 border-b bg-background px-4">
+          <header className="sticky top-0 z-30 flex h-16 items-center gap-2 border-b bg-background px-3 md:gap-3 md:px-4">
             <button
-              onClick={() => setSidebarOpen(!sidebarOpen)}
+              onClick={() => {
+                if (window.innerWidth < 768) setDrawerOpen(true)
+                else setSidebarOpen(!sidebarOpen)
+              }}
               className="rounded-lg p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <Menu className="size-5" />
             </button>
-
-            <div className="flex-1">
-              <h1 className="text-sm font-semibold">{currentPage?.label}</h1>
+          
+            <div className="min-w-0 flex-1">
+              <h1 className="truncate text-sm font-semibold">{currentPage?.label}</h1>
             </div>
 
             <form
@@ -558,7 +575,7 @@ function AppInner() {
                 value={stockQuery}
                 onChange={(e) => setStockQuery(e.target.value)}
                 placeholder="Search stock symbol..."
-                className="rounded-lg border px-3 py-2"
+                className="w-28 rounded-lg border bg-transparent px-3 py-2 text-base sm:w-48 sm:text-sm"
               />
               <button
                 type="submit"
@@ -569,7 +586,7 @@ function AppInner() {
               </button>
             </form>
 
-            <button className="rounded-lg p-2 text-muted-foreground hover:bg-accent" aria-label="Notifications">
+            <button className="hidden rounded-lg p-2 text-muted-foreground hover:bg-accent sm:block" aria-label="Notifications">
               <Bell className="size-5" />
             </button>
 
@@ -624,7 +641,7 @@ function AppInner() {
           </header>
 
           {/* CONTENT */}
-          <main className="flex-1 overflow-auto p-6">
+          <main className="flex-1 overflow-auto p-3 pb-24 md:p-6 md:pb-6">
 
             {page === "dashboard" && market === "crypto" && (
             <DashboardPage
@@ -782,21 +799,96 @@ function AppInner() {
           </main>
         </div>
       </div>        
+      {/* BOTTOM TAB BAR (มือถือ) */}
+<nav
+  className="fixed inset-x-0 bottom-0 z-40 flex border-t bg-background/95 backdrop-blur md:hidden"
+  style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+>
+  {mobileTabs.map((item) => {
+    const Icon = item.icon
+    const active = page === item.id
+    return (
       <button
-        onClick={() => setAiOpen(true)}
-        className="fixed bottom-6 right-6 z-40 rounded-full border bg-background px-4 py-3 text-sm font-medium shadow-lg hover:bg-accent"
+        key={item.id}
+        onClick={() => goto(item.id)}
+        className={`flex min-w-0 flex-1 flex-col items-center gap-0.5 px-1 py-2 text-[11px] ${
+          active ? "text-primary" : "text-muted-foreground"
+        }`}
       >
-        ✨ ถาม AI
+        <Icon className="size-5" />
+        <span className="w-full truncate text-center">{item.label}</span>
       </button>
-     {aiOpen && (
-        <AiAssistantOverlay
-          onClose={() => setAiOpen(false)}
-          market={market}
-        />
-      )}
-    </div>            
-  )
-}
+    )
+  })}
+  <button
+    onClick={() => setDrawerOpen(true)}
+    className="flex min-w-0 flex-1 flex-col items-center gap-0.5 px-1 py-2 text-[11px] text-muted-foreground"
+  >
+    <Menu className="size-5" />
+    <span>เพิ่มเติม</span>
+  </button>
+</nav>
+
+{/* DRAWER (มือถือ) */}
+{drawerOpen && (
+  <div className="fixed inset-0 z-50 md:hidden">
+    <div className="absolute inset-0 bg-black/60" onClick={() => setDrawerOpen(false)} />
+    <div className="absolute inset-y-0 left-0 flex w-72 max-w-[85%] flex-col border-r bg-card shadow-xl">
+      <div className="flex h-16 shrink-0 items-center border-b px-4">
+        <div className="flex size-9 items-center justify-center rounded-lg bg-primary font-bold text-primary-foreground">X</div>
+        <div className="ml-3 text-sm font-semibold">Nobodi</div>
+      </div>
+
+      <div className="grid shrink-0 grid-cols-2 gap-1 p-2 pb-0">
+        {(["crypto", "stocks"] as Market[]).map((m) => (
+          <button
+            key={m}
+            onClick={() => {
+              setMarket(m)
+              goto("dashboard")
+            }}
+            className={`rounded-lg px-2 py-2 text-sm font-medium ${
+              market === m ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+            }`}
+          >
+            {m === "crypto" ? "คริปโต" : "หุ้นสหรัฐ"}
+          </button>
+        ))}
+      </div>
+
+      <nav className="flex-1 space-y-1 overflow-y-auto p-2">
+        {navigation.map((item) => {
+          const Icon = item.icon
+          const active = page === item.id
+          return (
+            <button
+              key={item.id}
+              onClick={() => goto(item.id)}
+              className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm ${
+                active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"
+              }`}
+            >
+              <Icon className="size-4 shrink-0" />
+              <span className="flex-1 truncate">{item.label}</span>
+              {item.count !== undefined && (
+                <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold">{item.count}</span>
+              )}
+            </button>
+          )
+        })}
+      </nav>
+    </div>
+  </div>
+)}
+
+{/* ปุ่ม AI: มือถือเป็นไอคอน ลอยเหนือแท็บบาร์ */}
+<button
+  onClick={() => setAiOpen(true)}
+  className="fixed bottom-20 right-4 z-40 rounded-full border bg-background px-3 py-3 text-sm font-medium shadow-lg hover:bg-accent md:bottom-6 md:right-6 md:px-4"
+  aria-label="ถาม AI"
+>
+  ✨<span className="hidden md:inline"> ถาม AI</span>
+</button>
 
 
 /* =========================================================
