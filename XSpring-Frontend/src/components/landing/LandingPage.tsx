@@ -237,6 +237,7 @@ const startTour = () => {
             </div>
           </div>
         )}
+      </header>
 
       {view === "contact" ? (
         <ContactPage />
