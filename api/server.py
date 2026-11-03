@@ -2172,7 +2172,7 @@ def _chat_stocks_tools(req: ChatRequest, user: str, api_key: str) -> dict:
         hint += f"[หุ้นที่เปิดอยู่: {sym}] "
     contents.append(types.Content(role="user", parts=[types.Part(text=hint + req.message.strip())]))
 
-        resp = None
+    resp = None
     last_err = None
     model_name = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
     for attempt in range(3):
