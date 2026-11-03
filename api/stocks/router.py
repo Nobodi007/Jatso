@@ -22,6 +22,8 @@ from .stock_detail import router as stock_detail_router
 router.include_router(stock_detail_router)
 from .stock_insights import router as stock_insights_router
 router.include_router(stock_insights_router)
+from .valuation_router import router as _valuation_router
+router.include_router(_valuation_router)
 
 
 
