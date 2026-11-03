@@ -24,8 +24,8 @@ STOP_RANGES = {"stop_loss_pct": (0.1, 90.0), "take_profit_pct": (0.1, 1000.0), "
 def _run(spec: dict, mk) -> dict:
     """mk = Market (ราคาซื้อขาย/ราคาสัญญาณ/benchmark) — โหมด Total Return ใช้ชุดราคาเดียวกับรันหลัก"""
     if spec.get("strategy"):
-        return run_strategy(spec, mk.bars, mk.bench, mk.signal_bars, mk.signal_bench)
-    return run_backtest(spec, mk.bars, mk.bench)
+        return run_strategy(spec, mk.bars, mk.bench, mk.signal_bars, mk.signal_bench, mk.rates)
+    return run_backtest(spec, mk.bars, mk.bench, mk.rates)
 
 
 def _brief(res: dict) -> dict:
