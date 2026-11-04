@@ -19,6 +19,7 @@ from datetime import date
 from typing import Any
 
 from .. import config as C
+from .accum_spec import AccumError, validate_accumulate
 from .rules import RuleError, validate_strategy
 
 SYMBOL_RE = re.compile(r"^[A-Z][A-Z.\-]{0,9}$")
@@ -50,7 +51,7 @@ def validate_spec(raw: Any, today: date | None = None) -> dict:
     today = today or date.today()
     if not isinstance(raw, dict):
         raise SpecError("spec ต้องเป็น object")
-    unknown = set(raw) - {"version", "start", "end", "initial_capital", "positions", "rebalance", "costs", "risk_free_annual", "strategy", "return_mode", "risk_free_source"}
+    unknown = set(raw) - {"version", "start", "end", "initial_capital", "positions", "rebalance", "costs", "risk_free_annual", "strategy", "return_mode", "risk_free_source", "accumulate"}
     if unknown:
         raise SpecError(f"พบฟิลด์ที่ไม่รองรับ: {', '.join(sorted(map(str, unknown)))}")
     if raw.get("version", C.SPEC_VERSION) != C.SPEC_VERSION:
@@ -135,6 +136,15 @@ def validate_spec(raw: Any, today: date | None = None) -> dict:
             out["strategy"] = validate_strategy(raw["strategy"])
         except RuleError as e:
             raise SpecError(f"strategy: {e}")
+    if raw.get("accumulate") is not None:                    # ไม่มี accumulate -> spec/hash เหมือนเดิมทุกประการ
+        if raw.get("strategy") is not None:
+            raise SpecError("ใช้ strategy (กฎเข้า/ออก) กับ accumulate (DCA/ซื้อตอนย่อ) พร้อมกันไม่ได้ เลือกอย่างใดอย่างหนึ่ง")
+        if mode != "none":
+            raise SpecError("accumulate ไม่รองรับ rebalance (ตั้ง rebalance.mode = none)")
+        try:
+            out["accumulate"] = validate_accumulate(raw["accumulate"])
+        except AccumError as e:
+            raise SpecError(f"accumulate: {e}")
     return out
 
 
