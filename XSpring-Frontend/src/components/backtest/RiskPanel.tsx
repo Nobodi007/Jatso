@@ -21,10 +21,10 @@ const toneCls = (v: number | null | undefined) => (v == null || v === 0 ? "text-
 const why = (m?: RM) =>
   m && m.value == null ? (m.status === "unavailable" ? "ไม่มีค่า (ต้องมี risk-free/benchmark)" : `ข้อมูลยังไม่พอ${m.n_obs != null ? ` (มี ${m.n_obs} วัน)` : ""}`) : m?.status === "limited_sample" ? "ตัวอย่างน้อย (<250 วัน)" : undefined
 
-function Panel({ children }: { children: ReactNode }) {
+export function Panel({ children }: { children: ReactNode }) {
   return <div className="rounded-3xl border border-border bg-card p-5">{children}</div>
 }
-function Tag({ children, warn = false }: { children: ReactNode; warn?: boolean }) {
+export function Tag({ children, warn = false }: { children: ReactNode; warn?: boolean }) {
   return <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs ${warn ? "bg-amber-500/10 text-amber-500" : "bg-muted text-muted-foreground"}`}>{children}</span>
 }
 function Progress({ have, need, unit = "วัน" }: { have: number; need: number; unit?: string }) {
@@ -38,7 +38,7 @@ function Progress({ have, need, unit = "วัน" }: { have: number; need: numb
     </div>
   )
 }
-function Stat({ label, value, cls = "", note, help }: { label: string; value: string; cls?: string; note?: string; help?: string }) {
+export function Stat({ label, value, cls = "", note, help }: { label: string; value: string; cls?: string; note?: string; help?: string }) {
   return (
     <div>
       <p className="text-xs text-muted-foreground">
@@ -62,7 +62,7 @@ function Bar({ value, max, good }: { value: number; max: number; good: boolean }
 /* ───────── line chart (SVG ล้วน เหมือนของ Risk Center) ───────── */
 interface Line { name: string; values: (number | null)[]; stroke: string; swatch: string; fill: string }
 
-function LineChart({ dates, lines, fmt, zero = false, label }: { dates: string[]; lines: Line[]; fmt: (v: number | null) => string; zero?: boolean; label: string }) {
+export function LineChart({ dates, lines, fmt, zero = false, label }: { dates: string[]; lines: Line[]; fmt: (v: number | null) => string; zero?: boolean; label: string }) {
   const [hover, setHover] = useState<number | null>(null)
   const n = dates.length
   const all = lines.flatMap((l) => l.values).filter((v): v is number => v != null && Number.isFinite(v))
