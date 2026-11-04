@@ -11,7 +11,8 @@ from .data.total_return import load_market
 from .data.provider_base import ProviderError
 from .data.validate import DataError, clean_bars
 from .db.run_store import RunStore, now_iso
-from .engine.rules import warmup_bars
+from .engine.accum_spec import spec_warmup
+from .engine.dispatch import run_any
 from .engine.runner import run_backtest
 from .engine.strategy_runner import run_strategy
 from .engine.spec import SpecError, spec_hash
@@ -94,15 +95,12 @@ def _apply_total_labels(spec: dict, result: dict) -> None:
 def build_result(spec: dict, price_store: PriceStore) -> dict:
     start, end = date.fromisoformat(spec["start"]), date.fromisoformat(spec["end"])
     strategy = spec.get("strategy")
-    warm = warmup_bars(strategy) if strategy else 0
+    warm = spec_warmup(spec)
     # ต้องมีแท่งก่อนวันเริ่ม (วันฐาน + seed เติมช่องว่าง) + ช่วงอุ่นเครื่องของตัวชี้วัด (วันทำการ ≈ 1.5 เท่าเป็นวันปฏิทิน)
     fetch_from = start - timedelta(days=30 + int(warm * 1.5) + 7)
     total = spec.get("return_mode") == "total"
     mk = load_market(spec, price_store, fetch_from, end)
-    if strategy:
-        result = run_strategy(spec, mk.bars, mk.bench, mk.signal_bars, mk.signal_bench, mk.rates)
-    else:
-        result = run_backtest(spec, mk.bars, mk.bench, mk.rates)
+    result = run_any(spec, mk.bars, mk.bench, mk.signal_bars, mk.signal_bench, mk.rates)
     filled = result["data_quality"]["filled_days"]
     result["data_quality"]["issues"] = mk.issues
     result["data_snapshot"] = mk.snapshot
@@ -111,6 +109,8 @@ def build_result(spec: dict, price_store: PriceStore) -> dict:
         result["warnings"].extend(_strategy_warnings(spec, result, mk.signal_bars or mk.bars, warm))
     if spec.get("risk_free_source") == "tbill":
         result["warnings"].extend(_tbill_warnings(result, mk))
+    if spec.get("accumulate"):
+        result["warnings"].extend(_accumulate_warnings(spec, result))
     if total:
         _apply_total_labels(spec, result)
         result["warnings"] = [w for w in result["warnings"] if w["code"] != "price_return_only"]
@@ -120,6 +120,26 @@ def build_result(spec: dict, price_store: PriceStore) -> dict:
     result["engine_version"] = C.ENGINE_VERSION
     result["spec_hash"] = spec_hash(spec)
     return result
+
+
+def _accumulate_warnings(spec: dict, result: dict) -> list[dict]:
+    st, ar = result["stats"], result["accumulate_result"]
+    w = [{"code": "hindsight_risk", "severity": "high",
+          "message": "เกณฑ์ (เช่น % ที่ลง, ช่วงสูงสุดย้อนหลัง, ตัวชี้วัด) ที่เลือกหลังเห็นผลย้อนหลังมีความเสี่ยง overfit สูง ควรทดสอบกับช่วงเวลา/หุ้นอื่นด้วย"},
+         {"code": "dca_cash_idle", "severity": "info",
+          "message": "เงินที่รอทยอยซื้อเป็นเงินสดที่ไม่ได้ดอกเบี้ย จึงถ่วงผลตอบแทนเทียบการลงเงินทันที (ดูคอลัมน์ 'ลงทันที')"}]
+    if spec["accumulate"]["contribution"]:
+        w.append({"code": "dca_flows", "severity": "info",
+                  "message": "มีเงินใหม่เข้าพอร์ต: Sharpe/drawdown/CAGR ใช้ผลตอบแทนถ่วงเวลา ส่วนกำไรเป็นเงินและ IRR วัดจากกระแสเงินจริง ห้ามเทียบกำไรเป็นเงินกับผลตอบแทนถ่วงเวลาตรง ๆ"})
+    if sum(ar["buy_counts"].values()) == 0:
+        w.append({"code": "no_buys", "severity": "high",
+                  "message": "ไม่มีการซื้อเกิดขึ้นเลย (เงื่อนไขไม่เคยเป็นจริง หรือเพดานเงิน/เงินสดไม่พอ) พอร์ตจึงเป็นเงินสดตลอด"})
+    if ar["blocked"]["cap"] or ar["blocked"]["no_cash"]:
+        w.append({"code": "buys_blocked", "severity": "low",
+                  "message": f"มีสัญญาณซื้อที่ซื้อไม่ได้ {ar['blocked']['no_cash']} ครั้งเพราะเงินสดในช่องหมด และ {ar['blocked']['cap']} ครั้งเพราะชนเพดานเงินต่อหุ้น"})
+    if st["money_weighted_return"] is None and st["total_invested"] > 0:
+        w.append({"code": "irr_short", "severity": "info", "message": "ช่วงสั้นกว่า 1 ปี จึงไม่แสดง IRR รายปี (ดูกำไรเป็นเงินแทน)"})
+    return w
 
 
 def _tbill_warnings(result: dict, mk) -> list[dict]:
