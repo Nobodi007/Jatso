@@ -12,6 +12,8 @@ import RobustnessPanel from "./RobustnessPanel"
 import ResultCharts from "./ResultCharts"
 import SearchPanel from "./SearchPanel"
 import RiskPanel from "./RiskPanel"
+import AccumulateBuilder, { defaultAccState, accStateToSpec } from "./AccumulateBuilder"
+import AccumulatePanel from "./AccumulatePanel"
 
 
 // หน้า Backtest Lab (หุ้นสหรัฐ) — คอมโพเนนต์ใหม่ทั้งหมด ไม่ import/ไม่แตะโค้ด Backtest เดิม
@@ -92,8 +94,8 @@ function Comparison({ r }: { r: Result }) {
   ]
   const rows: { name: string; b: Brief }[] = [
     { name: "พอร์ตที่ทดสอบ", b: r.comparison.portfolio },
-    { name: "Buy-and-Hold (หุ้นชุดเดียวกัน)", b: r.comparison.buy_hold },
-    { name: r.return_mode === "total" ? "S&P 500 Total Return" : "S&P 500 Price Index", b: r.comparison.benchmark },
+    { name: r.mode === "accumulate" ? "ลงทันที (หุ้นชุดเดียวกัน เงินก้อนเดียวกัน)" : "Buy-and-Hold (หุ้นชุดเดียวกัน)", b: r.comparison.buy_hold },
+    { name: (r.return_mode === "total" ? "S&P 500 Total Return" : "S&P 500 Price Index") + (r.mode === "accumulate" ? " (กระแสเงินเดียวกัน)" : ""), b: r.comparison.benchmark },
   ]
   return (
     <div className="overflow-x-auto">
@@ -156,7 +158,7 @@ function Results({ run }: { run: Run }) {
         <Comparison r={r} />
         <div className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
           <div><div className="text-xs text-muted-foreground">มูลค่าสุดท้าย</div><div className="tabular-nums">{usd(s.final_value)}</div></div>
-          <div><div className="text-xs text-muted-foreground">Buy-and-Hold</div><div className="tabular-nums">{usd(s.buy_hold_final_value)}</div></div>
+          <div><div className="text-xs text-muted-foreground">{r.mode === "accumulate" ? "ลงทันที" : "Buy-and-Hold"}</div><div className="tabular-nums">{usd(s.buy_hold_final_value)}</div></div>
           <div><div className="text-xs text-muted-foreground">ต้นทุนรวม</div><div className="tabular-nums">{usd(s.total_cost)} ({pct(s.total_cost_pct_of_initial)})</div></div>
           <div><div className="text-xs text-muted-foreground">Turnover/ปี (ฝั่งเดียว)</div><div className="tabular-nums">{pct(s.turnover_annual_one_way, 1)}</div></div>
           <div><div className="text-xs text-muted-foreground">จำนวนครั้ง Rebalance</div><div>{s.rebalance_count}</div></div>
@@ -171,6 +173,8 @@ function Results({ run }: { run: Run }) {
         <h3 className="mb-2 text-sm font-medium text-foreground">ผลตอบแทนสะสม</h3>
         <ResultCharts series={r.series} />
       </div>
+
+      {r.mode === "accumulate" && <AccumulatePanel result={r} />}
 
       <RiskPanel result={r} />
 
@@ -214,7 +218,7 @@ function Results({ run }: { run: Run }) {
             <tr className="text-left text-xs text-muted-foreground">
               <th className="py-1 font-normal">ปี</th>
               <th className="text-right font-normal">พอร์ต</th>
-              <th className="text-right font-normal">Buy-and-Hold</th>
+              <th className="text-right font-normal">{r.mode === "accumulate" ? "ลงทันที" : "Buy-and-Hold"}</th>
               <th className="text-right font-normal">S&P 500</th>
               <th className="text-right font-normal">วัน</th>
             </tr>
@@ -298,6 +302,7 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
   const [rfMode, setRfMode] = useState<"none" | "tbill" | "manual">("none")
   const [retMode, setRetMode] = useState<"price" | "total">("price")
   const [sf, setSf] = useState<StrategyForm>(defaultStrategyForm)
+  const [acc, setAcc] = useState(defaultAccState)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [run, setRun] = useState<Run | null>(null)
@@ -399,6 +404,13 @@ export default function BacktestPage({ getToken, apiBase }: Props) {
       costs: { commission_bps: Number(comm), slippage_bps: Number(slip) },
       risk_free_annual: rfMode === "manual" && rf.trim() !== "" ? Number(rf) / 100 : null,
       ...(rfMode === "tbill" ? { risk_free_source: "tbill" as const } : {}),
+    }
+    const a = accStateToSpec(acc)
+    if (a.error) return a.error
+    if (a.spec) {
+      if (sf.enabled) return "โหมด DCA / ซื้อตอนย่อ ใช้ร่วมกับกฎเข้า/ออกไม่ได้ — ปิดอย่างใดอย่างหนึ่ง"
+      spec.accumulate = a.spec
+      spec.rebalance = { mode: "none" } // โหมดนี้ไม่ขาย/ไม่ rebalance
     }
     if (sf.enabled) {
       const st = buildStrategy(sf, meta?.indicators ?? [])
@@ -605,6 +617,9 @@ const rangeText = (() => {
                 <option value="threshold">ตามเกณฑ์เบี่ยง</option>
                 <option value="hybrid">ผสม (เวลา + เกณฑ์)</option>
               </select>
+              {acc.enabled && mode !== "none" && (
+                <p className="mt-1 text-xs text-amber-500">โหมด DCA / ซื้อตอนย่อเปิดอยู่ — ระบบจะใช้ ไม่ปรับสัดส่วน แทนค่านี้</p>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-2">
               {(mode === "calendar" || mode === "hybrid") && (
@@ -627,6 +642,7 @@ const rangeText = (() => {
         {meta && meta.indicators && (
           <StrategyBuilder form={sf} onChange={setSf} cat={meta.indicators} ops={meta.rule_language.operators} fields={meta.rule_language.price_fields} />
         )}
+        <AccumulateBuilder value={acc} onChange={setAcc} />
 
         <p className="mt-3 text-xs text-muted-foreground">
                     คำสั่งซื้อขายจับคู่ที่ราคาเปิดวันทำการถัดไป · เงินสดไม่ได้ดอกเบี้ย · ข้อมูลไม่รวมหุ้นที่ถูกถอนจากตลาด (ผลอาจดีกว่าความจริง) · Benchmark = {retMode === "total" ? "S&P 500 Total Return (^SP500TR)" : "S&P 500 Price Index (^GSPC)"}
