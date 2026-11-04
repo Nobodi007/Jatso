@@ -101,6 +101,7 @@ export type Result = {
   mode?: "strategy" | "accumulate"
   return_mode?: "total"
   strategy_result?: StrategyResult
+  accumulate_result?: AccResultBlock
   period: { base_date: string; first_trade_date: string; last_date: string; trading_days: number }
   comparison: { portfolio: Brief; buy_hold: Brief; benchmark: Brief }
   series: { date: string; portfolio: number; buy_hold: number; benchmark: number }[]
