@@ -2174,8 +2174,12 @@ def _chat_stocks_tools(req: ChatRequest, user: str, api_key: str) -> dict:
 
     resp = None
     last_err = None
-    model_name = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+    models = [m for m in (
+        os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
+        os.environ.get("GEMINI_FALLBACK_MODEL", ""),
+    ) if m]
     for attempt in range(3):
+        model_name = models[min(attempt, len(models) - 1)]
         try:
             client = genai.Client(api_key=api_key)
             resp = client.models.generate_content(
