@@ -3,7 +3,7 @@
 
 หลักที่ล็อกไว้ (มี test ตรวจว่าบวกกลับได้พอดี)
 1) P&L รายหุ้น (USD)  net_i = Σขาย(เงินสุทธิ) − Σซื้อ(เงินสุทธิ) + หุ้นคงเหลือ × ราคาปิดวันสุดท้าย
-   และ Σ_i net_i = มูลค่าพอร์ตสิ้นสุด − เงินต้น  (เงินสดไม่มีดอกเบี้ย จึงไม่มี P&L ฝั่งเงินสด)
+   และ Σ_i net_i = มูลค่าพอร์ตสิ้นสุด − เงินที่ใส่ทั้งหมด (เงินต้น + เงินเติม)  (เงินสดไม่มีดอกเบี้ย จึงไม่มี P&L ฝั่งเงินสด)
    แยกต้นทุน: gross = net + ค่าคอม + slippage  (slippage คิดเทียบราคาเปิด ตามที่ engine ล็อก)
 2) การมีส่วนร่วมต่อผลตอบแทนรวม = net_i / เงินต้น  (บวกกันได้เท่ากับผลตอบแทนรวมของพอร์ต — เป็นการบวกแบบเงินต้นคงที่
    ไม่ใช่ผลตอบแทนถ่วงเวลา)
@@ -43,8 +43,12 @@ def _shares_by_day(sym: str, trades: Sequence[dict], cal: Sequence[str]) -> tupl
 
 
 def build(syms: Sequence[str], trades: Sequence[dict], cal: Sequence[str], closes: Mapping[str, Sequence[float]],
-          capital: float, eq: Sequence[float], rp: Sequence[float]) -> dict:
+          capital: float, eq: Sequence[float], rp: Sequence[float], flows: Sequence[float] | None = None) -> dict:
+    """flows[k] = เงินใหม่ที่เข้าพอร์ตที่เปิดวัน k (DCA แท้) — ไม่ระบุ = ไม่มีเงินเข้า/ออก (พฤติกรรมเดิมทุกประการ)
+    ฐานของผลตอบแทนรายวัน = มูลค่าวันก่อน + เงินที่เข้าวันนั้น (ตรงกับผลตอบแทนถ่วงเวลาของ engine)"""
     N = len(cal)
+    fl = list(flows) if flows is not None else [0.0] * N
+    money_in = capital + math.fsum(fl)
     rows, contrib, avg_w = [], {}, {}
     vals = {}
     total_net = 0.0
@@ -59,11 +63,11 @@ def build(syms: Sequence[str], trades: Sequence[dict], cal: Sequence[str], close
         net = sells - buys - comm + v[-1]
         total_net += net
         prev = [0.0] + v[:-1]
-        base = [capital] + list(eq[:-1])
+        base = [capital + fl[0]] + [eq[k - 1] + fl[k] for k in range(1, N)]
         contrib[s] = [(v[k] - prev[k] - cf[k]) / base[k] for k in range(N)]
         avg_w[s] = math.fsum(v[k] / eq[k] for k in range(N)) / N
         n_trades = sum(1 for t in trades if t["symbol"] == s)
-        rows.append({"symbol": s, "net_pnl": net, "contribution": net / capital, "gross_pnl": net + comm + slip,
+        rows.append({"symbol": s, "net_pnl": net, "contribution": net / money_in, "gross_pnl": net + comm + slip,
                      "commission": comm, "slippage_cost": slip, "final_value": v[-1], "final_weight": v[-1] / eq[-1],
                      "avg_weight": avg_w[s], "trade_count": n_trades})
     # ความเสี่ยงที่เกิดจริง
@@ -74,12 +78,12 @@ def build(syms: Sequence[str], trades: Sequence[dict], cal: Sequence[str], close
         r["pct_of_risk"] = (E._cov(c, list(rp)) / var_p) if risk_ok else None
         r["risk_volatility_contribution"] = (E._cov(c, list(rp)) / var_p * math.sqrt(var_p) * E.SQRT_T) if risk_ok else None
     rows.sort(key=lambda r: -r["net_pnl"])
-    final_pnl = eq[-1] - capital
+    final_pnl = eq[-1] - money_in
     return {
         "method": "per-stock P&L from trade log; Σ net = final value − initial capital; %risk = Cov(c_i, r_p)/Var(r_p) from daily contributions",
         "positions": rows,
         "totals": {"net_pnl": total_net, "portfolio_pnl": final_pnl, "reconciliation_error": total_net - final_pnl,
-                   "total_return": final_pnl / capital, "sum_contribution": total_net / capital,
+                   "total_return": final_pnl / money_in, "sum_contribution": total_net / money_in, "money_in": money_in,
                    "commission": sum(r["commission"] for r in rows), "slippage_cost": sum(r["slippage_cost"] for r in rows),
                    "pct_risk_sum": (sum(r["pct_of_risk"] for r in rows) if risk_ok else None)},
         "risk_status": "ok" if risk_ok else "insufficient_data",
