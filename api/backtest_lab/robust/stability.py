@@ -13,8 +13,7 @@ from statistics import median
 
 from ..data.validate import DataError
 from ..engine import indicators as I
-from ..engine.runner import run_backtest
-from ..engine.strategy_runner import run_strategy
+from ..engine.dispatch import run_any
 
 PERIOD_PARAMS = ("period", "fast", "slow", "signal", "k", "d", "smooth")
 FACTORS = (0.5, 0.75, 1.0, 1.25, 1.5)
@@ -23,9 +22,7 @@ STOP_RANGES = {"stop_loss_pct": (0.1, 90.0), "take_profit_pct": (0.1, 1000.0), "
 
 def _run(spec: dict, mk) -> dict:
     """mk = Market (ราคาซื้อขาย/ราคาสัญญาณ/benchmark) — โหมด Total Return ใช้ชุดราคาเดียวกับรันหลัก"""
-    if spec.get("strategy"):
-        return run_strategy(spec, mk.bars, mk.bench, mk.signal_bars, mk.signal_bench, mk.rates)
-    return run_backtest(spec, mk.bars, mk.bench, mk.rates)
+    return run_any(spec, mk.bars, mk.bench, mk.signal_bars, mk.signal_bench, mk.rates)
 
 
 def _brief(res: dict) -> dict:
