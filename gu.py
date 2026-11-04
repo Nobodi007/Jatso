@@ -2455,7 +2455,24 @@ PROFILE_STATE_ENV_VAR ="XSPRING_PROFILE_STATE"
 def profile_state_path ()->Path :
     return Path (os .environ .get (PROFILE_STATE_ENV_VAR )or (_HERE /"user_profiles.json"))
 
+_PROFILES_TTL_SEC = 120
+
+
 def load_profiles ()->dict [str ,dict [str ,str ]]:
+    """Cached per Streamlit session. Original query pulled every user's avatar_b64
+    on every rerun (twice) -> large Supabase egress."""
+    if is_guest_mode ():
+        return {}
+    _c =st .session_state .get ("_profiles_cache")
+    if _c and (time .time ()-_c [0 ])<_PROFILES_TTL_SEC :
+        return _c [1 ]
+    _out =_load_profiles_uncached ()
+    if _out :# ไม่แคชผลว่าง (กันค้างหน้า setup ถ้าอ่านพลาดชั่วคราว)
+        st .session_state ["_profiles_cache"]=(time .time (),_out )
+    return _out 
+
+
+def _load_profiles_uncached ()->dict [str ,dict [str ,str ]]:
     if is_guest_mode ():
         return {}
     sb =_get_supabase ()
@@ -2488,7 +2505,14 @@ def load_profiles ()->dict [str ,dict [str ,str ]]:
     return raw 
 
 
-def save_profile (email :str ,display_name :str ,avatar_b64 :Optional [str ]=None ,
+def save_profile (*args ,**kwargs )->None :
+    try :
+        return _save_profile_impl (*args ,**kwargs )
+    finally :
+        st .session_state .pop ("_profiles_cache",None )
+
+
+def _save_profile_impl (email :str ,display_name :str ,avatar_b64 :Optional [str ]=None ,
 role :Optional [str ]=None )->None :
     if is_guest_mode ():
         return 
@@ -4351,13 +4375,16 @@ def save_nc_snapshot (cfg :dict [str ,Any ],data :pd .DataFrame )->bool :
     return False 
 
 
+_NC_LIST_COLS ="snapshot_at,actor,asset,price_usd,usdthb,required_stock_thb,total_capital_thb,cex_margin_thb,liab_thb,nc_actual,nc_required,nc_buffer"
+
+
 def load_nc_snapshots (limit :int =100 )->list [dict [str ,Any ]]:
     if is_guest_mode ():
         return list (st .session_state .get ("nc_snapshots",[]))[-limit :]
     sb =_get_supabase ()
     if sb is not None :
         try :
-            res =(sb .table ("nc_snapshots").select ("*").order ("snapshot_at",desc =True ).limit (limit ).execute ())
+            res =(sb .table ("nc_snapshots").select (_NC_LIST_COLS ).order ("snapshot_at",desc =True ).limit (limit ).execute ())
             return list (reversed (res .data or []))
         except Exception :
             pass 
@@ -8242,7 +8269,7 @@ def _render_perp_venue_table_live (base :str ="BTC")->None :
 
 # Public board renderer. Streamlit fragments support automatic reruns via
 # run_every; the project already detects fragment support for older runtimes.
-BOARD_AUTO_REFRESH_SEC = 30.0
+BOARD_AUTO_REFRESH_SEC = 120.0
 if HAS_FRAGMENT:
     render_perp_venue_table = st.fragment(run_every=BOARD_AUTO_REFRESH_SEC)(
         _render_perp_venue_table_live
@@ -9800,7 +9827,7 @@ def _asset_return_pct (asset :str ,months :int ,cfg :dict [str ,Any ])->Optional
 # =========================================================================
 
 DCA_FREQS = ["รายวัน", "รายสัปดาห์", "รายเดือน"]
-DCA_RUN_EVERY_SEC = 30
+DCA_RUN_EVERY_SEC = 120
 
 
 def _dca_now() -> pd.Timestamp:
@@ -9951,6 +9978,7 @@ def _dca_execute_due_plans(
 
     now = _dca_now()
     executed = 0
+    _plans_before = json.dumps(plans, sort_keys=True, default=str)
 
     for plan in plans:
         if not isinstance(plan, dict) or not plan.get("enabled", False):
@@ -10034,7 +10062,7 @@ def _dca_execute_due_plans(
         plan["last_qty"] = float(record.get("เหรียญที่ส่งมอบ", 0.0) or 0.0)
         executed += 1
 
-    if executed or any(isinstance(p, dict) and p.get("last_attempt_at") for p in plans):
+    if executed or json.dumps(plans, sort_keys=True, default=str) != _plans_before:
         save_sim_state(sim)
     return executed
 
