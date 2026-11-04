@@ -1,4 +1,5 @@
 // ชนิดข้อมูลของ Backtest Lab — แยกไฟล์ใหม่ ไม่ import จากโค้ดเดิมของโปรเจกต์
+import type { AccumulateSpec, AccResultBlock } from "./accumulateTypes"
 
 export type Metric = {
   value: number | null
