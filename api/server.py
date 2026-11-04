@@ -2046,6 +2046,7 @@ CHAT_SYSTEM_STOCKS = (
     "ถ้า meta.warnings มีรายการ ให้แจ้งผู้ใช้สั้นๆ "
     "อธิบายความหมายของค่าต่างๆ ด้วย explain_metric "
     "ห้ามแนะนำให้ซื้อหรือขาย และห้ามสั่งซื้อขายแทนผู้ใช้"
+    "ห้ามใช้ markdown ทุกชนิด เช่น ** # - ตอบเป็นข้อความธรรมดา ไม่เกิน 4 ประโยค "
 )
 
 # series ยาวๆ ที่ AI ไม่จำเป็นต้องเห็น (ประหยัด token)
@@ -2213,7 +2214,7 @@ def _chat_stocks_tools(req: ChatRequest, user: str, api_key: str) -> dict:
             )
         raise _internal_server_error("เรียก AI ไม่สำเร็จ", last_err)
 
-    answer = (resp.text or "").strip()[:1500]
+    answer = (resp.text or "").replace("**", "").replace("__", "").strip()[:1500]
     return {"status": "ok", "answer": answer or "ไม่ได้รับคำตอบจาก AI"}
 
 
