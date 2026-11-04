@@ -14,6 +14,7 @@ import SearchPanel from "./SearchPanel"
 import RiskPanel from "./RiskPanel"
 import AccumulateBuilder, { defaultAccState, accStateToSpec } from "./AccumulateBuilder"
 import AccumulatePanel from "./AccumulatePanel"
+import type { AccumulateSpec, AccResultBlock } from "./accumulateTypes"
 
 
 // หน้า Backtest Lab (หุ้นสหรัฐ) — คอมโพเนนต์ใหม่ทั้งหมด ไม่ import/ไม่แตะโค้ด Backtest เดิม
