@@ -24,6 +24,7 @@ export type Spec = {
   return_mode?: "price" | "total"
   strategy?: StrategySpec
   risk_free_source?: "tbill"
+  accumulate?: AccumulateSpec
 }
 
 export type OperandSpec = Record<string, string | number>
@@ -96,7 +97,7 @@ export type Trade = {
 export type Warning = { code: string; severity: "info" | "low" | "medium" | "high"; message: string; symbol?: string }
 
 export type Result = {
-  mode?: "strategy"
+  mode?: "strategy" | "accumulate"
   return_mode?: "total"
   strategy_result?: StrategyResult
   period: { base_date: string; first_trade_date: string; last_date: string; trading_days: number }
